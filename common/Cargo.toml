@@ -1,0 +1,10 @@
+[package]
+name = "common"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "time"] }
+time = { version = "0.3", features = ["formatting"] }
