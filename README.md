@@ -1,4 +1,3 @@
-
 [<div align=center><img src="freebird.webp">](https://carpocratian.org/en/church/)
 [<div align=center><br><img src="church.png" width=72 height=72>](https://carpocratian.org/en/church/)
 
@@ -35,7 +34,7 @@ Built with production-ready Rust, Freebird provides cryptographic unlinkability 
 - **Standards-Based** – P-256 VOPRF with DLEQ proofs
 - **Flexible Storage** – In-memory or Redis backend for spent token tracking
 
-## How It Works
+## How 🕊️ Freebird Works
 
 ### The Cryptography: VOPRF in Plain Terms
 
