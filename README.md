@@ -1,17 +1,18 @@
-# 🕊️ Freebird
+
 [<div align=center><img src="freebird.webp">](https://carpocratian.org/en/church/)
 [<div align=center><br><img src="church.png" width=72 height=72>](https://carpocratian.org/en/church/)
 
 _A mission of [The Carpocratian Church of Commonality and Equality](https://carpocratian.org/en/church/)_.</div>
 <div align=center><img src="mission.png" width=256 height=200></div></div>
 
+# What is 🕊️ Freebird?
 **Anonymous credential system using VOPRF cryptography**
 
 Freebird is a self-hostable anonymous token system that allows users to prove authorization without revealing their identity or linking multiple uses. Think of it as anonymous digital cash for the internet—users get cryptographic tokens that prove "I'm authorized" without revealing "who I am."
 
 Built with production-ready Rust, Freebird provides cryptographic unlinkability and replay protection through VOPRF (Verifiable Oblivious Pseudorandom Function) with DLEQ proofs on the P-256 elliptic curve.
 
-## Why Freebird?
+## Why is 🕊️ Freebird?
 
 **The Problem:** Traditional authentication links every action to an identity. Rate limiting requires tracking users. Privacy and access control are at odds.
 
