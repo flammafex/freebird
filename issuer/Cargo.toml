@@ -1,0 +1,36 @@
+[package]
+name = "issuer"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[features]
+default = []
+human-gate-webauthn = ["dep:webauthn-rs", "dep:url"]
+
+[dependencies]
+common = { path = "../common" }
+crypto = { path = "../crypto", features = ["voprf-p256"] }
+axum = "0.7"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64ct = { version = "1.8", default-features = false }
+time = "0.3"
+anyhow = "1"
+rand = "0.8"
+zeroize = { version = "1", features = ["zeroize_derive"] }
+
+p256 = { version = "0.13", features = ["ecdsa"] }
+elliptic-curve = "0.13"
+sha2 = "0.10"
+blake3 = "1"
+
+webauthn-rs = { version = "0.5.3", optional = true }
+url = { version = "2", optional = true }
+
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
+tower_governor = "0.5"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["trace", "timeout", "set-header", "util", "request-id"] }
