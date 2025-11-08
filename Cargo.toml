@@ -1,0 +1,10 @@
+[workspace]
+members = [
+  "issuer",
+  "verifier",
+  "interface",
+  "crypto",
+  "common",
+  "integration_tests"   # <-- new
+]
+resolver = "2"
