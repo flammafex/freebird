@@ -546,18 +546,22 @@ Freebird gives you complete control over token issuance and verification.
 - [ ] Hardware security module (HSM) integration
 - [ ] Post-quantum cryptography exploration
 
-## Contributing
+## Relevant Papers
 
-Contributions are welcome! Please:
+[Zcash Protocol Specification (Sapling or later)](https://github.com/zcash/zips)
+Shows nullifier construction
 
-1. Open an issue to discuss major changes
-2. Follow the existing code style
-3. Add tests for new features
-4. Update documentation
+[Privacy Pass Protocol (IETF Draft)](https://datatracker.ietf.org/doc/draft-irtf-cfrg-voprf/)
+VOPRF specification
+
+Zerocoin Paper (2013) Miers et al., "Zerocoin: Anonymous Distributed E-Cash from Bitcoin"
+The original academic work on nullifiers
+
+[VOPRF Draft RFC](https://datatracker.ietf.org/doc/draft-irtf-cfrg-voprf/)
 
 ## License
 
-[Apache 2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT), at your option.
+[Apache 2.0](LICENSE-APACHE).
 
 ## Acknowledgments
 
