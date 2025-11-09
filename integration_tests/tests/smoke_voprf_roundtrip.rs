@@ -1,18 +1,5 @@
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-// integration_tests/tests/smoke_voprf_roundtrip.rs
-//
-// Pure-crypto happy-path: Client blinds → Server evaluates → Client finalizes → Verifier verifies.
-// No HTTP involved. Uses the crypto facade you already have.
+// SPDX-License-Identifier: Apache-2.0 OR MIT
+// Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
 use crypto::{Client, Server, Verifier};
 use crypto::nullifier_key;
 use base64ct::{Base64UrlUnpadded, Encoding};
