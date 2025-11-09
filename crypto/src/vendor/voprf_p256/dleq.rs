@@ -10,7 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //./crypto/src/vendor/voprf_p256/dleq.rs
-//! Discrete Log Equality (DLEQ) proof for P-256
+// Discrete Log Equality (DLEQ) proof for P-256
 //
 // Prove that the same secret 'k' links two point pairs:
 //   Y = k·G  and  B = k·A
@@ -44,7 +44,7 @@ use sha2::{Digest, Sha256};
 /// A DLEQ proof (challenge `c` and response `s`).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct DleqProof {
-    /// Fiat–Shamir challenge scalar.
+    /// Fiat-Shamir challenge scalar.
     pub c: Scalar,
     /// Schnorr response scalar.
     pub s: Scalar,
@@ -59,7 +59,7 @@ impl fmt::Debug for DleqProof {
 /// Domain separation tag for the transcript.
 const DLEQ_DST: &[u8] = b"DLEQ-P256-v1";
 
-/// Compute Fiat–Shamir challenge as a scalar: c = H(bytes) mod n.
+/// Compute Fiat-Shamir challenge as a scalar: c = H(bytes) mod n.
 fn challenge_scalar(
     g: &AffinePoint,
     y: &AffinePoint,
@@ -86,16 +86,16 @@ fn challenge_scalar(
     Scalar::reduce_bytes(FieldBytes::from_slice(&digest))
 }
 
-/// Create a DLEQ proof that `y = k·G` and `b = k·a` for the same `k`.
+/// Create a DLEQ proof that 'y = k·G' and 'b = k·a' for the same 'k'.
 ///
 /// Inputs:
-/// - `k`: secret scalar witness
-/// - `g`: generator (affine)
-/// - `y`: k·g (affine)
-/// - `a`: second base point (affine)
-/// - `b`: k·a (affine)
-/// - `rng`: CSPRNG
-/// - `dst`: optional extra domain separator (in addition to a built-in tag)
+/// - 'k': secret scalar witness
+/// - 'g': generator (affine)
+/// - 'y': k·g (affine)
+/// - 'a': second base point (affine)
+/// - 'b': k·a (affine)
+/// - 'rng': CSPRNG
+/// - 'dst': optional extra domain separator (in addition to a built-in tag)
 pub fn prove<R: RngCore + CryptoRng>(
     k: &Scalar,
     g: &AffinePoint,
