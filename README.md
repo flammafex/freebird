@@ -561,7 +561,7 @@ The original academic work on nullifiers
 
 ## License
 
-[Apache 2.0](LICENSE-APACHE).
+[Apache 2.0](NOTICE)
 
 ## Acknowledgments
 
