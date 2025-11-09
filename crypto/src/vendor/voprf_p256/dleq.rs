@@ -16,7 +16,7 @@
 //   Y = k·G  and  B = k·A
 // without revealing 'k'.
 //
-// Proof is a Schnorr-style Sigma protocol made non-interactive via Fiat–Shamir:
+// Proof is a Schnorr-style Sigma protocol made non-interactive via Fiat-Shamir:
 //   r ←$ Z_n
 //   T1 = r·G,  T2 = r·A
 //   c = H(G, Y, A, B, T1, T2, DST)
