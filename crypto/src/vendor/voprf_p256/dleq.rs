@@ -1,9 +1,20 @@
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 //./crypto/src/vendor/voprf_p256/dleq.rs
 //! Discrete Log Equality (DLEQ) proof for P-256
 //
-// Prove that the same secret `k` links two point pairs:
+// Prove that the same secret 'k' links two point pairs:
 //   Y = k·G  and  B = k·A
-// without revealing `k`.
+// without revealing 'k'.
 //
 // Proof is a Schnorr-style Sigma protocol made non-interactive via Fiat–Shamir:
 //   r ←$ Z_n
