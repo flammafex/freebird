@@ -44,7 +44,7 @@ const TOKEN_LEN: usize = TOKEN_POINT_LEN * 2 + TOKEN_PROOF_LEN;
 #[cfg(feature = "rfc9380")]
 fn hash_to_curve(input: &[u8], ctx: &[u8]) -> ProjectivePoint {
     // --- PLACEHOLDER ---
-    // You’ll replace this body with a real SSWU_RO implementation once you
+    // Replace this body with a real SSWU_RO implementation once you
     // vendor a base-field and map. For now we deliberately fail if someone
     // enables the feature without providing the implementation.
     compile_error!("Feature `rfc9380` enabled, but no public P-256 SSWU map is available in p256 0.13.x. See comments in this file for integration instructions.");
