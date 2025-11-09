@@ -10,21 +10,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //./crypto/src/vendor/voprf_p256/dleq.rs
-// Discrete Log Equality (DLEQ) proof for P-256
-//
-// Prove that the same secret 'k' links two point pairs:
-//   Y = k·G  and  B = k·A
-// without revealing 'k'.
-//
-// Proof is a Schnorr-style Sigma protocol made non-interactive via Fiat-Shamir:
-//   r ←$ Z_n
-//   T1 = r·G,  T2 = r·A
-//   c = H(G, Y, A, B, T1, T2, DST)
-//   s = r + c·k (mod n)
-// Verify:
-//   s·G == T1 + c·Y
-//   s·A == T2 + c·B
-//
+/// Discrete Log Equality (DLEQ) proof for P-256
+///
+/// Prove that the same secret 'k' links two point pairs:
+///   Y = k·G  and  B = k·A
+/// without revealing 'k'.
+///
+/// Proof is a Schnorr-style Sigma protocol made non-interactive via Fiat-Shamir:
+///   r ←$ Z_n
+///   T1 = r·G,  T2 = r·A
+///   c = H(G, Y, A, B, T1, T2, DST)
+///   s = r + c·k (mod n)
+/// Verify:
+///   s·G == T1 + c·Y
+///   s·A == T2 + c·B
+///
 // This file is self-contained and targets p256 = "0.13" and elliptic-curve = "0.13".
 // No hash-to-curve machinery is used; we only hash bytes to a scalar challenge.
 
@@ -69,10 +69,10 @@ fn challenge_scalar(
     t2: &AffinePoint,
     dst: &[u8],
 ) -> Scalar {
-    // Compress points (SEC1 compressed) and hash in a fixed order.
+    /// Compress points (SEC1 compressed) and hash in a fixed order.
     let mut hasher = Sha256::new();
 
-    // Personalize with DST length and bytes to avoid collisions across protocols.
+    /// Personalize with DST length and bytes to avoid collisions across protocols.
     hasher.update(u32::try_from(dst.len()).unwrap_or(0).to_be_bytes());
     hasher.update(dst);
 
@@ -82,7 +82,7 @@ fn challenge_scalar(
     }
 
     let digest = hasher.finalize();
-    // Reduce 256-bit digest modulo curve order.
+    /// Reduce 256-bit digest modulo curve order.
     Scalar::reduce_bytes(FieldBytes::from_slice(&digest))
 }
 
