@@ -12,6 +12,7 @@ use elliptic_curve::{
 };
 use p256::{ProjectivePoint, FieldBytes, Scalar, NistP256, AffinePoint, EncodedPoint};
 use sha2::{Sha256, Digest};
+use elliptic_curve::hash2curve::{ExpandMsgXmd, GroupDigest};
 
 use super::dleq::{encode_proof, decode_proof, prove, verify};
 
@@ -29,37 +30,26 @@ const TOKEN_POINT_LEN: usize = COMPRESSED_POINT_LEN; // 33
 const TOKEN_PROOF_LEN: usize = 64;
 const TOKEN_LEN: usize = TOKEN_POINT_LEN * 2 + TOKEN_PROOF_LEN;
 
-/// RFC 9380-compliant hash_to_curve for P-256 (SSWU_RO).
-/// NOTE: stubbed here; see below for how to provide an implementation.
-/// Keep the signature stable so call sites don't change.
-#[cfg(feature = "rfc9380")]
+/// RFC 9380-compliant hash-to-curve for P-256 (SSWU_RO).
 fn hash_to_curve(input: &[u8], ctx: &[u8]) -> ProjectivePoint {
-    // --- PLACEHOLDER ---
-    // Replace this body with a real SSWU_RO implementation once you
-    // vendor a base-field and map. For now we deliberately fail if someone
-    // enables the feature without providing the implementation.
-    compile_error!("Feature `rfc9380` enabled, but no public P-256 SSWU map is available in p256 0.13.x. See comments in this file for integration instructions.");
-}
-
-/// Fallback hash-to-group: reduce SHA-256 to a scalar and multiply by G.
-/// Not RFC 9380, but secure enough inside this VOPRF (k re-randomizes).
-#[cfg(not(feature = "rfc9380"))]
-fn hash_to_curve(input: &[u8], ctx: &[u8]) -> ProjectivePoint {
-    use sha2::{Digest, Sha256};
-    use p256::FieldBytes;
-    use elliptic_curve::ops::Reduce;
-
+    // Domain separation tag as per RFC 9380
     const BASE_DST: &[u8] = b"P256_XMD:SHA-256_SSWU_RO_";
-
-    let mut h = Sha256::new();
-    h.update(BASE_DST);
-    h.update(ctx);
-    h.update((input.len() as u64).to_be_bytes());
-    h.update(input);
-
-    let digest = h.finalize();
-    let k = Scalar::reduce_bytes(FieldBytes::from_slice(&digest));
-    ProjectivePoint::GENERATOR * k
+    
+    // Append context for VOPRF domain separation
+    let mut dst = Vec::with_capacity(BASE_DST.len() + ctx.len());
+    dst.extend_from_slice(BASE_DST);
+    dst.extend_from_slice(ctx);
+    
+    // Use NistP256::hash_from_bytes (Method 1 - confirmed working!)
+    // This returns a generic curve point that we convert to ProjectivePoint
+    let point = NistP256::hash_from_bytes::<ExpandMsgXmd<Sha256>>(
+        &[input],
+        &[&dst],
+    )
+    .expect("hash_to_curve failed");
+    
+    // Convert to ProjectivePoint
+    ProjectivePoint::from(point)
 }
 
 /// Compress a projective point (SEC1-encoded, 33 bytes)
