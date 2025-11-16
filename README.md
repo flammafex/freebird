@@ -15,7 +15,7 @@ Built with production-ready Rust, Freebird provides cryptographic unlinkability 
 
 **The Problem:** Traditional authentication links every action to an identity. Rate limiting requires tracking users. Privacy and access control are at odds.
 
-**The Solution:** Freebird issues anonymous tokens that prove authorization without surveillance. The issuer can't track where tokens are used. The verifier can't link uses to identities. Yet double-spending is prevented.
+**The Solution:** Freebird issues anonymous tokens that prove authorization without surveillance. The issuer can't track where tokens are used. The verifier can't link uses to identities. Yet double-spending is prevented. Invitation-based Sybil resistance ensures one-per-human without biometrics.
 
 **Use Cases:**
 - Anonymous rate limiting (verify "human-ness" without tracking users)
@@ -28,9 +28,10 @@ Built with production-ready Rust, Freebird provides cryptographic unlinkability 
 ## Key Features
 
 - **Cryptographic Unlinkability** – Issuer can't track where tokens are used
+- **Sybil Resistance** – Invitation system ensures one-per-human without biometrics
 - **Self-Hostable** – No central authority required
 - **Replay Protection** – Nullifier-based double-spend prevention
-- **Production Ready** – ~2,400 lines of robust Rust with comprehensive tests
+- **Production Ready** – ~3,000 lines of robust Rust with comprehensive tests
 - **Standards-Based** – P-256 VOPRF with DLEQ proofs
 - **Flexible Storage** – In-memory or Redis backend for spent token tracking
 
@@ -226,6 +227,12 @@ BIND_ADDR=0.0.0.0:8081          # Listen address
 TOKEN_TTL_MIN=60                # Token expiration (minutes, default: 10)
 REQUIRE_TLS=false               # Enforce HTTPS (production: true)
 BEHIND_PROXY=false              # Trust X-Forwarded-* headers
+
+# Sybil Resistance (optional)
+SYBIL_RESISTANCE=invitation     # Options: none, invitation, proof_of_work, rate_limit
+SYBIL_INVITE_PER_USER=5
+SYBIL_INVITE_COOLDOWN_SECS=3600
+SYBIL_INVITE_BOOTSTRAP_USERS=admin:100,alice:50
 ```
 
 **Verifier:**
@@ -508,7 +515,11 @@ freebird/
 │   └── src/
 │       ├── main.rs      # HTTP server
 │       ├── routes/      # API endpoints
-│       └── voprf_core.rs
+│       ├── voprf_core.rs
+│       └── sybil_resistance/  # Sybil resistance mechanisms
+│           ├── invitation.rs
+│           ├── proof_of_work.rs
+│           └── rate_limit.rs
 ├── verifier/            # Token verification service
 │   └── src/
 │       ├── main.rs      # HTTP server
@@ -562,12 +573,6 @@ The original academic work on nullifiers
 ## License
 
 [Apache 2.0](NOTICE)
-
-## Acknowledgments
-
-- Built on [RustCrypto](https://github.com/RustCrypto) primitives
-- Inspired by [Privacy Pass](https://privacypass.github.io/)
-- VOPRF protocol from [draft-irtf-cfrg-voprf](https://datatracker.ietf.org/doc/draft-irtf-cfrg-voprf/)
 
 ## Support
 

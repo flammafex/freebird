@@ -26,6 +26,7 @@ hkdf           = "0.12"
 base64ct       = { version = "1.8", features = ["alloc"] }
 generic-array  = "0.14"
 zeroize        = "1"
+voprf = "0.5"
 
 [patch.crates-io]
 # Enforce a single generic-array version to prevent trait-bound conflicts

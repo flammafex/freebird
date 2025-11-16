@@ -32,10 +32,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod proof_of_work;
 pub mod rate_limit;
+pub mod invitation;
 
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
 pub use proof_of_work::ProofOfWork;
 pub use rate_limit::{RateLimit, client_id_from_ip, client_id_from_fingerprint};
+pub use invitation::{InvitationSystem, InvitationConfig, InvitationStats};
 
 // Future implementations:
 // pub mod payment_gate;
@@ -76,13 +78,12 @@ pub enum SybilProof {
     },
 
     /// Invitation: Client was invited by existing user
+    /// (inviter_id is tracked server-side, not in the proof)
     #[allow(dead_code)]
     Invitation {
-        /// Inviter's identifier
-        inviter_id: String,
         /// Invitation code
         code: String,
-        /// Signature from inviter
+        /// Signature from issuer (proves authenticity)
         signature: String,
     },
 
