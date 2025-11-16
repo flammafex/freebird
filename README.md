@@ -338,10 +338,15 @@ HTTP 401 Unauthorized
 
 ### What Freebird Does NOT Guarantee
 
-❌ **Sybil Resistance**: Freebird doesn't prevent users from getting multiple tokens  
 ❌ **Front-running**: Tokens can be stolen and used by others before the legitimate holder  
 ❌ **Network Anonymity**: Use Tor or VPNs if you need network-level privacy  
 ❌ **Quantum Resistance**: P-256 ECDLP is vulnerable to quantum computers  
+
+### What Freebird Provides (with Invitation System)
+
+✅ **Sybil Resistance**: One token per human via invitation graphs and social proof  
+✅ **Self-Policing**: Ban trees prune malicious networks  
+✅ **No Biometrics**: Trust-based without surveillance  
 
 ### Threat Model
 
@@ -351,7 +356,7 @@ HTTP 401 Unauthorized
 
 **Adversary Can:**
 - Observe all network traffic
-- Request unlimited tokens
+- Request tokens (if they have valid invitations)
 - Attempt replays
 - Try to forge tokens
 
@@ -359,6 +364,7 @@ HTTP 401 Unauthorized
 - Link tokens to identities (unlinkability)
 - Reuse tokens (replay protection)
 - Forge valid tokens (unforgeability)
+- Bypass invitation system (Sybil attack, with invitation mode)
 - Fool DLEQ verification (soundness)
 
 ### Production Recommendations
@@ -396,93 +402,90 @@ HTTP 401 Unauthorized
    - Only issue tokens to verified users
    - Consider proof-of-work or CAPTCHAs
 
-## Integration Guide
+## Using the Invitation System
 
-### Step 1: Deploy Services
+The invitation system provides Sybil resistance through trust networks.
+
+### Setup
+
+Start the issuer with invitation-based Sybil resistance:
 
 ```bash
-# Deploy issuer
-docker run -e ISSUER_ID=myapp \
-           -e TOKEN_TTL_MIN=60 \
-           -p 8081:8081 \
-           freebird-issuer
+cd issuer
 
-# Deploy verifier with Redis
-docker run -e REDIS_URL=redis://redis:6379 \
-           -e ISSUER_URL=http://issuer:8081/.well-known/issuer \
-           -p 8082:8082 \
-           freebird-verifier
+export SYBIL_RESISTANCE=invitation
+export SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
+
+cargo run --release
 ```
 
-### Step 2: Add to Your Application
+This creates an "admin" user with 100 invites to bootstrap your network.
 
-**Python Client Example:**
+### How It Works
 
-```python
-import requests
-import secrets
-from hashlib import sha256
+**1. Generate an invitation** (admin or existing user):
 
-# 1. Get issuer metadata
-meta = requests.get("http://issuer:8081/.well-known/issuer").json()
-issuer_id = meta["issuer_id"]
+```bash
+# Using the crypto library
+use crypto::InvitationSystem;
 
-# 2. Request token (implement VOPRF blinding)
-# See crypto/ module for reference implementation
+let (code, signature, expires_at) = invitation_system
+    .generate_invite("admin")
+    .await?;
 
-# 3. Verify token before granting access
-response = requests.post("http://verifier:8082/v1/verify", json={
-    "token_b64": token,
-    "issuer_id": issuer_id
-})
-
-if response.status_code == 200 and response.json()["ok"]:
-    # Grant access
-    print("✅ Token verified - user authorized")
-else:
-    # Deny access
-    print("❌ Invalid or replayed token")
+// Returns:
+// code: "Abc123XyZ456..."        (random 16 bytes, base64url)
+// signature: "MEUCIQDx..."        (ECDSA P-256 signature)
+// expires_at: 1734567890          (Unix timestamp, 30 days default)
 ```
 
-### Step 3: Add Authorization to Issuance
+**2. Share invitation** with a new user (out-of-band):
+- Email, Signal, in-person, etc.
+- Give them both `code` and `signature`
 
-Freebird intentionally doesn't include authorization logic—you add it:
+**3. New user requests token** with invitation proof:
 
-```rust
-// Example: Require JWT before issuing tokens
-async fn issue_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(req): Json<IssueReq>
-) -> Result<Json<IssueResp>, StatusCode> {
-    // 1. Verify JWT from Authorization header
-    let jwt = extract_jwt(&headers)?;
-    verify_jwt(&jwt)?;
-    
-    // 2. Check rate limit
-    rate_limit(&jwt.sub)?;
-    
-    // 3. Issue token
-    issue_token(state, req).await
+```bash
+POST /v1/oprf/issue-protected
+{
+  "blinded_element_b64": "...",
+  "sybil_proof": {
+    "type": "invitation",
+    "code": "Abc123XyZ456...",
+    "signature": "MEUCIQDx..."
+  }
 }
 ```
 
-## Performance
+**4. Issuer verifies invitation**:
+- ✓ Signature is valid (ECDSA verification)
+- ✓ Invitation exists in database
+- ✓ Not expired (within 30 days)
+- ✓ Not already used (single-use enforcement)
 
-Benchmarks on Apple M1 Pro:
+**5. If valid**:
+- Mark invitation as redeemed
+- Create new user record (0 invites initially)
+- After 30 days (configurable), new user earns 5 invites
+- Issue anonymous token
 
-| Operation | Throughput | Latency (p50) | Latency (p99) |
-|-----------|------------|---------------|---------------|
-| Issue     | ~8,000/sec | 0.12 ms       | 0.35 ms       |
-| Verify    | ~12,000/sec| 0.08 ms       | 0.20 ms       |
+**6. Growth**: New user can now invite others after waiting period
 
-**Bottlenecks:**
-- Issuer: ECDH scalar multiplication (P-256)
-- Verifier: Redis/network RTT (if using Redis)
+### Properties
 
-**Scaling:**
-- Issuer: Horizontally scalable (stateless)
-- Verifier: Shared Redis backend for replay protection
+- **Single-use enforcement**: Each invitation can only be redeemed once
+- **Social accountability**: Inviters stake reputation on invitees (ban trees)
+- **Privacy preserved**: Verifier never sees invitation history
+- **No biometrics**: Trust-based without surveillance infrastructure
+
+### Configuration
+
+```bash
+SYBIL_INVITE_PER_USER=5              # Default invites per user
+SYBIL_INVITE_COOLDOWN_SECS=3600      # Time between invites (1 hour)
+SYBIL_INVITE_EXPIRES_SECS=2592000    # Invitation validity (30 days)
+SYBIL_INVITE_NEW_USER_WAIT_SECS=2592000  # Wait before new users can invite (30 days)
+```
 
 ## Testing
 
