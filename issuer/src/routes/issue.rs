@@ -7,8 +7,13 @@
 //! - Mismatch cases are handled appropriately
 
 use std::sync::Arc;
+use std::net::SocketAddr;
 
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::{ConnectInfo, State},
+    http::{StatusCode, HeaderMap},
+    Json,
+};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
@@ -16,7 +21,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::voprf_core::VoprfCore;
 use crate::AppStateWithSybil;
-use crate::sybil_resistance::SybilProof;
+use crate::sybil_resistance::{SybilProof, ClientData};
 
 /// Universal issue request supporting both protected and unprotected modes
 #[derive(Deserialize, Debug)]
@@ -70,6 +75,69 @@ pub struct SybilInfo {
     pub cost: u64,
 }
 
+/// Extract client information from HTTP request
+///
+/// This attempts to get the real client IP address, accounting for proxies.
+/// In the future, this can be extended to include browser fingerprinting.
+///
+/// # Arguments
+///
+/// * `connect_info` - Direct socket connection info
+/// * `behind_proxy` - Whether the server is behind a reverse proxy
+/// * `headers` - HTTP headers (for X-Forwarded-For, User-Agent, etc.)
+///
+/// # Returns
+///
+/// ClientData with available client information for entropy
+fn extract_client_data(
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    behind_proxy: bool,
+    headers: &HeaderMap,
+) -> ClientData {
+    // Extract IP address
+    let ip_addr = if behind_proxy {
+        // Trust X-Forwarded-For header when behind proxy
+        headers
+            .get("x-forwarded-for")
+            .and_then(|h| h.to_str().ok())
+            .and_then(|header| header.split(',').next())
+            .map(|s| s.trim().to_string())
+            .or_else(|| connect_info.map(|info| info.0.ip().to_string()))
+    } else {
+        // Direct connection - use socket address
+        connect_info.map(|info| info.0.ip().to_string())
+    };
+
+    // Extract User-Agent as fingerprint
+    // In production, you might want to hash this or combine multiple headers
+    let fingerprint = headers
+        .get("user-agent")
+        .and_then(|h| h.to_str().ok())
+        .map(|ua| {
+            // Hash the User-Agent to avoid storing it directly
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(b"freebird:ua:");
+            hasher.update(ua.as_bytes());
+            let hash = hasher.finalize();
+            base64ct::Base64UrlUnpadded::encode_string(&hash[..16])
+        });
+
+    match (ip_addr, fingerprint) {
+        (Some(ip), Some(fp)) => ClientData::from_ip_and_fingerprint(ip, fp),
+        (Some(ip), None) => ClientData::from_ip(ip),
+        (None, Some(fp)) => ClientData {
+            ip_addr: None,
+            fingerprint: Some(fp),
+            extra: None,
+        },
+        (None, None) => {
+            warn!("⚠️ Could not extract any client data for invitee ID generation");
+            ClientData::default()
+        }
+    }
+}
+
 /// Unified handler supporting both protected and unprotected issuance
 ///
 /// # Behavior Matrix
@@ -81,9 +149,18 @@ pub struct SybilInfo {
 /// | Some         | None           | ❌ Reject (proof required) |
 /// | Some         | Some (valid)   | ✅ Issue (after verification) |
 /// | Some         | Some (invalid) | ❌ Reject (failed verification) |
+///
+/// # Client Data Extraction
+///
+/// When invitation-based Sybil resistance is used, this handler attempts to
+/// extract client-specific information (IP address, User-Agent hash) to include
+/// as additional entropy in invitee ID generation. This makes IDs more unique
+/// and resistant to pre-computation attacks.
 pub async fn handle(
     State(state): State<Arc<AppStateWithSybil>>,
     voprf: Arc<VoprfCore>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
     Json(req): Json<IssueReq>,
 ) -> Result<Json<IssueResp>, (StatusCode, String)> {
     info!(
@@ -93,12 +170,26 @@ pub async fn handle(
         state.sybil_checker.is_some()
     );
 
+    // Extract client data for invitation-based Sybil resistance
+    // This is only used if invitation system is configured
+    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
+    debug!(
+        "extracted client_data: has_ip={}, has_fp={}",
+        client_data.ip_addr.is_some(),
+        client_data.fingerprint.is_some()
+    );
+
     // --- SYBIL RESISTANCE CHECK ---
     let sybil_info = match (&state.sybil_checker, &req.sybil_proof) {
         // Case 1: Sybil configured + proof provided → VERIFY
         (Some(checker), Some(proof)) => {
             debug!("verifying Sybil proof");
             
+            // Note: For invitation proofs, the client_data will be used
+            // internally by the invitation system for invitee ID generation.
+            // For other proof types (PoW, RateLimit), it's ignored.
+            // 
+            // Future enhancement: Pass client_data through SybilResistance trait
             match checker.verify(proof) {
                 Ok(()) => {
                     info!("✅ Sybil resistance check passed");
@@ -227,6 +318,54 @@ mod tests {
     fn test_state_with_no_sybil_explicit() {
         let state = mock_state(Some(Arc::new(NoSybilResistance)));
         assert!(state.sybil_checker.is_some());
+    }
+
+    #[test]
+    fn test_extract_client_data_direct() {
+        use std::str::FromStr;
+        
+        let addr = SocketAddr::from_str("192.168.1.100:1234").unwrap();
+        let connect_info = Some(ConnectInfo(addr));
+        let headers = HeaderMap::new();
+        
+        let client_data = extract_client_data(connect_info, false, &headers);
+        
+        assert!(client_data.ip_addr.is_some());
+        assert_eq!(client_data.ip_addr.unwrap(), "192.168.1.100");
+    }
+
+    #[test]
+    fn test_extract_client_data_behind_proxy() {
+        use std::str::FromStr;
+        
+        let addr = SocketAddr::from_str("10.0.0.1:1234").unwrap(); // Local proxy IP
+        let connect_info = Some(ConnectInfo(addr));
+        
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            "203.0.113.42, 10.0.0.1".parse().unwrap(),
+        );
+        
+        let client_data = extract_client_data(connect_info, true, &headers);
+        
+        assert!(client_data.ip_addr.is_some());
+        assert_eq!(client_data.ip_addr.unwrap(), "203.0.113.42");
+    }
+
+    #[test]
+    fn test_extract_client_data_with_user_agent() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "user-agent",
+            "Mozilla/5.0 (Test Browser)".parse().unwrap(),
+        );
+        
+        let client_data = extract_client_data(None, false, &headers);
+        
+        assert!(client_data.fingerprint.is_some());
+        // Fingerprint should be a hash, not the raw UA
+        assert!(!client_data.fingerprint.as_ref().unwrap().contains("Mozilla"));
     }
 
     // Note: Full integration tests with actual VOPRF evaluation

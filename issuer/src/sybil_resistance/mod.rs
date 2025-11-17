@@ -37,7 +37,7 @@ pub mod invitation;
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
 pub use proof_of_work::ProofOfWork;
 pub use rate_limit::{RateLimit, client_id_from_ip, client_id_from_fingerprint};
-pub use invitation::{InvitationSystem, InvitationConfig, InvitationStats};
+pub use invitation::{InvitationSystem, InvitationConfig, InvitationStats, ClientData};
 
 // Future implementations:
 // pub mod payment_gate;

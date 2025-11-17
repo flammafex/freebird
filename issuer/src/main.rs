@@ -16,7 +16,8 @@ use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
-
+use axum::http::HeaderMap;
+use axum::extract::ConnectInfo;
 use sybil_resistance::{ProofOfWork, RateLimit, CombinedSybilResistance, SybilResistance};
 
 // Single unified state structure
@@ -211,9 +212,11 @@ async fn well_known_handler(
 
 async fn issue_handler(
     State((state, voprf)): State<SharedState>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
     Json(req): Json<routes::IssueReq>,
 ) -> Result<Json<routes::IssueResp>, (axum::http::StatusCode, String)> {
-    routes::handle(State(state), voprf, Json(req)).await
+    routes::handle(State(state), voprf, connect_info, headers, Json(req)).await
 }
 
 async fn shutdown_signal() {
