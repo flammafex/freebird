@@ -299,6 +299,7 @@ mod tests {
             require_tls: false,
             behind_proxy: false,
             sybil_checker,
+            invitation_system: None,
         }
     }
 

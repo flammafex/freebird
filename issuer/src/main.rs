@@ -18,7 +18,13 @@ use tokio::net::TcpListener;
 use tracing::{info, warn};
 use axum::http::HeaderMap;
 use axum::extract::ConnectInfo;
-use sybil_resistance::{ProofOfWork, RateLimit, CombinedSybilResistance, SybilResistance};
+use sybil_resistance::{
+    ProofOfWork, 
+    RateLimit, 
+    CombinedSybilResistance, 
+    SybilResistance,
+    invitation::InvitationSystem, // Add this import
+};
 
 // Single unified state structure
 #[derive(Clone)]
@@ -30,6 +36,7 @@ pub struct AppStateWithSybil {
     pub require_tls: bool,
     pub behind_proxy: bool,
     pub sybil_checker: Option<Arc<dyn SybilResistance>>,
+    pub invitation_system: Option<Arc<InvitationSystem>>, // Add this field
 }
 
 #[derive(Serialize)]
@@ -83,6 +90,8 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // ---------- Sybil Resistance Configuration ----------
+    let mut invitation_system: Option<Arc<InvitationSystem>> = None;
+    
     let sybil_checker: Option<Arc<dyn SybilResistance>> = 
         match env::var("SYBIL_RESISTANCE").as_deref() {
             Ok("proof_of_work") | Ok("pow") => {
@@ -102,6 +111,61 @@ async fn main() -> anyhow::Result<()> {
                 
                 info!("🛡️  Sybil resistance: Rate Limiting (interval={}s)", interval_secs);
                 Some(Arc::new(RateLimit::new(Duration::from_secs(interval_secs))))
+            }
+            Ok("invitation") => {
+                // Invitation system setup (simplified - see full implementation in invitation.rs)
+                use p256::ecdsa::SigningKey;
+                use rand::rngs::OsRng;
+                use sybil_resistance::invitation::InvitationConfig;
+                use std::path::PathBuf;
+                
+                let signing_key = SigningKey::random(&mut OsRng);
+                
+                let config = InvitationConfig {
+                    invites_per_user: env::var("SYBIL_INVITE_PER_USER")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(5),
+                    invite_cooldown_secs: env::var("SYBIL_INVITE_COOLDOWN_SECS")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(3600),
+                    invite_expires_secs: env::var("SYBIL_INVITE_EXPIRES_SECS")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(30 * 24 * 3600),
+                    new_user_can_invite_after_secs: env::var("SYBIL_INVITE_NEW_USER_WAIT_SECS")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(30 * 24 * 3600),
+                    persistence_path: env::var("SYBIL_INVITE_PERSISTENCE_PATH")
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|_| PathBuf::from("invitations.json")),
+                    autosave_interval_secs: env::var("SYBIL_INVITE_AUTOSAVE_INTERVAL_SECS")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(300),
+                };
+                
+                let inv_sys = InvitationSystem::load_or_create(signing_key, config)
+                    .await?;
+                
+                // Bootstrap users
+                if let Ok(bootstrap_users) = env::var("SYBIL_INVITE_BOOTSTRAP_USERS") {
+                    for entry in bootstrap_users.split(',') {
+                        if let Some((user_id, count_str)) = entry.split_once(':') {
+                            if let Ok(count) = count_str.parse::<u32>() {
+                                inv_sys.add_bootstrap_user(user_id.to_string(), count).await;
+                                info!("Added bootstrap user: {} with {} invites", user_id, count);
+                            }
+                        }
+                    }
+                }
+                
+                info!("🛡️  Sybil resistance: Invitation System");
+                let inv_sys = Arc::new(inv_sys);
+                invitation_system = Some(Arc::clone(&inv_sys));
+                Some(inv_sys)
             }
             Ok("combined") => {
                 let pow_difficulty = env::var("SYBIL_POW_DIFFICULTY")
@@ -150,6 +214,7 @@ async fn main() -> anyhow::Result<()> {
         require_tls,
         behind_proxy,
         sybil_checker,
+        invitation_system, // Include the invitation system reference
     });
 
     // ---------- Router ----------
@@ -157,12 +222,41 @@ async fn main() -> anyhow::Result<()> {
     // The handler adapts based on:
     // - Whether Sybil resistance is configured in state
     // - Whether a Sybil proof is provided in the request
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/.well-known/issuer", get(well_known_handler))
         .route("/v1/oprf/issue", post(issue_handler))
         .route("/v1/oprf/issue-protected", post(issue_handler)) // Same handler!
         .layer(DefaultBodyLimit::max(64 * 1024))
         .with_state((state.clone(), voprf));
+        
+    // ---------- Admin API (optional) ----------
+    if let Ok(admin_key) = env::var("ADMIN_API_KEY") {
+        if admin_key.len() < 32 {
+            warn!("⚠️  ADMIN_API_KEY is too short (< 32 chars), admin API disabled");
+        } else if let Some(ref inv_sys) = state.invitation_system {
+            info!("✅ Admin API enabled at /admin/*");
+            info!("   Endpoints:");
+            info!("   GET  /admin/health");
+            info!("   GET  /admin/stats");
+            info!("   POST /admin/invites/grant");
+            info!("   POST /admin/users/ban");
+            info!("   POST /admin/bootstrap/add");
+            info!("   GET  /admin/users/:user_id");
+            info!("   GET  /admin/invitations/:code");
+            info!("   POST /admin/save");
+            
+            let admin_router = routes::admin_router(
+                Arc::clone(inv_sys),
+                admin_key
+            );
+            
+            app = app.nest("/admin", admin_router);
+        } else {
+            warn!("⚠️  Admin API requires invitation-based Sybil resistance");
+        }
+    } else {
+        info!("ℹ️  Admin API disabled (set ADMIN_API_KEY to enable)");
+    }
 
     // ---------- Serve ----------
     let addr: SocketAddr = bind_addr.parse().expect("BIND_ADDR parse");

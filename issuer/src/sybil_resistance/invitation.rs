@@ -64,7 +64,7 @@ impl Default for InvitationConfig {
 
 /// Represents a single invitation
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct Invitation {
+pub struct Invitation {
     /// Unique invitation code
     code: String,
     /// User ID who created this invite
@@ -103,7 +103,7 @@ mod hex_serde {
 
 /// State tracking for a user who can send invites
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct InviterState {
+pub struct InviterState {
     /// User's identifier
     user_id: String,
     /// How many invites they have left
@@ -675,6 +675,96 @@ impl InvitationSystem {
             banned_users,
         }
     }
+	
+	/// Get detailed information about a user
+	/// 
+	/// Returns user state and list of their invitees
+	pub async fn get_user_details(&self, user_id: &str) -> Result<(InviterState, Vec<String>)> {
+		let state = self.state.read().await;
+		
+		let inviter = state.inviters
+			.get(user_id)
+			.ok_or_else(|| anyhow!("user not found"))?
+			.clone();
+		
+		// Find all users invited by this user
+		let mut invitees = Vec::new();
+		for invitation in state.invitations.values() {
+			if invitation.inviter_id == user_id {
+				if let Some(ref invitee_id) = invitation.invitee_id {
+					invitees.push(invitee_id.clone());
+				}
+			}
+		}
+		
+		Ok((inviter, invitees))
+	}
+
+	/// Get detailed information about an invitation
+	pub async fn get_invitation_details(&self, code: &str) -> Result<Invitation> {
+		let state = self.state.read().await;
+		
+		state.invitations
+			.get(code)
+			.cloned()
+			.ok_or_else(|| anyhow!("invitation not found"))
+	}
+	
+	/// Get the current invite count for a user (for admin responses)
+	pub async fn get_user_invite_count(&self, user_id: &str) -> Result<u32> {
+		let state = self.state.read().await;
+		
+		state.inviters
+			.get(user_id)
+			.map(|inviter| inviter.invites_remaining)
+			.ok_or_else(|| anyhow!("user not found"))
+	}
+
+	/// List all users (for admin dashboard)
+	/// 
+	/// Returns a vector of (user_id, invites_remaining, banned)
+	pub async fn list_users(&self) -> Vec<(String, u32, bool)> {
+		let state = self.state.read().await;
+		
+		state.inviters
+			.values()
+			.map(|inviter| (
+				inviter.user_id.clone(),
+				inviter.invites_remaining,
+				inviter.banned
+			))
+			.collect()
+	}
+
+	/// Count how many users would be affected by a ban tree
+	/// 
+	/// Returns the number of users that would be banned (including the target)
+	pub async fn count_ban_tree_size(&self, user_id: &str) -> usize {
+		let state = self.state.read().await;
+		
+		// Start with the target user
+		let mut count = 1;
+		
+		// Find all users invited by this user (recursively)
+		let mut to_check = vec![user_id.to_string()];
+		let mut checked = std::collections::HashSet::new();
+		
+		while let Some(current_id) = to_check.pop() {
+			if !checked.insert(current_id.clone()) {
+				continue; // Already checked this user
+			}
+			
+			for invitation in state.invitations.values() {
+				if invitation.inviter_id == current_id {
+					if let Some(ref invitee_id) = invitation.invitee_id {
+						count += 1;
+						to_check.push(invitee_id.clone());
+					}
+				}
+			}
+		}
+		count
+	}
 }
 
 /// Statistics about the invitation system
