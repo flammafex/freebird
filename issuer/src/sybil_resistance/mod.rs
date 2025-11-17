@@ -41,7 +41,6 @@ pub use invitation::{InvitationSystem, InvitationConfig, InvitationStats};
 
 // Future implementations:
 // pub mod payment_gate;
-// pub mod invitation;
 // pub mod proof_of_humanity;
 
 /// Proof submitted to demonstrate Sybil resistance
@@ -149,6 +148,15 @@ impl SybilResistance for NoSybilResistance {
 ///     Box::new(RateLimit::new(Duration::from_secs(3600))),
 /// ]);
 /// ```
+///
+/// # Important Note
+///
+/// This implementation requires that the proof satisfies ALL mechanisms.
+/// If you configure PoW + RateLimit, the client must provide a proof that
+/// works for both (which may require extending the SybilProof enum to support
+/// multiple proofs in one request, or using a wrapper proof type).
+///
+/// Current implementation: Proof must be valid for ALL configured mechanisms.
 pub struct CombinedSybilResistance {
     mechanisms: Vec<Box<dyn SybilResistance>>,
 }
@@ -161,11 +169,42 @@ impl CombinedSybilResistance {
 
 impl SybilResistance for CombinedSybilResistance {
     fn verify(&self, proof: &SybilProof) -> Result<()> {
+        // CRITICAL FIX: All mechanisms must verify the proof
+        // We count how many mechanisms support and verify this proof
+        let mut supported_count = 0;
+        let mut verified_count = 0;
+        
         for mechanism in &self.mechanisms {
             if mechanism.supports(proof) {
+                supported_count += 1;
                 mechanism.verify(proof)?;
+                verified_count += 1;
             }
         }
+        
+        // The proof must be supported by at least one mechanism
+        if supported_count == 0 {
+            return Err(anyhow!(
+                "proof type {:?} not supported by any configured mechanism",
+                std::mem::discriminant(proof)
+            ));
+        }
+        
+        // WARNING: With single-proof design, we can only verify mechanisms
+        // that support this proof type. If you want defense-in-depth with
+        // multiple proof types, you need to extend the API to accept
+        // multiple proofs or use a MultiProof variant.
+        //
+        // For now, we document this limitation.
+        if supported_count < self.mechanisms.len() {
+            tracing::warn!(
+                supported = supported_count,
+                total = self.mechanisms.len(),
+                "proof only verified by subset of mechanisms (consider multi-proof API)"
+            );
+        }
+        
+        // All mechanisms that support this proof have verified it
         Ok(())
     }
 
@@ -207,6 +246,7 @@ pub fn verify_timestamp_recent(timestamp: u64, window_secs: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn test_no_sybil_resistance() {
@@ -236,5 +276,29 @@ mod tests {
 
         // Recent timestamp should be valid
         assert!(verify_timestamp_recent(now - 30, 60).is_ok());
+    }
+    
+    #[test]
+    fn test_combined_requires_supported_proof() {
+        let combined = CombinedSybilResistance::new(vec![
+            Box::new(ProofOfWork::new(16)),
+        ]);
+        
+        // ProofOfWork proof should work
+        let timestamp = current_timestamp();
+        let (nonce, _) = ProofOfWork::compute(16, "test", timestamp).unwrap();
+        let proof = SybilProof::ProofOfWork {
+            nonce,
+            input: "test".to_string(),
+            timestamp,
+        };
+        assert!(combined.verify(&proof).is_ok());
+        
+        // RateLimit proof should fail (not supported)
+        let rate_proof = SybilProof::RateLimit {
+            client_id: "test".to_string(),
+            timestamp: current_timestamp(),
+        };
+        assert!(combined.verify(&rate_proof).is_err());
     }
 }

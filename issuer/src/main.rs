@@ -32,6 +32,7 @@ pub struct AppState {
 }
 
 // App state with Sybil resistance
+#[derive(Clone)]
 pub struct AppStateWithSybil {
     pub issuer_id: String,
     pub kid: String,
@@ -173,47 +174,13 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // ---------- Router ----------
-    let shared_state = (state.clone(), voprf.clone());
-    let shared_state_sybil = (state_with_sybil.clone(), voprf.clone());
-    
-    // We need to handle two different state types, so we'll use nested routers
-    
-    // Router for standard endpoints (uses AppState)
-    let standard_router = Router::new()
-        .route(
-            "/.well-known/issuer",
-            get(|State((app_state, _)): State<(Arc<AppState>, Arc<voprf_core::VoprfCore>)>| async move {
-                well_known(State(app_state)).await
-            }),
-        )
-        .route(
-            "/v1/oprf/issue",
-            post(
-                |State((app_state, voprf)): State<(Arc<AppState>, Arc<voprf_core::VoprfCore>)>,
-                 Json(req): Json<crate::routes::issue::IssueReq>| async move {
-                    crate::routes::issue::handle(State(app_state), voprf, Json(req)).await
-                },
-            ),
-        )
-        .with_state(shared_state);
-
-    // Router for protected endpoint (uses AppStateWithSybil)
-    let protected_router = Router::new()
-        .route(
-            "/v1/oprf/issue-protected",
-            post(
-                |State((app_state, voprf)): State<(Arc<AppStateWithSybil>, Arc<voprf_core::VoprfCore>)>,
-                 Json(req): Json<crate::routes::issue_with_sybil::IssueReqWithSybil>| async move {
-                    crate::routes::issue_with_sybil::handle_with_sybil(State(app_state), voprf, Json(req)).await
-                },
-            ),
-        )
-        .with_state(shared_state_sybil);
-
-    // Merge routers
-    let app = standard_router
-        .merge(protected_router)
-        .layer(DefaultBodyLimit::max(64 * 1024));
+    // Use with_state() to provide state to handlers
+    let app = Router::new()
+        .route("/.well-known/issuer", get(well_known_handler))
+        .route("/v1/oprf/issue", post(issue_handler))
+        .route("/v1/oprf/issue-protected", post(issue_protected_handler))
+        .layer(DefaultBodyLimit::max(64 * 1024))
+        .with_state((state.clone(), state_with_sybil, voprf));
 
     // ---------- Serve ----------
     let addr: SocketAddr = bind_addr.parse().expect("BIND_ADDR parse");
@@ -224,18 +191,13 @@ async fn main() -> anyhow::Result<()> {
     } else {
         info!("🕊️ Freebird issuer listening on {}", listener.local_addr()?);
     }
-    println!("✅ Router built successfully. Expected endpoints:");
-    println!("   GET  /.well-known/issuer");
-    println!("   POST /v1/oprf/issue (no Sybil resistance)");
-    println!("   POST /v1/oprf/issue-protected (with Sybil resistance)");
+    info!("✅ Router built successfully. Endpoints:");
+    info!("   GET  /.well-known/issuer");
+    info!("   POST /v1/oprf/issue (no Sybil resistance)");
+    info!("   POST /v1/oprf/issue-protected (with Sybil resistance)");
     
     if sybil_checker.is_some() {
-        println!("\n🛡️  Sybil resistance enabled on /v1/oprf/issue-protected");
-        println!("   Configure with SYBIL_RESISTANCE env var:");
-        println!("   - 'proof_of_work' or 'pow'");
-        println!("   - 'rate_limit'");
-        println!("   - 'combined'");
-        println!("   - 'none'");
+        info!("🛡️  Sybil resistance enabled on /v1/oprf/issue-protected");
     }
 
     axum::serve(listener, app)
@@ -245,7 +207,13 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // ---------- Handlers ----------
-async fn well_known(State(st): State<Arc<AppState>>) -> Json<WellKnown> {
+
+// Type alias for our shared state
+type SharedState = (Arc<AppState>, Arc<AppStateWithSybil>, Arc<voprf_core::VoprfCore>);
+
+async fn well_known_handler(
+    State((st, _, _)): State<SharedState>,
+) -> Json<WellKnown> {
     Json(WellKnown {
         issuer_id: st.issuer_id.clone(),
         voprf: VoprfInfo {
@@ -255,6 +223,20 @@ async fn well_known(State(st): State<Arc<AppState>>) -> Json<WellKnown> {
             exp_sec: st.exp_sec,
         },
     })
+}
+
+async fn issue_handler(
+    State((st, _, voprf)): State<SharedState>,
+    Json(req): Json<crate::routes::issue::IssueReq>,
+) -> Result<Json<crate::routes::issue::IssueResp>, (axum::http::StatusCode, String)> {
+    crate::routes::issue::handle(State(st), voprf, Json(req)).await
+}
+
+async fn issue_protected_handler(
+    State((_, st_sybil, voprf)): State<SharedState>,
+    Json(req): Json<crate::routes::issue_with_sybil::IssueReqWithSybil>,
+) -> Result<Json<crate::routes::issue_with_sybil::IssueRespWithSybil>, (axum::http::StatusCode, String)> {
+    crate::routes::issue_with_sybil::handle_with_sybil(State(st_sybil), voprf, Json(req)).await
 }
 
 async fn shutdown_signal() {

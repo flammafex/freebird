@@ -3,18 +3,14 @@ name = "crypto"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
-[[bin]]
- name = "test_hash2curve"
-path = "test_hash2curve.rs"
-[features]
-default = []
-voprf-p256 = []
-rfc9380 = []         # turn on when you provide a real SSWU_RO map
 
+[features]
+default = ["voprf-p256"]
+voprf-p256 = []
 
 [dependencies]
-# Core curve + math
-p256 = { version = "0.13", default-features = false, features = ["arithmetic", "hash2curve"] }
+# Core curve + math for P-256 VOPRF implementation
+p256 = { version = "0.13", default-features = false, features = ["arithmetic", "hash2curve", "ecdsa"] }
 elliptic-curve = { version = "0.13", features = ["hash2curve"] }
 
 # Hashing / randomness
@@ -28,7 +24,9 @@ hkdf           = "0.12"
 base64ct       = { version = "1.8", features = ["alloc"] }
 generic-array  = "0.14"
 zeroize        = "1"
-voprf = "0.5"
+
+# NOTE: The external voprf crate is NOT used. We use our custom P-256 implementation.
+# If you need Ristretto255 VOPRF, create a separate feature flag and wrapper.
 
 [patch.crates-io]
 # Enforce a single generic-array version to prevent trait-bound conflicts

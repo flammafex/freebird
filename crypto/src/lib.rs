@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
+
+//! Cryptographic primitives for Freebird
+//!
+//! This module provides high-level APIs for VOPRF operations using the
+//! custom P-256 implementation in vendor/voprf_p256/.
+
 use base64ct::{Base64UrlUnpadded, Encoding};
 use sha2::{Digest, Sha256};
 
