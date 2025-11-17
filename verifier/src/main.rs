@@ -21,6 +21,8 @@ use store::{SpendStore, StoreBackend};
 struct AppState {
     issuers: Arc<RwLock<HashMap<String, IssuerInfo>>>,
     store: Arc<dyn SpendStore>,
+    /// Maximum acceptable clock skew in seconds (default: 300 = 5 minutes)
+    max_clock_skew_secs: i64,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -45,11 +47,14 @@ struct IssuerInfo {
     exp_sec: u64,
 }
 
-// ✅ CLEANED: Removed HPS field
 #[derive(Deserialize, Debug)]
 struct VerifyRequest {
     token_b64: String,
     issuer_id: String,
+    /// Optional: Token expiration time (Unix timestamp)
+    /// If not provided, uses default from issuer metadata
+    #[serde(default)]
+    exp: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -61,6 +66,14 @@ struct VerifyResponse {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     logging::init("debug");
+
+    // ---------- Configuration ----------
+    let max_clock_skew_secs = std::env::var("MAX_CLOCK_SKEW_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(300); // Default: 5 minutes
+
+    info!("⏰ Clock skew tolerance: {} seconds", max_clock_skew_secs);
 
     // ---------- Backend selection ----------
     let backend = if let Ok(url) = std::env::var("REDIS_URL") {
@@ -81,9 +94,10 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         issuers: Arc::new(RwLock::new(HashMap::new())),
         store,
+        max_clock_skew_secs,
     });
 
-    // background refresh loop
+    // Background refresh loop
     let refresh_state = Arc::clone(&state);
     tokio::spawn(async move {
         let mut failures = 0u32;
@@ -155,20 +169,18 @@ async fn verify_with_logging(
     
     match result {
         Ok(Json(req)) => {
-            info!("✅ Request parsed successfully: issuer_id={}", req.issuer_id);
+            info!("✅ Request parsed: issuer_id={}", req.issuer_id);
             debug!("Full request: {:?}", req);
             verify(state, Json(req)).await
         }
         Err(rejection) => {
-            error!("❌ JSON deserialization failed!");
-            error!("Rejection type: {:?}", rejection);
-            error!("Error message: {}", rejection);
+            error!("❌ JSON deserialization failed: {}", rejection);
             Err((StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", rejection)))
         }
     }
 }
 
-// ---------- Verification handler ----------
+// ---------- Verification handler with expiration checking ----------
 async fn verify(
     State(st): State<Arc<AppState>>,
     Json(req): Json<VerifyRequest>,
@@ -188,22 +200,69 @@ async fn verify(
     
     debug!("Found issuer: kid={}", issuer.kid);
 
-    // 2) Verify DLEQ token and derive PRF output
+    // 2) NEW: Check token expiration BEFORE cryptographic verification
+    //    This prevents wasting CPU on expired tokens
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    
+    // Determine expiration time:
+    // - Use explicit exp from request if provided
+    // - Otherwise, tokens expire based on issuer's default TTL from issuance time
+    // Note: For proper validation, tokens should include their exp in the request
+    if let Some(exp) = req.exp {
+        debug!("Checking explicit expiration: exp={}, now={}", exp, now);
+        
+        // Check if token has expired (with clock skew tolerance)
+        if now > exp + st.max_clock_skew_secs {
+            let expired_by = now - exp;
+            warn!(
+                "❌ Token expired: expired_by={}s (tolerance={}s)",
+                expired_by, st.max_clock_skew_secs
+            );
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "token expired".to_string(),
+            ));
+        }
+        
+        // Also check for tokens with expiration too far in the future
+        // (possible clock skew or forged timestamps)
+        let max_future_time = now + st.max_clock_skew_secs;
+        if exp > now + issuer.exp_sec as i64 + st.max_clock_skew_secs {
+            warn!(
+                "❌ Token expiration too far in future: exp={}, max_expected={}",
+                exp,
+                now + issuer.exp_sec as i64
+            );
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "invalid token expiration".to_string(),
+            ));
+        }
+        
+        debug!("✅ Token not expired (exp in {}s)", exp - now);
+    } else {
+        debug!("⚠️ No explicit expiration provided, relying on nullifier TTL");
+        // Without explicit exp, we rely on the nullifier TTL to prevent
+        // old tokens from being used. This is less secure than explicit
+        // expiration checking but maintains backward compatibility.
+    }
+
+    // 3) Verify DLEQ token and derive PRF output
     debug!("Verifying DLEQ token with context len={}", issuer.ctx.len());
     let verifier = crypto::Verifier::new(&issuer.ctx);
     let out_b64 = verifier
         .verify(&req.token_b64, &issuer.pubkey_bytes)
         .map_err(|e| {
-            error!("Token verification failed: {:?}", e);
+            error!("Token cryptographic verification failed: {:?}", e);
             (StatusCode::UNAUTHORIZED, "verification failed".into())
         })?;
     
-    debug!("Token verified, PRF output derived");
+    debug!("✅ Token cryptographically valid, PRF output derived");
 
-    // 3) Replay / spend tracking
+    // 4) Replay / spend tracking
     let null_key = crypto::nullifier_key(&req.issuer_id, &out_b64);
     let spend_key = format!("freebird:spent:{}:{}", req.issuer_id, null_key);
-    debug!("Checking spend status for key: {}", spend_key);
+    debug!("Checking replay with key: {}", spend_key);
     
     let spent = st
         .store
@@ -215,15 +274,19 @@ async fn verify(
         })?;
 
     if !spent {
-        warn!(%spend_key, "replay detected");
+        warn!(%spend_key, "replay detected (token already used)");
         return Err((StatusCode::UNAUTHORIZED, "verification failed".into()));
     }
 
-    // 4) Success
-    info!("✅ Token verified successfully: issuer={}, kid={}", req.issuer_id, issuer.kid);
+    // 5) Success
+    info!(
+        "✅ Token verified successfully: issuer={}, kid={}, nullifier={}",
+        req.issuer_id, issuer.kid, &null_key[..16]
+    );
+    
     Ok(Json(VerifyResponse {
         ok: true,
-        verified_at: time::OffsetDateTime::now_utc().unix_timestamp(),
+        verified_at: now,
     }))
 }
 

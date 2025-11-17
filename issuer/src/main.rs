@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-// Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
+// Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
 mod keys;
 mod voprf_core;
 mod routes;
-#[cfg(feature = "human-gate-webauthn")]
-mod proof;
 mod sybil_resistance;
 
 use axum::{
@@ -21,17 +19,7 @@ use tracing::{info, warn};
 
 use sybil_resistance::{ProofOfWork, RateLimit, CombinedSybilResistance, SybilResistance};
 
-#[derive(Clone)]
-pub struct AppState {
-    pub issuer_id: String,
-    pub kid: String,
-    pub exp_sec: u64,
-    pub pubkey_b64: String,
-    pub require_tls: bool,
-    pub behind_proxy: bool,
-}
-
-// App state with Sybil resistance
+// Single unified state structure
 #[derive(Clone)]
 pub struct AppStateWithSybil {
     pub issuer_id: String,
@@ -100,7 +88,7 @@ async fn main() -> anyhow::Result<()> {
                 let difficulty = env::var("SYBIL_POW_DIFFICULTY")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(20); // Default: ~1 second
+                    .unwrap_or(20);
                 
                 info!("🛡️  Sybil resistance: Proof-of-Work (difficulty={})", difficulty);
                 Some(Arc::new(ProofOfWork::new(difficulty)))
@@ -109,7 +97,7 @@ async fn main() -> anyhow::Result<()> {
                 let interval_secs = env::var("SYBIL_RATE_LIMIT_SECS")
                     .ok()
                     .and_then(|s| s.parse().ok())
-                    .unwrap_or(3600); // Default: 1 hour
+                    .unwrap_or(3600);
                 
                 info!("🛡️  Sybil resistance: Rate Limiting (interval={}s)", interval_secs);
                 Some(Arc::new(RateLimit::new(Duration::from_secs(interval_secs))))
@@ -134,7 +122,7 @@ async fn main() -> anyhow::Result<()> {
                 ])))
             }
             Ok("none") | Err(_) => {
-                warn!("⚠️  No Sybil resistance configured - tokens can be issued freely");
+                info!("ℹ️  No Sybil resistance configured - tokens issued freely");
                 None
             }
             Ok(other) => {
@@ -152,35 +140,28 @@ async fn main() -> anyhow::Result<()> {
         ctx,
     )?);
 
-    // Standard state (for backward-compatible endpoint)
-    let state = Arc::new(AppState {
-        issuer_id: issuer_id.clone(),
-        kid: kid.clone(),
-        exp_sec,
-        pubkey_b64: pubkey_b64.clone(),
-        require_tls,
-        behind_proxy,
-    });
-
-    // State with Sybil resistance (for protected endpoint)
-    let state_with_sybil = Arc::new(AppStateWithSybil {
+    // Single unified state
+    let state = Arc::new(AppStateWithSybil {
         issuer_id,
         kid,
         exp_sec,
         pubkey_b64,
         require_tls,
         behind_proxy,
-        sybil_checker: sybil_checker.clone(),
+        sybil_checker,
     });
 
     // ---------- Router ----------
-    // Use with_state() to provide state to handlers
+    // Both endpoints use the same unified handler
+    // The handler adapts based on:
+    // - Whether Sybil resistance is configured in state
+    // - Whether a Sybil proof is provided in the request
     let app = Router::new()
         .route("/.well-known/issuer", get(well_known_handler))
         .route("/v1/oprf/issue", post(issue_handler))
-        .route("/v1/oprf/issue-protected", post(issue_protected_handler))
+        .route("/v1/oprf/issue-protected", post(issue_handler)) // Same handler!
         .layer(DefaultBodyLimit::max(64 * 1024))
-        .with_state((state.clone(), state_with_sybil, voprf));
+        .with_state((state.clone(), voprf));
 
     // ---------- Serve ----------
     let addr: SocketAddr = bind_addr.parse().expect("BIND_ADDR parse");
@@ -191,13 +172,16 @@ async fn main() -> anyhow::Result<()> {
     } else {
         info!("🕊️ Freebird issuer listening on {}", listener.local_addr()?);
     }
-    info!("✅ Router built successfully. Endpoints:");
-    info!("   GET  /.well-known/issuer");
-    info!("   POST /v1/oprf/issue (no Sybil resistance)");
-    info!("   POST /v1/oprf/issue-protected (with Sybil resistance)");
     
-    if sybil_checker.is_some() {
-        info!("🛡️  Sybil resistance enabled on /v1/oprf/issue-protected");
+    info!("✅ Router configured. Endpoints:");
+    info!("   GET  /.well-known/issuer");
+    info!("   POST /v1/oprf/issue              (adaptive: checks for Sybil proof)");
+    info!("   POST /v1/oprf/issue-protected    (same handler, clearer intent)");
+    
+    if state.sybil_checker.is_some() {
+        info!("🛡️  Sybil resistance enabled - proofs will be verified when provided");
+    } else {
+        info!("ℹ️  Sybil resistance disabled - tokens issued without verification");
     }
 
     axum::serve(listener, app)
@@ -208,35 +192,28 @@ async fn main() -> anyhow::Result<()> {
 
 // ---------- Handlers ----------
 
-// Type alias for our shared state
-type SharedState = (Arc<AppState>, Arc<AppStateWithSybil>, Arc<voprf_core::VoprfCore>);
+// Type alias for shared state
+type SharedState = (Arc<AppStateWithSybil>, Arc<voprf_core::VoprfCore>);
 
 async fn well_known_handler(
-    State((st, _, _)): State<SharedState>,
+    State((state, _)): State<SharedState>,
 ) -> Json<WellKnown> {
     Json(WellKnown {
-        issuer_id: st.issuer_id.clone(),
+        issuer_id: state.issuer_id.clone(),
         voprf: VoprfInfo {
             suite: "OPRF(P-256, SHA-256)-verifiable".into(),
-            kid: st.kid.clone(),
-            pubkey: st.pubkey_b64.clone(),
-            exp_sec: st.exp_sec,
+            kid: state.kid.clone(),
+            pubkey: state.pubkey_b64.clone(),
+            exp_sec: state.exp_sec,
         },
     })
 }
 
 async fn issue_handler(
-    State((st, _, voprf)): State<SharedState>,
-    Json(req): Json<crate::routes::issue::IssueReq>,
-) -> Result<Json<crate::routes::issue::IssueResp>, (axum::http::StatusCode, String)> {
-    crate::routes::issue::handle(State(st), voprf, Json(req)).await
-}
-
-async fn issue_protected_handler(
-    State((_, st_sybil, voprf)): State<SharedState>,
-    Json(req): Json<crate::routes::issue_with_sybil::IssueReqWithSybil>,
-) -> Result<Json<crate::routes::issue_with_sybil::IssueRespWithSybil>, (axum::http::StatusCode, String)> {
-    crate::routes::issue_with_sybil::handle_with_sybil(State(st_sybil), voprf, Json(req)).await
+    State((state, voprf)): State<SharedState>,
+    Json(req): Json<routes::IssueReq>,
+) -> Result<Json<routes::IssueResp>, (axum::http::StatusCode, String)> {
+    routes::handle(State(state), voprf, Json(req)).await
 }
 
 async fn shutdown_signal() {
@@ -245,6 +222,7 @@ async fn shutdown_signal() {
             .await
             .expect("failed to install Ctrl+C handler");
     };
+    
     #[cfg(unix)]
     let terminate = async {
         use tokio::signal::unix::{signal, SignalKind};
@@ -252,11 +230,14 @@ async fn shutdown_signal() {
             signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
         sigterm.recv().await;
     };
+    
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
+    
     tokio::select! {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
+    
     info!("shutdown signal received");
 }

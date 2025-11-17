@@ -5,7 +5,7 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 use tracing::{debug, error, warn};
 
-use crypto::vendor::voprf_p256::oprf::{self, Server};
+use crypto::vendor::voprf_p256::oprf::Server;
 
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct IssuerSecret(pub [u8; 32]);
@@ -140,59 +140,6 @@ impl VoprfCore {
     pub fn context(&self) -> &[u8] {
         &self.ctx
     }
-}
-
-// ============================================================================
-// HTTP Handler Helpers
-// ============================================================================
-
-use axum::{http::StatusCode, Json};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use crate::AppState;
-
-#[derive(Deserialize)]
-pub struct IssueRequest {
-    #[serde(alias = "blinded")]
-    pub blinded_element_b64: String,
-    pub proof_type: Option<String>,
-    pub proof_payload: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct IssueResponse {
-    pub issuer_id: String,
-    pub suite: String,
-    pub kid: String,
-    pub pubkey: String,
-    pub token: String,
-}
-
-/// Adapter used for backward compatibility (no Sybil resistance)
-pub async fn issue_token(
-    voprf: Arc<VoprfCore>,
-    req: IssueRequest,
-) -> Result<Json<IssueResponse>, (StatusCode, String)> {
-    debug!("🌀 issue_token entered");
-    
-    let token_b64 = match voprf.evaluate_b64(&req.blinded_element_b64) {
-        Ok(t) => t,
-        Err(e) => {
-            error!("❌ evaluate_b64 failed: {:?}", e);
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "invalid blinded_element".into(),
-            ));
-        }
-    };
-
-    Ok(Json(IssueResponse {
-        issuer_id: "issuer:freebird:v1".to_string(),
-        suite: voprf.suite_id().to_string(),
-        kid: voprf.kid.clone(),
-        pubkey: voprf.pubkey_b64.clone(),
-        token: token_b64,
-    }))
 }
 
 #[cfg(test)]
