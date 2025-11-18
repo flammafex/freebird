@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tracing::{debug, error, info, warn};
 
-use crate::voprf_core::VoprfCore;
+use crate::multi_key_voprf::MultiKeyVoprfCore;
 use crate::AppStateWithSybil;
 use crate::sybil_resistance::{SybilProof, ClientData};
 
@@ -158,7 +158,7 @@ fn extract_client_data(
 /// and resistant to pre-computation attacks.
 pub async fn handle(
     State(state): State<Arc<AppStateWithSybil>>,
-    voprf: Arc<VoprfCore>,
+    voprf: Arc<MultiKeyVoprfCore>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
     Json(req): Json<IssueReq>,
@@ -258,12 +258,18 @@ pub async fn handle(
         })?;
     }
 
-    // Perform VOPRF evaluation
-    debug!("calling voprf.evaluate_b64()");
-    let evaluated_b64 = voprf.evaluate_b64(&req.blinded_element_b64).map_err(|e| {
-        error!("evaluate_b64 failed: {e:?}");
-        (StatusCode::BAD_REQUEST, "VOPRF evaluation failed".into())
-    })?;
+    // Perform VOPRF evaluation with multi-key support
+	debug!("calling voprf.evaluate_b64()");
+	let eval_result = voprf.evaluate_b64(&req.blinded_element_b64)
+		.await  // Add .await - it's async now
+		.map_err(|e| {
+			error!("evaluate_b64 failed: {e:?}");
+			(StatusCode::BAD_REQUEST, "VOPRF evaluation failed".into())
+		})?;
+	
+	// Extract token and kid from result
+	let evaluated_b64 = eval_result.token;
+	let kid_used = eval_result.kid;
 
     // Calculate expiration
     let exp = OffsetDateTime::now_utc().unix_timestamp() + state.exp_sec as i64;
@@ -276,12 +282,12 @@ pub async fn handle(
     );
 
     Ok(Json(IssueResp {
-        token: evaluated_b64,
-        proof: String::new(), // Reserved for future DLEQ proof inclusion
-        kid: state.kid.clone(),
-        exp,
-        sybil_info,
-    }))
+		token: evaluated_b64,
+		proof: String::new(),
+		kid: kid_used,  // ✅ NEW - use the actual key ID
+		exp,
+		sybil_info,
+	}))
 }
 
 #[cfg(test)]

@@ -20,16 +20,13 @@ time = "0.3"
 anyhow = "1"
 rand = "0.8"
 zeroize = { version = "1", features = ["zeroize_derive"] }
-
 p256 = { version = "0.13", features = ["ecdsa"] }
 elliptic-curve = "0.13"
 sha2 = "0.10"
 blake3 = "1"
 hex = "0.4"  # For invitation signature serialization
-
 webauthn-rs = { version = "0.5.3", optional = true }
 url = { version = "2", optional = true }
-
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tower_governor = "0.5"

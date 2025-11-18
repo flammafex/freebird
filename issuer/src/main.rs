@@ -2,6 +2,7 @@
 // Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
 mod keys;
 mod voprf_core;
+mod multi_key_voprf;
 mod routes;
 mod sybil_resistance;
 
@@ -198,12 +199,11 @@ async fn main() -> anyhow::Result<()> {
 
     // ---------- Core ----------
     let ctx = b"freebird:v1";
-    let voprf = Arc::new(voprf_core::VoprfCore::new(
-        sk_bytes,
-        pubkey_b64.clone(),
-        kid.clone(),
-        ctx,
-    )?);
+    use multi_key_voprf::MultiKeyVoprfCore;
+    let voprf = Arc::new(multi_key_voprf::MultiKeyVoprfCore::load_or_create(
+		sk_bytes, pubkey_b64.clone(), kid.clone(), ctx,
+		Some(std::path::PathBuf::from("key_rotation_state.json")),
+	).await?);
 
     // Single unified state
     let state = Arc::new(AppStateWithSybil {
@@ -227,8 +227,27 @@ async fn main() -> anyhow::Result<()> {
         .route("/v1/oprf/issue", post(issue_handler))
         .route("/v1/oprf/issue-protected", post(issue_handler)) // Same handler!
         .layer(DefaultBodyLimit::max(64 * 1024))
-        .with_state((state.clone(), voprf));
+        .with_state((state.clone(), voprf.clone()));
         
+    // Background task: Clean up expired keys daily
+	let cleanup_voprf = Arc::clone(&voprf);
+	tokio::spawn(async move {
+		loop {
+			tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)).await;
+			
+			match cleanup_voprf.cleanup_expired_keys().await {
+				Ok(removed) => {
+					if removed > 0 {
+						info!("Automatic cleanup removed {} expired keys", removed);
+					}
+				}
+				Err(e) => {
+					warn!("Automatic key cleanup failed: {}", e);
+				}
+			}
+		}
+	});
+			
     // ---------- Admin API (optional) ----------
     if let Ok(admin_key) = env::var("ADMIN_API_KEY") {
         if admin_key.len() < 32 {
@@ -247,6 +266,7 @@ async fn main() -> anyhow::Result<()> {
             
             let admin_router = routes::admin_router(
                 Arc::clone(inv_sys),
+                Arc::clone(&voprf),
                 admin_key
             );
             
@@ -288,17 +308,40 @@ async fn main() -> anyhow::Result<()> {
 // ---------- Handlers ----------
 
 // Type alias for shared state
-type SharedState = (Arc<AppStateWithSybil>, Arc<voprf_core::VoprfCore>);
+type SharedState = (Arc<AppStateWithSybil>, Arc<multi_key_voprf::MultiKeyVoprfCore>);
+
+#[derive(Serialize)]
+struct WellKnownMultiKey {
+    issuer_id: String,
+    voprf: VoprfInfoMultiKey,
+}
+
+#[derive(Serialize)]
+struct VoprfInfoMultiKey {
+    suite: String,
+    keys: Vec<VoprfKeyInfo>,
+    exp_sec: u64,
+}
+
+#[derive(Serialize)]
+struct VoprfKeyInfo {
+    kid: String,
+    pubkey: String,
+    status: String,
+}
 
 async fn well_known_handler(
-    State((state, _)): State<SharedState>,
+    State((state, voprf)): State<SharedState>,  // Use voprf, not _
 ) -> Json<WellKnown> {
+    let active_kid = voprf.active_kid().await;
+    let active_pubkey = voprf.active_pubkey_b64().await;
+    
     Json(WellKnown {
         issuer_id: state.issuer_id.clone(),
         voprf: VoprfInfo {
             suite: "OPRF(P-256, SHA-256)-verifiable".into(),
-            kid: state.kid.clone(),
-            pubkey: state.pubkey_b64.clone(),
+            kid: active_kid,      // NEW
+            pubkey: active_pubkey, // NEW
             exp_sec: state.exp_sec,
         },
     })

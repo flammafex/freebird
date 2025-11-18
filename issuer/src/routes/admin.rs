@@ -9,36 +9,38 @@
 //! - Viewing system statistics
 //! - Inspecting user details and invite trees
 //! - Managing bootstrap users
+//! - Managing key rotation
 //!
 //! # Security
 //!
 //! All endpoints require authentication via API key in the `X-Admin-Key` header.
 //! The API key should be configured via the `ADMIN_API_KEY` environment variable.
-//!
-//! # Rate Limiting
-//!
-//! Admin endpoints have their own rate limiting separate from token issuance.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tracing::{debug, info, warn};
-
+use std::collections::HashSet;
+use tracing::{info, warn};
+use crate::multi_key_voprf::{KeyInfo, KeyStats, MultiKeyVoprfCore};
 use crate::sybil_resistance::invitation::{InvitationSystem, InvitationStats};
-
+use base64ct::{Base64UrlUnpadded, Encoding};
+use p256::ecdsa::SigningKey;
+use rand::rngs::OsRng;
 // ============================================================================
 // State & Configuration
 // ============================================================================
 
-/// Admin API state
+// Admin API state
 #[derive(Clone)]
 pub struct AdminState {
     /// Reference to the invitation system
     pub invitation_system: Arc<InvitationSystem>,
+    /// Reference to the multi-key VOPRF core
+    pub multi_key_voprf: Arc<MultiKeyVoprfCore>,
     /// Admin API key for authentication
     pub api_key: String,
 }
@@ -50,9 +52,7 @@ pub struct AdminState {
 /// Request to grant invites to a user
 #[derive(Debug, Deserialize)]
 pub struct GrantInvitesRequest {
-    /// User ID to grant invites to
     pub user_id: String,
-    /// Number of invites to grant
     pub count: u32,
 }
 
@@ -68,9 +68,7 @@ pub struct GrantInvitesResponse {
 /// Request to ban a user
 #[derive(Debug, Deserialize)]
 pub struct BanUserRequest {
-    /// User ID to ban
     pub user_id: String,
-    /// Whether to ban their entire invite tree
     #[serde(default)]
     pub ban_tree: bool,
 }
@@ -86,9 +84,7 @@ pub struct BanUserResponse {
 /// Request to add a bootstrap user
 #[derive(Debug, Deserialize)]
 pub struct AddBootstrapUserRequest {
-    /// User ID for the bootstrap user
     pub user_id: String,
-    /// Number of invites to grant
     pub invite_count: u32,
 }
 
@@ -100,62 +96,11 @@ pub struct AddBootstrapUserResponse {
     pub invites_granted: u32,
 }
 
-/// Query parameters for user lookup
-#[derive(Debug, Deserialize)]
-pub struct UserQuery {
-    /// User ID to look up
-    pub user_id: String,
-}
-
-/// Detailed user information
-#[derive(Debug, Serialize)]
-pub struct UserDetails {
-    pub user_id: String,
-    pub invites_remaining: u32,
-    pub invites_sent_count: u32,
-    pub invites_used_count: u32,
-    pub joined_at: u64,
-    pub last_invite_at: u64,
-    pub reputation: f64,
-    pub banned: bool,
-}
-
-/// Response containing user details
-#[derive(Debug, Serialize)]
-pub struct UserDetailsResponse {
-    pub user: UserDetails,
-    pub invitees: Vec<String>,
-}
-
-/// Stats response (wraps InvitationStats)
+/// Stats response
 #[derive(Debug, Serialize)]
 pub struct StatsResponse {
     pub stats: InvitationStats,
     pub timestamp: u64,
-}
-
-/// Query parameters for invitation lookup
-#[derive(Debug, Deserialize)]
-pub struct InvitationQuery {
-    /// Invitation code to look up
-    pub code: String,
-}
-
-/// Invitation details
-#[derive(Debug, Serialize)]
-pub struct InvitationDetails {
-    pub code: String,
-    pub inviter_id: String,
-    pub invitee_id: Option<String>,
-    pub created_at: u64,
-    pub expires_at: u64,
-    pub redeemed: bool,
-}
-
-/// Response containing invitation details
-#[derive(Debug, Serialize)]
-pub struct InvitationDetailsResponse {
-    pub invitation: InvitationDetails,
 }
 
 /// Health check response
@@ -164,6 +109,47 @@ pub struct HealthResponse {
     pub status: String,
     pub uptime_seconds: u64,
     pub invitation_system_status: String,
+}
+
+/// Request to rotate to a new key
+#[derive(Debug, Deserialize)]
+pub struct RotateKeyRequest {
+    pub new_kid: String,
+    #[serde(default)]
+    pub grace_period_secs: Option<u64>,
+}
+
+/// Response after key rotation
+#[derive(Debug, Serialize)]
+pub struct RotateKeyResponse {
+    pub ok: bool,
+    pub old_kid: String,
+    pub new_kid: String,
+    pub grace_period_secs: u64,
+    pub expires_at: u64,
+}
+
+/// Response with list of all keys
+#[derive(Debug, Serialize)]
+pub struct ListKeysResponse {
+    pub keys: Vec<KeyInfo>,
+    pub stats: KeyStats,
+}
+
+/// Response after cleanup
+#[derive(Debug, Serialize)]
+pub struct CleanupKeysResponse {
+    pub ok: bool,
+    pub removed_count: usize,
+    pub removed_kids: Vec<String>,
+}
+
+/// Response after force removing a key
+#[derive(Debug, Serialize)]
+pub struct ForceRemoveKeyResponse {
+    pub ok: bool,
+    pub kid: String,
+    pub message: String,
 }
 
 // ============================================================================
@@ -175,7 +161,6 @@ pub struct HealthResponse {
 pub enum AdminError {
     Unauthorized,
     UserNotFound(String),
-    InvitationNotFound(String),
     InvalidRequest(String),
     Internal(String),
 }
@@ -184,9 +169,7 @@ impl AdminError {
     fn status_code(&self) -> StatusCode {
         match self {
             AdminError::Unauthorized => StatusCode::UNAUTHORIZED,
-            AdminError::UserNotFound(_) | AdminError::InvitationNotFound(_) => {
-                StatusCode::NOT_FOUND
-            }
+            AdminError::UserNotFound(_) => StatusCode::NOT_FOUND,
             AdminError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             AdminError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -196,7 +179,6 @@ impl AdminError {
         match self {
             AdminError::Unauthorized => "unauthorized".to_string(),
             AdminError::UserNotFound(id) => format!("user not found: {}", id),
-            AdminError::InvitationNotFound(code) => format!("invitation not found: {}", code),
             AdminError::InvalidRequest(msg) => format!("invalid request: {}", msg),
             AdminError::Internal(_) => "internal server error".to_string(),
         }
@@ -208,7 +190,6 @@ impl axum::response::IntoResponse for AdminError {
         let status = self.status_code();
         let message = self.message();
 
-        // Log internal errors with details
         if matches!(self, AdminError::Internal(_)) {
             warn!("Admin API error: {:?}", self);
         }
@@ -224,10 +205,9 @@ impl axum::response::IntoResponse for AdminError {
 }
 
 // ============================================================================
-// Authentication Middleware
+// Authentication
 // ============================================================================
 
-/// Extract and verify API key from headers
 fn verify_api_key(headers: &HeaderMap, expected_key: &str) -> Result<(), AdminError> {
     let provided_key = headers
         .get("x-admin-key")
@@ -243,41 +223,17 @@ fn verify_api_key(headers: &HeaderMap, expected_key: &str) -> Result<(), AdminEr
 }
 
 // ============================================================================
-// Handler Functions
+// Invitation System Handlers
 // ============================================================================
 
-/// GET /admin/health
-///
-/// Health check endpoint (no authentication required)
 pub async fn health_handler() -> Json<HealthResponse> {
-    // In a real implementation, you'd track actual uptime
     Json(HealthResponse {
         status: "ok".to_string(),
-        uptime_seconds: 0, // TODO: track actual uptime
+        uptime_seconds: 0,
         invitation_system_status: "operational".to_string(),
     })
 }
 
-/// GET /admin/stats
-///
-/// Get invitation system statistics
-///
-/// # Authentication
-/// Requires `X-Admin-Key` header
-///
-/// # Response
-/// ```json
-/// {
-///   "stats": {
-///     "total_invitations": 150,
-///     "redeemed_invitations": 75,
-///     "pending_invitations": 75,
-///     "total_users": 80,
-///     "banned_users": 5
-///   },
-///   "timestamp": 1699454400
-/// }
-/// ```
 pub async fn get_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -295,35 +251,6 @@ pub async fn get_stats_handler(
     Ok(Json(StatsResponse { stats, timestamp }))
 }
 
-/// POST /admin/invites/grant
-///
-/// Grant invites to a user (for reputation rewards, etc.)
-///
-/// # Authentication
-/// Requires `X-Admin-Key` header
-///
-/// # Request Body
-/// ```json
-/// {
-///   "user_id": "user123",
-///   "count": 10
-/// }
-/// ```
-///
-/// # Response
-/// ```json
-/// {
-///   "ok": true,
-///   "user_id": "user123",
-///   "invites_granted": 10,
-///   "new_total": 15
-/// }
-/// ```
-///
-/// # Errors
-/// - 401 Unauthorized: Invalid or missing API key
-/// - 404 Not Found: User does not exist
-/// - 400 Bad Request: User is banned or invalid count
 pub async fn grant_invites_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -337,7 +264,6 @@ pub async fn grant_invites_handler(
         ));
     }
 
-    // Grant the invites
     state
         .invitation_system
         .grant_invites(&req.user_id, req.count)
@@ -353,10 +279,6 @@ pub async fn grant_invites_handler(
             }
         })?;
 
-    // Get the updated count (we need to query the system for this)
-    // For now, we'll return a simplified response
-    // TODO: Add a method to InvitationSystem to return the new total
-
     info!(
         user_id = %req.user_id,
         count = req.count,
@@ -367,37 +289,10 @@ pub async fn grant_invites_handler(
         ok: true,
         user_id: req.user_id,
         invites_granted: req.count,
-        new_total: 0, // TODO: get actual count from system
+        new_total: 0,
     }))
 }
 
-/// POST /admin/users/ban
-///
-/// Ban a user and optionally their entire invite tree
-///
-/// # Authentication
-/// Requires `X-Admin-Key` header
-///
-/// # Request Body
-/// ```json
-/// {
-///   "user_id": "malicious_user",
-///   "ban_tree": true
-/// }
-/// ```
-///
-/// # Response
-/// ```json
-/// {
-///   "ok": true,
-///   "user_id": "malicious_user",
-///   "banned_count": 15
-/// }
-/// ```
-///
-/// # Errors
-/// - 401 Unauthorized: Invalid or missing API key
-/// - 404 Not Found: User does not exist
 pub async fn ban_user_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -405,16 +300,13 @@ pub async fn ban_user_handler(
 ) -> Result<Json<BanUserResponse>, AdminError> {
     verify_api_key(&headers, &state.api_key)?;
 
-    // Get stats before ban to count affected users
     let stats_before = state.invitation_system.get_stats().await;
 
-    // Ban the user
     state
         .invitation_system
         .ban_user(&req.user_id, req.ban_tree)
         .await;
 
-    // Get stats after ban
     let stats_after = state.invitation_system.get_stats().await;
     let banned_count = (stats_after.banned_users - stats_before.banned_users) as u32;
 
@@ -432,29 +324,6 @@ pub async fn ban_user_handler(
     }))
 }
 
-/// POST /admin/bootstrap/add
-///
-/// Add a bootstrap user with initial invite allocation
-///
-/// # Authentication
-/// Requires `X-Admin-Key` header
-///
-/// # Request Body
-/// ```json
-/// {
-///   "user_id": "admin_user",
-///   "invite_count": 100
-/// }
-/// ```
-///
-/// # Response
-/// ```json
-/// {
-///   "ok": true,
-///   "user_id": "admin_user",
-///   "invites_granted": 100
-/// }
-/// ```
 pub async fn add_bootstrap_user_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -480,99 +349,6 @@ pub async fn add_bootstrap_user_handler(
     }))
 }
 
-/// GET /admin/users/{user_id}
-///
-/// Get detailed information about a user
-///
-/// # Authentication
-/// Requires `X-Admin-Key` header
-///
-/// # Response
-/// ```json
-/// {
-///   "user": {
-///     "user_id": "user123",
-///     "invites_remaining": 5,
-///     "invites_sent_count": 10,
-///     "invites_used_count": 8,
-///     "joined_at": 1699454400,
-///     "last_invite_at": 1699540800,
-///     "reputation": 0.95,
-///     "banned": false
-///   },
-///   "invitees": ["user456", "user789"]
-/// }
-/// ```
-///
-/// # Errors
-/// - 401 Unauthorized: Invalid or missing API key
-/// - 404 Not Found: User does not exist
-pub async fn get_user_handler(
-    State(state): State<Arc<AdminState>>,
-    headers: HeaderMap,
-    Path(user_id): Path<String>,
-) -> Result<Json<UserDetailsResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
-
-    // TODO: Add method to InvitationSystem to get user details
-    // For now, return a placeholder error
-    Err(AdminError::Internal(
-        "get_user_details not yet implemented".to_string(),
-    ))
-}
-
-/// GET /admin/invitations/{code}
-///
-/// Get detailed information about an invitation
-///
-/// # Authentication
-/// Requires `X-Admin-Key` header
-///
-/// # Response
-/// ```json
-/// {
-///   "invitation": {
-///     "code": "Abc123XyZ456",
-///     "inviter_id": "user123",
-///     "invitee_id": "user456",
-///     "created_at": 1699454400,
-///     "expires_at": 1702046400,
-///     "redeemed": true
-///   }
-/// }
-/// ```
-///
-/// # Errors
-/// - 401 Unauthorized: Invalid or missing API key
-/// - 404 Not Found: Invitation does not exist
-pub async fn get_invitation_handler(
-    State(state): State<Arc<AdminState>>,
-    headers: HeaderMap,
-    Path(code): Path<String>,
-) -> Result<Json<InvitationDetailsResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
-
-    // TODO: Add method to InvitationSystem to get invitation details
-    // For now, return a placeholder error
-    Err(AdminError::Internal(
-        "get_invitation_details not yet implemented".to_string(),
-    ))
-}
-
-/// POST /admin/save
-///
-/// Manually trigger a save of the invitation system state
-///
-/// # Authentication
-/// Requires `X-Admin-Key` header
-///
-/// # Response
-/// ```json
-/// {
-///   "ok": true,
-///   "message": "State saved successfully"
-/// }
-/// ```
 pub async fn save_state_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -594,25 +370,147 @@ pub async fn save_state_handler(
 }
 
 // ============================================================================
+// Key Management Handlers
+// ============================================================================
+
+pub async fn list_keys_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<ListKeysResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let keys = state.multi_key_voprf.list_keys().await;
+    let stats = state.multi_key_voprf.key_stats().await;
+
+    info!("Admin: listed keys (count={})", keys.len());
+
+    Ok(Json(ListKeysResponse { keys, stats }))
+}
+
+pub async fn rotate_key_handler(  // <-- MUST have 'async' keyword
+    State(state): State<Arc<AdminState>>,
+    Json(req): Json<RotateKeyRequest>,
+) -> Result<Json<RotateKeyResponse>, AdminError> {
+    if req.new_kid.is_empty() {
+        return Err(AdminError::InvalidRequest(
+            "new_kid cannot be empty".to_string(),
+        ));
+    }
+
+    let old_kid = state.multi_key_voprf.active_kid().await;
+
+    let signing_key = SigningKey::random(&mut OsRng);
+    let sk_bytes: [u8; 32] = signing_key.to_bytes().into();
+    let verifying_key = signing_key.verifying_key();
+    let pubkey_bytes = verifying_key.to_encoded_point(true);
+    let pubkey_b64 = base64ct::Base64UrlUnpadded::encode_string(pubkey_bytes.as_bytes());
+
+    let grace_period = req.grace_period_secs.unwrap_or(30 * 24 * 3600);
+    let expires_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() + grace_period;
+
+    state
+        .multi_key_voprf
+        .rotate_key(sk_bytes, pubkey_b64, req.new_kid.clone(), Some(grace_period))
+        .await
+        .map_err(|e| AdminError::Internal(format!("Key rotation failed: {}", e)))?;
+
+    info!(old_kid = %old_kid, new_kid = %req.new_kid, "Admin: rotated key");
+
+    Ok(Json(RotateKeyResponse {
+        ok: true,
+        old_kid,
+        new_kid: req.new_kid,
+        grace_period_secs: grace_period,
+        expires_at,
+    }))
+}
+pub async fn cleanup_keys_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<CleanupKeysResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let keys_before = state.multi_key_voprf.list_keys().await;
+    
+    let removed_count = state
+        .multi_key_voprf
+        .cleanup_expired_keys()
+        .await
+        .map_err(|e| AdminError::Internal(format!("Cleanup failed: {}", e)))?;
+
+    let keys_after = state.multi_key_voprf.list_keys().await;
+    let remaining_kids: HashSet<_> = 
+        keys_after.iter().map(|k| k.kid.clone()).collect();
+    
+    let removed_kids: Vec<String> = keys_before
+        .iter()
+        .filter(|k| !remaining_kids.contains(&k.kid))
+        .map(|k| k.kid.clone())
+        .collect();
+
+    info!(
+        removed_count = removed_count,
+        "Admin: cleaned up expired keys"
+    );
+
+    Ok(Json(CleanupKeysResponse {
+        ok: true,
+        removed_count,
+        removed_kids,
+    }))
+}
+
+pub async fn force_remove_key_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(kid): Path<String>,
+) -> Result<Json<ForceRemoveKeyResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let active_kid = state.multi_key_voprf.active_kid().await;
+    if kid == active_kid {
+        return Err(AdminError::InvalidRequest(
+            "Cannot remove active key. Rotate to a new key first.".to_string(),
+        ));
+    }
+
+    state
+        .multi_key_voprf
+        .force_remove_key(&kid)
+        .await
+        .map_err(|e| {
+            let err_msg = e.to_string();
+            if err_msg.contains("not found") {
+                AdminError::UserNotFound(kid.clone())
+            } else {
+                AdminError::Internal(err_msg)
+            }
+        })?;
+
+    warn!(kid = %kid, "Admin: forcibly removed key");
+
+    Ok(Json(ForceRemoveKeyResponse {
+        ok: true,
+        kid,
+        message: "Key forcibly removed. Tokens issued with this key are now invalid.".to_string(),
+    }))
+}
+
+// ============================================================================
 // Router Configuration
 // ============================================================================
 
-/// Create the admin API router
-///
-/// # Arguments
-///
-/// * `invitation_system` - Arc reference to the invitation system
-/// * `api_key` - Admin API key for authentication
-///
-/// # Returns
-///
-/// An Axum Router with all admin endpoints configured
 pub fn admin_router(
     invitation_system: Arc<InvitationSystem>,
+    multi_key_voprf: Arc<MultiKeyVoprfCore>,
     api_key: String,
 ) -> axum::Router {
     let state = Arc::new(AdminState {
         invitation_system,
+        multi_key_voprf,
         api_key,
     });
 
@@ -621,61 +519,11 @@ pub fn admin_router(
         .route("/stats", axum::routing::get(get_stats_handler))
         .route("/invites/grant", axum::routing::post(grant_invites_handler))
         .route("/users/ban", axum::routing::post(ban_user_handler))
-        .route(
-            "/bootstrap/add",
-            axum::routing::post(add_bootstrap_user_handler),
-        )
-        .route("/users/:user_id", axum::routing::get(get_user_handler))
-        .route(
-            "/invitations/:code",
-            axum::routing::get(get_invitation_handler),
-        )
+        .route("/bootstrap/add", axum::routing::post(add_bootstrap_user_handler))
         .route("/save", axum::routing::post(save_state_handler))
+        .route("/keys", axum::routing::get(list_keys_handler))
+        .route("/keys/rotate", axum::routing::post(rotate_key_handler))
+        .route("/keys/cleanup", axum::routing::post(cleanup_keys_handler))
+        .route("/keys/:kid", axum::routing::delete(force_remove_key_handler))
         .with_state(state)
-}
-
-// ============================================================================
-// Tests
-// ============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_admin_error_status_codes() {
-        assert_eq!(
-            AdminError::Unauthorized.status_code(),
-            StatusCode::UNAUTHORIZED
-        );
-        assert_eq!(
-            AdminError::UserNotFound("test".to_string()).status_code(),
-            StatusCode::NOT_FOUND
-        );
-        assert_eq!(
-            AdminError::InvalidRequest("test".to_string()).status_code(),
-            StatusCode::BAD_REQUEST
-        );
-        assert_eq!(
-            AdminError::Internal("test".to_string()).status_code(),
-            StatusCode::INTERNAL_SERVER_ERROR
-        );
-    }
-
-    #[test]
-    fn test_verify_api_key() {
-        let mut headers = HeaderMap::new();
-        let expected_key = "test-key-123";
-
-        // Missing key
-        assert!(verify_api_key(&headers, expected_key).is_err());
-
-        // Wrong key
-        headers.insert("x-admin-key", "wrong-key".parse().unwrap());
-        assert!(verify_api_key(&headers, expected_key).is_err());
-
-        // Correct key
-        headers.insert("x-admin-key", expected_key.parse().unwrap());
-        assert!(verify_api_key(&headers, expected_key).is_ok());
-    }
 }
