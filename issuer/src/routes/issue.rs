@@ -89,7 +89,7 @@ pub struct SybilInfo {
 /// # Returns
 ///
 /// ClientData with available client information for entropy
-fn extract_client_data(
+pub fn extract_client_data(
     connect_info: Option<ConnectInfo<SocketAddr>>,
     behind_proxy: bool,
     headers: &HeaderMap,

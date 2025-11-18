@@ -27,7 +27,7 @@
 //! checker.verify(&proof)?;
 //! ```
 
-use super::{current_timestamp, verify_timestamp_recent, SybilProof, SybilResistance};
+use super::{verify_timestamp_recent, SybilProof, SybilResistance};
 use anyhow::{anyhow, Result};
 use sha2::{Digest, Sha256};
 

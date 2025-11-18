@@ -11,22 +11,21 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use axum::http::HeaderMap;
+use axum::extract::ConnectInfo;
 use common::logging;
 use serde::Serialize;
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
-use axum::http::HeaderMap;
-use axum::extract::ConnectInfo;
 use sybil_resistance::{
     ProofOfWork, 
     RateLimit, 
     CombinedSybilResistance, 
     SybilResistance,
-    invitation::InvitationSystem, // Add this import
+    invitation::InvitationSystem,
 };
-
 // Single unified state structure
 #[derive(Clone)]
 pub struct AppStateWithSybil {
@@ -199,7 +198,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ---------- Core ----------
     let ctx = b"freebird:v1";
-    use multi_key_voprf::MultiKeyVoprfCore;
+    
     let voprf = Arc::new(multi_key_voprf::MultiKeyVoprfCore::load_or_create(
 		sk_bytes, pubkey_b64.clone(), kid.clone(), ctx,
 		Some(std::path::PathBuf::from("key_rotation_state.json")),
@@ -225,7 +224,7 @@ async fn main() -> anyhow::Result<()> {
     let mut app = Router::new()
         .route("/.well-known/issuer", get(well_known_handler))
         .route("/v1/oprf/issue", post(issue_handler))
-        .route("/v1/oprf/issue-protected", post(issue_handler)) // Same handler!
+        .route("/v1/oprf/issue/batch", post(batch_handler))
         .layer(DefaultBodyLimit::max(64 * 1024))
         .with_state((state.clone(), voprf.clone()));
         
@@ -291,7 +290,7 @@ async fn main() -> anyhow::Result<()> {
     info!("✅ Router configured. Endpoints:");
     info!("   GET  /.well-known/issuer");
     info!("   POST /v1/oprf/issue              (adaptive: checks for Sybil proof)");
-    info!("   POST /v1/oprf/issue-protected    (same handler, clearer intent)");
+    info!("   POST /v1/oprf/issue/batch    (same handler, clearer intent)");
     
     if state.sybil_checker.is_some() {
         info!("🛡️  Sybil resistance enabled - proofs will be verified when provided");
@@ -355,7 +354,14 @@ async fn issue_handler(
 ) -> Result<Json<routes::IssueResp>, (axum::http::StatusCode, String)> {
     routes::handle(State(state), voprf, connect_info, headers, Json(req)).await
 }
-
+async fn batch_handler(
+    State((state, voprf)): State<SharedState>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(req): Json<routes::BatchIssueReq>,
+) -> Result<Json<routes::BatchIssueResp>, (axum::http::StatusCode, String)> {
+    routes::handle_batch(State(state), voprf, connect_info, headers, Json(req)).await
+}
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()

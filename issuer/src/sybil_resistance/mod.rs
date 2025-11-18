@@ -27,7 +27,7 @@
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub mod proof_of_work;
@@ -36,8 +36,8 @@ pub mod invitation;
 
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
 pub use proof_of_work::ProofOfWork;
-pub use rate_limit::{RateLimit, client_id_from_ip, client_id_from_fingerprint};
-pub use invitation::{InvitationSystem, InvitationConfig, InvitationStats, ClientData};
+pub use rate_limit::RateLimit;
+pub use invitation::ClientData;
 
 // Future implementations:
 // pub mod payment_gate;

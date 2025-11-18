@@ -12,6 +12,7 @@ human-gate-webauthn = ["dep:webauthn-rs", "dep:url"]
 common = { path = "../common" }
 crypto = { path = "../crypto", features = ["voprf-p256"] }
 axum = "0.7"
+rayon = "1.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "fs"] }  # Added "fs" feature
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

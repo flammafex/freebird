@@ -40,7 +40,6 @@
 //! ```
 
 use anyhow::{anyhow, Context, Result};
-use base64ct::{Base64UrlUnpadded, Encoding};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -48,7 +47,6 @@ use std::sync::Arc;
 use time::OffsetDateTime;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
-use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::voprf_core::VoprfCore;
 

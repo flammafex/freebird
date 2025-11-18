@@ -7,10 +7,9 @@ use elliptic_curve::{
     Field,
     bigint::{NonZero, U256},
     scalar::FromUintUnchecked,
-    sec1::{ToEncodedPoint, FromEncodedPoint},
-    ops::Reduce, // <- we'll use Scalar::reduce_bytes
+    sec1::{ToEncodedPoint, FromEncodedPoint}, // <- we'll use Scalar::reduce_bytes
 };
-use p256::{ProjectivePoint, FieldBytes, Scalar, NistP256, AffinePoint, EncodedPoint};
+use p256::{ProjectivePoint, Scalar, NistP256, AffinePoint, EncodedPoint};
 use sha2::{Sha256, Digest};
 use elliptic_curve::hash2curve::{ExpandMsgXmd, GroupDigest};
 

@@ -10,7 +10,7 @@
 //! - JSON-based persistence (survives restarts)
 //! - Strong invitee ID generation with cryptographic random nonce
 
-use super::{current_timestamp, verify_timestamp_recent, SybilProof, SybilResistance};
+use super::{current_timestamp, SybilProof, SybilResistance};
 use anyhow::{anyhow, bail, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use p256::ecdsa::{signature::Signer, signature::Verifier, Signature, SigningKey, VerifyingKey};

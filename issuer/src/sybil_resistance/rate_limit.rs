@@ -31,7 +31,7 @@
 
 use super::{current_timestamp, verify_timestamp_recent, SybilProof, SybilResistance};
 use anyhow::{anyhow, Result};
-use base64ct::{Base64UrlUnpadded, Encoding};
+use base64ct::Encoding;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;

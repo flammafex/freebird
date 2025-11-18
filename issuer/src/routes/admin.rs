@@ -27,7 +27,7 @@ use std::collections::HashSet;
 use tracing::{info, warn};
 use crate::multi_key_voprf::{KeyInfo, KeyStats, MultiKeyVoprfCore};
 use crate::sybil_resistance::invitation::{InvitationSystem, InvitationStats};
-use base64ct::{Base64UrlUnpadded, Encoding};
+use base64ct::Encoding;
 use p256::ecdsa::SigningKey;
 use rand::rngs::OsRng;
 // ============================================================================

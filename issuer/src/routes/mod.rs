@@ -1,11 +1,13 @@
 // issuer/src/routes/mod.rs
-//! HTTP route handlers for the issuer service
-//!
-//! This module contains the unified token issuance handler that supports
-//! both protected (with Sybil resistance) and unprotected modes.
-
 pub mod issue;
+pub mod batch_issue;
 pub mod admin;
-// Re-export the main types for convenience
-pub use issue::{handle, IssueReq, IssueResp, SybilInfo};
+
+// Re-export types
+pub use issue::{IssueReq, IssueResp};
+pub use batch_issue::{BatchIssueReq, BatchIssueResp};
+
+// Re-export handlers (for use in main.rs)
+pub use issue::handle;
+pub use batch_issue::handle_batch;
 pub use admin::admin_router;
