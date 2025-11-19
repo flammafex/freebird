@@ -30,7 +30,8 @@ const TOKEN_PROOF_LEN: usize = 64;
 const TOKEN_LEN: usize = TOKEN_POINT_LEN * 2 + TOKEN_PROOF_LEN;
 
 /// RFC 9380-compliant hash-to-curve for P-256 (SSWU_RO).
-fn hash_to_curve(input: &[u8], ctx: &[u8]) -> ProjectivePoint {
+/// Returns Option instead of panicking on failure.
+fn hash_to_curve(input: &[u8], ctx: &[u8]) -> Option<ProjectivePoint> {
     // Domain separation tag as per RFC 9380
     const BASE_DST: &[u8] = b"P256_XMD:SHA-256_SSWU_RO_";
 
@@ -40,12 +41,12 @@ fn hash_to_curve(input: &[u8], ctx: &[u8]) -> ProjectivePoint {
     dst.extend_from_slice(ctx);
 
     // Use NistP256::hash_from_bytes (Method 1 - confirmed working!)
-    // This returns a generic curve point that we convert to ProjectivePoint
-    let point = NistP256::hash_from_bytes::<ExpandMsgXmd<Sha256>>(&[input], &[&dst])
-        .expect("hash_to_curve failed");
+    // This returns a generic curve point that we convert to ProjectivePoint.
+    // We use ok() to convert Result to Option, avoiding panic.
+    let point = NistP256::hash_from_bytes::<ExpandMsgXmd<Sha256>>(&[input], &[&dst]).ok()?;
 
     // Convert to ProjectivePoint
-    ProjectivePoint::from(point)
+    Some(ProjectivePoint::from(point))
 }
 
 /// Compress a projective point (SEC1-encoded, 33 bytes)
@@ -128,7 +129,8 @@ impl Client {
     }
 
     pub fn blind(&mut self, input: &[u8]) -> Result<(Vec<u8>, BlindState), Error> {
-        let p = hash_to_curve(input, &self.ctx);
+        // Propagate error if hash_to_curve fails instead of crashing
+        let p = hash_to_curve(input, &self.ctx).ok_or(Error::InvalidPoint)?;
         let r = Scalar::random(rand::rngs::OsRng);
         let a = p * r;
         Ok((encode_point(&a).to_vec(), BlindState { r, p }))
