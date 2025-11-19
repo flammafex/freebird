@@ -548,14 +548,14 @@ impl InvitationSystem {
             
             // Client-specific data (optional additional entropy)
             if let Some(ref data) = client_data {
-                hasher.update(&data.to_hash_input());
+                hasher.update(data.to_hash_input());
                 hasher.update(b":");
             }
             
             // Cryptographic random nonce (guarantees uniqueness)
             let mut nonce = [0u8; 16];
             rand::thread_rng().fill_bytes(&mut nonce);
-            hasher.update(&nonce);
+            hasher.update(nonce);
             
             let hash = hasher.finalize();
             Base64UrlUnpadded::encode_string(&hash[..24]) // 192 bits

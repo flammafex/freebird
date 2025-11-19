@@ -18,8 +18,6 @@ use serde::Serialize;
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
-use std::collections::HashMap;
 use tracing::{info, warn};
 use sybil_resistance::{
     ProofOfWork, 
