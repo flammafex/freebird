@@ -6,115 +6,68 @@ _A mission of [The Carpocratian Church of Commonality and Equality](https://carp
 
 # 🕊️ Freebird
 
-**Anonymous credential system using VOPRF cryptography**
+**Authorization without identity. Privacy without compromise.**
 
-Freebird is a self-hostable anonymous token system that allows users to prove authorization without revealing their identity. Think of it as anonymous digital cash for the internet—users get cryptographic tokens that prove "I'm authorized" without revealing "who I am."
+Freebird is infrastructure for a world without surveillance. It provides cryptographic proof of authorization without revealing identity - separating "can you?" from "who are you?" for the first time in a practical, deployable way.
 
-**Current Version: 0.1.0** (Pre-release)
-
-**Core Features:**
-- 🔒 **Cryptographic Unlinkability** – Issuer can't track where tokens are used (P-256 VOPRF)
-- 🛡️ **Multiple Sybil Resistance Options** – Invitations, proof-of-work, rate limiting, WebAuthn
-- 🏠 **Self-Hostable** – No central authority required
-- ♻️ **Replay Protection** – Nullifier-based double-spend prevention
-- ⏱️ **Token Expiration** – Time-bound validity with clock skew tolerance
-- ⚡ **Batch Issuance** – Process multiple tokens in parallel with Rayon
-- 🔑 **Key Rotation** – Multi-key support with graceful rotation via admin API
+Think of it as anonymous digital cash for the internet. Users receive unforgeable, unlinkable tokens that prove authorization while revealing nothing about identity.
 
 ---
 
-## 🚧 Project Status
+## The Problem
 
-**This is a working prototype undergoing stabilization.** Core cryptography works, but expect:
-- API changes before 1.0
-- Limited production testing
-- Documentation gaps
-- No formal security audit yet
+Every online interaction today demands identity:
+- **Rate limiting requires tracking users**
+- **Access control requires accounts**  
+- **Spam prevention requires surveillance**
+- **Resource allocation requires registration**
 
-### ✅ Implemented & Working
+We've accepted total surveillance as the price of functional systems. This is a false choice.
 
-**Core Protocol:**
-- ✅ P-256 VOPRF implementation (custom, not using external crate)
-- ✅ DLEQ proof verification
-- ✅ Token issuance and verification
-- ✅ Nullifier-based replay protection
-- ✅ Token expiration with clock skew tolerance
+## The Solution
 
-**Sybil Resistance:**
-- ✅ Invitation system with Ed25519 signatures
-- ✅ Proof-of-work (configurable difficulty)
-- ✅ Rate limiting (IP-based)
-- ✅ WebAuthn/FIDO2 support (feature flag: `human-gate-webauthn`)
-- ✅ Combined mechanisms (multiple checks)
+Freebird uses **VOPRF (Verifiable Oblivious Pseudorandom Function)** cryptography to enable:
 
-**Infrastructure:**
-- ✅ Redis backend for verifier storage
-- ✅ In-memory storage option
-- ✅ Admin API with API key authentication
-- ✅ Key rotation with grace periods
-- ✅ Batch token issuance (Rayon parallelization)
-- ✅ Basic CLI testing interface
+✅ **Prove you're authorized without revealing who you are**  
+✅ **Rate limiting without tracking**  
+✅ **Access control without accounts**  
+✅ **Spam prevention without surveillance**  
+✅ **One person, one vote - anonymously**  
 
-**WebAuthn (Experimental):**
-- ✅ Registration and authentication flows
-- ✅ Redis credential storage
-- ✅ Attestation policy modes (none/strict/log_only)
-- ⚠️ Using heuristics for hardware detection (library limitations)
-
-### 🚧 In Progress / Partially Implemented
-
-- 🚧 Comprehensive test coverage (~70% currently)
-- 🚧 Performance optimization (functional but not optimized)
-- 🚧 Documentation (basic docs exist, needs expansion)
-- 🚧 Docker/Kubernetes manifests (not started)
-
-### ❌ Not Yet Implemented
-
-- ❌ Client libraries (JavaScript, Python, Go)
-- ❌ Metrics/monitoring endpoints
-- ❌ HSM integration
-- ❌ Mobile SDKs
-- ❌ Formal security audit
-- ❌ Production deployment guides
+This isn't just "privacy-preserving rate limiting." It's a new primitive for authorization that makes identity optional rather than mandatory.
 
 ---
 
-## Quick Start
+## Use Cases
 
-### Prerequisites
+**Anonymous Authorization:**
+- Access community resources without accounts
+- Prove membership without revealing which member
+- Whistleblower platforms with spam protection
+- Anonymous voting with Sybil resistance
 
-- Rust 1.70+ ([rustup.rs](https://rustup.rs))
-- Optional: Redis 6+ (for production storage)
+**Privacy-Preserving Services:**
+- Share your Jellyfin/Plex server anonymously
+- API access without tracking
+- Paywalls without surveillance
+- Downloads without registration
 
-### Build & Run
+**Censorship Resistance:**
+- Participate without permanent records
+- Access without attribution
+- Contribute without consequences
 
-```bash
-# Clone repository
-git clone https://github.com/yourusername/freebird.git
-cd freebird
-
-# Build all components
-cargo build --release
-
-# Build with WebAuthn support
-cargo build --release --features human-gate-webauthn
-
-# Run tests
-cargo test
-
-# Terminal 1 - Start the issuer (permissive mode)
-./target/release/issuer
-
-# Terminal 2 - Start the verifier  
-./target/release/verifier
-
-# Terminal 3 - Test with CLI
-./target/release/interface
-```
+**Anti-Spam Without Surveillance:**
+- Nostr relay protection
+- Comment systems without accounts
+- Contact forms without CAPTCHAs
+- Rate limiting for Tor users
 
 ---
 
-## Architecture Overview
+## Technical Implementation
+
+### Architecture
 
 ```
 ┌─────────┐                    ┌─────────┐                    ┌──────────┐
@@ -124,180 +77,206 @@ cargo test
      │  1. Blind(input)             │                              │
      ├──────────────────────────────►                              │
      │                              │                              │
-     │  2. Evaluate(blinded)        │                              │
+     │  2. Evaluate(blinded) + DLEQ │                              │
      │◄──────────────────────────────                              │
      │                              │                              │
      │  3. Finalize → token         │                              │
      │                              │                              │
-     │  4. Verify(token)            │                              │
+     │  4. Present anonymous token  │                              │
      ├──────────────────────────────┼──────────────────────────────►
      │                              │                              │
-     │  5. ✓ or ✗                   │                              │
+     │  5. ✓ Authorized (or ✗)      │                              │
      ◄──────────────────────────────┼───────────────────────────────
+```
+
+### Cryptographic Properties
+
+- **Unlinkability**: Mathematical guarantee via VOPRF - issuer cannot correlate token issuance with usage
+- **Unforgeability**: Only the issuer's private key can create valid tokens
+- **Verifiability**: DLEQ proofs ensure correct token generation
+- **Single-Use**: Nullifier-based replay protection
+
+### Implementation Status
+
+**Working Core (v0.1.0):**
+- ✅ P-256 VOPRF with DLEQ proofs
+- ✅ Token issuance and verification  
+- ✅ Nullifier-based replay protection
+- ✅ Multiple Sybil resistance mechanisms
+- ✅ Redis and in-memory storage backends
+- ✅ Batch issuance with parallelization
+- ✅ Key rotation with grace periods
+- ✅ WebAuthn/FIDO2 integration (experimental)
+
+**Sybil Resistance Options:**
+- **Invitation System** - Ed25519 signed invites for trust networks
+- **Proof of Work** - Configurable computational cost
+- **Rate Limiting** - IP or fingerprint-based throttling
+- **WebAuthn** - Hardware authenticator verification
+- **Combined** - Stack multiple mechanisms
+
+---
+
+## Quick Start
+
+```bash
+# Prerequisites: Rust 1.70+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Clone and build
+git clone https://github.com/yourusername/freebird.git
+cd freebird
+cargo build --release
+
+# Terminal 1: Start issuer
+./target/release/issuer
+
+# Terminal 2: Start verifier
+./target/release/verifier
+
+# Terminal 3: Test the flow
+./target/release/interface
+```
+
+### Docker Deployment (Coming Soon)
+
+```yaml
+version: '3'
+services:
+  freebird-issuer:
+    image: freebird/issuer:latest
+    environment:
+      - SYBIL_RESISTANCE=rate_limit
+      - TOKEN_TTL_MIN=10
+  
+  freebird-verifier:
+    image: freebird/verifier:latest
+    environment:
+      - ISSUER_URL=http://freebird-issuer:8081/.well-known/issuer
+      - REDIS_URL=redis://redis:6379
 ```
 
 ---
 
 ## Configuration
 
-### Environment Variables
-
 ```bash
-# Issuer Configuration
-export ISSUER_ID="issuer:freebird:v1"      # Unique issuer identifier
-export ISSUER_PORT=8081                     # Listen port
-export TOKEN_TTL_MIN=10                     # Token lifetime in minutes
+# Core
+export ISSUER_ID="issuer:freebird:v1"       # Unique identifier
+export TOKEN_TTL_MIN=10                     # Token lifetime
+
+# Sybil Resistance (choose one or combined)
 export SYBIL_RESISTANCE=invitation          # none|invitation|pow|rate_limit|webauthn|combined
+export SYBIL_POW_DIFFICULTY=20              # For PoW
+export SYBIL_RATE_LIMIT_SECS=60            # For rate limiting
 
-# Verifier Configuration  
-export VERIFIER_PORT=8082                   # Listen port
-export ISSUER_URL=http://localhost:8081/.well-known/issuer
-export REDIS_URL=redis://localhost:6379     # Optional: Redis for production
-export MAX_CLOCK_SKEW_SECS=300             # Clock tolerance (5 minutes)
+# Storage
+export REDIS_URL=redis://localhost:6379     # Optional persistent storage
 
-# Admin API (Issuer)
-export ADMIN_API_KEY=your-secret-key-here   # Required for admin endpoints
-export ADMIN_PORT=8090                      # Admin API port
-
-# WebAuthn (if enabled)
-export WEBAUTHN_RP_ID=localhost             # Relying party ID
-export WEBAUTHN_RP_NAME="Freebird"         # Display name
-export WEBAUTHN_RP_ORIGIN=http://localhost:8081
-export WEBAUTHN_REDIS_URL=redis://localhost:6379
+# WebAuthn (if using hardware auth)
+export WEBAUTHN_RP_ID=example.com
+export WEBAUTHN_RP_ORIGIN=https://example.com
 ```
 
 ---
 
-## API Endpoints
+## Security Model
 
-### Issuer
+### Guarantees
 
-```bash
-# Issue single token
-POST /v1/oprf/issue
-{
-  "blinded_element_b64": "...",
-  "sybil_proof": { /* optional */ }
-}
+✅ **Cryptographic unlinkability** - Token usage cannot be traced to issuance  
+✅ **Forward privacy** - Past tokens remain secure even if keys are compromised  
+✅ **Replay protection** - Each token can only be used once  
+✅ **No phone-home** - Fully self-contained, no external dependencies  
 
-# Batch issue (multiple tokens)
-POST /v1/oprf/issue/batch
-{
-  "blinded_elements_b64": ["...", "..."],
-  "sybil_proof": { /* optional */ }
-}
+### Assumptions
 
-# Get issuer metadata
-GET /.well-known/issuer
-```
-
-### Verifier
-
-```bash
-# Verify token
-POST /v1/verify
-{
-  "token_b64": "...",
-  "issuer_id": "...",
-  "exp": 1234567890  // Unix timestamp
-}
-```
-
-### Admin API (Issuer)
-
-```bash
-# Key rotation
-POST /admin/rotate-key
-Authorization: Bearer {ADMIN_API_KEY}
-{
-  "new_kid": "key-2024-11",
-  "grace_period_secs": 2592000  // 30 days
-}
-
-# List keys
-GET /admin/keys
-Authorization: Bearer {ADMIN_API_KEY}
-```
-
----
-
-## Performance Characteristics
-
-**Current (Unoptimized):**
-- Single token issuance: ~5-20ms
-- Batch issuance: ~50-200ms for 100 tokens (Rayon parallel)
-- Verification: ~2-10ms (with Redis)
-- Memory usage: < 50MB per service
-
-**Hardware:** Tested on 4-core consumer CPU
-
-**Note:** No systematic performance optimization has been done yet. These are baseline numbers.
-
----
-
-## Security Considerations
-
-### What Freebird Provides
-
-✅ **Unlinkability** – Mathematical guarantee via VOPRF  
-✅ **Unforgeability** – Only issuer with private key can create tokens  
-✅ **Replay Protection** – Nullifier-based single-use enforcement  
-✅ **Expiration** – Time-bound token validity  
-
-### Current Limitations
-
-⚠️ **No formal audit** – Cryptography not professionally reviewed  
-⚠️ **Side channels** – No systematic protection against timing attacks  
-⚠️ **WebAuthn limitations** – Using webauthn-rs 0.5.3 (can't access AAGUIDs)  
-⚠️ **Single issuer** – No threshold/distributed trust model  
+- Issuer's private key remains secret
+- Users protect their tokens (like cash - if lost, anyone can use)
+- TLS protects tokens in transit
+- Verifier trusts the issuer (federated trust model)
 
 ### Not Protected Against
 
-❌ **Token theft** – Stolen tokens can be used (use TLS!)  
-❌ **Network privacy** – Does not provide network anonymity  
-❌ **Quantum attacks** – P-256 vulnerable to future quantum computers  
+- Token theft (use TLS!)
+- Network-level correlation (use Tor for network anonymity)
+- Quantum computers (P-256 ECDLP vulnerable)
 
 ---
 
-## Testing
+## Philosophy
 
-```bash
-# Run all tests
-cargo test
+Freebird embodies a belief: **humans deserve dignity, privacy, and agency**.
 
-# Run integration tests
-cargo test -p integration_tests
+Current systems assume humans are threats to be monitored. Every interaction requires identity because the default assumption is malfeasance. This architecture of distrust creates the surveillance infrastructure that defines the modern internet.
 
-# CLI test modes
-./target/release/interface              # Normal flow
-./target/release/interface --replay     # Test replay protection
-./target/release/interface --expired    # Test expiration
-./target/release/interface --stress 100 # Stress test
-```
+Freebird inverts this: it assumes humans are trustworthy enough to interact anonymously. Bad actors are handled through cryptographic rate limiting, not universal surveillance.
+
+This is not naive - it's necessary. Privacy-preserving systems aren't just technically superior; they're ethically mandatory for human flourishing.
 
 ---
 
-## Documentation
+## Roadmap
 
-- `docs/CONFIGURATION.md` - Environment variables reference
-- `docs/SYBIL_RESISTANCE.md` - Anti-Sybil mechanisms
-- `docs/WEBAUTHN.md` - WebAuthn integration guide
-- `docs/HOW_IT_WORKS.md` - Protocol deep dive
-- `docs/TESTING.md` - Testing guide
+### Phase 1: Core Stabilization (Current)
+- [x] VOPRF implementation
+- [x] Basic Sybil resistance
+- [x] Redis backend
+- [ ] 90% test coverage
+- [ ] Security audit
+
+### Phase 2: Adoption
+- [ ] JavaScript client library
+- [ ] Docker images
+- [ ] Nostr integration (NIP)
+- [ ] Production deployment guide
+- [ ] Prometheus metrics
+
+### Phase 3: Ecosystem
+- [ ] Python/Go clients
+- [ ] Kubernetes operators
+- [ ] OAuth2/OIDC bridge
+- [ ] Mobile SDKs
+- [ ] HSM support
 
 ---
 
 ## Contributing
 
-We welcome contributions! Priority areas:
+We need help with:
+- **Security review** - Cryptographic implementation audit
+- **Client libraries** - JavaScript, Python, Go, Rust
+- **Integrations** - Nostr, ActivityPub, Matrix
+- **Documentation** - Deployment guides, tutorials
+- **Activism** - Spread the word about surveillance-free alternatives
 
-1. **Testing** - Increase test coverage
-2. **Documentation** - Improve guides and examples
-3. **Client libraries** - JavaScript, Python, Go
-4. **Performance** - Optimization and benchmarking
-5. **Security** - Review and hardening
+---
 
-Please open an issue before starting major work.
+## FAQ
+
+**Q: How is this different from Privacy Pass?**  
+A: Privacy Pass is centralized (Cloudflare controls it). Freebird is fully self-hostable. You control the entire stack.
+
+**Q: Why not just use Tor?**  
+A: Tor provides network anonymity. Freebird provides application-layer authorization. They're complementary - use both.
+
+**Q: Can this be used for evil?**  
+A: Any privacy tool can be misused. We believe the benefits of human dignity outweigh the risks of bad actors.
+
+**Q: Is this production-ready?**  
+A: The cryptography works. The system needs hardening, audit, and battle-testing. Early adopters welcome.
+
+**Q: Why the religious connection?**  
+A: Building surveillance-free systems is an act of faith in humanity. The Carpocratian Church shares this belief.
+
+---
+
+## Support
+
+- **Documentation**: [docs/](docs/) directory
+- **Issues**: [GitHub Issues](https://github.com/yourusername/freebird/issues)
+- **Discussion**: [GitHub Discussions](https://github.com/yourusername/freebird/discussions)
+- **Security**: Report vulnerabilities via GitHub Security Advisories
 
 ---
 
@@ -305,32 +284,24 @@ Please open an issue before starting major work.
 
 **Apache License 2.0**
 
-Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
+Copyright 2025 The Carpocratian Church of Commonality and Equality
 
-See [LICENSE](LICENSE) and [NOTICE](NOTICE) for details.
+Free as in freedom. Free as in Freebird.
 
 ---
 
 ## Acknowledgments
 
-- VOPRF protocol: [IETF draft-irtf-cfrg-voprf](https://datatracker.ietf.org/doc/draft-irtf-cfrg-voprf/)
-- P-256 implementation: [RustCrypto](https://github.com/RustCrypto/elliptic-curves)
-- WebAuthn: [webauthn-rs](https://github.com/kanidm/webauthn-rs)
-- Inspired by [Privacy Pass](https://privacypass.github.io/)
+Standing on the shoulders of giants:
+- David Chaum's blind signatures (1983)
+- The cypherpunks who fought for cryptographic freedom
+- Privacy Pass team for proving this approach works
+- Everyone who believes privacy is a human right
 
 ---
 
-## Roadmap to 1.0
+**"Surveillance is not safety. Privacy is not crime. Authorization is not identity."**
 
-- [ ] Complete test coverage (>90%)
-- [ ] Security audit of crypto implementation
-- [ ] Production deployment guide
-- [ ] Performance optimization (<5ms verification)
-- [ ] Client library (at least JavaScript)
-- [ ] API stability guarantee
-- [ ] Docker images
-- [ ] Comprehensive documentation
+Join us in building infrastructure for human dignity.
 
----
-
-_Built with ❤️ for privacy by Marcellina II for The Carpocratian Church
+🕊️
