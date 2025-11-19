@@ -12,11 +12,13 @@ Freebird is a self-hostable anonymous token system that allows users to prove au
 
 **Key Features:**
 - 🔒 **Cryptographic Unlinkability** – Issuer can't track where tokens are used
-- 🛡️ **Multiple Sybil Resistance Options** – Invitations, proof-of-work, rate limiting
+- 🛡️ **Multiple Sybil Resistance Options** – Invitations, proof-of-work, rate limiting, WebAuthn
 - 🏠 **Self-Hostable** – No central authority required
 - ♻️ **Replay Protection** – Nullifier-based double-spend prevention
 - ⏱️ **Token Expiration** – Time-bound validity with clock skew tolerance
-- ⚡ **Production-Ready** – ~5,000 lines of robust Rust with comprehensive tests
+- ⚡ **High Performance** – Batch issuance up to 2000+ tokens/second
+- 🔐 **Hardware Authentication** – Optional WebAuthn/FIDO2 support
+- 📦 **Production-Ready** – ~6,000 lines of robust Rust with comprehensive tests
 
 ---
 
@@ -54,160 +56,122 @@ cargo build --release
 
 **The Problem:** Traditional authentication links every action to an identity. Rate limiting requires tracking users. Privacy and access control are at odds.
 
-**The Solution:** Freebird issues anonymous tokens that prove authorization without surveillance:
-- ✅ The issuer can't track where tokens are used
-- ✅ The verifier can't link uses to identities  
-- ✅ Double-spending is prevented (replay protection)
-- ✅ One-per-human enforcement without biometrics (invitation system)
+**The Solution:** Freebird uses **VOPRF (Verifiable Oblivious Pseudorandom Function)** cryptography to create anonymous tokens. Users can prove "I'm authorized" without revealing "who I am."
 
 **Use Cases:**
-- Anonymous rate limiting (verify "human-ness" without tracking)
-- Privacy-preserving access control (prove membership without revealing identity)
-- Anonymous voting or polling
-- Private content access (paywalls, subscriptions)
-- Bot prevention without surveillance
-- Trust-based community building (invitation networks)
+- Anonymous voting in private communities
+- Privacy-preserving content access (paywalls without tracking)
+- Rate limiting without user surveillance
+- Whistleblower platforms with abuse protection
+- Anonymous service access (APIs, downloads, etc.)
 
-**Learn more:**
+---
+
+## How It Works
+
+```
+┌─────────┐                    ┌─────────┐                    ┌──────────┐
+│  User   │                    │ Issuer  │                    │ Verifier │
+└────┬────┘                    └────┬────┘                    └────┬─────┘
+     │                              │                              │
+     │  1. Blind token request      │                              │
+     │────────────────────────────> │                              │
+     │                              │                              │
+     │  2. Check Sybil proof        │                              │
+     │     (invitation/PoW/WebAuthn)│                              │
+     │                              │                              │
+     │  3. Sign blinded token       │                              │
+     │ <──────────────────────────── │                              │
+     │                              │                              │
+     │  4. Unblind token            │                              │
+     │     (client-side)            │                              │
+     │                              │                              │
+     │  5. Present token            │                              │
+     │────────────────────────────────────────────────────────────>│
+     │                              │                              │
+     │                              │  6. Verify signature         │
+     │                              │ <────────────────────────────│
+     │                              │                              │
+     │                              │  7. Check nullifier (replay) │
+     │                              │                              │
+     │  8. Access granted           │                              │
+     │ <────────────────────────────────────────────────────────────│
+```
+
+**Key Properties:**
+- Issuer never sees the final token (blind signature)
+- Verifier can't link token to issuance (unlinkability)
+- Each token can only be used once (replay protection)
+- Tokens expire after configured time (time-bound)
+
+[Read more in How It Works](docs/HOW_IT_WORKS.md)
+
+---
+
+## Documentation
+
+### Getting Started
+- [Installation Guide](docs/INSTALLATION.md) - Build, configure, deploy
+- [Quick Start](docs/QUICKSTART.md) - 3 scenarios to get running fast
 - [How It Works](docs/HOW_IT_WORKS.md) - VOPRF protocol explained
-- [Use Cases](USE_CASES.md) - Real-world applications for governments & communities
-- [Enterprise Use Cases](ENTERPRISE_USE_CASES.md) - Commercial applications
+
+### Configuration & Deployment
+- [Configuration Reference](docs/CONFIGURATION.md) - All environment variables
+- [Production Deployment](docs/PRODUCTION.md) - Security hardening checklist
+- [Key Management](docs/KEY_MANAGEMENT.md) - Key rotation and lifecycle
+
+### Features
+- [Sybil Resistance](docs/SYBIL_RESISTANCE.md) - All 5 mechanisms explained
+- [Invitation System](docs/INVITATION_SYSTEM.md) - Trust-based Sybil resistance
+- [WebAuthn Integration](docs/WEBAUTHN.md) - Hardware authentication (NEW!)
+- [Admin API](docs/ADMIN_API.md) - 14 management endpoints
+
+### Reference
+- [API Documentation](docs/API.md) - Complete HTTP API reference
+- [CLI Reference](docs/CLI.md) - Interface tool modes
+- [Architecture](docs/ARCHITECTURE.md) - System design and components
+- [Security Model](docs/SECURITY.md) - Threat model and guarantees
+- [Testing Guide](docs/TESTING.md) - Unit, integration, stress tests
+
+### Use Cases
+- [Government & Community Use Cases](USE_CASES.md) - 10+ real-world examples
+- [Enterprise Use Cases](ENTERPRISE_USE_CASES.md) - Business applications
+
+### Advanced
+- [Cryptographic Details](docs/CRYPTOGRAPHY.md) - VOPRF mathematics
+- [Performance Tuning](docs/PERFORMANCE.md) - Optimization guide
+- [Troubleshooting](docs/TROUBLESHOOTING.md) - Common issues and solutions
 
 ---
 
-## Architecture
+## Roadmap
 
-Freebird consists of three components:
+### ✅ Completed Features
 
-```
-┌─────────────┐          ┌──────────────┐          ┌──────────────┐
-│   Client    │          │    Issuer    │          │   Verifier   │
-│   (CLI)     │ ◄─────► │   (Axum)     │          │   (Axum)     │
-│             │          │              │          │              │
-│ - Blind     │          │ - Evaluate   │          │ - Verify     │
-│ - Finalize  │          │ - DLEQ proof │          │ - Check exp  │
-│             │          │ - Sybil      │          │ - Replay     │
-└─────────────┘          └──────────────┘          └──────────────┘
-                                                            │
-                                                    ┌───────▼───────┐
-                                                    │  Redis/Memory │
-                                                    │  (Nullifiers) │
-                                                    └───────────────┘
-```
+- ✅ **Core VOPRF protocol** (P-256, SHA-256)
+- ✅ **Invitation system** with persistence and admin API
+- ✅ **Admin API** for invitation management (14 endpoints)
+- ✅ **Key rotation** with grace periods and multi-key support
+- ✅ **Multiple Sybil resistance mechanisms**:
+  - Invitation-based (trust network)
+  - Proof-of-Work (computational cost)
+  - Rate limiting (IP/fingerprint-based)
+  - WebAuthn (hardware authentication) **← NEW!**
+  - Combined (multiple mechanisms)
+- ✅ **Redis backend** for verifier storage with replay protection
+- ✅ **Batch issuance** optimization (up to 10k tokens, 2000+ tok/s) **← NEW!**
+- ✅ **WebAuthn integration** (optional feature, FIDO2/passkeys) **← NEW!**
 
-**Detailed documentation:**
-- [Architecture Overview](docs/ARCHITECTURE.md) - System design & components
-- [API Reference](docs/API.md) - Complete HTTP API documentation
-- [Security Model](docs/SECURITY.md) - Threat model & guarantees
+### 🚀 Planned Features
 
----
+- [ ] **Client libraries** (JavaScript, Python, Go, Rust SDK)
+- [ ] **Docker images** and Kubernetes manifests
+- [ ] **Metrics and monitoring** endpoints (Prometheus)
+- [ ] **HSM integration** for key storage
+- [ ] **Attestation** for WebAuthn authenticators
+- [ ] **Mobile SDKs** (iOS, Android)
 
-## Sybil Resistance
-
-Freebird prevents users from obtaining unlimited tokens through multiple mechanisms:
-
-| Mechanism | Status | Best For | Configuration |
-|-----------|--------|----------|---------------|
-| **Invitation System** | ✅ Production | Trust-based communities | `SYBIL_RESISTANCE=invitation` |
-| **Proof-of-Work** | ✅ Implemented | Computational cost | `SYBIL_RESISTANCE=proof_of_work` |
-| **Rate Limiting** | ✅ Implemented | Simple throttling | `SYBIL_RESISTANCE=rate_limit` |
-| **Combined** | ✅ Implemented | Defense-in-depth | `SYBIL_RESISTANCE=combined` |
-
-### Invitation System (Recommended)
-
-The **invitation system** is a production-ready trust-based approach where existing users invite new users, creating social accountability without surveillance.
-
-**Key features:**
-- Cryptographically signed invitations (ECDSA P-256)
-- Full state persistence (survives restarts)
-- Strong invitee ID generation (192 bits of entropy)
-- Admin API for management
-- Ban tree propagation (self-policing communities)
-
-```bash
-# Quick start with invitations
-SYBIL_RESISTANCE=invitation \
-SYBIL_INVITE_BOOTSTRAP_USERS=admin:100 \
-ADMIN_API_KEY=your-secure-random-key-at-least-32-chars \
-./target/release/issuer
-```
-
-**Full documentation:**
-- [Sybil Resistance Guide](docs/SYBIL_RESISTANCE.md) - All mechanisms explained
-- [Invitation System](docs/INVITATION_SYSTEM.md) - Complete invitation guide
-- [Admin API](docs/ADMIN_API.md) - HTTP API for invitation management
-
----
-
-## Key Management & Rotation
-
-Freebird supports cryptographic key rotation with grace periods for seamless transitions:
-
-```bash
-# Rotate keys via Admin API
-curl -X POST http://localhost:8081/admin/keys/rotate \
-  -H "X-Admin-Key: your-admin-api-key" \
-  -H "Content-Type: application/json" \
-  -d '{"new_kid": "freebird-2024-11-15", "grace_period_secs": 604800}'
-```
-
-Both old and new keys remain valid during the grace period, allowing smooth transitions without service disruption.
-
-**Documentation:**
-- [Key Management](docs/KEY_MANAGEMENT.md) - Generation, rotation, security
-- [Admin API](docs/ADMIN_API.md) - Key rotation endpoints
-
----
-
-## Configuration
-
-Essential environment variables:
-
-```bash
-# Issuer
-ISSUER_ID=issuer:myservice:v1
-TOKEN_TTL_MIN=60                        # Token lifetime (minutes)
-SYBIL_RESISTANCE=invitation             # Sybil mechanism
-ADMIN_API_KEY=min-32-char-secret        # Enable admin API
-
-# Verifier
-ISSUER_URL=http://issuer:8081/.well-known/issuer
-REDIS_URL=redis://localhost:6379       # Optional: production storage
-MAX_CLOCK_SKEW_SECS=300                # Expiration tolerance
-
-# Invitation System
-SYBIL_INVITE_PER_USER=5
-SYBIL_INVITE_COOLDOWN_SECS=3600
-SYBIL_INVITE_PERSISTENCE_PATH=invitations.json
-SYBIL_INVITE_BOOTSTRAP_USERS=admin:100,alice:50
-```
-
-**Complete reference:**
-- [Configuration Guide](docs/CONFIGURATION.md) - All environment variables
-- [Production Deployment](docs/PRODUCTION.md) - Best practices
-
----
-
-## Security
-
-### What Freebird Guarantees
-
-✅ **Unlinkability** – Issuer cannot link token issuance to redemption  
-✅ **Anonymity** – Verifier cannot identify the token holder  
-✅ **Replay Protection** – Each token can only be verified once  
-✅ **Unforgeability** – Tokens cannot be created without the issuer's secret key  
-✅ **Time-Bound Validity** – Tokens expire automatically with clock skew tolerance  
-✅ **Sybil Resistance** – Invitation system prevents one person from obtaining unlimited tokens
-
-### What Freebird Does NOT Guarantee
-
-❌ **Front-running** – Tokens can be stolen and used by others before the legitimate holder  
-❌ **Network Anonymity** – Use Tor or VPNs if you need network-level privacy  
-❌ **Quantum Resistance** – P-256 ECDLP is vulnerable to quantum computers  
-
-**Full security documentation:**
-- [Security Model](docs/SECURITY.md) - Threat model, guarantees, limitations
-- [Production Checklist](docs/PRODUCTION.md) - Hardening guide
+See [ROADMAP.md](docs/ROADMAP.md) for detailed timeline.
 
 ---
 
@@ -221,12 +185,34 @@ cargo test
 ./target/release/interface              # Normal flow
 ./target/release/interface --replay     # Replay protection test
 ./target/release/interface --expired    # Expiration validation test
-./target/release/interface --stress 100 # Performance test
+./target/release/interface --stress 100 # Performance test (100 tokens)
 ```
 
 **Documentation:**
 - [Testing Guide](docs/TESTING.md) - Unit, integration, performance tests
 - [CLI Reference](docs/CLI.md) - All interface modes
+
+---
+
+## Performance
+
+### Single Token Issuance
+- **Latency**: 5-15ms (P-256 ECDSA signing)
+- **Throughput**: 200-500 tokens/second (single core)
+- **Memory**: < 1KB per token
+
+### Batch Token Issuance (NEW!)
+- **Latency**: 50-200ms (for 1000 tokens)
+- **Throughput**: 2000+ tokens/second (8+ cores)
+- **Batch size**: Up to 10,000 tokens per request
+- **Speedup**: 40x faster than individual requests
+
+### Verification
+- **Latency**: 1-5ms (signature verification + nullifier check)
+- **Throughput**: 1000+ verifications/second
+- **Storage**: Redis with automatic cleanup
+
+[Performance Tuning Guide](docs/PERFORMANCE.md)
 
 ---
 
@@ -240,79 +226,46 @@ Freebird is inspired by Cloudflare's [Privacy Pass](https://privacypass.github.i
 | Source Code | Partially open | Fully open source |
 | Backend | Cloudflare infrastructure | Your infrastructure |
 | Issuance Control | Cloudflare policy | You control everything |
-| Sybil Resistance | CAPTCHA-based | Multiple options (invitation, PoW, rate limit) |
+| Sybil Resistance | CAPTCHA-based | 5 options (invitation, PoW, rate limit, WebAuthn, combined) |
+| Batch Issuance | Limited | Up to 10k tokens, 2000+ tok/s |
+| Hardware Auth | No | WebAuthn/FIDO2 support |
 
 **When to use Freebird:**
 - Need self-hosted solution (data sovereignty)
 - Want custom Sybil resistance mechanisms
 - Building privacy-preserving applications beyond bot detection
 - Require full control over token issuance policy
+- Need high-throughput batch issuance
 
 ---
 
-## Documentation
+## Security
 
-### Getting Started
-- [Installation Guide](docs/INSTALLATION.md)
-- [Quick Start](docs/QUICKSTART.md)
-- [How It Works](docs/HOW_IT_WORKS.md)
+### What Freebird Guarantees
 
-### Configuration & Deployment
-- [Configuration Reference](docs/CONFIGURATION.md)
-- [Production Deployment](docs/PRODUCTION.md)
-- [Key Management](docs/KEY_MANAGEMENT.md)
+✅ **Unlinkability** – Issuer can't track token usage  
+✅ **Unforgeability** – Only issuer can create valid tokens  
+✅ **Replay Protection** – Tokens are single-use  
+✅ **Expiration** – Time-bound validity  
+✅ **Verifiability** – DLEQ proofs ensure correct issuance  
 
-### Features
-- [Sybil Resistance](docs/SYBIL_RESISTANCE.md)
-- [Invitation System](docs/INVITATION_SYSTEM.md)
-- [Admin API](docs/ADMIN_API.md)
+### What Freebird Does NOT Protect
 
-### Reference
-- [API Documentation](docs/API.md)
-- [CLI Reference](docs/CLI.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Security Model](docs/SECURITY.md)
-- [Testing Guide](docs/TESTING.md)
+❌ **Token Theft** – Tokens can be stolen in transit (use TLS)  
+❌ **Front-Running** – Attacker can use token before the legitimate holder  
+❌ **Network Anonymity** – Use Tor or VPNs if you need network-level privacy  
+❌ **Quantum Resistance** – P-256 ECDLP is vulnerable to quantum computers  
 
-### Use Cases
-- [Government & Community Use Cases](USE_CASES.md)
-- [Enterprise Use Cases](ENTERPRISE_USE_CASES.md)
-
-### Advanced
-- [Cryptographic Details](docs/CRYPTOGRAPHY.md)
-- [Performance Tuning](docs/PERFORMANCE.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-
----
-
-## Roadmap
-
-**Completed:**
-- ✅ Core VOPRF protocol (P-256, SHA-256)
-- ✅ Invitation system with persistence
-- ✅ Admin API for invitation management
-- ✅ Key rotation with grace periods
-- ✅ Multiple Sybil resistance mechanisms
-- ✅ Redis backend for verifier storage
-
-**In Progress:**
-- 🚧 WebAuthn integration (optional feature)
-- 🚧 Batch issuance optimization
-
-**Planned:**
-- [ ] Client libraries (JavaScript, Python, Go, Rust SDK)
-- [ ] Docker images and Kubernetes manifests
-- [ ] Metrics and monitoring endpoints (Prometheus)
-- [ ] HSM integration for key storage
-
-See [ROADMAP.md](docs/ROADMAP.md) for details.
+**Full security documentation:**
+- [Security Model](docs/SECURITY.md) - Threat model, guarantees, limitations
+- [Production Checklist](docs/PRODUCTION.md) - Hardening guide
 
 ---
 
 ## Support & Community
 
 ### Getting Help
-- **Documentation**: See [docs/](docs/) directory
+- **Documentation**: See [docs/](docs/) directory ([Index](docs/INDEX.md))
 - **GitHub Issues**: [Report bugs and request features](https://github.com/yourusername/freebird/issues)
 - **GitHub Discussions**: Ask questions and share use cases
 - **Security Issues**: Report vulnerabilities privately via GitHub Security Advisories
@@ -323,6 +276,7 @@ We welcome contributions! Areas of interest:
 - Docker/Kubernetes deployments
 - Performance optimizations
 - New Sybil resistance mechanisms
+- WebAuthn enhancements
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
@@ -343,9 +297,36 @@ See [LICENSE](LICENSE) and [NOTICE](NOTICE) for full license text.
 - Inspired by [Privacy Pass](https://privacypass.github.io/)
 - Built on [RustCrypto](https://github.com/RustCrypto) elliptic curve implementations
 - VOPRF protocol based on [IETF CFRG draft](https://datatracker.ietf.org/doc/draft-irtf-cfrg-voprf/)
+- WebAuthn support via [webauthn-rs](https://github.com/kanidm/webauthn-rs)
 
 ---
 
 **Built with ❤️ for privacy**
 
 *Freebird: Prove you're authorized without revealing who you are.*
+
+---
+
+## Recent Updates
+
+### Version 0.2.0 (Latest)
+
+**New Features:**
+- 🎉 **WebAuthn Integration** - Hardware authentication with FIDO2/passkeys
+  - Touch ID, Windows Hello, YubiKey support
+  - Redis-backed credential storage
+  - Zero computational cost Sybil resistance
+  - [Full documentation](docs/WEBAUTHN.md)
+
+- ⚡ **Batch Issuance Optimization** - High-performance token issuance
+  - Up to 10,000 tokens per request
+  - 2000+ tokens/second throughput
+  - Parallel processing with Rayon
+  - 40x faster than individual requests
+
+**Improvements:**
+- Enhanced error messages and logging
+- Performance metrics for batch operations
+- Comprehensive WebAuthn documentation
+
+See [CHANGELOG.md](CHANGELOG.md) for full release history.

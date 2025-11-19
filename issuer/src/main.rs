@@ -18,6 +18,8 @@ use serde::Serialize;
 use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
+use tokio::sync::RwLock;
+use std::collections::HashMap;
 use tracing::{info, warn};
 use sybil_resistance::{
     ProofOfWork, 
@@ -26,6 +28,10 @@ use sybil_resistance::{
     SybilResistance,
     invitation::InvitationSystem,
 };
+#[cfg(feature = "human-gate-webauthn")]
+mod webauthn_ctx;
+mod webauthn_store;
+
 // Single unified state structure
 #[derive(Clone)]
 pub struct AppStateWithSybil {
@@ -88,6 +94,52 @@ async fn main() -> anyhow::Result<()> {
         }
         Err(_) => format!("{}-{}", kid_from_key, OffsetDateTime::now_utc().date()),
     };
+    
+    // ============================================================================
+	// WEBAUTHN INITIALIZATION - Add after Sybil resistance setup
+	// ============================================================================
+
+	#[cfg(feature = "human-gate-webauthn")]
+	let webauthn_state: Option<Arc<routes::webauthn::WebAuthnState>> = {
+		// Only initialize if WebAuthn is configured
+		if let (Ok(rp_id), Ok(rp_origin)) = (
+			env::var("WEBAUTHN_RP_ID"),
+			env::var("WEBAUTHN_RP_ORIGIN"),
+		) {
+			info!("🔐 Initializing WebAuthn subsystem");
+			
+			let webauthn_ctx = webauthn_ctx::WebAuthnCtx::from_env()
+				.expect("Failed to initialize WebAuthn context");
+			
+			// Choose credential storage backend
+			let cred_store = if let Ok(redis_url) = env::var("WEBAUTHN_REDIS_URL") {
+				let ttl = env::var("WEBAUTHN_CRED_TTL_SECS")
+					.ok()
+					.and_then(|s| s.parse().ok());
+				
+				info!("Using Redis for WebAuthn credential storage");
+				routes::webauthn::CredentialStore::Redis(
+					webauthn_store::RedisCredStore::new(&redis_url, ttl)
+						.expect("Failed to connect to WebAuthn Redis")
+				)
+			} else {
+				warn!("⚠️  Using in-memory WebAuthn credential storage (not for production!)");
+				routes::webauthn::CredentialStore::InMemory(
+					webauthn_store::InMemoryCredStore::new()
+				)
+			};
+			
+			Some(Arc::new(routes::webauthn::WebAuthnState {
+				webauthn: webauthn_ctx,
+				cred_store,
+				sessions: Arc::new(RwLock::new(HashMap::new())),
+			}))
+		} else {
+			None
+		}
+	};
+	#[cfg(not(feature = "human-gate-webauthn"))]
+	let webauthn_state: Option<()> = None;
 
     // ---------- Sybil Resistance Configuration ----------
     let mut invitation_system: Option<Arc<InvitationSystem>> = None;
@@ -167,6 +219,24 @@ async fn main() -> anyhow::Result<()> {
                 invitation_system = Some(Arc::clone(&inv_sys));
                 Some(inv_sys)
             }
+          #[cfg(feature = "human-gate-webauthn")]
+			Ok("webauthn") => {
+			
+				if let Some(ref wa_state) = webauthn_state {
+					let max_proof_age = env::var("WEBAUTHN_MAX_PROOF_AGE")
+						.ok()
+						.and_then(|s| s.parse().ok());
+					
+					info!("✅ Sybil resistance: WebAuthn (proof of humanity)");
+					Some(Arc::new(sybil_resistance::WebAuthnGate::new(
+						Arc::clone(wa_state),
+						max_proof_age,
+					)))
+				} else {
+					warn!("⚠️  WebAuthn Sybil resistance requires WEBAUTHN_RP_ID and WEBAUTHN_RP_ORIGIN");
+					None
+				}
+			}
             Ok("combined") => {
                 let pow_difficulty = env::var("SYBIL_POW_DIFFICULTY")
                     .ok()
@@ -195,6 +265,8 @@ async fn main() -> anyhow::Result<()> {
                 None
             }
         };
+        
+	
 
     // ---------- Core ----------
     let ctx = b"freebird:v1";
@@ -246,7 +318,27 @@ async fn main() -> anyhow::Result<()> {
 			}
 		}
 	});
-			
+	#[cfg(feature = "human-gate-webauthn")]
+	if let Some(ref wa_state) = webauthn_state {
+		info!("✅ WebAuthn endpoints enabled at /webauthn/*");
+		info!("   Endpoints:");
+		info!("   POST /webauthn/register/start");
+		info!("   POST /webauthn/register/finish");
+		info!("   POST /webauthn/authenticate/start");
+		info!("   POST /webauthn/authenticate/finish");
+		info!("   GET  /webauthn/info");
+		
+		// Create WebAuthn router
+		let webauthn_router = Router::new()
+			.route("/register/start", post(routes::webauthn::start_registration))
+			.route("/register/finish", post(routes::webauthn::finish_registration))
+			.route("/authenticate/start", post(routes::webauthn::start_authentication))
+			.route("/authenticate/finish", post(routes::webauthn::finish_authentication))
+			.route("/info", get(routes::webauthn::webauthn_info))
+			.with_state(Arc::clone(wa_state));
+		
+		app = app.nest("/webauthn", webauthn_router);
+	}
     // ---------- Admin API (optional) ----------
     if let Ok(admin_key) = env::var("ADMIN_API_KEY") {
         if admin_key.len() < 32 {
@@ -290,7 +382,7 @@ async fn main() -> anyhow::Result<()> {
     info!("✅ Router configured. Endpoints:");
     info!("   GET  /.well-known/issuer");
     info!("   POST /v1/oprf/issue              (adaptive: checks for Sybil proof)");
-    info!("   POST /v1/oprf/issue/batch    (same handler, clearer intent)");
+    info!("   POST /v1/oprf/issue/batch    (issue multiple tokens at once)");
     
     if state.sybil_checker.is_some() {
         info!("🛡️  Sybil resistance enabled - proofs will be verified when provided");

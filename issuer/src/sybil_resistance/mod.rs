@@ -33,11 +33,17 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub mod proof_of_work;
 pub mod rate_limit;
 pub mod invitation;
+#[cfg(feature = "human-gate-webauthn")]
+pub mod webauthn_gate;
 
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
 pub use proof_of_work::ProofOfWork;
 pub use rate_limit::RateLimit;
 pub use invitation::ClientData;
+#[cfg(feature = "human-gate-webauthn")]
+pub use webauthn_gate::WebAuthnGate;
+
+use async_trait::async_trait;
 
 // Future implementations:
 // pub mod payment_gate;
@@ -78,12 +84,23 @@ pub enum SybilProof {
 
     /// Invitation: Client was invited by existing user
     /// (inviter_id is tracked server-side, not in the proof)
-    #[allow(dead_code)]
     Invitation {
         /// Invitation code
         code: String,
         /// Signature from issuer (proves authenticity)
         signature: String,
+    },
+    
+    /// WebAuthn: Client authenticated with registered passkey/security key
+    /// NEW VARIANT - Add this to the existing enum
+    #[cfg(feature = "human-gate-webauthn")]
+    WebAuthn {
+        /// Username that authenticated
+        username: String,
+        /// Authentication proof from /webauthn/authenticate/finish
+        auth_proof: String,
+        /// Timestamp of authentication (Unix seconds)
+        timestamp: i64,
     },
 
     /// Proof of Humanity: External system verified uniqueness
@@ -99,22 +116,10 @@ pub enum SybilProof {
     None,
 }
 
-/// Trait for Sybil resistance mechanisms
 pub trait SybilResistance: Send + Sync {
-    /// Verify that the proof demonstrates uniqueness/scarcity
-    ///
-    /// Returns Ok(()) if proof is valid, Err otherwise
-    fn verify(&self, proof: &SybilProof) -> Result<()>;
-
-    /// Optional: Get the difficulty/cost of this mechanism
-    ///
-    /// Used for adaptive difficulty or cost estimation
-    fn cost(&self) -> u64 {
-        0
-    }
-
-    /// Optional: Check if this proof type is supported
+    fn verify(&self, proof: &SybilProof) -> Result<()>;  // Keep as fn, not async fn
     fn supports(&self, proof: &SybilProof) -> bool;
+    fn cost(&self) -> u64;  // Add back the cost method
 }
 
 /// No Sybil resistance (permissive mode)
@@ -132,6 +137,9 @@ impl SybilResistance for NoSybilResistance {
 
     fn supports(&self, proof: &SybilProof) -> bool {
         matches!(proof, SybilProof::None)
+    }
+    fn cost(&self) -> u64 {
+        0  // No computational cost
     }
 }
 
@@ -210,6 +218,9 @@ impl SybilResistance for CombinedSybilResistance {
 
     fn supports(&self, proof: &SybilProof) -> bool {
         self.mechanisms.iter().any(|m| m.supports(proof))
+    }
+    fn cost(&self) -> u64 {
+        0  // No computational cost
     }
 }
 

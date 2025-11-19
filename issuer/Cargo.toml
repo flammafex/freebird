@@ -6,7 +6,13 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = []
-human-gate-webauthn = ["dep:webauthn-rs", "dep:url"]
+human-gate-webauthn = [
+    "dep:webauthn-rs",
+    "dep:url",
+    "dep:uuid",
+    "dep:chrono",
+    "dep:redis",
+]
 
 [dependencies]
 common = { path = "../common" }
@@ -26,10 +32,16 @@ elliptic-curve = "0.13"
 sha2 = "0.10"
 blake3 = "1"
 hex = "0.4"  # For invitation signature serialization
-webauthn-rs = { version = "0.5.3", optional = true }
-url = { version = "2", optional = true }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tower_governor = "0.5"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["trace", "timeout", "set-header", "util", "request-id"] }
+# WebAuthn dependencies (conditional on feature flag)
+webauthn-rs = { version = "0.5.3", optional = true }
+url = { version = "2", optional = true }
+uuid = { version = "1", features = ["v4", "serde"], optional = true }
+chrono = { version = "0.4", optional = true }
+async-trait = "0.1"  # For async trait implementations
+redis = { version = "0.24", features = ["aio", "tokio-comp"], optional = true }
+
