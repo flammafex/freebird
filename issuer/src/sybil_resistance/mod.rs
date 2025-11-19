@@ -43,7 +43,6 @@ pub use invitation::ClientData;
 #[cfg(feature = "human-gate-webauthn")]
 pub use webauthn_gate::WebAuthnGate;
 
-use async_trait::async_trait;
 
 // Future implementations:
 // pub mod payment_gate;

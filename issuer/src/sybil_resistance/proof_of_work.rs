@@ -192,7 +192,7 @@ impl SybilResistance for ProofOfWork {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+	use crate::sybil_resistance::current_timestamp; 
     #[test]
     fn test_pow_difficulty_16() {
         let difficulty = 16; // ~65k hashes

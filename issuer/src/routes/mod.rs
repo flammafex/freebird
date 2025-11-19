@@ -4,6 +4,8 @@ pub mod batch_issue;
 pub mod admin;
 #[cfg(feature = "human-gate-webauthn")]
 pub mod webauthn;
+#[cfg(feature = "human-gate-webauthn")]
+pub mod webauthn_attestation;  // Add this line
 
 // Re-export types
 pub use issue::{IssueReq, IssueResp};

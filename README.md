@@ -156,11 +156,11 @@ cargo build --release
   - Invitation-based (trust network)
   - Proof-of-Work (computational cost)
   - Rate limiting (IP/fingerprint-based)
-  - WebAuthn (hardware authentication) **← NEW!**
+  - WebAuthn (FIDO2/passkeys) **← NEW!**
   - Combined (multiple mechanisms)
 - ✅ **Redis backend** for verifier storage with replay protection
 - ✅ **Batch issuance** optimization (up to 10k tokens, 2000+ tok/s) **← NEW!**
-- ✅ **WebAuthn integration** (optional feature, FIDO2/passkeys) **← NEW!**
+- ✅ **Attestation** (experimental hardware verification for WebAuthn authenticators)
 
 ### 🚀 Planned Features
 
@@ -168,10 +168,39 @@ cargo build --release
 - [ ] **Docker images** and Kubernetes manifests
 - [ ] **Metrics and monitoring** endpoints (Prometheus)
 - [ ] **HSM integration** for key storage
-- [ ] **Attestation** for WebAuthn authenticators
 - [ ] **Mobile SDKs** (iOS, Android)
 
-See [ROADMAP.md](docs/ROADMAP.md) for detailed timeline.
+### Hardware Attestation Support (NEW!)
+
+Freebird now includes **experimental attestation verification** for WebAuthn authenticators, providing enhanced Sybil resistance through hardware verification.
+
+**Features:**
+- 🔐 **Policy-Based Enforcement** - Configure attestation requirements
+- 📊 **Heuristic Detection** - Identify likely software authenticators
+- 📈 **Metadata Tracking** - Monitor registration patterns
+- ⚙️ **Three Policy Modes**:
+  - `none` - No enforcement (default)
+  - `strict` - Reject likely software keys
+  - `log_only` - Monitor without enforcement
+
+**Configuration:**
+```bash
+# Enable strict hardware policy
+export WEBAUTHN_REQUIRE_ATTESTATION=true
+export WEBAUTHN_ATTESTATION_POLICY=strict
+
+# Or just monitor
+export WEBAUTHN_ATTESTATION_POLICY=log_only
+```
+
+**Limitations (webauthn-rs 0.5.3):**
+- Cannot access authenticator AAGUIDs directly
+- Cannot verify attestation certificates
+- Uses size-based heuristics for detection
+
+Despite these limitations, the implementation still provides value through policy enforcement and monitoring capabilities.
+
+
 
 ---
 

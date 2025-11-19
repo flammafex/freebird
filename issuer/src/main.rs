@@ -30,6 +30,7 @@ use sybil_resistance::{
 };
 #[cfg(feature = "human-gate-webauthn")]
 mod webauthn_ctx;
+#[cfg(feature = "human-gate-webauthn")]
 mod webauthn_store;
 
 // Single unified state structure
@@ -320,22 +321,30 @@ async fn main() -> anyhow::Result<()> {
 	});
 	#[cfg(feature = "human-gate-webauthn")]
 	if let Some(ref wa_state) = webauthn_state {
-		info!("✅ WebAuthn endpoints enabled at /webauthn/*");
-		info!("   Endpoints:");
-		info!("   POST /webauthn/register/start");
-		info!("   POST /webauthn/register/finish");
-		info!("   POST /webauthn/authenticate/start");
-		info!("   POST /webauthn/authenticate/finish");
-		info!("   GET  /webauthn/info");
+		// Check if attestation is enabled
+		let use_attestation = std::env::var("WEBAUTHN_REQUIRE_ATTESTATION")
+			.unwrap_or_else(|_| "false".to_string())
+			.eq_ignore_ascii_case("true");
 		
-		// Create WebAuthn router
-		let webauthn_router = Router::new()
-			.route("/register/start", post(routes::webauthn::start_registration))
-			.route("/register/finish", post(routes::webauthn::finish_registration))
-			.route("/authenticate/start", post(routes::webauthn::start_authentication))
-			.route("/authenticate/finish", post(routes::webauthn::finish_authentication))
-			.route("/info", get(routes::webauthn::webauthn_info))
-			.with_state(Arc::clone(wa_state));
+		let webauthn_router = if use_attestation {
+			info!("🔐 WebAuthn with attestation verification enabled");
+			Router::new()
+				.route("/register/start", post(routes::webauthn::start_registration))
+				.route("/register/finish", post(routes::webauthn_attestation::finish_registration_with_attestation))
+				.route("/authenticate/start", post(routes::webauthn::start_authentication))
+				.route("/authenticate/finish", post(routes::webauthn::finish_authentication))
+				.route("/info", get(routes::webauthn::webauthn_info))
+				.with_state(Arc::clone(wa_state))
+		} else {
+			info!("📝 WebAuthn without attestation verification");
+			Router::new()
+				.route("/register/start", post(routes::webauthn::start_registration))
+				.route("/register/finish", post(routes::webauthn::finish_registration))
+				.route("/authenticate/start", post(routes::webauthn::start_authentication))
+				.route("/authenticate/finish", post(routes::webauthn::finish_authentication))
+				.route("/info", get(routes::webauthn::webauthn_info))
+				.with_state(Arc::clone(wa_state))
+		};
 		
 		app = app.nest("/webauthn", webauthn_router);
 	}
