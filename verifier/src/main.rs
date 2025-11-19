@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
+use anyhow::Context;
 use axum::{
     extract::{rejection::JsonRejection, State},
     http::StatusCode,
@@ -7,12 +8,11 @@ use axum::{
     Json, Router,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
+use common::logging;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{net::TcpListener, sync::RwLock, time::sleep};
-use tracing::{error, info, warn, debug};
-use anyhow::Context;
-use common::logging;
+use tracing::{debug, error, info, warn};
 
 mod store;
 use store::{SpendStore, StoreBackend};
@@ -126,7 +126,10 @@ async fn main() -> anyhow::Result<()> {
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8082".into());
     let addr: SocketAddr = bind_addr.parse()?;
     let listener = TcpListener::bind(addr).await?;
-    info!("🕊️ Freebird verifier listening on http://{}", listener.local_addr()?);
+    info!(
+        "🕊️ Freebird verifier listening on http://{}",
+        listener.local_addr()?
+    );
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
@@ -166,7 +169,7 @@ async fn verify_with_logging(
     result: Result<Json<VerifyRequest>, JsonRejection>,
 ) -> Result<Json<VerifyResponse>, (StatusCode, String)> {
     info!("📥 /v1/verify request received");
-    
+
     match result {
         Ok(Json(req)) => {
             info!("✅ Request parsed: issuer_id={}", req.issuer_id);
@@ -175,7 +178,10 @@ async fn verify_with_logging(
         }
         Err(rejection) => {
             error!("❌ JSON deserialization failed: {}", rejection);
-            Err((StatusCode::BAD_REQUEST, format!("Invalid JSON: {}", rejection)))
+            Err((
+                StatusCode::BAD_REQUEST,
+                format!("Invalid JSON: {}", rejection),
+            ))
         }
     }
 }
@@ -186,31 +192,29 @@ async fn verify(
     Json(req): Json<VerifyRequest>,
 ) -> Result<Json<VerifyResponse>, (StatusCode, String)> {
     info!("🔍 Starting verification for issuer={}", req.issuer_id);
-    
+
     // 1) Lookup issuer
     let issuers = st.issuers.read().await;
     debug!("Loaded issuers map, contains {} entries", issuers.len());
-    
-    let issuer = issuers
-        .get(&req.issuer_id)
-        .ok_or_else(|| {
-            error!("Issuer not found: {}", req.issuer_id);
-            (StatusCode::UNAUTHORIZED, "verification failed".to_string())
-        })?;
-    
+
+    let issuer = issuers.get(&req.issuer_id).ok_or_else(|| {
+        error!("Issuer not found: {}", req.issuer_id);
+        (StatusCode::UNAUTHORIZED, "verification failed".to_string())
+    })?;
+
     debug!("Found issuer: kid={}", issuer.kid);
 
     // 2) NEW: Check token expiration BEFORE cryptographic verification
     //    This prevents wasting CPU on expired tokens
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    
+
     // Determine expiration time:
     // - Use explicit exp from request if provided
     // - Otherwise, tokens expire based on issuer's default TTL from issuance time
     // Note: For proper validation, tokens should include their exp in the request
     if let Some(exp) = req.exp {
         debug!("Checking explicit expiration: exp={}, now={}", exp, now);
-        
+
         // Check if token has expired (with clock skew tolerance)
         if now > exp + st.max_clock_skew_secs {
             let expired_by = now - exp;
@@ -218,12 +222,9 @@ async fn verify(
                 "❌ Token expired: expired_by={}s (tolerance={}s)",
                 expired_by, st.max_clock_skew_secs
             );
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                "token expired".to_string(),
-            ));
+            return Err((StatusCode::UNAUTHORIZED, "token expired".to_string()));
         }
-        
+
         // Also check for tokens with expiration too far in the future
         // (possible clock skew or forged timestamps)
         let max_future_time = now + st.max_clock_skew_secs;
@@ -238,7 +239,7 @@ async fn verify(
                 "invalid token expiration".to_string(),
             ));
         }
-        
+
         debug!("✅ Token not expired (exp in {}s)", exp - now);
     } else {
         debug!("⚠️ No explicit expiration provided, relying on nullifier TTL");
@@ -256,14 +257,14 @@ async fn verify(
             error!("Token cryptographic verification failed: {:?}", e);
             (StatusCode::UNAUTHORIZED, "verification failed".into())
         })?;
-    
+
     debug!("✅ Token cryptographically valid, PRF output derived");
 
     // 4) Replay / spend tracking
     let null_key = crypto::nullifier_key(&req.issuer_id, &out_b64);
     let spend_key = format!("freebird:spent:{}:{}", req.issuer_id, null_key);
     debug!("Checking replay with key: {}", spend_key);
-    
+
     let spent = st
         .store
         .mark_spent(&spend_key, Duration::from_secs(issuer.exp_sec))
@@ -281,9 +282,11 @@ async fn verify(
     // 5) Success
     info!(
         "✅ Token verified successfully: issuer={}, kid={}, nullifier={}",
-        req.issuer_id, issuer.kid, &null_key[..16]
+        req.issuer_id,
+        issuer.kid,
+        &null_key[..16]
     );
-    
+
     Ok(Json(VerifyResponse {
         ok: true,
         verified_at: now,

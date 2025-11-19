@@ -23,28 +23,28 @@
 //!           Verify      Verification   Batched Eval   Results
 //! ```
 
-use std::sync::Arc;
 use std::net::SocketAddr;
+use std::sync::Arc;
 use std::time::Instant;
 
 use axum::{
     extract::{ConnectInfo, State},
-    http::{StatusCode, HeaderMap},
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
-use tracing::{debug, error, info, warn, instrument};
-use rayon::prelude::*;
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::multi_key_voprf::MultiKeyVoprfCore;
-use crate::AppStateWithSybil;
-use crate::sybil_resistance::SybilProof;
-use crate::routes::issue::SybilInfo;
 pub use crate::routes::issue::extract_client_data;
+use crate::routes::issue::SybilInfo;
+use crate::sybil_resistance::SybilProof;
+use crate::AppStateWithSybil;
 /// Maximum batch size to prevent memory exhaustion
-/// 
+///
 /// Rationale:
 /// - Each token: ~33 bytes input + 130 bytes output = ~163 bytes
 /// - 10k tokens: ~1.6MB memory
@@ -71,7 +71,7 @@ pub const MIN_PARALLEL_BATCH_SIZE: usize = 10;
 #[derive(Deserialize, Debug)]
 pub struct BatchIssueReq {
     /// Array of base64url-encoded blinded elements
-    /// 
+    ///
     /// Each must be exactly 33 bytes (SEC1 compressed point) when decoded
     pub blinded_elements: Vec<String>,
 
@@ -96,22 +96,22 @@ pub enum TokenResult {
     Success {
         /// Base64url-encoded evaluation token
         token: String,
-        
+
         /// DLEQ proof (currently empty, reserved for future use)
         proof: String,
-        
+
         /// Key identifier
         kid: String,
-        
+
         /// Expiration timestamp (Unix seconds)
         exp: i64,
     },
-    
+
     /// Failed to issue token
     Error {
         /// Error message
         message: String,
-        
+
         /// Error code for programmatic handling
         code: String,
     },
@@ -122,19 +122,19 @@ pub enum TokenResult {
 pub struct BatchIssueResp {
     /// Array of token results (same order as request)
     pub results: Vec<TokenResult>,
-    
+
     /// Number of successful tokens
     pub successful: usize,
-    
+
     /// Number of failed tokens
     pub failed: usize,
-    
+
     /// Processing time in milliseconds
     pub processing_time_ms: u64,
-    
+
     /// Tokens per second throughput
     pub throughput: f64,
-    
+
     /// Optional Sybil resistance information
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sybil_info: Option<SybilInfo>,
@@ -177,8 +177,8 @@ impl BatchMetrics {
 /// - Total: ~110ns per token (negligible)
 fn validate_blinded_element(blinded_b64: &str) -> Result<Vec<u8>, String> {
     // Decode base64
-    let blinded = Base64UrlUnpadded::decode_vec(blinded_b64)
-        .map_err(|e| format!("invalid base64: {}", e))?;
+    let blinded =
+        Base64UrlUnpadded::decode_vec(blinded_b64).map_err(|e| format!("invalid base64: {}", e))?;
 
     // Validate length
     if blinded.len() != 33 {
@@ -205,11 +205,7 @@ fn validate_blinded_element(blinded_b64: &str) -> Result<Vec<u8>, String> {
 /// 1. SIMD: Batch point operations (requires custom implementation)
 /// 2. GPU: Offload to GPU for large batches (>10k tokens)
 /// 3. Hardware crypto: Use CPU crypto extensions (AES-NI, SHA-NI)
-async fn evaluate_token(
-    voprf: &MultiKeyVoprfCore,
-    blinded_b64: &str,
-    exp: i64,
-) -> TokenResult {
+async fn evaluate_token(voprf: &MultiKeyVoprfCore, blinded_b64: &str, exp: i64) -> TokenResult {
     match voprf.evaluate_b64(blinded_b64).await {
         Ok(eval_result) => TokenResult::Success {
             token: eval_result.token,
@@ -274,10 +270,7 @@ pub async fn handle_batch(
 
     // Check batch size limits
     if batch_size == 0 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "batch cannot be empty".to_string(),
-        ));
+        return Err((StatusCode::BAD_REQUEST, "batch cannot be empty".to_string()));
     }
 
     if batch_size > MAX_BATCH_SIZE {
@@ -304,12 +297,12 @@ pub async fn handle_batch(
     // --- SYBIL RESISTANCE CHECK ---
     let sybil_start = Instant::now();
     let client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
-    
+
     let sybil_info = match (&state.sybil_checker, &req.sybil_proof) {
         // Case 1: Sybil configured + proof provided → VERIFY
         (Some(checker), Some(proof)) => {
             debug!("verifying Sybil proof for batch of {}", batch_size);
-            
+
             match checker.verify(proof) {
                 Ok(()) => {
                     info!("✅ Sybil resistance check passed for batch");
@@ -355,15 +348,18 @@ pub async fn handle_batch(
 
     // --- PARALLEL VOPRF EVALUATION ---
     let voprf_start = Instant::now();
-    
+
     // Calculate expiration once for all tokens
     let exp = OffsetDateTime::now_utc().unix_timestamp() + state.exp_sec as i64;
 
     // Choose processing strategy based on batch size
     let results = if batch_size < MIN_PARALLEL_BATCH_SIZE {
         // Sequential processing for small batches (less overhead)
-        debug!("using sequential processing for small batch (n={})", batch_size);
-        
+        debug!(
+            "using sequential processing for small batch (n={})",
+            batch_size
+        );
+
         let mut results = Vec::with_capacity(batch_size);
         for blinded_b64 in &req.blinded_elements {
             // Validate first
@@ -384,9 +380,10 @@ pub async fn handle_batch(
     } else {
         // Parallel processing for larger batches
         debug!("using parallel processing for batch (n={})", batch_size);
-        
+
         // Step 1: Validate all inputs in parallel (fast, CPU-bound)
-        let validated: Vec<_> = req.blinded_elements
+        let validated: Vec<_> = req
+            .blinded_elements
             .par_iter()
             .map(|b| validate_blinded_element(b))
             .collect();
@@ -395,7 +392,7 @@ pub async fn handle_batch(
         // Note: We need to handle async evaluation in a blocking context
         // We use tokio::runtime::Handle to bridge rayon and tokio
         let handle = tokio::runtime::Handle::current();
-        
+
         validated
             .into_par_iter()
             .enumerate()
@@ -445,7 +442,9 @@ pub async fn handle_batch(
             "⚠️ Throughput below target: {:.0} tok/s (target: 1000+ tok/s)",
             throughput
         );
-        warn!("Consider: (1) more CPU cores, (2) batch size optimization, (3) hardware acceleration");
+        warn!(
+            "Consider: (1) more CPU cores, (2) batch size optimization, (3) hardware acceleration"
+        );
     }
 
     Ok(Json(BatchIssueResp {

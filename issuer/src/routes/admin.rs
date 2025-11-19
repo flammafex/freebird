@@ -16,20 +16,20 @@
 //! All endpoints require authentication via API key in the `X-Admin-Key` header.
 //! The API key should be configured via the `ADMIN_API_KEY` environment variable.
 
+use crate::multi_key_voprf::{KeyInfo, KeyStats, MultiKeyVoprfCore};
+use crate::sybil_resistance::invitation::{InvitationStats, InvitationSystem};
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use std::collections::HashSet;
-use tracing::{info, warn};
-use crate::multi_key_voprf::{KeyInfo, KeyStats, MultiKeyVoprfCore};
-use crate::sybil_resistance::invitation::{InvitationSystem, InvitationStats};
 use base64ct::Encoding;
 use p256::ecdsa::SigningKey;
 use rand::rngs::OsRng;
+use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
+use std::sync::Arc;
+use tracing::{info, warn};
 // ============================================================================
 // State & Configuration
 // ============================================================================
@@ -387,7 +387,8 @@ pub async fn list_keys_handler(
     Ok(Json(ListKeysResponse { keys, stats }))
 }
 
-pub async fn rotate_key_handler(  // <-- MUST have 'async' keyword
+pub async fn rotate_key_handler(
+    // <-- MUST have 'async' keyword
     State(state): State<Arc<AdminState>>,
     Json(req): Json<RotateKeyRequest>,
 ) -> Result<Json<RotateKeyResponse>, AdminError> {
@@ -409,11 +410,17 @@ pub async fn rotate_key_handler(  // <-- MUST have 'async' keyword
     let expires_at = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs() + grace_period;
+        .as_secs()
+        + grace_period;
 
     state
         .multi_key_voprf
-        .rotate_key(sk_bytes, pubkey_b64, req.new_kid.clone(), Some(grace_period))
+        .rotate_key(
+            sk_bytes,
+            pubkey_b64,
+            req.new_kid.clone(),
+            Some(grace_period),
+        )
         .await
         .map_err(|e| AdminError::Internal(format!("Key rotation failed: {}", e)))?;
 
@@ -434,7 +441,7 @@ pub async fn cleanup_keys_handler(
     verify_api_key(&headers, &state.api_key)?;
 
     let keys_before = state.multi_key_voprf.list_keys().await;
-    
+
     let removed_count = state
         .multi_key_voprf
         .cleanup_expired_keys()
@@ -442,9 +449,8 @@ pub async fn cleanup_keys_handler(
         .map_err(|e| AdminError::Internal(format!("Cleanup failed: {}", e)))?;
 
     let keys_after = state.multi_key_voprf.list_keys().await;
-    let remaining_kids: HashSet<_> = 
-        keys_after.iter().map(|k| k.kid.clone()).collect();
-    
+    let remaining_kids: HashSet<_> = keys_after.iter().map(|k| k.kid.clone()).collect();
+
     let removed_kids: Vec<String> = keys_before
         .iter()
         .filter(|k| !remaining_kids.contains(&k.kid))
@@ -519,11 +525,17 @@ pub fn admin_router(
         .route("/stats", axum::routing::get(get_stats_handler))
         .route("/invites/grant", axum::routing::post(grant_invites_handler))
         .route("/users/ban", axum::routing::post(ban_user_handler))
-        .route("/bootstrap/add", axum::routing::post(add_bootstrap_user_handler))
+        .route(
+            "/bootstrap/add",
+            axum::routing::post(add_bootstrap_user_handler),
+        )
         .route("/save", axum::routing::post(save_state_handler))
         .route("/keys", axum::routing::get(list_keys_handler))
         .route("/keys/rotate", axum::routing::post(rotate_key_handler))
         .route("/keys/cleanup", axum::routing::post(cleanup_keys_handler))
-        .route("/keys/:kid", axum::routing::delete(force_remove_key_handler))
+        .route(
+            "/keys/:kid",
+            axum::routing::delete(force_remove_key_handler),
+        )
         .with_state(state)
 }

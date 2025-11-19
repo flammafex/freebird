@@ -37,14 +37,12 @@ impl WebAuthnCtx {
     /// export WEBAUTHN_RP_ORIGIN=http://localhost:8081
     /// ```
     pub fn from_env() -> Result<Arc<Self>> {
-        let rp_id = std::env::var("WEBAUTHN_RP_ID")
-            .context("WEBAUTHN_RP_ID not set")?;
+        let rp_id = std::env::var("WEBAUTHN_RP_ID").context("WEBAUTHN_RP_ID not set")?;
 
-        let rp_name = std::env::var("WEBAUTHN_RP_NAME")
-            .unwrap_or_else(|_| "Freebird".to_string());
+        let rp_name = std::env::var("WEBAUTHN_RP_NAME").unwrap_or_else(|_| "Freebird".to_string());
 
-        let rp_origin = std::env::var("WEBAUTHN_RP_ORIGIN")
-            .context("WEBAUTHN_RP_ORIGIN not set")?;
+        let rp_origin =
+            std::env::var("WEBAUTHN_RP_ORIGIN").context("WEBAUTHN_RP_ORIGIN not set")?;
 
         Self::new(rp_id, rp_name, rp_origin)
     }
@@ -56,8 +54,8 @@ impl WebAuthnCtx {
             .with_context(|| format!("Invalid WEBAUTHN_RP_ORIGIN: {}", rp_origin))?;
 
         // Create WebAuthn builder
-        let rp_origin_parsed = Url::parse(&rp_origin)
-            .with_context(|| format!("Invalid origin URL: {}", rp_origin))?;
+        let rp_origin_parsed =
+            Url::parse(&rp_origin).with_context(|| format!("Invalid origin URL: {}", rp_origin))?;
 
         let mut builder = WebauthnBuilder::new(&rp_id, &rp_origin_parsed)
             .with_context(|| format!("Failed to create WebAuthn builder for RP ID: {}", rp_id))?;
@@ -66,7 +64,8 @@ impl WebAuthnCtx {
         builder = builder.rp_name(&rp_name);
 
         // Build WebAuthn instance
-        let webauthn = builder.build()
+        let webauthn = builder
+            .build()
             .context("Failed to build WebAuthn instance")?;
 
         info!(

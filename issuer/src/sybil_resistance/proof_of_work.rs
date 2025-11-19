@@ -97,10 +97,7 @@ impl ProofOfWork {
             let hash = Self::hash_pow(input, nonce, timestamp);
 
             // Check full zero bytes
-            if !hash[..required_zeros as usize]
-                .iter()
-                .all(|&b| b == 0)
-            {
+            if !hash[..required_zeros as usize].iter().all(|&b| b == 0) {
                 continue;
             }
 
@@ -192,7 +189,7 @@ impl SybilResistance for ProofOfWork {
 #[cfg(test)]
 mod tests {
     use super::*;
-	use crate::sybil_resistance::current_timestamp; 
+    use crate::sybil_resistance::current_timestamp;
     #[test]
     fn test_pow_difficulty_16() {
         let difficulty = 16; // ~65k hashes
@@ -200,8 +197,8 @@ mod tests {
         let input = "test_input";
         let timestamp = current_timestamp();
 
-        let (nonce, hash) = ProofOfWork::compute(difficulty, input, timestamp)
-            .expect("should find nonce");
+        let (nonce, hash) =
+            ProofOfWork::compute(difficulty, input, timestamp).expect("should find nonce");
 
         println!(
             "Found nonce {} with hash {:02x?} (difficulty {})",
@@ -244,8 +241,7 @@ mod tests {
         let checker = ProofOfWork::new(difficulty);
         let old_timestamp = current_timestamp() - 600; // 10 minutes ago
 
-        let (nonce, _) =
-            ProofOfWork::compute(difficulty, "test", old_timestamp).expect("compute");
+        let (nonce, _) = ProofOfWork::compute(difficulty, "test", old_timestamp).expect("compute");
 
         let proof = SybilProof::ProofOfWork {
             nonce,

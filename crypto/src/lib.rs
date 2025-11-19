@@ -57,8 +57,7 @@ impl Client {
         evaluation_b64: &str,
         issuer_pubkey_sec1_compressed: &[u8],
     ) -> Result<(String, String), Error> {
-        let eval_raw =
-            Base64UrlUnpadded::decode_vec(evaluation_b64).map_err(|_| Error::Decode)?;
+        let eval_raw = Base64UrlUnpadded::decode_vec(evaluation_b64).map_err(|_| Error::Decode)?;
         let (token_raw, out_raw) = self
             .0
             .finalize(state.inner, &eval_raw, issuer_pubkey_sec1_compressed)
@@ -83,8 +82,7 @@ impl Server {
 
     /// Evaluate a single blinded element (base64url), return evaluation/token bytes (base64url).
     pub fn evaluate_with_proof(&self, blinded_b64: &str) -> Result<String, Error> {
-        let blinded_raw =
-            Base64UrlUnpadded::decode_vec(blinded_b64).map_err(|_| Error::Decode)?;
+        let blinded_raw = Base64UrlUnpadded::decode_vec(blinded_b64).map_err(|_| Error::Decode)?;
         let eval_raw = self.0.evaluate(&blinded_raw).map_err(|_| Error::Internal)?;
         Ok(Base64UrlUnpadded::encode_string(&eval_raw))
     }

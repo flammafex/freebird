@@ -47,7 +47,7 @@ use base64ct::Encoding;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
 
-use super::{SybilResistance, SybilProof};
+use super::{SybilProof, SybilResistance};
 use crate::routes::webauthn::WebAuthnState;
 
 /// WebAuthn-based Sybil resistance
@@ -79,42 +79,46 @@ impl WebAuthnGate {
 }
 
 impl SybilResistance for WebAuthnGate {
-fn verify(&self, proof: &SybilProof) -> Result<()> {
-    match proof {
-        SybilProof::WebAuthn { username, auth_proof, timestamp } => {
-            // Check timestamp first (no async needed)
-            let now = chrono::Utc::now().timestamp();
-            let age = now - timestamp;
+    fn verify(&self, proof: &SybilProof) -> Result<()> {
+        match proof {
+            SybilProof::WebAuthn {
+                username,
+                auth_proof,
+                timestamp,
+            } => {
+                // Check timestamp first (no async needed)
+                let now = chrono::Utc::now().timestamp();
+                let age = now - timestamp;
 
-            if age > self.max_proof_age {
-                return Err(anyhow!("Authentication proof expired"));
+                if age > self.max_proof_age {
+                    return Err(anyhow!("Authentication proof expired"));
+                }
+
+                if age < -60 {
+                    return Err(anyhow!("Timestamp in future"));
+                }
+
+                // Just verify proof format without checking credentials
+                let proof_bytes = base64ct::Base64UrlUnpadded::decode_vec(auth_proof)
+                    .context("Invalid proof encoding")?;
+
+                if proof_bytes.len() != 32 {
+                    return Err(anyhow!("Invalid proof length"));
+                }
+
+                Ok(())
             }
-
-            if age < -60 {
-                return Err(anyhow!("Timestamp in future"));
-            }
-
-            // Just verify proof format without checking credentials
-            let proof_bytes = base64ct::Base64UrlUnpadded::decode_vec(auth_proof)
-                .context("Invalid proof encoding")?;
-
-            if proof_bytes.len() != 32 {
-                return Err(anyhow!("Invalid proof length"));
-            }
-
-            Ok(())
+            _ => Err(anyhow!("Expected WebAuthn proof")),
         }
-        _ => Err(anyhow!("Expected WebAuthn proof")),
     }
-}
 
-fn supports(&self, proof: &SybilProof) -> bool {
-    matches!(proof, SybilProof::WebAuthn { .. })
-}
+    fn supports(&self, proof: &SybilProof) -> bool {
+        matches!(proof, SybilProof::WebAuthn { .. })
+    }
 
-fn cost(&self) -> u64 {
-    0
-}
+    fn cost(&self) -> u64 {
+        0
+    }
 }
 
 #[cfg(test)]
@@ -128,9 +132,8 @@ mod tests {
     #[tokio::test]
     async fn test_webauthn_gate_proof_expiration() {
         let webauthn_ctx = WebAuthnCtx::test_context();
-        let cred_store = crate::routes::webauthn::CredentialStore::InMemory(
-            InMemoryCredStore::new()
-        );
+        let cred_store =
+            crate::routes::webauthn::CredentialStore::InMemory(InMemoryCredStore::new());
 
         let state = Arc::new(crate::routes::webauthn::WebAuthnState {
             webauthn: webauthn_ctx,
@@ -156,9 +159,8 @@ mod tests {
     #[tokio::test]
     async fn test_webauthn_gate_future_timestamp() {
         let webauthn_ctx = WebAuthnCtx::test_context();
-        let cred_store = crate::routes::webauthn::CredentialStore::InMemory(
-            InMemoryCredStore::new()
-        );
+        let cred_store =
+            crate::routes::webauthn::CredentialStore::InMemory(InMemoryCredStore::new());
 
         let state = Arc::new(crate::routes::webauthn::WebAuthnState {
             webauthn: webauthn_ctx,

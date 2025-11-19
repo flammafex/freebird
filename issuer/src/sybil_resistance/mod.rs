@@ -30,19 +30,18 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub mod invitation;
 pub mod proof_of_work;
 pub mod rate_limit;
-pub mod invitation;
 #[cfg(feature = "human-gate-webauthn")]
 pub mod webauthn_gate;
 
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
+pub use invitation::ClientData;
 pub use proof_of_work::ProofOfWork;
 pub use rate_limit::RateLimit;
-pub use invitation::ClientData;
 #[cfg(feature = "human-gate-webauthn")]
 pub use webauthn_gate::WebAuthnGate;
-
 
 // Future implementations:
 // pub mod payment_gate;
@@ -89,7 +88,7 @@ pub enum SybilProof {
         /// Signature from issuer (proves authenticity)
         signature: String,
     },
-    
+
     /// WebAuthn: Client authenticated with registered passkey/security key
     /// NEW VARIANT - Add this to the existing enum
     #[cfg(feature = "human-gate-webauthn")]
@@ -116,9 +115,9 @@ pub enum SybilProof {
 }
 
 pub trait SybilResistance: Send + Sync {
-    fn verify(&self, proof: &SybilProof) -> Result<()>;  // Keep as fn, not async fn
+    fn verify(&self, proof: &SybilProof) -> Result<()>; // Keep as fn, not async fn
     fn supports(&self, proof: &SybilProof) -> bool;
-    fn cost(&self) -> u64;  // Add back the cost method
+    fn cost(&self) -> u64; // Add back the cost method
 }
 
 /// No Sybil resistance (permissive mode)
@@ -138,7 +137,7 @@ impl SybilResistance for NoSybilResistance {
         matches!(proof, SybilProof::None)
     }
     fn cost(&self) -> u64 {
-        0  // No computational cost
+        0 // No computational cost
     }
 }
 
@@ -180,7 +179,7 @@ impl SybilResistance for CombinedSybilResistance {
         // We count how many mechanisms support and verify this proof
         let mut supported_count = 0;
         let mut verified_count = 0;
-        
+
         for mechanism in &self.mechanisms {
             if mechanism.supports(proof) {
                 supported_count += 1;
@@ -188,7 +187,7 @@ impl SybilResistance for CombinedSybilResistance {
                 verified_count += 1;
             }
         }
-        
+
         // The proof must be supported by at least one mechanism
         if supported_count == 0 {
             return Err(anyhow!(
@@ -196,7 +195,7 @@ impl SybilResistance for CombinedSybilResistance {
                 std::mem::discriminant(proof)
             ));
         }
-        
+
         // WARNING: With single-proof design, we can only verify mechanisms
         // that support this proof type. If you want defense-in-depth with
         // multiple proof types, you need to extend the API to accept
@@ -210,7 +209,7 @@ impl SybilResistance for CombinedSybilResistance {
                 "proof only verified by subset of mechanisms (consider multi-proof API)"
             );
         }
-        
+
         // All mechanisms that support this proof have verified it
         Ok(())
     }
@@ -219,7 +218,7 @@ impl SybilResistance for CombinedSybilResistance {
         self.mechanisms.iter().any(|m| m.supports(proof))
     }
     fn cost(&self) -> u64 {
-        0  // No computational cost
+        0 // No computational cost
     }
 }
 
@@ -287,13 +286,11 @@ mod tests {
         // Recent timestamp should be valid
         assert!(verify_timestamp_recent(now - 30, 60).is_ok());
     }
-    
+
     #[test]
     fn test_combined_requires_supported_proof() {
-        let combined = CombinedSybilResistance::new(vec![
-            Box::new(ProofOfWork::new(16)),
-        ]);
-        
+        let combined = CombinedSybilResistance::new(vec![Box::new(ProofOfWork::new(16))]);
+
         // ProofOfWork proof should work
         let timestamp = current_timestamp();
         let (nonce, _) = ProofOfWork::compute(16, "test", timestamp).unwrap();
@@ -303,7 +300,7 @@ mod tests {
             timestamp,
         };
         assert!(combined.verify(&proof).is_ok());
-        
+
         // RateLimit proof should fail (not supported)
         let rate_proof = SybilProof::RateLimit {
             client_id: "test".to_string(),

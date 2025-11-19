@@ -147,14 +147,9 @@ impl MultiKeyVoprfCore {
     /// * `pubkey_b64` - Base64url-encoded public key
     /// * `kid` - Key identifier
     /// * `ctx` - VOPRF context bytes
-    pub fn new(
-        sk: [u8; 32],
-        pubkey_b64: String,
-        kid: String,
-        ctx: &[u8],
-    ) -> Result<Self> {
+    pub fn new(sk: [u8; 32], pubkey_b64: String, kid: String, ctx: &[u8]) -> Result<Self> {
         let voprf = VoprfCore::new(sk, pubkey_b64, kid, ctx)?;
-        
+
         Ok(Self {
             active_key: Arc::new(RwLock::new(voprf)),
             deprecated_keys: Arc::new(RwLock::new(HashMap::new())),
@@ -212,7 +207,7 @@ impl MultiKeyVoprfCore {
         let active = self.active_key.read().await;
         let token = active.evaluate_b64(blinded_b64)?;
         let kid = active.kid.clone();
-        
+
         Ok(EvaluationWithKid { token, kid })
     }
 
@@ -242,7 +237,7 @@ impl MultiKeyVoprfCore {
         // The token is actually the evaluation result, not something to "verify"
         // In the context of VOPRF, the verifier just needs to extract the PRF output
         // This is a placeholder - adjust based on your actual verification logic
-        
+
         // For now, we'll just return the token as-is since verification happens
         // at the verifier service level with the public key
         Ok(token_b64.to_string())
@@ -274,7 +269,7 @@ impl MultiKeyVoprfCore {
             let mut active = self.active_key.write().await;
             let old_kid = active.kid.clone();
             let old_pubkey = active.pubkey_b64.clone();
-            
+
             info!(
                 old_kid = %old_kid,
                 new_kid = %new_kid,
@@ -283,23 +278,19 @@ impl MultiKeyVoprfCore {
             );
 
             // Create new active key
-            let new_voprf = VoprfCore::new(
-                new_sk,
-                new_pubkey_b64.clone(),
-                new_kid.clone(),
-                &self.ctx,
-            )?;
+            let new_voprf =
+                VoprfCore::new(new_sk, new_pubkey_b64.clone(), new_kid.clone(), &self.ctx)?;
 
             // Swap active key
             let old_voprf = std::mem::replace(&mut *active, new_voprf);
-            
+
             (old_voprf, old_kid, old_pubkey)
         };
 
         // Move old key to deprecated
         {
             let mut deprecated = self.deprecated_keys.write().await;
-            
+
             let metadata = DeprecatedKeyMetadata {
                 kid: old_voprf.1.clone(),
                 deprecated_at: now_ts,
@@ -339,7 +330,7 @@ impl MultiKeyVoprfCore {
 
         {
             let mut deprecated = self.deprecated_keys.write().await;
-            
+
             // Find expired keys
             for (kid, dep_key) in deprecated.iter() {
                 if now_ts >= dep_key.metadata.expires_at {
@@ -366,7 +357,7 @@ impl MultiKeyVoprfCore {
     /// Use with caution - this may invalidate tokens still in circulation
     pub async fn force_remove_key(&self, kid: &str) -> Result<()> {
         let mut deprecated = self.deprecated_keys.write().await;
-        
+
         if deprecated.remove(kid).is_some() {
             warn!(kid = %kid, "Force removed key");
             drop(deprecated);
@@ -446,14 +437,16 @@ impl MultiKeyVoprfCore {
 
         for dep_key in deprecated.values() {
             let time_until_expiry = dep_key.metadata.expires_at.saturating_sub(now_ts);
-            
+
             // Expiring within 7 days
             if time_until_expiry < 7 * 24 * 3600 {
                 expiring_soon += 1;
             }
 
             // Track oldest expiry
-            if oldest_expires_at.is_none() || dep_key.metadata.expires_at < oldest_expires_at.unwrap() {
+            if oldest_expires_at.is_none()
+                || dep_key.metadata.expires_at < oldest_expires_at.unwrap()
+            {
                 oldest_expires_at = Some(dep_key.metadata.expires_at);
             }
         }
@@ -479,9 +472,7 @@ impl MultiKeyVoprfCore {
 
             KeyRotationState {
                 active_kid: active.kid.clone(),
-                deprecated_keys: deprecated.values()
-                    .map(|dk| dk.metadata.clone())
-                    .collect(),
+                deprecated_keys: deprecated.values().map(|dk| dk.metadata.clone()).collect(),
                 version: 1,
             }
         };
@@ -508,8 +499,8 @@ impl MultiKeyVoprfCore {
             .await
             .context("failed to read key rotation state")?;
 
-        let state: KeyRotationState = serde_json::from_str(&json)
-            .context("failed to parse key rotation state")?;
+        let state: KeyRotationState =
+            serde_json::from_str(&json).context("failed to parse key rotation state")?;
 
         // Note: We don't actually load the keys themselves from disk
         // because we don't persist secret keys. This just loads metadata.
@@ -546,13 +537,9 @@ mod tests {
         let sk1 = [1u8; 32];
         let sk2 = [2u8; 32];
 
-        let core = MultiKeyVoprfCore::new(
-            sk1,
-            "pubkey1".to_string(),
-            "key-2024-01".to_string(),
-            ctx,
-        )
-        .unwrap();
+        let core =
+            MultiKeyVoprfCore::new(sk1, "pubkey1".to_string(), "key-2024-01".to_string(), ctx)
+                .unwrap();
 
         // Check initial state
         assert_eq!(core.active_kid().await, "key-2024-01");
@@ -572,10 +559,14 @@ mod tests {
         assert_eq!(core.active_kid().await, "key-2024-02");
         let keys = core.list_keys().await;
         assert_eq!(keys.len(), 2);
-        
+
         // Verify both keys are present
-        assert!(keys.iter().any(|k| k.kid == "key-2024-02" && matches!(k.status, KeyStatus::Active)));
-        assert!(keys.iter().any(|k| k.kid == "key-2024-01" && matches!(k.status, KeyStatus::Deprecated)));
+        assert!(keys
+            .iter()
+            .any(|k| k.kid == "key-2024-02" && matches!(k.status, KeyStatus::Active)));
+        assert!(keys
+            .iter()
+            .any(|k| k.kid == "key-2024-01" && matches!(k.status, KeyStatus::Deprecated)));
     }
 
     #[tokio::test]
@@ -584,23 +575,13 @@ mod tests {
         let sk1 = [1u8; 32];
         let sk2 = [2u8; 32];
 
-        let core = MultiKeyVoprfCore::new(
-            sk1,
-            "pubkey1".to_string(),
-            "key-old".to_string(),
-            ctx,
-        )
-        .unwrap();
+        let core =
+            MultiKeyVoprfCore::new(sk1, "pubkey1".to_string(), "key-old".to_string(), ctx).unwrap();
 
         // Rotate with very short grace period (1 second for testing)
-        core.rotate_key(
-            sk2,
-            "pubkey2".to_string(),
-            "key-new".to_string(),
-            Some(1),
-        )
-        .await
-        .unwrap();
+        core.rotate_key(sk2, "pubkey2".to_string(), "key-new".to_string(), Some(1))
+            .await
+            .unwrap();
 
         // Wait for expiration
         tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;

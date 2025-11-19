@@ -81,8 +81,7 @@ impl RedisCredStore {
                 Err(e) if attempt < 3 => {
                     warn!(
                         attempt,
-                        backoff_ms,
-                        "Redis connection failed, retrying: {}", e
+                        backoff_ms, "Redis connection failed, retrying: {}", e
                     );
                     tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
                     backoff_ms *= 2;
@@ -128,8 +127,7 @@ impl RedisCredStore {
             last_used_at: None,
         };
 
-        let cred_json = serde_json::to_string(&stored)
-            .context("Failed to serialize credential")?;
+        let cred_json = serde_json::to_string(&stored).context("Failed to serialize credential")?;
 
         let cred_key = Self::credential_key(&cred_id);
         let user_key = Self::user_creds_key(&user_id_hash);
@@ -167,8 +165,8 @@ impl RedisCredStore {
 
         match cred_json {
             Some(json) => {
-                let stored: StoredCredential = serde_json::from_str(&json)
-                    .context("Failed to deserialize credential")?;
+                let stored: StoredCredential =
+                    serde_json::from_str(&json).context("Failed to deserialize credential")?;
                 debug!(cred_key = %cred_key, "Loaded WebAuthn credential");
                 Ok(Some(stored))
             }

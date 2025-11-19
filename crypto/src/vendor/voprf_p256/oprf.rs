@@ -2,18 +2,18 @@
 // Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
 #![allow(deprecated)]
 //./crypto/src/vendor/voprf_p256/oprf.rs
+use elliptic_curve::hash2curve::{ExpandMsgXmd, GroupDigest};
 use elliptic_curve::{
-    Curve,
-    Field,
     bigint::{NonZero, U256},
     scalar::FromUintUnchecked,
-    sec1::{ToEncodedPoint, FromEncodedPoint}, // <- we'll use Scalar::reduce_bytes
+    sec1::{FromEncodedPoint, ToEncodedPoint}, // <- we'll use Scalar::reduce_bytes
+    Curve,
+    Field,
 };
-use p256::{ProjectivePoint, Scalar, NistP256, AffinePoint, EncodedPoint};
-use sha2::{Sha256, Digest};
-use elliptic_curve::hash2curve::{ExpandMsgXmd, GroupDigest};
+use p256::{AffinePoint, EncodedPoint, NistP256, ProjectivePoint, Scalar};
+use sha2::{Digest, Sha256};
 
-use super::dleq::{encode_proof, decode_proof, prove, verify};
+use super::dleq::{decode_proof, encode_proof, prove, verify};
 
 const COMPRESSED_POINT_LEN: usize = 33;
 
@@ -33,20 +33,17 @@ const TOKEN_LEN: usize = TOKEN_POINT_LEN * 2 + TOKEN_PROOF_LEN;
 fn hash_to_curve(input: &[u8], ctx: &[u8]) -> ProjectivePoint {
     // Domain separation tag as per RFC 9380
     const BASE_DST: &[u8] = b"P256_XMD:SHA-256_SSWU_RO_";
-    
+
     // Append context for VOPRF domain separation
     let mut dst = Vec::with_capacity(BASE_DST.len() + ctx.len());
     dst.extend_from_slice(BASE_DST);
     dst.extend_from_slice(ctx);
-    
+
     // Use NistP256::hash_from_bytes (Method 1 - confirmed working!)
     // This returns a generic curve point that we convert to ProjectivePoint
-    let point = NistP256::hash_from_bytes::<ExpandMsgXmd<Sha256>>(
-        &[input],
-        &[&dst],
-    )
-    .expect("hash_to_curve failed");
-    
+    let point = NistP256::hash_from_bytes::<ExpandMsgXmd<Sha256>>(&[input], &[&dst])
+        .expect("hash_to_curve failed");
+
     // Convert to ProjectivePoint
     ProjectivePoint::from(point)
 }
@@ -138,7 +135,7 @@ impl Client {
     }
 
     /// Returns (token_bytes, prf_output[32]).
-     pub fn finalize(
+    pub fn finalize(
         self,
         _st: BlindState, // keep the param to preserve API; not used for hashing
         token_bytes: &[u8],
@@ -180,7 +177,11 @@ impl Server {
     pub fn from_secret_key(sk_bytes: [u8; 32], ctx: &[u8]) -> Result<Self, Error> {
         let k = scalar_from_be32(sk_bytes)?;
         let q = generator() * k;
-        Ok(Self { k, q, ctx: ctx.to_vec() })
+        Ok(Self {
+            k,
+            q,
+            ctx: ctx.to_vec(),
+        })
     }
 
     pub fn public_key_sec1_compressed(&self) -> [u8; COMPRESSED_POINT_LEN] {

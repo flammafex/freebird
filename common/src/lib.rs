@@ -28,7 +28,9 @@ pub mod logging {
             // Build env filter with sane fallback
             let env_filter = EnvFilter::try_from_env("RUST_LOG")
                 .or_else(|_| EnvFilter::try_new(default_filter))
-                .unwrap_or_else(|_| EnvFilter::from_default_env().add_directive(LevelFilter::INFO.into()));
+                .unwrap_or_else(|_| {
+                    EnvFilter::from_default_env().add_directive(LevelFilter::INFO.into())
+                });
 
             let json = std::env::var("LOG_FORMAT")
                 .map(|v| v.eq_ignore_ascii_case("json"))

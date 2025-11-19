@@ -17,14 +17,14 @@ struct IssueReq {
 struct IssueResp {
     token: String,
     kid: String,
-    exp: i64,  // Expiration timestamp from issuer
+    exp: i64, // Expiration timestamp from issuer
 }
 
 #[derive(Serialize)]
 struct VerifyReq {
     token_b64: String,
     issuer_id: String,
-    exp: i64,  // NEW: Include expiration for validation
+    exp: i64, // NEW: Include expiration for validation
 }
 
 #[derive(Deserialize)]
@@ -37,7 +37,7 @@ struct VerifyResp {
 struct SavedToken {
     token_b64: String,
     issuer_id: String,
-    exp: i64,  // NEW: Save expiration time
+    exp: i64, // NEW: Save expiration time
 }
 
 #[tokio::main]
@@ -46,7 +46,11 @@ async fn main() -> Result<()> {
 
     // Parse command-line arguments
     let args: Vec<String> = std::env::args().collect();
-    let mode = if args.len() > 1 { args[1].as_str() } else { "normal" };
+    let mode = if args.len() > 1 {
+        args[1].as_str()
+    } else {
+        "normal"
+    };
 
     match mode {
         "--help" | "-h" => {
@@ -154,7 +158,7 @@ async fn test_replay_attack() -> Result<()> {
     // First verification (should succeed)
     println!("\n✅ Step 2: First verification attempt...");
     let success1 = verify_token(&http, verifier_url, &token_b64, &issuer_id, exp).await?;
-    
+
     if !success1 {
         println!("❌ First verification failed! Something is wrong.");
         return Ok(());
@@ -202,7 +206,7 @@ async fn test_expired_token() -> Result<()> {
     let fake_exp = now() - 600; // 10 minutes ago
     println!("\n⏰ Step 2: Attempting verification with expired timestamp...");
     println!("   Fake exp: {} (600s ago)", fake_exp);
-    
+
     let success = verify_token(&http, verifier_url, &token_b64, &issuer_id, fake_exp).await?;
 
     if !success {
@@ -249,13 +253,24 @@ async fn load_token_mode() -> Result<()> {
 
     println!("📂 Loaded token from token.json");
     println!("   Issuer: {}", saved.issuer_id);
-    println!("   Expiration: {} ({}s from now)", saved.exp, saved.exp - now());
+    println!(
+        "   Expiration: {} ({}s from now)",
+        saved.exp,
+        saved.exp - now()
+    );
 
     let http = HttpClient::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
 
-    let success = verify_token(&http, verifier_url, &saved.token_b64, &saved.issuer_id, saved.exp).await?;
+    let success = verify_token(
+        &http,
+        verifier_url,
+        &saved.token_b64,
+        &saved.issuer_id,
+        saved.exp,
+    )
+    .await?;
 
     if success {
         println!("⚠️  WARNING: Token was accepted (either first use or replay protection failed)");
@@ -282,7 +297,7 @@ async fn stress_test(count: usize) -> Result<()> {
 
     for i in 1..=count {
         print!("Token {}/{}: ", i, count);
-        
+
         match issue_token(&http, issuer_url, ctx).await {
             Ok((token_b64, issuer_id, exp)) => {
                 match verify_token(&http, verifier_url, &token_b64, &issuer_id, exp).await {
@@ -350,7 +365,7 @@ async fn issue_token(
         .error_for_status()?
         .json()
         .await?;
-    
+
     let pubkey_b64 = wk["voprf"]["pubkey"]
         .as_str()
         .ok_or_else(|| anyhow!("missing pubkey"))?;
@@ -365,7 +380,7 @@ async fn issue_token(
     let (token_raw, _out_cli_raw) = client
         .finalize(blind_state, &token_bytes, &issuer_pubkey_bytes)
         .map_err(|e| anyhow!("{:?}", e))?;
-    
+
     let token_b64 = Base64UrlUnpadded::encode_string(&token_raw);
 
     Ok((token_b64, issuer_id, issue_resp.exp))

@@ -2,8 +2,8 @@
 // Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
 use anyhow::{anyhow, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use zeroize::{Zeroize, ZeroizeOnDrop};
 use tracing::{debug, error, warn};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crypto::vendor::voprf_p256::oprf::Server;
 
@@ -20,8 +20,7 @@ pub struct VoprfCore {
 
 impl VoprfCore {
     pub fn new(sk: [u8; 32], pubkey_b64: String, kid: String, ctx: &[u8]) -> Result<Self> {
-        let server = Server::from_secret_key(sk, ctx)
-            .map_err(|_| anyhow!("invalid secret key"))?;
+        let server = Server::from_secret_key(sk, ctx).map_err(|_| anyhow!("invalid secret key"))?;
         Ok(Self {
             server,
             ctx: ctx.to_vec(),
@@ -74,8 +73,8 @@ impl VoprfCore {
         debug!("🔍 evaluate_b64 called ({} chars)", blinded_b64.len());
 
         // Decode the blinded element
-        let blinded = Base64UrlUnpadded::decode_vec(blinded_b64)
-            .context("invalid base64 encoding")?;
+        let blinded =
+            Base64UrlUnpadded::decode_vec(blinded_b64).context("invalid base64 encoding")?;
 
         if blinded.len() != 33 {
             error!("❌ invalid blinded_element length: {}", blinded.len());
@@ -110,7 +109,7 @@ impl VoprfCore {
                         token.len()
                     ));
                 }
-                
+
                 let encoded = Base64UrlUnpadded::encode_string(&token);
                 debug!("✅ evaluate_b64 succeeded (encoded len={})", encoded.len());
                 Ok(encoded)
@@ -124,8 +123,11 @@ impl VoprfCore {
                 error!("💥 CRITICAL: Server::evaluate() panicked!");
                 error!("Panic info: {:?}", panic_info);
                 warn!("This indicates a bug in the VOPRF implementation");
-                warn!("Please report this with the blinded input length: {}", blinded.len());
-                
+                warn!(
+                    "Please report this with the blinded input length: {}",
+                    blinded.len()
+                );
+
                 Err(anyhow!(
                     "internal error: VOPRF evaluation panicked (this is a bug)"
                 ))

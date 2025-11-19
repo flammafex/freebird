@@ -6,12 +6,12 @@
 //! - If neither is present, tokens are issued freely (backward compatible)
 //! - Mismatch cases are handled appropriately
 
-use std::sync::Arc;
 use std::net::SocketAddr;
+use std::sync::Arc;
 
 use axum::{
     extract::{ConnectInfo, State},
-    http::{StatusCode, HeaderMap},
+    http::{HeaderMap, StatusCode},
     Json,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
@@ -20,8 +20,8 @@ use time::OffsetDateTime;
 use tracing::{debug, error, info, warn};
 
 use crate::multi_key_voprf::MultiKeyVoprfCore;
+use crate::sybil_resistance::{ClientData, SybilProof};
 use crate::AppStateWithSybil;
-use crate::sybil_resistance::{SybilProof, ClientData};
 
 /// Universal issue request supporting both protected and unprotected modes
 #[derive(Deserialize, Debug)]
@@ -47,13 +47,13 @@ pub struct IssueReq {
 pub struct IssueResp {
     /// Base64url-encoded evaluation token
     pub token: String,
-    
+
     /// DLEQ proof (currently empty, reserved for future use)
     pub proof: String,
-    
+
     /// Key identifier
     pub kid: String,
-    
+
     /// Expiration timestamp (Unix seconds)
     pub exp: i64,
 
@@ -67,10 +67,10 @@ pub struct IssueResp {
 pub struct SybilInfo {
     /// Was Sybil resistance required?
     pub required: bool,
-    
+
     /// Did the proof pass verification?
     pub passed: bool,
-    
+
     /// Computational cost (for PoW) or time cost (for rate limiting)
     pub cost: u64,
 }
@@ -184,11 +184,11 @@ pub async fn handle(
         // Case 1: Sybil configured + proof provided → VERIFY
         (Some(checker), Some(proof)) => {
             debug!("verifying Sybil proof");
-            
+
             // Note: For invitation proofs, the client_data will be used
             // internally by the invitation system for invitee ID generation.
             // For other proof types (PoW, RateLimit), it's ignored.
-            // 
+            //
             // Future enhancement: Pass client_data through SybilResistance trait
             match checker.verify(proof) {
                 Ok(()) => {
@@ -232,7 +232,7 @@ pub async fn handle(
     };
 
     // --- VOPRF EVALUATION (common for all cases) ---
-    
+
     // Decode and validate blinded element
     let blinded_bytes = Base64UrlUnpadded::decode_vec(&req.blinded_element_b64).map_err(|e| {
         error!("invalid base64 for blinded_element_b64: {e:?}");
@@ -259,21 +259,22 @@ pub async fn handle(
     }
 
     // Perform VOPRF evaluation with multi-key support
-	debug!("calling voprf.evaluate_b64()");
-	let eval_result = voprf.evaluate_b64(&req.blinded_element_b64)
-		.await  // Add .await - it's async now
-		.map_err(|e| {
-			error!("evaluate_b64 failed: {e:?}");
-			(StatusCode::BAD_REQUEST, "VOPRF evaluation failed".into())
-		})?;
-	
-	// Extract token and kid from result
-	let evaluated_b64 = eval_result.token;
-	let kid_used = eval_result.kid;
+    debug!("calling voprf.evaluate_b64()");
+    let eval_result = voprf
+        .evaluate_b64(&req.blinded_element_b64)
+        .await // Add .await - it's async now
+        .map_err(|e| {
+            error!("evaluate_b64 failed: {e:?}");
+            (StatusCode::BAD_REQUEST, "VOPRF evaluation failed".into())
+        })?;
+
+    // Extract token and kid from result
+    let evaluated_b64 = eval_result.token;
+    let kid_used = eval_result.kid;
 
     // Calculate expiration
     let exp = OffsetDateTime::now_utc().unix_timestamp() + state.exp_sec as i64;
-    
+
     debug!(
         "✅ token issued: kid={}, exp={}, sybil_verified={}",
         state.kid,
@@ -282,12 +283,12 @@ pub async fn handle(
     );
 
     Ok(Json(IssueResp {
-		token: evaluated_b64,
-		proof: String::new(),
-		kid: kid_used,  // ✅ NEW - use the actual key ID
-		exp,
-		sybil_info,
-	}))
+        token: evaluated_b64,
+        proof: String::new(),
+        kid: kid_used, // ✅ NEW - use the actual key ID
+        exp,
+        sybil_info,
+    }))
 }
 
 #[cfg(test)]
@@ -330,13 +331,13 @@ mod tests {
     #[test]
     fn test_extract_client_data_direct() {
         use std::str::FromStr;
-        
+
         let addr = SocketAddr::from_str("192.168.1.100:1234").unwrap();
         let connect_info = Some(ConnectInfo(addr));
         let headers = HeaderMap::new();
-        
+
         let client_data = extract_client_data(connect_info, false, &headers);
-        
+
         assert!(client_data.ip_addr.is_some());
         assert_eq!(client_data.ip_addr.unwrap(), "192.168.1.100");
     }
@@ -344,18 +345,15 @@ mod tests {
     #[test]
     fn test_extract_client_data_behind_proxy() {
         use std::str::FromStr;
-        
+
         let addr = SocketAddr::from_str("10.0.0.1:1234").unwrap(); // Local proxy IP
         let connect_info = Some(ConnectInfo(addr));
-        
+
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-forwarded-for",
-            "203.0.113.42, 10.0.0.1".parse().unwrap(),
-        );
-        
+        headers.insert("x-forwarded-for", "203.0.113.42, 10.0.0.1".parse().unwrap());
+
         let client_data = extract_client_data(connect_info, true, &headers);
-        
+
         assert!(client_data.ip_addr.is_some());
         assert_eq!(client_data.ip_addr.unwrap(), "203.0.113.42");
     }
@@ -363,16 +361,17 @@ mod tests {
     #[test]
     fn test_extract_client_data_with_user_agent() {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "user-agent",
-            "Mozilla/5.0 (Test Browser)".parse().unwrap(),
-        );
-        
+        headers.insert("user-agent", "Mozilla/5.0 (Test Browser)".parse().unwrap());
+
         let client_data = extract_client_data(None, false, &headers);
-        
+
         assert!(client_data.fingerprint.is_some());
         // Fingerprint should be a hash, not the raw UA
-        assert!(!client_data.fingerprint.as_ref().unwrap().contains("Mozilla"));
+        assert!(!client_data
+            .fingerprint
+            .as_ref()
+            .unwrap()
+            .contains("Mozilla"));
     }
 
     // Note: Full integration tests with actual VOPRF evaluation

@@ -1,11 +1,7 @@
 // issuer/src/routes/webauthn.rs
 // CORRECTED FOR webauthn-rs 0.5.3 API
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use base64ct::Encoding;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -48,14 +44,20 @@ impl CredentialStore {
         }
     }
 
-    pub async fn load(&self, cred_id: &[u8]) -> anyhow::Result<Option<crate::webauthn_store::StoredCredential>> {
+    pub async fn load(
+        &self,
+        cred_id: &[u8],
+    ) -> anyhow::Result<Option<crate::webauthn_store::StoredCredential>> {
         match self {
             CredentialStore::Redis(store) => store.load(cred_id).await,
             CredentialStore::InMemory(store) => store.load(cred_id).await,
         }
     }
 
-    pub async fn load_user_credentials(&self, user_id_hash: &str) -> anyhow::Result<Vec<crate::webauthn_store::StoredCredential>> {
+    pub async fn load_user_credentials(
+        &self,
+        user_id_hash: &str,
+    ) -> anyhow::Result<Vec<crate::webauthn_store::StoredCredential>> {
         match self {
             CredentialStore::Redis(store) => store.load_user_credentials(user_id_hash).await,
             CredentialStore::InMemory(store) => store.load_user_credentials(user_id_hash).await,
@@ -139,14 +141,22 @@ pub async fn start_registration(
         );
         return Err((
             StatusCode::CONFLICT,
-            format!("User already has {} credential(s) registered", existing_creds.len()),
+            format!(
+                "User already has {} credential(s) registered",
+                existing_creds.len()
+            ),
         ));
     }
 
     let exclude_credentials = if existing_creds.is_empty() {
         None
     } else {
-        Some(existing_creds.iter().map(|c| c.cred_id.clone().into()).collect())
+        Some(
+            existing_creds
+                .iter()
+                .map(|c| c.cred_id.clone().into())
+                .collect(),
+        )
     };
 
     // webauthn-rs 0.5.3 API: start_passkey_registration(uuid, username, display_name, exclude)
@@ -156,12 +166,17 @@ pub async fn start_registration(
         .start_passkey_registration(
             Uuid::new_v4(),
             &req.username,
-            &req.display_name.clone().unwrap_or_else(|| req.username.clone()),
+            &req.display_name
+                .clone()
+                .unwrap_or_else(|| req.username.clone()),
             exclude_credentials,
         )
         .map_err(|e| {
             warn!(error = %e, "Failed to start registration");
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Registration start failed: {}", e))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Registration start failed: {}", e),
+            )
         })?;
 
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -214,12 +229,17 @@ pub async fn finish_registration(
     let (reg_state, username) = {
         let mut sessions = state.sessions.write().await;
         match sessions.remove(&req.session_id) {
-            Some(SessionData::Registration { state, username, .. }) => (state, username),
+            Some(SessionData::Registration {
+                state, username, ..
+            }) => (state, username),
             Some(_) => {
                 return Err((StatusCode::BAD_REQUEST, "Invalid session type".to_string()));
             }
             None => {
-                return Err((StatusCode::NOT_FOUND, "Session not found or expired".to_string()));
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    "Session not found or expired".to_string(),
+                ));
             }
         }
     };
@@ -230,7 +250,10 @@ pub async fn finish_registration(
         .finish_passkey_registration(&req.credential, &reg_state)
         .map_err(|e| {
             warn!(error = %e, session_id = %req.session_id, "Registration failed");
-            (StatusCode::BAD_REQUEST, format!("Registration failed: {}", e))
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Registration failed: {}", e),
+            )
         })?;
 
     let user_id_hash = {
@@ -248,7 +271,10 @@ pub async fn finish_registration(
         .await
         .map_err(|e| {
             warn!(error = %e, "Failed to save credential");
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save credential: {}", e))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to save credential: {}", e),
+            )
         })?;
 
     let cred_id_b64 = base64ct::Base64UrlUnpadded::encode_string(&cred_id);
@@ -304,13 +330,13 @@ pub async fn start_authentication(
 
     if stored_creds.is_empty() {
         warn!(username = %req.username, "No credentials found for user");
-        return Err((StatusCode::NOT_FOUND, "User has no registered credentials".to_string()));
+        return Err((
+            StatusCode::NOT_FOUND,
+            "User has no registered credentials".to_string(),
+        ));
     }
 
-    let passkeys: Vec<Passkey> = stored_creds
-        .into_iter()
-        .map(|c| c.credential)
-        .collect();
+    let passkeys: Vec<Passkey> = stored_creds.into_iter().map(|c| c.credential).collect();
 
     let (options, auth_state) = state
         .webauthn
@@ -318,7 +344,10 @@ pub async fn start_authentication(
         .start_passkey_authentication(&passkeys)
         .map_err(|e| {
             warn!(error = %e, "Failed to start authentication");
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Authentication start failed: {}", e))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Authentication start failed: {}", e),
+            )
         })?;
 
     let session_id = uuid::Uuid::new_v4().to_string();
@@ -372,12 +401,17 @@ pub async fn finish_authentication(
     let (auth_state, username) = {
         let mut sessions = state.sessions.write().await;
         match sessions.remove(&req.session_id) {
-            Some(SessionData::Authentication { state, username, .. }) => (state, username),
+            Some(SessionData::Authentication {
+                state, username, ..
+            }) => (state, username),
             Some(_) => {
                 return Err((StatusCode::BAD_REQUEST, "Invalid session type".to_string()));
             }
             None => {
-                return Err((StatusCode::NOT_FOUND, "Session not found or expired".to_string()));
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    "Session not found or expired".to_string(),
+                ));
             }
         }
     };
@@ -388,15 +422,14 @@ pub async fn finish_authentication(
         .finish_passkey_authentication(&req.credential, &auth_state)
         .map_err(|e| {
             warn!(error = %e, session_id = %req.session_id, "Authentication failed");
-            (StatusCode::UNAUTHORIZED, format!("Authentication failed: {}", e))
+            (
+                StatusCode::UNAUTHORIZED,
+                format!("Authentication failed: {}", e),
+            )
         })?;
 
     let cred_id = auth_result.cred_id();
-    state
-        .cred_store
-        .update_last_used(cred_id)
-        .await
-        .ok();
+    state.cred_store.update_last_used(cred_id).await.ok();
 
     let cred_id_b64 = base64ct::Base64UrlUnpadded::encode_string(cred_id);
 
@@ -438,9 +471,7 @@ pub struct WebAuthnInfo {
     pub origin: String,
 }
 
-pub async fn webauthn_info(
-    State(state): State<Arc<WebAuthnState>>,
-) -> Json<WebAuthnInfo> {
+pub async fn webauthn_info(State(state): State<Arc<WebAuthnState>>) -> Json<WebAuthnInfo> {
     Json(WebAuthnInfo {
         rp_id: state.webauthn.rp_id.clone(),
         rp_name: state.webauthn.rp_name.clone(),

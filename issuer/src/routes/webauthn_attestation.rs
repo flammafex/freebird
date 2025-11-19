@@ -19,7 +19,7 @@ use webauthn_rs::prelude::*;
 
 // Import the existing types from webauthn.rs
 use super::webauthn::{
-    SessionData, WebAuthnState, FinishRegistrationRequest, FinishRegistrationResponse,
+    FinishRegistrationRequest, FinishRegistrationResponse, SessionData, WebAuthnState,
 };
 
 /// Extended finish registration with policy enforcement
@@ -32,12 +32,17 @@ pub async fn finish_registration_with_attestation(
     let (reg_state, username) = {
         let mut sessions = state.sessions.write().await;
         match sessions.remove(&req.session_id) {
-            Some(SessionData::Registration { state, username, .. }) => (state, username),
+            Some(SessionData::Registration {
+                state, username, ..
+            }) => (state, username),
             Some(_) => {
                 return Err((StatusCode::BAD_REQUEST, "Invalid session type".to_string()));
             }
             None => {
-                return Err((StatusCode::NOT_FOUND, "Session not found or expired".to_string()));
+                return Err((
+                    StatusCode::NOT_FOUND,
+                    "Session not found or expired".to_string(),
+                ));
             }
         }
     };
@@ -49,7 +54,10 @@ pub async fn finish_registration_with_attestation(
         .finish_passkey_registration(&req.credential, &reg_state)
         .map_err(|e| {
             warn!(error = %e, session_id = %req.session_id, "Registration failed");
-            (StatusCode::BAD_REQUEST, format!("Registration failed: {}", e))
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Registration failed: {}", e),
+            )
         })?;
 
     // Apply policy checks if configured
@@ -67,7 +75,7 @@ pub async fn finish_registration_with_attestation(
     };
 
     let cred_id = passkey.cred_id().clone();
-    
+
     // Save credential
     state
         .cred_store
@@ -75,9 +83,12 @@ pub async fn finish_registration_with_attestation(
         .await
         .map_err(|e| {
             warn!(error = %e, "Failed to save credential");
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Failed to save credential: {}", e))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to save credential: {}", e),
+            )
         })?;
-    
+
     // Optionally store policy metadata
     if let Ok(redis_url) = std::env::var("WEBAUTHN_REDIS_URL") {
         store_registration_metadata(&redis_url, &cred_id, &username).await;
@@ -107,9 +118,11 @@ fn should_enforce_policy() -> bool {
 }
 
 /// Enforce registration policy based on configuration
-fn enforce_registration_policy(credential: &RegisterPublicKeyCredential) -> Result<(), (StatusCode, String)> {
-    let policy = std::env::var("WEBAUTHN_ATTESTATION_POLICY")
-        .unwrap_or_else(|_| "none".to_string());
+fn enforce_registration_policy(
+    credential: &RegisterPublicKeyCredential,
+) -> Result<(), (StatusCode, String)> {
+    let policy =
+        std::env::var("WEBAUTHN_ATTESTATION_POLICY").unwrap_or_else(|_| "none".to_string());
 
     match policy.as_str() {
         "none" => {
@@ -121,15 +134,19 @@ fn enforce_registration_policy(credential: &RegisterPublicKeyCredential) -> Resu
             // Use to_vec() to get the actual bytes
             let data = credential.response.attestation_object.to_vec();
             let size = data.len();
-            
-            if size < 200 {  // Very small attestation object likely means "none" format
+
+            if size < 200 {
+                // Very small attestation object likely means "none" format
                 warn!("Registration rejected: attestation object too small (likely software key)");
                 return Err((
                     StatusCode::FORBIDDEN,
-                    "Hardware authenticator required".to_string()
+                    "Hardware authenticator required".to_string(),
                 ));
             }
-            info!("Registration accepted: attestation object present (size: {} bytes)", size);
+            info!(
+                "Registration accepted: attestation object present (size: {} bytes)",
+                size
+            );
             Ok(())
         }
         "log_only" => {
@@ -154,21 +171,24 @@ async fn store_registration_metadata(redis_url: &str, cred_id: &[u8], username: 
             let metadata = RegistrationMetadata {
                 username: username.to_string(),
                 registered_at: chrono::Utc::now().timestamp(),
-                policy: std::env::var("WEBAUTHN_ATTESTATION_POLICY").unwrap_or_else(|_| "none".to_string()),
+                policy: std::env::var("WEBAUTHN_ATTESTATION_POLICY")
+                    .unwrap_or_else(|_| "none".to_string()),
             };
-            
+
             if let Ok(json) = serde_json::to_string(&metadata) {
-                let key = format!("webauthn:metadata:{}",
-                    base64ct::Base64UrlUnpadded::encode_string(cred_id));
-                
+                let key = format!(
+                    "webauthn:metadata:{}",
+                    base64ct::Base64UrlUnpadded::encode_string(cred_id)
+                );
+
                 let _: Result<(), _> = redis::cmd("SET")
                     .arg(&key)
                     .arg(&json)
                     .arg("EX")
-                    .arg(86400)  // 24 hour TTL for metadata
+                    .arg(86400) // 24 hour TTL for metadata
                     .query_async(&mut conn)
                     .await;
-                
+
                 info!("Stored registration metadata for monitoring");
             }
         }

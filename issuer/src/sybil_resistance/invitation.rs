@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn, error};
+use tracing::{debug, error, info, warn};
 
 /// Configuration for the invitation system
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -53,8 +53,8 @@ impl Default for InvitationConfig {
     fn default() -> Self {
         Self {
             invites_per_user: 5,
-            invite_cooldown_secs: 3600,              // 1 hour
-            invite_expires_secs: 30 * 24 * 3600,     // 30 days
+            invite_cooldown_secs: 3600,                     // 1 hour
+            invite_expires_secs: 30 * 24 * 3600,            // 30 days
             new_user_can_invite_after_secs: 30 * 24 * 3600, // 30 days
             persistence_path: default_persistence_path(),
             autosave_interval_secs: default_autosave_interval(),
@@ -84,14 +84,14 @@ pub struct Invitation {
 
 mod hex_serde {
     use serde::{Deserialize, Deserializer, Serializer};
-    
+
     pub fn serialize<S>(bytes: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         serializer.serialize_str(&hex::encode(bytes))
     }
-    
+
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
     where
         D: Deserializer<'de>,
@@ -156,7 +156,7 @@ impl Default for PersistedState {
 }
 
 /// Client-specific data used for invitee ID generation
-/// 
+///
 /// This provides additional entropy beyond just the invitation code,
 /// making invitee IDs more unique and harder to predict.
 #[derive(Debug, Clone, Default)]
@@ -178,41 +178,38 @@ impl ClientData {
             extra: None,
         }
     }
-    
+
     /// Create ClientData from IP and fingerprint
-    pub fn from_ip_and_fingerprint(
-        ip: impl Into<String>,
-        fingerprint: impl Into<String>,
-    ) -> Self {
+    pub fn from_ip_and_fingerprint(ip: impl Into<String>, fingerprint: impl Into<String>) -> Self {
         Self {
             ip_addr: Some(ip.into()),
             fingerprint: Some(fingerprint.into()),
             extra: None,
         }
     }
-    
+
     /// Serialize for hashing (consistent ordering)
     fn to_hash_input(&self) -> Vec<u8> {
         let mut result = Vec::new();
-        
+
         if let Some(ref ip) = self.ip_addr {
             result.extend_from_slice(b"ip:");
             result.extend_from_slice(ip.as_bytes());
             result.push(b'|');
         }
-        
+
         if let Some(ref fp) = self.fingerprint {
             result.extend_from_slice(b"fp:");
             result.extend_from_slice(fp.as_bytes());
             result.push(b'|');
         }
-        
+
         if let Some(ref extra) = self.extra {
             result.extend_from_slice(b"extra:");
             result.extend_from_slice(extra.as_bytes());
             result.push(b'|');
         }
-        
+
         result
     }
 }
@@ -235,7 +232,7 @@ impl InvitationSystem {
     /// Create a new invitation system
     pub fn new(issuer_key: SigningKey, config: InvitationConfig) -> Self {
         let issuer_pubkey = VerifyingKey::from(&issuer_key);
-        
+
         Self {
             issuer_key,
             issuer_pubkey,
@@ -244,21 +241,21 @@ impl InvitationSystem {
             dirty: Arc::new(RwLock::new(false)),
         }
     }
-    
+
     /// Create and load from persistence file
-    pub async fn load_or_create(
-        issuer_key: SigningKey,
-        config: InvitationConfig,
-    ) -> Result<Self> {
+    pub async fn load_or_create(issuer_key: SigningKey, config: InvitationConfig) -> Result<Self> {
         let issuer_pubkey = VerifyingKey::from(&issuer_key);
-        
+
         let state = if config.persistence_path.exists() {
-            info!("Loading invitation state from {:?}", config.persistence_path);
+            info!(
+                "Loading invitation state from {:?}",
+                config.persistence_path
+            );
             let data = tokio::fs::read_to_string(&config.persistence_path)
                 .await
                 .context("read persistence file")?;
-            let loaded: PersistedState = serde_json::from_str(&data)
-                .context("deserialize invitation state")?;
+            let loaded: PersistedState =
+                serde_json::from_str(&data).context("deserialize invitation state")?;
             info!(
                 "Loaded {} invitations and {} users",
                 loaded.invitations.len(),
@@ -269,7 +266,7 @@ impl InvitationSystem {
             info!("No persistence file found, starting fresh");
             PersistedState::default()
         };
-        
+
         let system = Self {
             issuer_key,
             issuer_pubkey,
@@ -277,38 +274,37 @@ impl InvitationSystem {
             config,
             dirty: Arc::new(RwLock::new(false)),
         };
-        
+
         // Start autosave task if configured
         if system.config.autosave_interval_secs > 0 {
             system.start_autosave_task();
         }
-        
+
         Ok(system)
     }
-    
+
     /// Start background autosave task
     fn start_autosave_task(&self) {
         let state = self.state.clone();
         let dirty = self.dirty.clone();
         let path = self.config.persistence_path.clone();
         let interval = self.config.autosave_interval_secs;
-        
+
         tokio::spawn(async move {
-            let mut interval_timer = tokio::time::interval(
-                std::time::Duration::from_secs(interval)
-            );
-            
+            let mut interval_timer =
+                tokio::time::interval(std::time::Duration::from_secs(interval));
+
             loop {
                 interval_timer.tick().await;
-                
+
                 // Only save if dirty
                 let is_dirty = *dirty.read().await;
                 if !is_dirty {
                     continue;
                 }
-                
+
                 let state_snapshot = state.read().await.clone();
-                
+
                 match Self::save_to_file(&state_snapshot, &path).await {
                     Ok(_) => {
                         *dirty.write().await = false;
@@ -321,12 +317,11 @@ impl InvitationSystem {
             }
         });
     }
-    
+
     /// Save state to file
     async fn save_to_file(state: &PersistedState, path: &Path) -> Result<()> {
-        let json = serde_json::to_string_pretty(state)
-            .context("serialize state")?;
-        
+        let json = serde_json::to_string_pretty(state).context("serialize state")?;
+
         // Atomic write: write to temp file, then rename
         let temp_path = path.with_extension("tmp");
         tokio::fs::write(&temp_path, json)
@@ -335,19 +330,22 @@ impl InvitationSystem {
         tokio::fs::rename(&temp_path, path)
             .await
             .context("rename temp file")?;
-        
+
         Ok(())
     }
-    
+
     /// Explicitly save current state
     pub async fn save(&self) -> Result<()> {
         let state_snapshot = self.state.read().await.clone();
         Self::save_to_file(&state_snapshot, &self.config.persistence_path).await?;
         *self.dirty.write().await = false;
-        info!("Saved invitation state to {:?}", self.config.persistence_path);
+        info!(
+            "Saved invitation state to {:?}",
+            self.config.persistence_path
+        );
         Ok(())
     }
-    
+
     /// Mark state as dirty
     async fn mark_dirty(&self) {
         *self.dirty.write().await = true;
@@ -368,8 +366,7 @@ impl InvitationSystem {
 
     /// Verify a signature on an invitation code
     fn verify_signature(&self, code: &str, sig: &[u8]) -> Result<()> {
-        let signature = Signature::from_bytes(sig.into())
-            .context("invalid signature format")?;
+        let signature = Signature::from_bytes(sig.into()).context("invalid signature format")?;
         self.issuer_pubkey
             .verify(code.as_bytes(), &signature)
             .context("signature verification failed")?;
@@ -379,7 +376,7 @@ impl InvitationSystem {
     /// Add a bootstrap user with invite privileges
     pub async fn add_bootstrap_user(&self, user_id: String, invites: u32) {
         let mut state = self.state.write().await;
-        
+
         if state.inviters.contains_key(&user_id) {
             warn!(user_id = %user_id, "bootstrap user already exists");
             return;
@@ -388,7 +385,7 @@ impl InvitationSystem {
         let inviter_state = InviterState::new(user_id.clone(), invites, current_timestamp());
         state.inviters.insert(user_id.clone(), inviter_state);
         drop(state);
-        
+
         self.mark_dirty().await;
         info!(user_id = %user_id, invites = invites, "added bootstrap user");
     }
@@ -396,8 +393,9 @@ impl InvitationSystem {
     /// Check if a user can send invites right now
     async fn can_invite(&self, user_id: &str) -> Result<()> {
         let state = self.state.read().await;
-        
-        let inviter = state.inviters
+
+        let inviter = state
+            .inviters
             .get(user_id)
             .ok_or_else(|| anyhow!("user not found"))?;
 
@@ -414,7 +412,10 @@ impl InvitationSystem {
         // Check if new user needs to wait before inviting
         if now < inviter.joined_at + self.config.new_user_can_invite_after_secs {
             let wait_time = inviter.joined_at + self.config.new_user_can_invite_after_secs - now;
-            bail!("new user must wait {} more seconds before inviting", wait_time);
+            bail!(
+                "new user must wait {} more seconds before inviting",
+                wait_time
+            );
         }
 
         // Check cooldown period
@@ -453,14 +454,14 @@ impl InvitationSystem {
         {
             let mut state = self.state.write().await;
             state.invitations.insert(code.clone(), invitation);
-            
+
             if let Some(inviter) = state.inviters.get_mut(inviter_id) {
                 inviter.invites_remaining -= 1;
                 inviter.invites_sent.push(code.clone());
                 inviter.last_invite_at = now;
             }
         }
-        
+
         self.mark_dirty().await;
 
         info!(
@@ -479,7 +480,8 @@ impl InvitationSystem {
         self.verify_signature(code, signature)?;
 
         let state = self.state.read().await;
-        let invitation = state.invitations
+        let invitation = state
+            .invitations
             .get(code)
             .ok_or_else(|| anyhow!("invitation not found"))?;
 
@@ -530,40 +532,41 @@ impl InvitationSystem {
 
         // Generate invitee ID with strong entropy
         let invitee_id = {
-            use sha2::{Digest, Sha256};
             use rand::RngCore;
-            
+            use sha2::{Digest, Sha256};
+
             let mut hasher = Sha256::new();
-            
+
             // Domain separation
             hasher.update(b"freebird:invitee:v2:");
-            
+
             // Invitation code (uniqueness per code)
             hasher.update(code.as_bytes());
             hasher.update(b":");
-            
+
             // Redemption timestamp (prevents pre-computation)
             hasher.update(now.to_le_bytes());
             hasher.update(b":");
-            
+
             // Client-specific data (optional additional entropy)
             if let Some(ref data) = client_data {
                 hasher.update(data.to_hash_input());
                 hasher.update(b":");
             }
-            
+
             // Cryptographic random nonce (guarantees uniqueness)
             let mut nonce = [0u8; 16];
             rand::thread_rng().fill_bytes(&mut nonce);
             hasher.update(nonce);
-            
+
             let hash = hasher.finalize();
             Base64UrlUnpadded::encode_string(&hash[..24]) // 192 bits
         };
 
         let inviter_id = {
             let mut state = self.state.write().await;
-            let invitation = state.invitations
+            let invitation = state
+                .invitations
                 .get_mut(code)
                 .ok_or_else(|| anyhow!("invitation not found"))?;
 
@@ -573,9 +576,9 @@ impl InvitationSystem {
 
             invitation.redeemed = true;
             invitation.invitee_id = Some(invitee_id.clone());
-            
+
             let inviter_id = invitation.inviter_id.clone();
-            
+
             // Update inviter's used list
             if let Some(inviter) = state.inviters.get_mut(&inviter_id) {
                 inviter.invites_used.push(code.to_string());
@@ -584,10 +587,10 @@ impl InvitationSystem {
             // Create new user with 0 invites initially (earn them later)
             let invitee_state = InviterState::new(invitee_id.clone(), 0, now);
             state.inviters.insert(invitee_id.clone(), invitee_state);
-            
+
             inviter_id
         };
-        
+
         self.mark_dirty().await;
 
         info!(
@@ -614,7 +617,7 @@ impl InvitationSystem {
         if ban_tree {
             // Find all users invited by this user (recursively)
             let mut to_ban = Vec::new();
-            
+
             for invitation in state.invitations.values() {
                 if invitation.inviter_id == user_id {
                     if let Some(ref invitee_id) = invitation.invitee_id {
@@ -632,7 +635,7 @@ impl InvitationSystem {
                 }
             }
         }
-        
+
         drop(state);
         self.mark_dirty().await;
     }
@@ -640,8 +643,9 @@ impl InvitationSystem {
     /// Grant invites to a user (for reputation rewards, etc.)
     pub async fn grant_invites(&self, user_id: &str, count: u32) -> Result<()> {
         let mut state = self.state.write().await;
-        
-        let inviter = state.inviters
+
+        let inviter = state
+            .inviters
             .get_mut(user_id)
             .ok_or_else(|| anyhow!("user not found"))?;
 
@@ -651,10 +655,10 @@ impl InvitationSystem {
 
         inviter.invites_remaining += count;
         drop(state);
-        
+
         self.mark_dirty().await;
         info!(user_id = %user_id, count = count, "granted invites");
-        
+
         Ok(())
     }
 
@@ -675,96 +679,102 @@ impl InvitationSystem {
             banned_users,
         }
     }
-	
-	/// Get detailed information about a user
-	/// 
-	/// Returns user state and list of their invitees
-	pub async fn get_user_details(&self, user_id: &str) -> Result<(InviterState, Vec<String>)> {
-		let state = self.state.read().await;
-		
-		let inviter = state.inviters
-			.get(user_id)
-			.ok_or_else(|| anyhow!("user not found"))?
-			.clone();
-		
-		// Find all users invited by this user
-		let mut invitees = Vec::new();
-		for invitation in state.invitations.values() {
-			if invitation.inviter_id == user_id {
-				if let Some(ref invitee_id) = invitation.invitee_id {
-					invitees.push(invitee_id.clone());
-				}
-			}
-		}
-		
-		Ok((inviter, invitees))
-	}
 
-	/// Get detailed information about an invitation
-	pub async fn get_invitation_details(&self, code: &str) -> Result<Invitation> {
-		let state = self.state.read().await;
-		
-		state.invitations
-			.get(code)
-			.cloned()
-			.ok_or_else(|| anyhow!("invitation not found"))
-	}
-	
-	/// Get the current invite count for a user (for admin responses)
-	pub async fn get_user_invite_count(&self, user_id: &str) -> Result<u32> {
-		let state = self.state.read().await;
-		
-		state.inviters
-			.get(user_id)
-			.map(|inviter| inviter.invites_remaining)
-			.ok_or_else(|| anyhow!("user not found"))
-	}
+    /// Get detailed information about a user
+    ///
+    /// Returns user state and list of their invitees
+    pub async fn get_user_details(&self, user_id: &str) -> Result<(InviterState, Vec<String>)> {
+        let state = self.state.read().await;
 
-	/// List all users (for admin dashboard)
-	/// 
-	/// Returns a vector of (user_id, invites_remaining, banned)
-	pub async fn list_users(&self) -> Vec<(String, u32, bool)> {
-		let state = self.state.read().await;
-		
-		state.inviters
-			.values()
-			.map(|inviter| (
-				inviter.user_id.clone(),
-				inviter.invites_remaining,
-				inviter.banned
-			))
-			.collect()
-	}
+        let inviter = state
+            .inviters
+            .get(user_id)
+            .ok_or_else(|| anyhow!("user not found"))?
+            .clone();
 
-	/// Count how many users would be affected by a ban tree
-	/// 
-	/// Returns the number of users that would be banned (including the target)
-	pub async fn count_ban_tree_size(&self, user_id: &str) -> usize {
-		let state = self.state.read().await;
-		
-		// Start with the target user
-		let mut count = 1;
-		
-		// Find all users invited by this user (recursively)
-		let mut to_check = vec![user_id.to_string()];
-		let mut checked = std::collections::HashSet::new();
-		
-		while let Some(current_id) = to_check.pop() {
-			if !checked.insert(current_id.clone()) {
-				continue; // Already checked this user
-			}
-			
-			for invitation in state.invitations.values() {
-				if invitation.inviter_id == current_id {
-					if let Some(ref invitee_id) = invitation.invitee_id {
-						count += 1;
-						to_check.push(invitee_id.clone());
-					}
-				}
-			}
-		}
-		count
-	}
+        // Find all users invited by this user
+        let mut invitees = Vec::new();
+        for invitation in state.invitations.values() {
+            if invitation.inviter_id == user_id {
+                if let Some(ref invitee_id) = invitation.invitee_id {
+                    invitees.push(invitee_id.clone());
+                }
+            }
+        }
+
+        Ok((inviter, invitees))
+    }
+
+    /// Get detailed information about an invitation
+    pub async fn get_invitation_details(&self, code: &str) -> Result<Invitation> {
+        let state = self.state.read().await;
+
+        state
+            .invitations
+            .get(code)
+            .cloned()
+            .ok_or_else(|| anyhow!("invitation not found"))
+    }
+
+    /// Get the current invite count for a user (for admin responses)
+    pub async fn get_user_invite_count(&self, user_id: &str) -> Result<u32> {
+        let state = self.state.read().await;
+
+        state
+            .inviters
+            .get(user_id)
+            .map(|inviter| inviter.invites_remaining)
+            .ok_or_else(|| anyhow!("user not found"))
+    }
+
+    /// List all users (for admin dashboard)
+    ///
+    /// Returns a vector of (user_id, invites_remaining, banned)
+    pub async fn list_users(&self) -> Vec<(String, u32, bool)> {
+        let state = self.state.read().await;
+
+        state
+            .inviters
+            .values()
+            .map(|inviter| {
+                (
+                    inviter.user_id.clone(),
+                    inviter.invites_remaining,
+                    inviter.banned,
+                )
+            })
+            .collect()
+    }
+
+    /// Count how many users would be affected by a ban tree
+    ///
+    /// Returns the number of users that would be banned (including the target)
+    pub async fn count_ban_tree_size(&self, user_id: &str) -> usize {
+        let state = self.state.read().await;
+
+        // Start with the target user
+        let mut count = 1;
+
+        // Find all users invited by this user (recursively)
+        let mut to_check = vec![user_id.to_string()];
+        let mut checked = std::collections::HashSet::new();
+
+        while let Some(current_id) = to_check.pop() {
+            if !checked.insert(current_id.clone()) {
+                continue; // Already checked this user
+            }
+
+            for invitation in state.invitations.values() {
+                if invitation.inviter_id == current_id {
+                    if let Some(ref invitee_id) = invitation.invitee_id {
+                        count += 1;
+                        to_check.push(invitee_id.clone());
+                    }
+                }
+            }
+        }
+        count
+    }
 }
 
 /// Statistics about the invitation system
@@ -854,14 +864,14 @@ mod tests {
     async fn test_persistence() {
         let path = PathBuf::from("/tmp/test_persistence.json");
         let _ = std::fs::remove_file(&path); // Clean up
-        
+
         let key = SigningKey::random(&mut OsRng);
         let config = InvitationConfig {
             persistence_path: path.clone(),
             autosave_interval_secs: 0,
             ..Default::default()
         };
-        
+
         // Create system and add user
         {
             let system = InvitationSystem::load_or_create(key.clone(), config.clone())
@@ -870,16 +880,14 @@ mod tests {
             system.add_bootstrap_user("admin".into(), 10).await;
             system.save().await.unwrap();
         }
-        
+
         // Load and verify
         {
-            let system = InvitationSystem::load_or_create(key, config)
-                .await
-                .unwrap();
+            let system = InvitationSystem::load_or_create(key, config).await.unwrap();
             let stats = system.get_stats().await;
             assert_eq!(stats.total_users, 1);
         }
-        
+
         let _ = std::fs::remove_file(&path);
     }
 
@@ -887,17 +895,17 @@ mod tests {
     async fn test_invitee_id_uniqueness() {
         let system = setup().await;
         system.add_bootstrap_user("admin".into(), 10).await;
-        
+
         // Generate one invitation
         let (code, sig, _) = system.generate_invite("admin").await.unwrap();
-        
+
         // Verify it
         system.verify_invitation(&code, &sig).await.unwrap();
-        
+
         // Redeem twice with same code - should fail on second attempt
         let id1 = system.redeem_invitation(&code, None).await.unwrap();
         let result2 = system.redeem_invitation(&code, None).await;
-        
+
         assert!(result2.is_err()); // Should fail - already redeemed
         assert!(!id1.is_empty());
     }
@@ -906,19 +914,25 @@ mod tests {
     async fn test_invitee_id_with_client_data() {
         let system = setup().await;
         system.add_bootstrap_user("admin".into(), 10).await;
-        
+
         let (code1, sig1, _) = system.generate_invite("admin").await.unwrap();
         let (code2, sig2, _) = system.generate_invite("admin").await.unwrap();
-        
+
         system.verify_invitation(&code1, &sig1).await.unwrap();
         system.verify_invitation(&code2, &sig2).await.unwrap();
-        
+
         let client_data1 = ClientData::from_ip("192.168.1.1");
         let client_data2 = ClientData::from_ip("192.168.1.2");
-        
-        let id1 = system.redeem_invitation(&code1, Some(client_data1)).await.unwrap();
-        let id2 = system.redeem_invitation(&code2, Some(client_data2)).await.unwrap();
-        
+
+        let id1 = system
+            .redeem_invitation(&code1, Some(client_data1))
+            .await
+            .unwrap();
+        let id2 = system
+            .redeem_invitation(&code2, Some(client_data2))
+            .await
+            .unwrap();
+
         // IDs should be different (different codes + different IPs + random nonces)
         assert_ne!(id1, id2);
     }
@@ -928,7 +942,7 @@ mod tests {
         // Test that even with same parameters, random nonce makes IDs unique
         let system = setup().await;
         system.add_bootstrap_user("admin".into(), 10).await;
-        
+
         // Generate multiple invitations
         let mut ids = Vec::new();
         for _ in 0..5 {
@@ -936,11 +950,11 @@ mod tests {
             system.verify_invitation(&code, &sig).await.unwrap();
             let id = system.redeem_invitation(&code, None).await.unwrap();
             ids.push(id);
-            
+
             // Small delay to ensure timestamp changes (if needed)
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         }
-        
+
         // All IDs should be unique
         let unique_ids: std::collections::HashSet<_> = ids.iter().collect();
         assert_eq!(unique_ids.len(), 5, "All invitee IDs should be unique");

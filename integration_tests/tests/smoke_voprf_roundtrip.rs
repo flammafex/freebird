@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
-use crypto::{Client, Server, Verifier};
-use crypto::nullifier_key;
 use base64ct::{Base64UrlUnpadded, Encoding};
+use crypto::nullifier_key;
+use crypto::{Client, Server, Verifier};
 #[test]
 fn smoke_voprf_roundtrip() {
     // Keep context consistent across client/server/verifier
@@ -23,9 +23,7 @@ fn smoke_voprf_roundtrip() {
         .expect("server evaluate");
     println!("eval_b64={}", eval_b64);
     // ---- Client finalizes to produce token + token_output ----
-    let (token_b64, out_cli_b64) = client
-        .finalize(st, &eval_b64, &pk)
-        .expect("finalize");
+    let (token_b64, out_cli_b64) = client.finalize(st, &eval_b64, &pk).expect("finalize");
     println!("token_b64={}", token_b64);
     // ---- Verifier derives the same token_output from the opaque token ----
     let verifier = Verifier::new(ctx);

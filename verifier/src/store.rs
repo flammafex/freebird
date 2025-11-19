@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use redis::{aio::ConnectionLike, AsyncCommands, Script};
 use std::{
     collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-use redis::{aio::ConnectionLike, AsyncCommands, Script};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -99,8 +99,8 @@ pub struct RedisStore {
 
 impl RedisStore {
     pub fn new(url: &str) -> Result<Self> {
-        let client = redis::Client::open(url)
-            .with_context(|| format!("connect redis @ {}", url))?;
+        let client =
+            redis::Client::open(url).with_context(|| format!("connect redis @ {}", url))?;
         Ok(Self { client })
     }
 
@@ -110,7 +110,10 @@ impl RedisStore {
             match self.client.get_async_connection().await {
                 Ok(conn) => return Ok(conn),
                 Err(e) if attempt < 3 => {
-                    warn!(attempt, "redis connect failed: {e}; retrying in {backoff_ms}ms");
+                    warn!(
+                        attempt,
+                        "redis connect failed: {e}; retrying in {backoff_ms}ms"
+                    );
                     tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                     backoff_ms *= 2;
                 }

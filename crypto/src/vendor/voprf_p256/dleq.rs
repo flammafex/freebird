@@ -17,16 +17,14 @@
 ///
 // This file is self-contained and targets p256 = "0.13" and elliptic-curve = "0.13".
 // No hash-to-curve machinery is used; we only hash bytes to a scalar challenge.
-
 use core::fmt;
 use p256::{
-    AffinePoint, ProjectivePoint, Scalar,
     elliptic_curve::{
+        ops::Reduce,
         sec1::ToEncodedPoint,
         Field, // for Scalar::random
-        ops::Reduce,
     },
-    FieldBytes,
+    AffinePoint, FieldBytes, ProjectivePoint, Scalar,
 };
 use rand_core::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
@@ -42,7 +40,12 @@ pub struct DleqProof {
 
 impl fmt::Debug for DleqProof {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "DleqProof {{ c: 0x{}, s: 0x{} }}", hex32(&self.c), hex32(&self.s))
+        write!(
+            f,
+            "DleqProof {{ c: 0x{}, s: 0x{} }}",
+            hex32(&self.c),
+            hex32(&self.s)
+        )
     }
 }
 
@@ -101,7 +104,9 @@ pub fn prove<R: RngCore + CryptoRng>(
 
     let mut full_dst = Vec::with_capacity(DLEQ_DST.len() + dst.map_or(0, |d| d.len()));
     full_dst.extend_from_slice(DLEQ_DST);
-    if let Some(extra) = dst { full_dst.extend_from_slice(extra); }
+    if let Some(extra) = dst {
+        full_dst.extend_from_slice(extra);
+    }
 
     let c = challenge_scalar(g, y, a, b, &t1, &t2, &full_dst);
     let s = r + c * *k;
@@ -128,7 +133,9 @@ pub fn verify(
 
     let mut full_dst = Vec::with_capacity(DLEQ_DST.len() + dst.map_or(0, |d| d.len()));
     full_dst.extend_from_slice(DLEQ_DST);
-    if let Some(extra) = dst { full_dst.extend_from_slice(extra); }
+    if let Some(extra) = dst {
+        full_dst.extend_from_slice(extra);
+    }
 
     let c_check = challenge_scalar(g, y, a, b, &t1_prime, &t2_prime, &full_dst);
     c_check == proof.c
