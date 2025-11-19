@@ -6,6 +6,12 @@ mod routes;
 mod sybil_resistance;
 mod voprf_core;
 
+#[cfg(feature = "human-gate-webauthn")]
+mod webauthn_ctx;
+#[cfg(feature = "human-gate-webauthn")]
+mod webauthn_store;
+
+use anyhow::{Context, Result}; // Import Context
 use axum::extract::ConnectInfo;
 use axum::http::HeaderMap;
 use axum::{
@@ -22,10 +28,6 @@ use sybil_resistance::{
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
-#[cfg(feature = "human-gate-webauthn")]
-mod webauthn_ctx;
-#[cfg(feature = "human-gate-webauthn")]
-mod webauthn_store;
 
 // Single unified state structure
 #[derive(Clone)]
@@ -37,7 +39,7 @@ pub struct AppStateWithSybil {
     pub require_tls: bool,
     pub behind_proxy: bool,
     pub sybil_checker: Option<Arc<dyn SybilResistance>>,
-    pub invitation_system: Option<Arc<InvitationSystem>>, // Add this field
+    pub invitation_system: Option<Arc<InvitationSystem>>,
 }
 
 #[derive(Serialize)]
@@ -55,11 +57,12 @@ struct VoprfInfo {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<()> {
     // ---------- Logging ----------
     logging::init("info,axum=info,tower_http=info");
 
     // ---------- Config ----------
+    // Using defaults is safe here, no unwraps to remove.
     let issuer_id = env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v1".to_string());
     let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8081".to_string());
     let token_ttl_min: u64 = env::var("TOKEN_TTL_MIN")
@@ -77,7 +80,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(false);
 
     // ---------- Keys ----------
-    let (sk_bytes, pubkey_b64, kid_from_key) = keys::load_or_generate_keypair_b64()?;
+    // Propagate error with context instead of letting it bubble up raw
+    let (sk_bytes, pubkey_b64, kid_from_key) = keys::load_or_generate_keypair_b64()
+        .context("Failed to load or generate issuer keypair")?;
+
     let kid = match env::var("KID") {
         Ok(k) => {
             if !k.starts_with(&kid_from_key) {
@@ -91,21 +97,20 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // ============================================================================
-    // WEBAUTHN INITIALIZATION - Add after Sybil resistance setup
+    // WEBAUTHN INITIALIZATION
     // ============================================================================
 
     #[cfg(feature = "human-gate-webauthn")]
     let webauthn_state: Option<Arc<routes::webauthn::WebAuthnState>> = {
-        // Only initialize if WebAuthn is configured
-        if let (Ok(rp_id), Ok(rp_origin)) =
+        if let (Ok(_rp_id), Ok(_rp_origin)) =
             (env::var("WEBAUTHN_RP_ID"), env::var("WEBAUTHN_RP_ORIGIN"))
         {
             info!("🔐 Initializing WebAuthn subsystem");
 
+            // Replaced expect() with context()
             let webauthn_ctx = webauthn_ctx::WebAuthnCtx::from_env()
-                .expect("Failed to initialize WebAuthn context");
+                .context("Failed to initialize WebAuthn context from environment")?;
 
-            // Choose credential storage backend
             let cred_store = if let Ok(redis_url) = env::var("WEBAUTHN_REDIS_URL") {
                 let ttl = env::var("WEBAUTHN_CRED_TTL_SECS")
                     .ok()
@@ -114,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
                 info!("Using Redis for WebAuthn credential storage");
                 routes::webauthn::CredentialStore::Redis(
                     webauthn_store::RedisCredStore::new(&redis_url, ttl)
-                        .expect("Failed to connect to WebAuthn Redis"),
+                        .context("Failed to connect to WebAuthn Redis")?,
                 )
             } else {
                 warn!("⚠️  Using in-memory WebAuthn credential storage (not for production!)");
@@ -124,7 +129,7 @@ async fn main() -> anyhow::Result<()> {
             Some(Arc::new(routes::webauthn::WebAuthnState {
                 webauthn: webauthn_ctx,
                 cred_store,
-                sessions: Arc::new(RwLock::new(HashMap::new())),
+                sessions: Arc::new(RwLock::new(std::collections::HashMap::new())),
             }))
         } else {
             None
@@ -144,11 +149,7 @@ async fn main() -> anyhow::Result<()> {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(20);
-
-            info!(
-                "🛡️  Sybil resistance: Proof-of-Work (difficulty={})",
-                difficulty
-            );
+            info!("🛡️  Sybil resistance: Proof-of-Work (difficulty={})", difficulty);
             Some(Arc::new(ProofOfWork::new(difficulty)))
         }
         Ok("rate_limit") => {
@@ -156,15 +157,10 @@ async fn main() -> anyhow::Result<()> {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3600);
-
-            info!(
-                "🛡️  Sybil resistance: Rate Limiting (interval={}s)",
-                interval_secs
-            );
+            info!("🛡️  Sybil resistance: Rate Limiting (interval={}s)", interval_secs);
             Some(Arc::new(RateLimit::new(Duration::from_secs(interval_secs))))
         }
         Ok("invitation") => {
-            // Invitation system setup (simplified - see full implementation in invitation.rs)
             use p256::ecdsa::SigningKey;
             use rand::rngs::OsRng;
             use std::path::PathBuf;
@@ -198,9 +194,11 @@ async fn main() -> anyhow::Result<()> {
                     .unwrap_or(300),
             };
 
-            let inv_sys = InvitationSystem::load_or_create(signing_key, config).await?;
+            // Propagate error with context
+            let inv_sys = InvitationSystem::load_or_create(signing_key, config)
+                .await
+                .context("Failed to load or create invitation system")?;
 
-            // Bootstrap users
             if let Ok(bootstrap_users) = env::var("SYBIL_INVITE_BOOTSTRAP_USERS") {
                 for entry in bootstrap_users.split(',') {
                     if let Some((user_id, count_str)) = entry.split_once(':') {
@@ -230,9 +228,7 @@ async fn main() -> anyhow::Result<()> {
                     max_proof_age,
                 )))
             } else {
-                warn!(
-                    "⚠️  WebAuthn Sybil resistance requires WEBAUTHN_RP_ID and WEBAUTHN_RP_ORIGIN"
-                );
+                warn!("⚠️  WebAuthn Sybil resistance requires WEBAUTHN_RP_ID/ORIGIN");
                 None
             }
         }
@@ -246,10 +242,7 @@ async fn main() -> anyhow::Result<()> {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3600);
 
-            info!(
-                "🛡️  Sybil resistance: Combined (PoW difficulty={}, rate limit={}s)",
-                pow_difficulty, rate_limit_secs
-            );
+            info!("🛡️  Sybil resistance: Combined (PoW difficulty={}, rate limit={}s)", pow_difficulty, rate_limit_secs);
             Some(Arc::new(CombinedSybilResistance::new(vec![
                 Box::new(ProofOfWork::new(pow_difficulty)),
                 Box::new(RateLimit::new(Duration::from_secs(rate_limit_secs))),
@@ -268,6 +261,7 @@ async fn main() -> anyhow::Result<()> {
     // ---------- Core ----------
     let ctx = b"freebird:v1";
 
+    // Propagate error with context
     let voprf = Arc::new(
         multi_key_voprf::MultiKeyVoprfCore::load_or_create(
             sk_bytes,
@@ -276,10 +270,10 @@ async fn main() -> anyhow::Result<()> {
             ctx,
             Some(std::path::PathBuf::from("key_rotation_state.json")),
         )
-        .await?,
+        .await
+        .context("Failed to initialize VOPRF core")?,
     );
 
-    // Single unified state
     let state = Arc::new(AppStateWithSybil {
         issuer_id,
         kid,
@@ -288,14 +282,10 @@ async fn main() -> anyhow::Result<()> {
         require_tls,
         behind_proxy,
         sybil_checker,
-        invitation_system, // Include the invitation system reference
+        invitation_system,
     });
 
     // ---------- Router ----------
-    // Both endpoints use the same unified handler
-    // The handler adapts based on:
-    // - Whether Sybil resistance is configured in state
-    // - Whether a Sybil proof is provided in the request
     let mut app = Router::new()
         .route("/.well-known/issuer", get(well_known_handler))
         .route("/v1/oprf/issue", post(issue_handler))
@@ -308,22 +298,14 @@ async fn main() -> anyhow::Result<()> {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(tokio::time::Duration::from_secs(24 * 3600)).await;
-
-            match cleanup_voprf.cleanup_expired_keys().await {
-                Ok(removed) => {
-                    if removed > 0 {
-                        info!("Automatic cleanup removed {} expired keys", removed);
-                    }
-                }
-                Err(e) => {
-                    warn!("Automatic key cleanup failed: {}", e);
-                }
+            if let Err(e) = cleanup_voprf.cleanup_expired_keys().await {
+                warn!("Automatic key cleanup failed: {}", e);
             }
         }
     });
+
     #[cfg(feature = "human-gate-webauthn")]
     if let Some(ref wa_state) = webauthn_state {
-        // Check if attestation is enabled
         let use_attestation = std::env::var("WEBAUTHN_REQUIRE_ATTESTATION")
             .unwrap_or_else(|_| "false".to_string())
             .eq_ignore_ascii_case("true");
@@ -331,137 +313,75 @@ async fn main() -> anyhow::Result<()> {
         let webauthn_router = if use_attestation {
             info!("🔐 WebAuthn with attestation verification enabled");
             Router::new()
-                .route(
-                    "/register/start",
-                    post(routes::webauthn::start_registration),
-                )
-                .route(
-                    "/register/finish",
-                    post(routes::webauthn_attestation::finish_registration_with_attestation),
-                )
-                .route(
-                    "/authenticate/start",
-                    post(routes::webauthn::start_authentication),
-                )
-                .route(
-                    "/authenticate/finish",
-                    post(routes::webauthn::finish_authentication),
-                )
+                .route("/register/start", post(routes::webauthn::start_registration))
+                .route("/register/finish", post(routes::webauthn_attestation::finish_registration_with_attestation))
+                .route("/authenticate/start", post(routes::webauthn::start_authentication))
+                .route("/authenticate/finish", post(routes::webauthn::finish_authentication))
                 .route("/info", get(routes::webauthn::webauthn_info))
                 .with_state(Arc::clone(wa_state))
         } else {
             info!("📝 WebAuthn without attestation verification");
             Router::new()
-                .route(
-                    "/register/start",
-                    post(routes::webauthn::start_registration),
-                )
-                .route(
-                    "/register/finish",
-                    post(routes::webauthn::finish_registration),
-                )
-                .route(
-                    "/authenticate/start",
-                    post(routes::webauthn::start_authentication),
-                )
-                .route(
-                    "/authenticate/finish",
-                    post(routes::webauthn::finish_authentication),
-                )
+                .route("/register/start", post(routes::webauthn::start_registration))
+                .route("/register/finish", post(routes::webauthn::finish_registration))
+                .route("/authenticate/start", post(routes::webauthn::start_authentication))
+                .route("/authenticate/finish", post(routes::webauthn::finish_authentication))
                 .route("/info", get(routes::webauthn::webauthn_info))
                 .with_state(Arc::clone(wa_state))
         };
-
         app = app.nest("/webauthn", webauthn_router);
     }
-    // ---------- Admin API (optional) ----------
+
+    // ---------- Admin API ----------
     if let Ok(admin_key) = env::var("ADMIN_API_KEY") {
         if admin_key.len() < 32 {
             warn!("⚠️  ADMIN_API_KEY is too short (< 32 chars), admin API disabled");
         } else if let Some(ref inv_sys) = state.invitation_system {
             info!("✅ Admin API enabled at /admin/*");
-            info!("   Endpoints:");
-            info!("   GET  /admin/health");
-            info!("   GET  /admin/stats");
-            info!("   POST /admin/invites/grant");
-            info!("   POST /admin/users/ban");
-            info!("   POST /admin/bootstrap/add");
-            info!("   GET  /admin/users/:user_id");
-            info!("   GET  /admin/invitations/:code");
-            info!("   POST /admin/save");
-
-            let admin_router =
-                routes::admin_router(Arc::clone(inv_sys), Arc::clone(&voprf), admin_key);
-
+            let admin_router = routes::admin_router(Arc::clone(inv_sys), Arc::clone(&voprf), admin_key);
             app = app.nest("/admin", admin_router);
         } else {
             warn!("⚠️  Admin API requires invitation-based Sybil resistance");
         }
     } else {
-        info!("ℹ️  Admin API disabled (set ADMIN_API_KEY to enable)");
+        info!("ℹ️  Admin API disabled");
     }
 
     // ---------- Serve ----------
-    let addr: SocketAddr = bind_addr.parse().expect("BIND_ADDR parse");
-    let listener = TcpListener::bind(addr).await.expect("bind");
+    let addr: SocketAddr = bind_addr.parse()
+        .context(format!("Invalid BIND_ADDR: {}", bind_addr))?;
+    
+    let listener = TcpListener::bind(addr).await
+        .context(format!("Failed to bind to address: {}", addr))?;
 
     if state.require_tls {
-        info!(
-            "🕊️ Freebird issuer listening (TLS required) on {}",
-            listener.local_addr()?
-        );
+        info!("🕊️ Freebird issuer listening (TLS required) on {}", listener.local_addr()?);
     } else {
         info!("🕊️ Freebird issuer listening on {}", listener.local_addr()?);
     }
 
-    info!("✅ Router configured. Endpoints:");
-    info!("   GET  /.well-known/issuer");
-    info!("   POST /v1/oprf/issue              (adaptive: checks for Sybil proof)");
-    info!("   POST /v1/oprf/issue/batch    (issue multiple tokens at once)");
-
     if state.sybil_checker.is_some() {
-        info!("🛡️  Sybil resistance enabled - proofs will be verified when provided");
+        info!("🛡️  Sybil resistance enabled");
     } else {
-        info!("ℹ️  Sybil resistance disabled - tokens issued without verification");
+        info!("ℹ️  Sybil resistance disabled");
     }
 
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await
-        .map_err(|e| e.into())
+        .context("Server crashed")?;
+    
+    Ok(())
 }
 
 // ---------- Handlers ----------
 
-// Type alias for shared state
 type SharedState = (
     Arc<AppStateWithSybil>,
     Arc<multi_key_voprf::MultiKeyVoprfCore>,
 );
 
-#[derive(Serialize)]
-struct WellKnownMultiKey {
-    issuer_id: String,
-    voprf: VoprfInfoMultiKey,
-}
-
-#[derive(Serialize)]
-struct VoprfInfoMultiKey {
-    suite: String,
-    keys: Vec<VoprfKeyInfo>,
-    exp_sec: u64,
-}
-
-#[derive(Serialize)]
-struct VoprfKeyInfo {
-    kid: String,
-    pubkey: String,
-    status: String,
-}
-
-async fn well_known_handler(
-    State((state, voprf)): State<SharedState>, // Use voprf, not _
-) -> Json<WellKnown> {
+async fn well_known_handler(State((state, voprf)): State<SharedState>) -> Json<WellKnown> {
     let active_kid = voprf.active_kid().await;
     let active_pubkey = voprf.active_pubkey_b64().await;
 
@@ -469,8 +389,8 @@ async fn well_known_handler(
         issuer_id: state.issuer_id.clone(),
         voprf: VoprfInfo {
             suite: "OPRF(P-256, SHA-256)-verifiable".into(),
-            kid: active_kid,       // NEW
-            pubkey: active_pubkey, // NEW
+            kid: active_kid,
+            pubkey: active_pubkey,
             exp_sec: state.exp_sec,
         },
     })
@@ -484,6 +404,7 @@ async fn issue_handler(
 ) -> Result<Json<routes::IssueResp>, (axum::http::StatusCode, String)> {
     routes::handle(State(state), voprf, connect_info, headers, Json(req)).await
 }
+
 async fn batch_handler(
     State((state, voprf)): State<SharedState>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
@@ -492,6 +413,7 @@ async fn batch_handler(
 ) -> Result<Json<routes::BatchIssueResp>, (axum::http::StatusCode, String)> {
     routes::handle_batch(State(state), voprf, connect_info, headers, Json(req)).await
 }
+
 async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
@@ -502,8 +424,7 @@ async fn shutdown_signal() {
     #[cfg(unix)]
     let terminate = async {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut sigterm =
-            signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
+        let mut sigterm = signal(SignalKind::terminate()).expect("failed to install SIGTERM handler");
         sigterm.recv().await;
     };
 
@@ -514,6 +435,5 @@ async fn shutdown_signal() {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
-
     info!("shutdown signal received");
 }
