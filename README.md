@@ -37,6 +37,46 @@ Freebird uses **VOPRF (Verifiable Oblivious Pseudorandom Function)** cryptograph
 This isn't just "privacy-preserving rate limiting." It's a new primitive for authorization that makes identity optional rather than mandatory.
 
 ---
+## 🖥️ System Requirements
+
+Freebird is lightweight but has specific architectural requirements for security in production environments.
+
+### Hardware Sizing
+
+Resources depend on your anticipated user base and Sybil resistance complexity.
+
+| Deployment Size | Users | CPU | RAM | Disk |
+|-----------------|-------|-----|-----|------|
+| **Small** | < 1k | 2 vCPU | 1.5 GB | 10 GB SSD |
+| **Medium** | 10k | 4 vCPU | 3 GB | 20 GB SSD |
+| **Large** | 10k+ | 8+ vCPU | 6 GB+ | High-Perf SSD |
+
+* **CPU:** Primary bottleneck is cryptographic operations (P-256 scalar multiplication).
+* **RAM:** Includes overhead for Issuer, Verifier, and Redis.
+* **Disk:** State files are small (~1KB/user), but SSDs are recommended for database latency.
+
+### Network Architecture
+
+* **Development:** Issuer and Verifier can run on the same host (e.g., via Docker Compose).
+* **Production:** Issuer and Verifier **MUST** be deployed on separate infrastructure (different servers or VPCs) to prevent timing attacks and ensure user anonymity.
+* **Time Sync:** System clocks must be synchronized via NTP. The default skew tolerance is 300 seconds (5 minutes).
+
+### Software Environment
+
+* **Container Runtime:** Docker & Docker Compose (Recommended).
+* **Operating System:** Linux (Debian Bookworm is the reference OS).
+* **Dependencies:**
+    * **Redis:** Required for the Verifier (replay protection) and WebAuthn storage in production.
+    * **Reverse Proxy:** Nginx, Caddy, or Cloud LB required for TLS termination.
+    * **Entropy:** System must provide sufficient entropy (>1000 available) for key generation.
+
+### Build Requirements (Manual)
+
+If building from source instead of using Docker:
+
+* **Language:** Rust **1.70+**
+* **System Packages:** `pkg-config`, `libssl-dev` (OpenSSL is required for `reqwest`)
+---
 
 ## Technical Implementation
 
