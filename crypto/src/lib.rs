@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-// Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
+// Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
 
 //! Cryptographic primitives for Freebird
 //!
 //! This module provides high-level APIs for VOPRF operations using the
-//! custom P-256 implementation in vendor/voprf_p256/.
+//! internal P-256 implementation in voprf/.
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 use sha2::{Digest, Sha256};
 
-pub mod vendor;
-use vendor::voprf_p256 as v;
+// Internal VOPRF implementation (was vendor/voprf_p256)
+pub mod voprf;
+use voprf as v;
 
 #[derive(Debug)]
 pub enum Error {
@@ -114,7 +115,7 @@ mod tests {
 
     #[test]
     fn end_to_end() {
-        let ctx = b"presence-v1";
+        let ctx = b"freebird-v1";
         let sk = [7u8; 32];
 
         let server = Server::from_secret_key(sk, ctx).unwrap();
@@ -137,8 +138,8 @@ mod tests {
         assert_eq!(out_cli_b64, out_ver_b64);
 
         // nullifier determinism
-        let n1 = nullifier_key("issuer:presence:v1", &out_ver_b64);
-        let n2 = nullifier_key("issuer:presence:v1", &out_ver_b64);
+        let n1 = nullifier_key("issuer:freebird:v1", &out_ver_b64);
+        let n2 = nullifier_key("issuer:freebird:v1", &out_ver_b64);
         assert_eq!(n1, n2);
         assert!(!n1.is_empty());
     }

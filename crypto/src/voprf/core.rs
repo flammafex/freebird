@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-// Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
+// Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
 #![allow(deprecated)]
-//./crypto/src/vendor/voprf_p256/oprf.rs
+
 use elliptic_curve::hash2curve::{ExpandMsgXmd, GroupDigest};
 use elliptic_curve::{
     bigint::{NonZero, U256},
     scalar::FromUintUnchecked,
-    sec1::{FromEncodedPoint, ToEncodedPoint}, // <- we'll use Scalar::reduce_bytes
+    sec1::{FromEncodedPoint, ToEncodedPoint},
     Curve,
     Field,
 };
@@ -30,26 +30,16 @@ const TOKEN_PROOF_LEN: usize = 64;
 const TOKEN_LEN: usize = TOKEN_POINT_LEN * 2 + TOKEN_PROOF_LEN;
 
 /// RFC 9380-compliant hash-to-curve for P-256 (SSWU_RO).
-/// Returns Option instead of panicking on failure.
 fn hash_to_curve(input: &[u8], ctx: &[u8]) -> Option<ProjectivePoint> {
-    // Domain separation tag as per RFC 9380
     const BASE_DST: &[u8] = b"P256_XMD:SHA-256_SSWU_RO_";
-
-    // Append context for VOPRF domain separation
     let mut dst = Vec::with_capacity(BASE_DST.len() + ctx.len());
     dst.extend_from_slice(BASE_DST);
     dst.extend_from_slice(ctx);
 
-    // Use NistP256::hash_from_bytes (Method 1 - confirmed working!)
-    // This returns a generic curve point that we convert to ProjectivePoint.
-    // We use ok() to convert Result to Option, avoiding panic.
     let point = NistP256::hash_from_bytes::<ExpandMsgXmd<Sha256>>(&[input], &[&dst]).ok()?;
-
-    // Convert to ProjectivePoint
     Some(ProjectivePoint::from(point))
 }
 
-/// Compress a projective point (SEC1-encoded, 33 bytes)
 fn encode_point_compressed(p: &ProjectivePoint) -> [u8; COMPRESSED_POINT_LEN] {
     p.to_affine()
         .to_encoded_point(true)
@@ -58,11 +48,10 @@ fn encode_point_compressed(p: &ProjectivePoint) -> [u8; COMPRESSED_POINT_LEN] {
         .unwrap()
 }
 
-/// Decompress SEC1 bytes into a projective point
 fn decode_point_compressed(bytes: &[u8]) -> Option<ProjectivePoint> {
     let ep = EncodedPoint::from_bytes(bytes).ok()?;
     let ap_opt = AffinePoint::from_encoded_point(&ep);
-    let ap: Option<AffinePoint> = ap_opt.into(); // CtOption -> Option
+    let ap: Option<AffinePoint> = ap_opt.into();
     let ap = ap?;
     if ap.is_identity().into() {
         return None;
@@ -93,7 +82,6 @@ fn scalar_from_be32(bytes: [u8; 32]) -> Result<Scalar, Error> {
 }
 
 fn prf_output_from_b(b: &ProjectivePoint, ctx: &[u8]) -> [u8; 32] {
-    // Define y = H2(B||ctx) so client and verifier match exactly.
     let mut h = Sha256::new();
     h.update(b"VOPRF-P256-SHA256:Finalize");
     h.update(ctx);
@@ -129,17 +117,15 @@ impl Client {
     }
 
     pub fn blind(&mut self, input: &[u8]) -> Result<(Vec<u8>, BlindState), Error> {
-        // Propagate error if hash_to_curve fails instead of crashing
         let p = hash_to_curve(input, &self.ctx).ok_or(Error::InvalidPoint)?;
         let r = Scalar::random(rand::rngs::OsRng);
         let a = p * r;
         Ok((encode_point(&a).to_vec(), BlindState { r, p }))
     }
 
-    /// Returns (token_bytes, prf_output[32]).
     pub fn finalize(
         self,
-        _st: BlindState, // keep the param to preserve API; not used for hashing
+        _st: BlindState,
         token_bytes: &[u8],
         issuer_pubkey_sec1_compressed: &[u8],
     ) -> Result<(Vec<u8>, Vec<u8>), Error> {
@@ -155,7 +141,6 @@ impl Client {
         let proof = decode_proof(proof_bytes);
         let q = decode_point(issuer_pubkey_sec1_compressed)?;
 
-        // Verify DLEQ on (g,q,a,b) with ctx
         let ok = verify(
             &generator().to_affine(),
             &q.to_affine(),
@@ -168,9 +153,7 @@ impl Client {
             return Err(Error::InvalidProof);
         }
 
-        // IMPORTANT: Do NOT unblind here. Hash `b` exactly like the verifier.
         let y = prf_output_from_b(&b, &self.ctx);
-
         Ok((token_bytes.to_vec(), y.to_vec()))
     }
 }
@@ -190,7 +173,6 @@ impl Server {
         encode_point(&self.q)
     }
 
-    /// token = A||B||proof  (33 + 33 + 64 = 130 bytes)
     pub fn evaluate(&self, blinded_bytes: &[u8]) -> Result<Vec<u8>, Error> {
         let a = decode_point(blinded_bytes)?;
         let b = a * self.k;
