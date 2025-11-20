@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-// Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
+// Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
 use anyhow::Context;
 use axum::{
     extract::{rejection::JsonRejection, State},
@@ -14,8 +14,9 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{net::TcpListener, sync::RwLock, time::sleep};
 use tracing::{debug, error, info, warn};
 use common::api::{VerifyReq, VerifyResp};
-mod store;
-use store::{SpendStore, StoreBackend};
+
+// FIX: Import from the library crate instead of local mod
+use verifier::store::{SpendStore, StoreBackend};
 
 #[derive(Clone)]
 struct AppState {
