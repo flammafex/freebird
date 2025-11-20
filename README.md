@@ -28,11 +28,11 @@ We've accepted total surveillance as the price of functional systems. This is a 
 
 Freebird uses **VOPRF (Verifiable Oblivious Pseudorandom Function)** cryptography to enable:
 
-✅ **Prove you're authorized without revealing who you are**
-✅ **Rate limiting without tracking**
-✅ **Access control without accounts**
-✅ **Spam prevention without surveillance**
-✅ **One person, one vote—anonymously**
+- ✅ **Prove you're authorized without revealing who you are**
+- ✅ **Rate limiting without tracking**
+- ✅ **Access control without accounts**
+- ✅ **Spam prevention without surveillance**
+- ✅ **One person, one vote—anonymously**
 
 This isn't just "privacy-preserving rate limiting." It's a new primitive for authorization that makes identity optional rather than mandatory.
 
@@ -64,15 +64,34 @@ This isn't just "privacy-preserving rate limiting." It's a new primitive for aut
 
 ### Cryptographic Properties
 
-- **Unlinkability**: Mathematical guarantee via VOPRF—issuer cannot correlate token issuance with usage. - **Unforgeability**: Only the issuer's private key can create valid tokens. - **Verifiability**: DLEQ proofs ensure correct token generation using the committed key. - **Single-Use**: Nullifier-based replay protection ensures tokens are spent exactly once. ### Implementation Status (v0.1.0)
+- **Unlinkability**: Mathematical guarantee via VOPRF—issuer cannot correlate token issuance with usage.
+- **Unforgeability**: Only the issuer's private key can create valid tokens.
+- **Verifiability**: DLEQ proofs ensure correct token generation using the committed key.
+- **Single-Use**: Nullifier-based replay protection ensures tokens are spent exactly once.
+
+### Implementation Status (v0.1.0)
 
 **Core Features:**
-- ✅ **P-256 VOPRF** with DLEQ proofs - ✅ **Batch Issuance**: High-throughput parallel issuance using `rayon` - ✅ **Key Rotation**: Zero-downtime rotation with grace periods for deprecated keys - ✅ **Storage Backends**: In-memory (dev) and Redis (prod) support - ✅ **Admin API**: HTTP endpoints for user management, key rotation, and stats **Sybil Resistance Mechanisms:**
-- ✅ **Invitation System**: Cryptographically signed invites with ban-trees and reputation tracking - ✅ **Proof of Work**: Configurable computational cost - ✅ **Rate Limiting**: IP or fingerprint-based throttling - ✅ **WebAuthn/FIDO2**: Hardware-backed "Proof of Humanity" (Feature flagged) - ✅ **Combined**: Stack multiple mechanisms for defense-in-depth ---
+- ✅ **P-256 VOPRF** with DLEQ proofs
+- ✅ **Batch Issuance**: High-throughput parallel issuance using `rayon`
+- ✅ **Key Rotation**: Zero-downtime rotation with grace periods for deprecated keys
+- ✅ **Storage Backends**: In-memory (dev) and Redis (prod) support
+- ✅ **Admin API**: HTTP endpoints for user management, key rotation, and stats
+
+**Sybil Resistance Mechanisms:**
+- ✅ **Invitation System**: Cryptographically signed invites with ban-trees and reputation tracking
+- ✅ **Proof of Work**: Configurable computational cost
+- ✅ **Rate Limiting**: IP or fingerprint-based throttling
+- ✅ **WebAuthn/FIDO2**: Hardware-backed "Proof of Humanity" (Feature flagged)
+- ✅ **Combined**: Stack multiple mechanisms for defense-in-depth
+
+---
 
 ## 📦 Client SDKs
 
-Freebird includes a fully typed TypeScript/JavaScript SDK for browser and Node.js environments. ### JavaScript / TypeScript
+Freebird includes a fully typed TypeScript/JavaScript SDK for browser and Node.js environments.
+
+### JavaScript / TypeScript
 
 ```bash
 npm install @freebird/sdk
@@ -81,9 +100,9 @@ npm install @freebird/sdk
 ```typescript
 import { FreebirdClient } from '@freebird/sdk';
 
-const client = new FreebirdClient({ 
-  issuerUrl: '[https://issuer.example.com](https://issuer.example.com)',
-  verifierUrl: '[https://verifier.example.com](https://verifier.example.com)' 
+const client = new FreebirdClient({
+  issuerUrl: 'https://issuer.example.com',
+  verifierUrl: 'https://verifier.example.com'
 });
 
 // 1. Initialize (fetch keys)
@@ -103,8 +122,10 @@ const isValid = await client.verifyToken(token);
 
 ### 1. Run with Docker
 
-The fastest way to spin up the entire stack (Issuer, Verifier, Redis): ```bash
-git clone [https://github.com/yourusername/freebird.git](https://github.com/yourusername/freebird.git)
+The fastest way to spin up the entire stack (Issuer, Verifier, Redis):
+
+```bash
+git clone https://github.com/yourusername/freebird.git
 cd freebird
 docker-compose up --build
 ```
@@ -113,7 +134,7 @@ docker-compose up --build
 
 ```bash
 # Prerequisites: Rust 1.70+
-curl --proto '=https' --tlsv1.2 -sSf [https://sh.rustup.rs](https://sh.rustup.rs) | sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Build all components
 cargo build --release
@@ -132,7 +153,9 @@ cargo build --release
 
 ## Configuration
 
-Configuration is handled via environment variables. ### Issuer Configuration
+Configuration is handled via environment variables.
+
+### Issuer Configuration
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -148,7 +171,7 @@ Configuration is handled via environment variables. ### Issuer Configuration
 |----------|---------|-------------|
 | `ISSUER_URL` | `http://localhost:8081` | URL to fetch issuer public keys |
 | `REDIS_URL` | (None) | If set, uses Redis for nullifier storage (Persistence) |
-| `MAX_CLOCK_SKEW_SECS` | `300` | Tolerance for timestamp validation |
+| `MAX_CLOCKS_SKEW_SECS` | `300` | Tolerance for timestamp validation |
 
 ---
 
@@ -156,10 +179,10 @@ Configuration is handled via environment variables. ### Issuer Configuration
 
 ### Guarantees
 
-✅ **Cryptographic Unlinkability**: The issuer creates a blind signature. Even if the issuer and verifier collude, they cannot mathematically link the issuance request to the verification request.
-✅ **Forward Privacy**: Key rotation ensures that if a key is eventually compromised, past sessions remain secure.
-✅ **Replay Protection**: The verifier maintains a nullifier set (in Redis or memory) to prevent double-spending.
-✅ **No Phone-Home**: The system is fully self-contained.
+- ✅ **Cryptographic Unlinkability**: The issuer creates a blind signature. Even if the issuer and verifier collude, they cannot mathematically link the issuance request to the verification request.
+- ✅ **Forward Privacy**: Key rotation ensures that if a key is eventually compromised, past sessions remain secure.
+- ✅ **Replay Protection**: The verifier maintains a nullifier set (in Redis or memory) to prevent double-spending.
+- ✅ **No Phone-Home**: The system is fully self-contained.
 
 ### Not Protected Against
 
@@ -204,14 +227,12 @@ We need help with:
 
 **Apache License 2.0**
 
-Copyright 2025 The Carpocratian Church of Commonality and Equality
-
-Free as in freedom. Free as in Freebird.
+Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
 
 ---
 
 **"Surveillance is not safety. Privacy is not crime. Authorization is not identity."**
 
-Join us in building infrastructure for human dignity.
 
 🕊️
+
