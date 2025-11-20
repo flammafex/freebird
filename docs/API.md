@@ -8,11 +8,11 @@ Complete HTTP API reference for Freebird issuer and verifier services.
 
 1. [Overview](#overview)
 2. [Issuer API](#issuer-api)
-3. [Verifier API](#verifier-api)
-4. [Admin API](#admin-api)
-5. [Error Handling](#error-handling)
-6. [Authentication](#authentication)
-7. [Rate Limiting](#rate-limiting)
+3. [WebAuthn API](#webauthn-api)
+4. [Verifier API](#verifier-api)
+5. [Admin API](#admin-api)
+6. [Error Handling](#error-handling)
+7. [Authentication](#authentication)
 
 ---
 
@@ -67,10 +67,16 @@ curl http://localhost:8081/.well-known/issuer
 
 Issues a single anonymous token via VOPRF evaluation.
 
-**Request (Without Sybil Resistance):**
+**Request (With WebAuthn Proof):**
 ```json
 {
-  "blinded_element_b64": "A1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6..."
+  "blinded_element_b64": "A1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6...",
+  "sybil_proof": {
+    "type": "webauthn",
+    "username": "alice",
+    "auth_proof": "base64url_proof_string_from_auth_finish",
+    "timestamp": 1699454445
+  }
 }
 ```
 
@@ -96,7 +102,7 @@ Issues a single anonymous token via VOPRF evaluation.
   "sybil_info": {
     "required": true,
     "passed": true,
-    "cost": 3600
+    "cost": 0
   }
 }
 ```
@@ -142,6 +148,116 @@ Issues multiple tokens in parallel (1000+ tokens/sec).
 
 ---
 
+## WebAuthn API
+
+Endpoints for hardware-backed registration and authentication. These are available when the `webauthn` feature is enabled.
+
+### Registration
+
+**POST /webauthn/register/start**
+
+Start a new registration ceremony.
+
+**Request:**
+```json
+{
+  "username": "alice",
+  "display_name": "Alice Smith"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "options": { /* WebAuthn PublicKeyCredentialCreationOptions */ },
+  "session_id": "uuid-session-id"
+}
+```
+
+**POST /webauthn/register/finish**
+
+Complete registration and store credential.
+
+**Request:**
+```json
+{
+  "session_id": "uuid-session-id",
+  "credential": { /* WebAuthn RegisterPublicKeyCredential */ }
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "ok": true,
+  "cred_id": "base64url_credential_id",
+  "user_id_hash": "hashed_user_id",
+  "registered_at": 1699454445
+}
+```
+
+### Authentication
+
+**POST /webauthn/authenticate/start**
+
+Start an authentication ceremony.
+
+**Request:**
+```json
+{
+  "username": "alice"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "options": { /* WebAuthn PublicKeyCredentialRequestOptions */ },
+  "session_id": "uuid-session-id"
+}
+```
+
+**POST /webauthn/authenticate/finish**
+
+Complete authentication and receive a proof for token issuance.
+
+**Request:**
+```json
+{
+  "session_id": "uuid-session-id",
+  "credential": { /* WebAuthn PublicKeyCredential */ }
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "ok": true,
+  "cred_id": "base64url_credential_id",
+  "username": "alice",
+  "authenticated_at": 1699454445,
+  "proof": "base64url_proof_string" 
+}
+```
+**Note:** The `proof` string returned here is what you send in the `sybil_proof.auth_proof` field when issuing a token.
+
+### Info
+
+**GET /webauthn/info**
+
+Get Relying Party configuration.
+
+**Response:**
+```json
+{
+  "rp_id": "example.com",
+  "rp_name": "Freebird Service",
+  "origin": "[https://example.com](https://example.com)"
+}
+```
+
+---
+
 ## Verifier API
 
 ### Verify Token
@@ -175,23 +291,11 @@ Verifies a token with expiration checking and replay protection.
 }
 ```
 
-**Failure reasons:**
-- Token expired
-- Token already used (replay)
-- Invalid signature
-- Unknown issuer
-
 ---
 
 ## Admin API
 
 See [Admin API Reference](ADMIN_API.md) for complete documentation.
-
-**Key endpoints:**
-- `GET /admin/stats` - System statistics
-- `POST /admin/invites/grant` - Grant invites
-- `POST /admin/users/ban` - Ban users
-- `POST /admin/keys/rotate` - Rotate keys
 
 **Authentication:** All require `X-Admin-Key` header.
 
@@ -217,56 +321,12 @@ See [Admin API Reference](ADMIN_API.md) for complete documentation.
 - Public: `GET /.well-known/issuer`
 - Optional Sybil proof: `POST /v1/oprf/issue`
 
+**WebAuthn:**
+- Public: Registration/Auth start endpoints
+- Session-bound: Finish endpoints require valid session ID
+
 **Verifier:**
 - All endpoints public (verification is the auth)
 
 **Admin:**
 - All endpoints require `X-Admin-Key` header
-
----
-
-## Rate Limiting
-
-**Recommendation:** Use reverse proxy (nginx, Caddy) for rate limiting.
-
-**Example (nginx):**
-```nginx
-limit_req_zone $binary_remote_addr zone=issue:10m rate=10r/s;
-limit_req_zone $binary_remote_addr zone=verify:10m rate=100r/s;
-```
-
----
-
-## Testing
-
-**Issuer metadata:**
-```bash
-curl http://localhost:8081/.well-known/issuer | jq
-```
-
-**Issue token:**
-```bash
-curl -X POST http://localhost:8081/v1/oprf/issue \
-  -H "Content-Type: application/json" \
-  -d '{"blinded_element_b64": "A3x5Y2z8..."}'
-```
-
-**Verify token:**
-```bash
-curl -X POST http://localhost:8082/v1/verify \
-  -H "Content-Type: application/json" \
-  -d '{"token_b64": "Q9w8x7...", "issuer_id": "issuer:freebird:v1", "exp": 1699454445}'
-```
-
----
-
-## Related Documentation
-
-- [Admin API Reference](ADMIN_API.md) - Complete admin endpoints
-- [How It Works](HOW_IT_WORKS.md) - VOPRF protocol
-- [Configuration](CONFIGURATION.md) - Environment variables
-- [Security Model](SECURITY.md) - Threat model
-
----
-
-**Full API documentation including all request/response formats, error codes, and examples available in the sections above.**

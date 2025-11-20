@@ -9,10 +9,11 @@ Complete reference for all Freebird environment variables and configuration opti
 1. [Issuer Configuration](#issuer-configuration)
 2. [Verifier Configuration](#verifier-configuration)
 3. [Sybil Resistance](#sybil-resistance)
-4. [Invitation System](#invitation-system)
-5. [Key Management](#key-management)
-6. [Admin API](#admin-api)
-7. [Environment-Specific Configs](#environment-specific-configs)
+4. [WebAuthn Configuration](#webauthn-configuration)
+5. [Invitation System](#invitation-system)
+6. [Key Management](#key-management)
+7. [Admin API](#admin-api)
+8. [Environment-Specific Configs](#environment-specific-configs)
 
 ---
 
@@ -107,9 +108,43 @@ export REDIS_URL=redis://localhost:6379
 
 ```bash
 # Sybil resistance mechanism
-# Options: none, invitation, proof_of_work, rate_limit, combined
+# Options: none, invitation, proof_of_work, rate_limit, webauthn, combined
 export SYBIL_RESISTANCE=none
 ```
+
+### WebAuthn Configuration
+
+Required if `SYBIL_RESISTANCE` includes `webauthn`.
+
+```bash
+# Relying Party Identity (Domain name)
+export WEBAUTHN_RP_ID=example.com
+
+# Relying Party Origin (Full URL)
+export WEBAUTHN_RP_ORIGIN=[https://example.com](https://example.com)
+
+# Display Name (Optional)
+export WEBAUTHN_RP_NAME="Freebird Service"
+
+# Storage (Optional - defaults to in-memory if unset)
+export WEBAUTHN_REDIS_URL=redis://localhost:6379
+
+# Security Policies
+export WEBAUTHN_REQUIRE_ATTESTATION=false
+export WEBAUTHN_ATTESTATION_POLICY=none
+export WEBAUTHN_MAX_PROOF_AGE=300
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `WEBAUTHN_RP_ID` | (Required) | Effective domain (e.g., `localhost` or `example.com`) |
+| `WEBAUTHN_RP_ORIGIN` | (Required) | Full origin URL (e.g., `https://example.com`) |
+| `WEBAUTHN_RP_NAME` | `Freebird` | Human-readable name shown in browser prompt |
+| `WEBAUTHN_REDIS_URL` | None | Redis URL for credential persistence |
+| `WEBAUTHN_CRED_TTL_SECS`| None | Credential expiration (seconds) |
+| `WEBAUTHN_REQUIRE_ATTESTATION` | `false` | Enforce hardware attestation checks |
+| `WEBAUTHN_ATTESTATION_POLICY` | `none` | `none` \| `strict` \| `log_only` |
+| `WEBAUTHN_MAX_PROOF_AGE` | `300` | Max age of auth proof in seconds |
 
 ### Invitation System
 
@@ -187,6 +222,7 @@ export SYBIL_RATE_LIMIT_SECS=3600
 export SYBIL_RESISTANCE=combined
 export SYBIL_POW_DIFFICULTY=20
 export SYBIL_RATE_LIMIT_SECS=3600
+# WebAuthn vars...
 ```
 
 **Note:** Current implementation accepts proof satisfying ANY configured mechanism. Future enhancement: require ALL mechanisms.
@@ -229,7 +265,7 @@ export SYBIL_RESISTANCE=none
 
 # Verifier (in-memory)
 export BIND_ADDR=127.0.0.1:8082
-export ISSUER_URL=http://127.0.0.1:8081/.well-known/issuer
+export ISSUER_URL=[http://127.0.0.1:8081/.well-known/issuer](http://127.0.0.1:8081/.well-known/issuer)
 export MAX_CLOCK_SKEW_SECS=300
 ```
 
@@ -249,7 +285,7 @@ export ADMIN_API_KEY=${VAULT_STAGING_ADMIN_KEY}
 
 # Verifier (Redis)
 export BIND_ADDR=0.0.0.0:8082
-export ISSUER_URL=https://issuer-staging.example.com/.well-known/issuer
+export ISSUER_URL=[https://issuer-staging.example.com/.well-known/issuer](https://issuer-staging.example.com/.well-known/issuer)
 export REDIS_URL=redis://redis-staging:6379
 export REFRESH_INTERVAL_MIN=5
 ```
@@ -283,7 +319,7 @@ export ADMIN_API_KEY=${VAULT_ADMIN_API_KEY}
 
 # Verifier (Redis, strict timing)
 export BIND_ADDR=127.0.0.1:8082
-export ISSUER_URL=https://issuer.example.com/.well-known/issuer
+export ISSUER_URL=[https://issuer.example.com/.well-known/issuer](https://issuer.example.com/.well-known/issuer)
 export REDIS_URL=redis://redis.internal:6379
 export REFRESH_INTERVAL_MIN=10
 export MAX_CLOCK_SKEW_SECS=300
@@ -310,7 +346,7 @@ Freebird validates configuration on startup:
 
 ✅ Verifier starting...
    ├─ Bind address: 127.0.0.1:8082
-   ├─ Issuer URL: https://issuer.example.com/.well-known/issuer
+   ├─ Issuer URL: [https://issuer.example.com/.well-known/issuer](https://issuer.example.com/.well-known/issuer)
    ├─ Storage: Redis (redis://redis:6379)
    ├─ Refresh interval: 10 minutes
    └─ Clock skew tolerance: 300 seconds
@@ -341,7 +377,7 @@ export ADMIN_API_KEY=...
 **"Failed to load issuer metadata"**
 ```bash
 # Check issuer URL is accessible
-curl https://issuer.example.com/.well-known/issuer
+curl [https://issuer.example.com/.well-known/issuer](https://issuer.example.com/.well-known/issuer)
 
 # Verify TLS certificate
 openssl s_client -connect issuer.example.com:443
@@ -412,7 +448,12 @@ KID=auto-generated
 KEY_ROTATION_STATE_PATH=key_rotation_state.json
 
 # Sybil
-SYBIL_RESISTANCE=none|invitation|proof_of_work|rate_limit|combined
+SYBIL_RESISTANCE=none|invitation|proof_of_work|rate_limit|webauthn|combined
+
+# WebAuthn (if SYBIL_RESISTANCE=webauthn)
+WEBAUTHN_RP_ID=example.com
+WEBAUTHN_RP_ORIGIN=[https://example.com](https://example.com)
+WEBAUTHN_REDIS_URL=redis://localhost:6379
 
 # Invitation (if SYBIL_RESISTANCE=invitation)
 SYBIL_INVITE_PER_USER=5

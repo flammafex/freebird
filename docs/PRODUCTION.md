@@ -57,7 +57,7 @@ Complete checklist and best practices for deploying Freebird in production.
 │         (nginx, Caddy, or cloud LB)             │
 └─────┬──────────────────────────┬────────────────┘
       │                          │
-      │ /v1/oprf/*              │ /v1/verify
+      │ /v1/oprf/* │ /v1/verify
       ▼                          ▼
 ┌─────────────┐            ┌──────────────┐
 │   Issuer    │            │   Verifier   │
@@ -79,7 +79,75 @@ Complete checklist and best practices for deploying Freebird in production.
 
 ---
 
+## Container Deployment (Docker)
+
+Freebird provides official Docker images for containerized deployments. This is the recommended approach for Kubernetes, ECS, or Docker Swarm.
+
+### Docker Compose (Production Base)
+
+```yaml
+services:
+  issuer:
+    image: freebird/issuer:latest
+    restart: always
+    ports:
+      - "127.0.0.1:8081:8081"  # Bind to localhost, use Nginx for TLS
+    volumes:
+      - ./data/keys:/data/keys           # Persist VOPRF keys
+      - ./data/state:/data/state         # Persist invitations
+    environment:
+      - ISSUER_ID=issuer:prod:v1
+      - BIND_ADDR=0.0.0.0:8081
+      - REQUIRE_TLS=true
+      - BEHIND_PROXY=true
+      - SYBIL_RESISTANCE=invitation
+      - ADMIN_API_KEY=${ADMIN_API_KEY}   # Pass via secrets
+      # Paths inside container
+      - ISSUER_SK_PATH=/data/keys/issuer_sk.bin
+      - KEY_ROTATION_STATE_PATH=/data/keys/key_rotation_state.json
+      - SYBIL_INVITE_PERSISTENCE_PATH=/data/state/invitations.json
+
+  verifier:
+    image: freebird/verifier:latest
+    restart: always
+    ports:
+      - "127.0.0.1:8082:8082"
+    environment:
+      - BIND_ADDR=0.0.0.0:8082
+      - ISSUER_URL=[https://issuer.example.com/.well-known/issuer](https://issuer.example.com/.well-known/issuer)
+      - REDIS_URL=redis://redis.internal:6379
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:alpine
+    restart: always
+    volumes:
+      - ./data/redis:/data
+    command: redis-server --appendonly yes
+```
+
+### Kubernetes Considerations
+
+1.  **Secrets Management:**
+    * Mount the issuer's secret key (`issuer_sk.bin`) via a Kubernetes Secret or Vault sidecar. Do not generate it inside the ephemeral container unless you have a persistent volume.
+    * Pass `ADMIN_API_KEY` as an environment variable from a Secret.
+
+2.  **Networking:**
+    * **Issuer:** Expose publicly via Ingress (TLS termination).
+    * **Verifier:** Can be internal-only if verifying services run in the same cluster. If external clients verify, expose via Ingress.
+    * **Redis:** Keep strictly internal.
+
+3.  **Volume Mounts:**
+    * The Issuer requires a **PersistentVolume (PV)** for:
+        * `/data/keys` (if not using Vault)
+        * `/data/state` (for invitation system)
+
+---
+
 ## Systemd Service Files
+
+If running on bare metal without Docker:
 
 ### Issuer Service
 
@@ -189,14 +257,14 @@ server {
     listen 443 ssl http2;
     server_name issuer.example.com;
 
-    ssl_certificate /etc/letsencrypt/live/issuer.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/issuer.example.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/[issuer.example.com/fullchain.pem](https://issuer.example.com/fullchain.pem);
+    ssl_certificate_key /etc/letsencrypt/live/[issuer.example.com/privkey.pem](https://issuer.example.com/privkey.pem);
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
 
     # Public endpoints
     location /.well-known/issuer {
-        proxy_pass http://127.0.0.1:8081;
+        proxy_pass [http://127.0.0.1:8081](http://127.0.0.1:8081);
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -206,7 +274,7 @@ server {
     location /v1/oprf/issue {
         limit_req zone=issue burst=20 nodelay;
         
-        proxy_pass http://127.0.0.1:8081;
+        proxy_pass [http://127.0.0.1:8081](http://127.0.0.1:8081);
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -220,7 +288,7 @@ server {
         
         limit_req zone=admin burst=10 nodelay;
         
-        proxy_pass http://127.0.0.1:8081;
+        proxy_pass [http://127.0.0.1:8081](http://127.0.0.1:8081);
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -233,15 +301,15 @@ server {
     listen 443 ssl http2;
     server_name verifier.example.com;
 
-    ssl_certificate /etc/letsencrypt/live/verifier.example.com/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/verifier.example.com/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/[verifier.example.com/fullchain.pem](https://verifier.example.com/fullchain.pem);
+    ssl_certificate_key /etc/letsencrypt/live/[verifier.example.com/privkey.pem](https://verifier.example.com/privkey.pem);
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers HIGH:!aNULL:!MD5;
 
     location /v1/verify {
         limit_req zone=verify burst=200 nodelay;
         
-        proxy_pass http://127.0.0.1:8082;
+        proxy_pass [http://127.0.0.1:8082](http://127.0.0.1:8082);
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -308,10 +376,10 @@ verifier.example.com {
 
 ```bash
 # Issuer health
-curl https://issuer.example.com/.well-known/issuer
+curl [https://issuer.example.com/.well-known/issuer](https://issuer.example.com/.well-known/issuer)
 
 # Admin API health
-curl https://issuer.example.com/admin/health \
+curl [https://issuer.example.com/admin/health](https://issuer.example.com/admin/health) \
   -H "X-Admin-Key: ${ADMIN_KEY}"
 
 # Verifier implicit health (attempt verification)
@@ -423,7 +491,7 @@ journalctl -u freebird-issuer -n 100
 systemctl restart freebird-issuer
 
 # 4. Verify
-curl https://issuer.example.com/.well-known/issuer
+curl [https://issuer.example.com/.well-known/issuer](https://issuer.example.com/.well-known/issuer)
 ```
 
 **Data Corruption:**
@@ -445,7 +513,7 @@ jq . /var/lib/freebird/invitations.json
 systemctl start freebird-issuer
 
 # 5. Verify
-curl https://issuer.example.com/admin/stats \
+curl [https://issuer.example.com/admin/stats](https://issuer.example.com/admin/stats) \
   -H "X-Admin-Key: ${ADMIN_KEY}"
 ```
 
