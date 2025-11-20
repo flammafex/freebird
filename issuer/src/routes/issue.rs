@@ -106,8 +106,9 @@ pub fn extract_client_data(
 // / as additional entropy in invitee ID generation. This makes IDs more unique
 // / and resistant to pre-computation attacks.
 pub async fn handle(
-    State(state): State<Arc<AppStateWithSybil>>,
-    voprf: Arc<MultiKeyVoprfCore>,
+    // Change: Extract tuple from State
+    State((state, voprf)): State<(Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>)>,
+    // Remove: voprf: Arc<MultiKeyVoprfCore> (it's now in State)
     connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
     Json(req): Json<IssueReq>,

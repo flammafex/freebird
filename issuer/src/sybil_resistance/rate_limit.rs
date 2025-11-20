@@ -15,9 +15,12 @@
 //! # Example
 //!
 //! ```rust
-//! use sybil_resistance::{RateLimit, SybilProof, SybilResistance};
+//! use issuer::sybil_resistance::{RateLimit, SybilResistance}; // FIX: Correct import path
+//! use common::api::SybilProof;
 //! use std::time::Duration;
+//! use issuer::sybil_resistance::current_timestamp; // FIX: Import helper
 //!
+//! # fn main() -> anyhow::Result<()> { // FIX: Wrap in main for Error handling
 //! // Allow one token per client per hour
 //! let limiter = RateLimit::new(Duration::from_secs(3600));
 //!
@@ -27,9 +30,12 @@
 //! };
 //!
 //! limiter.verify(&proof)?;
+//! # Ok(())
+//! # }
 //! ```
 
-use super::{current_timestamp, verify_timestamp_recent, SybilProof, SybilResistance};
+use super::{current_timestamp, verify_timestamp_recent, SybilResistance}; // Remove SybilProof from here if unused in module logic
+use common::api::SybilProof; // Use shared type
 use anyhow::{anyhow, Result};
 use base64ct::Encoding;
 use std::collections::HashMap;

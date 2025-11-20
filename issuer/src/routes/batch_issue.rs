@@ -162,12 +162,13 @@ async fn evaluate_token(voprf: &MultiKeyVoprfCore, blinded_b64: &str, exp: i64) 
 // / ```
 #[instrument(skip(state, voprf, headers), fields(batch_size = req.blinded_elements.len()))]
 pub async fn handle_batch(
-    State(state): State<Arc<AppStateWithSybil>>,
-    voprf: Arc<MultiKeyVoprfCore>,
+    // Change: Extract tuple from State
+    State((state, voprf)): State<(Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>)>,
+    // Remove: voprf: Arc<MultiKeyVoprfCore>
     connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
     Json(req): Json<BatchIssueReq>,
-) -> Result<Json<BatchIssueResp>, (StatusCode, String)> {
+) -> Result<Json<BatchIssueResp>, (StatusCode, String)> { 
     let start = Instant::now();
     let batch_size = req.blinded_elements.len();
 
@@ -209,7 +210,7 @@ pub async fn handle_batch(
 
     // --- SYBIL RESISTANCE CHECK ---
     let sybil_start = Instant::now();
-    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
+    let _client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
 
     let sybil_info = match (&state.sybil_checker, &req.sybil_proof) {
         // Case 1: Sybil configured + proof provided → VERIFY

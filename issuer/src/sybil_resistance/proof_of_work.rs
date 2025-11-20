@@ -1,33 +1,32 @@
 // issuer/src/sybil_resistance/proof_of_work.rs
 //! Proof-of-Work Sybil resistance
 //!
-//! Requires clients to compute a hash with N leading zero bits.
-//! This makes obtaining tokens computationally expensive, limiting
-//! the rate at which an attacker can acquire them.
-//!
-//! # Properties
-//!
-//! - ✓ No identity required
-//! - ✓ Scalable cost (adjust difficulty)
-//! - ✗ Favors wealthy (better hardware)
-//! - ✗ Energy wasteful
-//! - ✗ Not true Sybil resistance (just expensive)
+//! ...
 //!
 //! # Example
 //!
 //! ```rust
-//! use sybil_resistance::{ProofOfWork, SybilProof, SybilResistance};
+//! use issuer::sybil_resistance::{ProofOfWork, SybilResistance};
+//! use common::api::SybilProof;
+//!
+//! # fn main() -> anyhow::Result<()> {
+//! let difficulty = 1; // Low difficulty for test
+//! let input = "test_input";
+//! let timestamp = issuer::sybil_resistance::current_timestamp();
 //!
 //! // Client side: compute proof
 //! let (nonce, hash) = ProofOfWork::compute(difficulty, &input, timestamp)?;
-//! let proof = SybilProof::ProofOfWork { nonce, input, timestamp };
+//! let proof = SybilProof::ProofOfWork { nonce, input: input.to_string(), timestamp };
 //!
 //! // Server side: verify
 //! let checker = ProofOfWork::new(difficulty);
 //! checker.verify(&proof)?;
+//! # Ok(())
+//! # }
 //! ```
 
-use super::{verify_timestamp_recent, SybilProof, SybilResistance};
+use super::{verify_timestamp_recent, SybilResistance};
+use common::api::SybilProof; // Use shared type
 use anyhow::{anyhow, Result};
 use sha2::{Digest, Sha256};
 

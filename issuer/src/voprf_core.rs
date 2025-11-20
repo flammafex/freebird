@@ -4,7 +4,7 @@ use anyhow::{anyhow, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use tracing::{debug, error};
 use zeroize::{Zeroize, ZeroizeOnDrop};
-use crypto::vendor::voprf_p256::oprf::Server;
+use crypto::voprf::core::Server;
 
 // Ensure IssuerSecret is defined if not imported
 #[derive(Zeroize, ZeroizeOnDrop)]

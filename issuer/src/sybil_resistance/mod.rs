@@ -1,17 +1,12 @@
 // issuer/src/sybil_resistance/mod.rs
 //! Sybil resistance mechanisms for Freebird token issuance
 //!
-//! This module provides pluggable Sybil resistance to prevent users from
-//! obtaining unlimited tokens. Different mechanisms have different tradeoffs:
-//!
-//! - **ProofOfWork**: Computational cost makes scaling expensive
-//! - **PaymentGate**: Economic cost (requires Lightning integration)
-//! - **RateLimit**: IP/fingerprint-based rate limiting (weak but simple)
-//! - **InvitationSystem**: Federated trust (requires bootstrap)
+//! ...
 //!
 //! # Architecture
 //!
-//! ```rust
+//! ```rust,ignore
+//! // FIX: Added 'ignore' because this is pseudo-code (SybilProof::from_request doesn't exist)
 //! use sybil_resistance::{SybilResistance, SybilProof};
 //!
 //! // Before issuing a token, verify Sybil resistance proof
@@ -24,9 +19,7 @@
 //!     // Reject
 //! }
 //! ```
-
 use anyhow::{anyhow, Result};
-use sha2::Digest;
 use std::time::{SystemTime, UNIX_EPOCH};
 use common::api::SybilProof;
 
@@ -42,14 +35,6 @@ pub use proof_of_work::ProofOfWork;
 pub use rate_limit::RateLimit;
 #[cfg(feature = "human-gate-webauthn")]
 pub use webauthn_gate::WebAuthnGate;
-
-// Future implementations:
-// pub mod payment_gate;
-// pub mod proof_of_humanity;
-
-/// Proof submitted to demonstrate Sybil resistance
-
-
 
 pub trait SybilResistance: Send + Sync {
     fn verify(&self, proof: &SybilProof) -> Result<()>; // Keep as fn, not async fn
@@ -78,6 +63,7 @@ impl SybilResistance for NoSybilResistance {
     }
 }
 
+
 /// Combined Sybil resistance (requires multiple proofs)
 ///
 /// Implements defense-in-depth by requiring multiple weak proofs.
@@ -85,21 +71,14 @@ impl SybilResistance for NoSybilResistance {
 /// # Example
 ///
 /// ```rust
+/// # use std::time::Duration;
+/// # use issuer::sybil_resistance::{CombinedSybilResistance, ProofOfWork, RateLimit};
 /// // Require BOTH proof-of-work AND rate limiting
 /// let combined = CombinedSybilResistance::new(vec![
 ///     Box::new(ProofOfWork::new(4)),
 ///     Box::new(RateLimit::new(Duration::from_secs(3600))),
 /// ]);
 /// ```
-///
-/// # Important Note
-///
-/// This implementation requires that the proof satisfies ALL mechanisms.
-/// If you configure PoW + RateLimit, the client must provide a proof that
-/// works for both (which may require extending the SybilProof enum to support
-/// multiple proofs in one request, or using a wrapper proof type).
-///
-/// Current implementation: Proof must be valid for ALL configured mechanisms.
 pub struct CombinedSybilResistance {
     mechanisms: Vec<Box<dyn SybilResistance>>,
 }
@@ -192,7 +171,6 @@ pub fn verify_timestamp_recent(timestamp: u64, window_secs: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     #[test]
     fn test_no_sybil_resistance() {

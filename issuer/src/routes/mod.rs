@@ -2,6 +2,8 @@
 pub mod admin;
 pub mod batch_issue;
 pub mod issue;
+pub mod metadata;
+
 #[cfg(feature = "human-gate-webauthn")]
 pub mod webauthn;
 #[cfg(feature = "human-gate-webauthn")]

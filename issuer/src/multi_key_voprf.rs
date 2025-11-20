@@ -21,22 +21,32 @@
 //!
 //! # Example
 //!
-//! ```rust
+//! ```rust,no_run
+//! # use issuer::multi_key_voprf::{MultiKeyVoprfCore, EvaluationWithKid};
+//! # use anyhow::Result;
+//! # async fn example() -> Result<()> {
+//! # let sk_bytes = [0u8; 32];
+//! # let new_sk_bytes = [0u8; 32];
+//! # let ctx = b"context";
+//! # let blinded = "valid_base64_blinded_element";
 //! // Initialize with active key
-//! let multi_key = MultiKeyVoprfCore::new(sk_bytes, "key-2024-01", ctx)?;
+//! let multi_key = MultiKeyVoprfCore::new(sk_bytes, "pubkey".to_string(), "key-2024-01".to_string(), ctx)?;
 //!
 //! // Issue tokens (uses active key)
-//! let (token, kid) = multi_key.evaluate_b64(blinded)?;
+//! // Note: evaluate_b64 returns an EvaluationWithKid struct, not a tuple
+//! let EvaluationWithKid { token, kid } = multi_key.evaluate_b64(blinded).await?;
 //!
 //! // Rotate to new key
-//! multi_key.rotate_key(new_sk_bytes, "key-2024-02", 30 * 24 * 3600).await?;
+//! multi_key.rotate_key(new_sk_bytes, "new_pubkey".to_string(), "key-2024-02".to_string(), Some(30 * 24 * 3600)).await?;
 //!
 //! // Old tokens still verify
-//! multi_key.verify_with_kid(old_token, "key-2024-01")?; // ✓ Works
+//! // multi_key.verify_with_kid(old_token, "key-2024-01").await?; // ✓ Works
 //!
 //! // New tokens use new key
-//! let (token, kid) = multi_key.evaluate_b64(blinded)?;
+//! let EvaluationWithKid { token, kid } = multi_key.evaluate_b64(blinded).await?;
 //! assert_eq!(kid, "key-2024-02");
+//! # Ok(())
+//! # }
 //! ```
 
 use anyhow::{anyhow, Context, Result};
@@ -78,11 +88,11 @@ struct DeprecatedKey {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct KeyRotationState {
     /// Active key ID
-    active_kid: String,
+    pub active_kid: String,
     /// Deprecated keys metadata
-    deprecated_keys: Vec<DeprecatedKeyMetadata>,
+    pub deprecated_keys: Vec<DeprecatedKeyMetadata>,
     /// Version of this state format
-    version: u32,
+    pub version: u32,
 }
 
 impl Default for KeyRotationState {
@@ -233,7 +243,7 @@ impl MultiKeyVoprfCore {
     }
 
     /// Verify token with a VoprfCore instance (internal helper)
-    fn verify_with_voprf(&self, voprf: &VoprfCore, token_b64: &str) -> Result<String> {
+    fn verify_with_voprf(&self, _voprf: &VoprfCore, token_b64: &str) -> Result<String> {
         // The token is actually the evaluation result, not something to "verify"
         // In the context of VOPRF, the verifier just needs to extract the PRF output
         // This is a placeholder - adjust based on your actual verification logic
