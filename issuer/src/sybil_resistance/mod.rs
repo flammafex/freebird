@@ -26,9 +26,9 @@
 //! ```
 
 use anyhow::{anyhow, Result};
-use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::time::{SystemTime, UNIX_EPOCH};
+use common::api::SybilProof;
 
 pub mod invitation;
 pub mod proof_of_work;
@@ -48,71 +48,8 @@ pub use webauthn_gate::WebAuthnGate;
 // pub mod proof_of_humanity;
 
 /// Proof submitted to demonstrate Sybil resistance
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum SybilProof {
-    /// Proof-of-work: Client computed hash with N leading zeros
-    ProofOfWork {
-        /// Nonce that produces valid hash
-        nonce: u64,
-        /// Client's input (for verification)
-        input: String,
-        /// Timestamp (prevents pre-computation)
-        timestamp: u64,
-    },
 
-    /// Rate limit: Client asserts they haven't requested recently
-    /// (Verifier must track state)
-    RateLimit {
-        /// Client identifier (could be fingerprint, IP hash, etc.)
-        client_id: String,
-        /// Timestamp of request
-        timestamp: u64,
-    },
 
-    /// Payment: Client paid for this token
-    /// (Requires Lightning/crypto integration)
-    #[allow(dead_code)]
-    Payment {
-        /// Payment proof (invoice, preimage, etc.)
-        proof: String,
-        /// Amount paid
-        amount_sats: u64,
-    },
-
-    /// Invitation: Client was invited by existing user
-    /// (inviter_id is tracked server-side, not in the proof)
-    Invitation {
-        /// Invitation code
-        code: String,
-        /// Signature from issuer (proves authenticity)
-        signature: String,
-    },
-
-    /// WebAuthn: Client authenticated with registered passkey/security key
-    /// NEW VARIANT - Add this to the existing enum
-    #[cfg(feature = "human-gate-webauthn")]
-    WebAuthn {
-        /// Username that authenticated
-        username: String,
-        /// Authentication proof from /webauthn/authenticate/finish
-        auth_proof: String,
-        /// Timestamp of authentication (Unix seconds)
-        timestamp: i64,
-    },
-
-    /// Proof of Humanity: External system verified uniqueness
-    #[allow(dead_code)]
-    ProofOfHumanity {
-        /// Provider (e.g., "worldcoin", "brightid")
-        provider: String,
-        /// Proof payload (provider-specific)
-        proof: String,
-    },
-
-    /// No proof (for testing or permissive contexts)
-    None,
-}
 
 pub trait SybilResistance: Send + Sync {
     fn verify(&self, proof: &SybilProof) -> Result<()>; // Keep as fn, not async fn

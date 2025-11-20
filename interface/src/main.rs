@@ -2,36 +2,12 @@
 // Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
 use anyhow::{anyhow, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
+use common::api::{IssueReq, IssueResp, VerifyReq, VerifyResp}; // <--- IMPORT SHARED TYPES
 use crypto::vendor::voprf_p256::oprf::Client;
 use rand::RngCore;
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-
-#[derive(Serialize)]
-struct IssueReq {
-    blinded_element_b64: String,
-}
-
-#[derive(Deserialize)]
-struct IssueResp {
-    token: String,
-    kid: String,
-    exp: i64, // Expiration timestamp from issuer
-}
-
-#[derive(Serialize)]
-struct VerifyReq {
-    token_b64: String,
-    issuer_id: String,
-    exp: i64, // NEW: Include expiration for validation
-}
-
-#[derive(Deserialize)]
-struct VerifyResp {
-    ok: bool,
-    verified_at: i64,
-}
 
 #[derive(Serialize, Deserialize)]
 struct SavedToken {
@@ -350,6 +326,8 @@ async fn issue_token(
         .post(format!("{issuer_url}/v1/oprf/issue"))
         .json(&IssueReq {
             blinded_element_b64: blinded_b64,
+            ctx_b64: None,      // <--- Initialize new field
+            sybil_proof: None,  // <--- Initialize new field
         })
         .send()
         .await?
@@ -399,7 +377,7 @@ async fn verify_token(
         .json(&VerifyReq {
             token_b64: token_b64.to_string(),
             issuer_id: issuer_id.to_string(),
-            exp, // Include expiration for validation
+            exp: Some(exp), // Include expiration for validation
         })
         .send()
         .await?;

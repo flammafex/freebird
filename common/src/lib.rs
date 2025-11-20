@@ -9,6 +9,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+pub mod api;
 pub mod logging {
     use std::sync::Once;
     use tracing::level_filters::LevelFilter;

@@ -15,80 +15,29 @@ use axum::{
     Json,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
-use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tracing::{debug, error, info, warn};
 
 use crate::multi_key_voprf::MultiKeyVoprfCore;
-use crate::sybil_resistance::{ClientData, SybilProof};
+use common::api::{IssueReq, IssueResp, SybilInfo};
+use crate::sybil_resistance::ClientData; // Keep ClientData local to issuer/sybil if not in common
 use crate::AppStateWithSybil;
 
-/// Universal issue request supporting both protected and unprotected modes
-#[derive(Deserialize, Debug)]
-pub struct IssueReq {
-    /// Blinded element for VOPRF
-    #[serde(alias = "blinded")]
-    pub blinded_element_b64: String,
 
-    /// Optional context (currently unused but reserved)
-    #[serde(default)]
-    pub ctx_b64: Option<String>,
-
-    /// Optional Sybil resistance proof
-    /// - If provided with configured Sybil resistance: verified
-    /// - If provided without configured Sybil resistance: ignored with warning
-    /// - If not provided but Sybil resistance required: rejected
-    #[serde(default)]
-    pub sybil_proof: Option<SybilProof>,
-}
-
-/// Issue response with optional Sybil information
-#[derive(Serialize)]
-pub struct IssueResp {
-    /// Base64url-encoded evaluation token
-    pub token: String,
-
-    /// DLEQ proof (currently empty, reserved for future use)
-    pub proof: String,
-
-    /// Key identifier
-    pub kid: String,
-
-    /// Expiration timestamp (Unix seconds)
-    pub exp: i64,
-
-    /// Optional Sybil resistance information
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sybil_info: Option<SybilInfo>,
-}
-
-/// Information about Sybil resistance verification
-#[derive(Serialize, Debug)]
-pub struct SybilInfo {
-    /// Was Sybil resistance required?
-    pub required: bool,
-
-    /// Did the proof pass verification?
-    pub passed: bool,
-
-    /// Computational cost (for PoW) or time cost (for rate limiting)
-    pub cost: u64,
-}
-
-/// Extract client information from HTTP request
-///
-/// This attempts to get the real client IP address, accounting for proxies.
-/// In the future, this can be extended to include browser fingerprinting.
-///
-/// # Arguments
-///
-/// * `connect_info` - Direct socket connection info
-/// * `behind_proxy` - Whether the server is behind a reverse proxy
-/// * `headers` - HTTP headers (for X-Forwarded-For, User-Agent, etc.)
-///
-/// # Returns
-///
-/// ClientData with available client information for entropy
+// / Extract client information from HTTP request
+// /
+// / This attempts to get the real client IP address, accounting for proxies.
+// / In the future, this can be extended to include browser fingerprinting.
+// /
+// / # Arguments
+// /
+// / * `connect_info` - Direct socket connection info
+// / * `behind_proxy` - Whether the server is behind a reverse proxy
+// / * `headers` - HTTP headers (for X-Forwarded-For, User-Agent, etc.)
+// /
+// / # Returns
+// /
+// / ClientData with available client information for entropy
 pub fn extract_client_data(
     connect_info: Option<ConnectInfo<SocketAddr>>,
     behind_proxy: bool,
@@ -138,24 +87,24 @@ pub fn extract_client_data(
     }
 }
 
-/// Unified handler supporting both protected and unprotected issuance
-///
-/// # Behavior Matrix
-///
-/// | Sybil Config | Proof Provided | Result |
-/// |--------------|----------------|--------|
-/// | None         | None           | ✅ Issue (backward compatible) |
-/// | None         | Some           | ⚠️ Issue + warn (proof ignored) |
-/// | Some         | None           | ❌ Reject (proof required) |
-/// | Some         | Some (valid)   | ✅ Issue (after verification) |
-/// | Some         | Some (invalid) | ❌ Reject (failed verification) |
-///
-/// # Client Data Extraction
-///
-/// When invitation-based Sybil resistance is used, this handler attempts to
-/// extract client-specific information (IP address, User-Agent hash) to include
-/// as additional entropy in invitee ID generation. This makes IDs more unique
-/// and resistant to pre-computation attacks.
+// / Unified handler supporting both protected and unprotected issuance
+// /
+// / # Behavior Matrix
+// /
+// / | Sybil Config | Proof Provided | Result |
+// / |--------------|----------------|--------|
+// / | None         | None           | ✅ Issue (backward compatible) |
+// / | None         | Some           | ⚠️ Issue + warn (proof ignored) |
+// / | Some         | None           | ❌ Reject (proof required) |
+// / | Some         | Some (valid)   | ✅ Issue (after verification) |
+// / | Some         | Some (invalid) | ❌ Reject (failed verification) |
+// /
+// / # Client Data Extraction
+// /
+// / When invitation-based Sybil resistance is used, this handler attempts to
+// / extract client-specific information (IP address, User-Agent hash) to include
+// / as additional entropy in invitee ID generation. This makes IDs more unique
+// / and resistant to pre-computation attacks.
 pub async fn handle(
     State(state): State<Arc<AppStateWithSybil>>,
     voprf: Arc<MultiKeyVoprfCore>,

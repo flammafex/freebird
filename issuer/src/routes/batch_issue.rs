@@ -26,7 +26,6 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
-
 use axum::{
     extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
@@ -34,113 +33,27 @@ use axum::{
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tracing::{debug, error, info, instrument, warn};
-
 use crate::multi_key_voprf::MultiKeyVoprfCore;
-pub use crate::routes::issue::extract_client_data;
-use crate::routes::issue::SybilInfo;
-use crate::sybil_resistance::SybilProof;
+use common::api::{BatchIssueReq, BatchIssueResp, TokenResult, SybilInfo};
+use crate::routes::issue::extract_client_data;
 use crate::AppStateWithSybil;
-/// Maximum batch size to prevent memory exhaustion
-///
-/// Rationale:
-/// - Each token: ~33 bytes input + 130 bytes output = ~163 bytes
-/// - 10k tokens: ~1.6MB memory
-/// - Plus intermediate allocations: ~5MB total
-/// - Safe limit for most deployments
+// / Maximum batch size to prevent memory exhaustion
+// /
+// / Rationale:
+// / - Each token: ~33 bytes input + 130 bytes output = ~163 bytes
+// / - 10k tokens: ~1.6MB memory
+// / - Plus intermediate allocations: ~5MB total
+// / - Safe limit for most deployments
 pub const MAX_BATCH_SIZE: usize = 10_000;
 
-/// Minimum batch size for parallel processing
-///
-/// Below this threshold, overhead of parallelization exceeds benefits
+// / Minimum batch size for parallel processing
+// /
+// / Below this threshold, overhead of parallelization exceeds benefits
 pub const MIN_PARALLEL_BATCH_SIZE: usize = 10;
 
-/// Batch issue request
-///
-/// # Design Decisions
-///
-/// - Single Sybil proof for entire batch (not per-token)
-///   - Rationale: Reduces verification overhead, reasonable for trusted clients
-///   - Alternative: Per-token proofs for untrusted scenarios (future enhancement)
-///
-/// - Optional context applies to all tokens
-///   - Rationale: Simplifies API, matches common use case
-///   - Alternative: Per-token context (adds complexity)
-#[derive(Deserialize, Debug)]
-pub struct BatchIssueReq {
-    /// Array of base64url-encoded blinded elements
-    ///
-    /// Each must be exactly 33 bytes (SEC1 compressed point) when decoded
-    pub blinded_elements: Vec<String>,
-
-    /// Optional context for all tokens (currently unused but reserved)
-    #[serde(default)]
-    pub ctx_b64: Option<String>,
-
-    /// Optional Sybil resistance proof
-    ///
-    /// If provided, it applies to the entire batch.
-    /// This is more efficient than per-token proofs and suitable for
-    /// trusted client scenarios (e.g., mobile app requesting tokens for offline use).
-    #[serde(default)]
-    pub sybil_proof: Option<SybilProof>,
-}
-
-/// Single token result (success or failure)
-#[derive(Serialize, Debug)]
-#[serde(tag = "status", rename_all = "lowercase")]
-pub enum TokenResult {
-    /// Successfully issued token
-    Success {
-        /// Base64url-encoded evaluation token
-        token: String,
-
-        /// DLEQ proof (currently empty, reserved for future use)
-        proof: String,
-
-        /// Key identifier
-        kid: String,
-
-        /// Expiration timestamp (Unix seconds)
-        exp: i64,
-    },
-
-    /// Failed to issue token
-    Error {
-        /// Error message
-        message: String,
-
-        /// Error code for programmatic handling
-        code: String,
-    },
-}
-
-/// Batch issue response
-#[derive(Serialize)]
-pub struct BatchIssueResp {
-    /// Array of token results (same order as request)
-    pub results: Vec<TokenResult>,
-
-    /// Number of successful tokens
-    pub successful: usize,
-
-    /// Number of failed tokens
-    pub failed: usize,
-
-    /// Processing time in milliseconds
-    pub processing_time_ms: u64,
-
-    /// Tokens per second throughput
-    pub throughput: f64,
-
-    /// Optional Sybil resistance information
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sybil_info: Option<SybilInfo>,
-}
-
-/// Performance metrics for batch processing
+// / Performance metrics for batch processing
 #[derive(Debug)]
 struct BatchMetrics {
     total_time_ms: u64,
@@ -166,15 +79,15 @@ impl BatchMetrics {
     }
 }
 
-/// Validate and decode a single blinded element
-///
-/// This is called in parallel for each token, so it must be thread-safe.
-///
-/// # Performance
-///
-/// - Base64 decoding: ~100ns per token
-/// - Length validation: ~10ns
-/// - Total: ~110ns per token (negligible)
+// / Validate and decode a single blinded element
+// /
+// / This is called in parallel for each token, so it must be thread-safe.
+// /
+// / # Performance
+// /
+// / - Base64 decoding: ~100ns per token
+// / - Length validation: ~10ns
+// / - Total: ~110ns per token (negligible)
 fn validate_blinded_element(blinded_b64: &str) -> Result<Vec<u8>, String> {
     // Decode base64
     let blinded =
@@ -191,20 +104,20 @@ fn validate_blinded_element(blinded_b64: &str) -> Result<Vec<u8>, String> {
     Ok(blinded)
 }
 
-/// Perform VOPRF evaluation with proper error handling
-///
-/// # Performance
-///
-/// This is the critical hot path. P-256 scalar multiplication is the bottleneck:
-/// - Single evaluation: ~200µs (5000 ops/sec per core)
-/// - With 8 cores: ~40,000 ops/sec theoretical maximum
-/// - Actual: ~30,000 ops/sec with overhead
-///
-/// # Optimization Opportunities
-///
-/// 1. SIMD: Batch point operations (requires custom implementation)
-/// 2. GPU: Offload to GPU for large batches (>10k tokens)
-/// 3. Hardware crypto: Use CPU crypto extensions (AES-NI, SHA-NI)
+// / Perform VOPRF evaluation with proper error handling
+// /
+// / # Performance
+// /
+// / This is the critical hot path. P-256 scalar multiplication is the bottleneck:
+// / - Single evaluation: ~200µs (5000 ops/sec per core)
+// / - With 8 cores: ~40,000 ops/sec theoretical maximum
+// / - Actual: ~30,000 ops/sec with overhead
+// /
+// / # Optimization Opportunities
+// /
+// / 1. SIMD: Batch point operations (requires custom implementation)
+// / 2. GPU: Offload to GPU for large batches (>10k tokens)
+// / 3. Hardware crypto: Use CPU crypto extensions (AES-NI, SHA-NI)
 async fn evaluate_token(voprf: &MultiKeyVoprfCore, blinded_b64: &str, exp: i64) -> TokenResult {
     match voprf.evaluate_b64(blinded_b64).await {
         Ok(eval_result) => TokenResult::Success {
@@ -220,33 +133,33 @@ async fn evaluate_token(voprf: &MultiKeyVoprfCore, blinded_b64: &str, exp: i64) 
     }
 }
 
-/// Main batch issuance handler
-///
-/// # Performance Strategy
-///
-/// 1. **Fast-path validation**: Reject bad requests early
-/// 2. **Single Sybil check**: One proof for entire batch
-/// 3. **Parallel VOPRF**: Use rayon for CPU-bound crypto operations
-/// 4. **Minimal allocations**: Pre-allocate result vectors
-/// 5. **Async-aware**: Properly integrate with tokio runtime
-///
-/// # Error Handling Philosophy
-///
-/// - **Partial success**: Return all results, even if some fail
-/// - **Fail-fast**: Reject entire batch if Sybil check fails (DDoS protection)
-/// - **Detailed errors**: Include error codes for each failed token
-///
-/// # Concurrency Model
-///
-/// ```text
-/// Tokio Runtime (async I/O)
-///       ↓
-/// Handler (validates request, checks Sybil)
-///       ↓
-/// Rayon Threadpool (parallel VOPRF)
-///       ↓
-/// Results aggregation
-/// ```
+// / Main batch issuance handler
+// /
+// / # Performance Strategy
+// /
+// / 1. **Fast-path validation**: Reject bad requests early
+// / 2. **Single Sybil check**: One proof for entire batch
+// / 3. **Parallel VOPRF**: Use rayon for CPU-bound crypto operations
+// / 4. **Minimal allocations**: Pre-allocate result vectors
+// / 5. **Async-aware**: Properly integrate with tokio runtime
+// /
+// / # Error Handling Philosophy
+// /
+// / - **Partial success**: Return all results, even if some fail
+// / - **Fail-fast**: Reject entire batch if Sybil check fails (DDoS protection)
+// / - **Detailed errors**: Include error codes for each failed token
+// /
+// / # Concurrency Model
+// /
+// / ```text
+// / Tokio Runtime (async I/O)
+// /       ↓
+// / Handler (validates request, checks Sybil)
+// /       ↓
+// / Rayon Threadpool (parallel VOPRF)
+// /       ↓
+// / Results aggregation
+// / ```
 #[instrument(skip(state, voprf, headers), fields(batch_size = req.blinded_elements.len()))]
 pub async fn handle_batch(
     State(state): State<Arc<AppStateWithSybil>>,

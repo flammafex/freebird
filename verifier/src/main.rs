@@ -9,11 +9,11 @@ use axum::{
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use common::logging;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
 use tokio::{net::TcpListener, sync::RwLock, time::sleep};
 use tracing::{debug, error, info, warn};
-
+use common::api::{VerifyReq, VerifyResp};
 mod store;
 use store::{SpendStore, StoreBackend};
 
@@ -45,22 +45,6 @@ struct IssuerInfo {
     kid: String,
     ctx: Vec<u8>,
     exp_sec: u64,
-}
-
-#[derive(Deserialize, Debug)]
-struct VerifyRequest {
-    token_b64: String,
-    issuer_id: String,
-    /// Optional: Token expiration time (Unix timestamp)
-    /// If not provided, uses default from issuer metadata
-    #[serde(default)]
-    exp: Option<i64>,
-}
-
-#[derive(Serialize)]
-struct VerifyResponse {
-    ok: bool,
-    verified_at: i64,
 }
 
 #[tokio::main]
@@ -166,8 +150,8 @@ async fn refresh_issuer_metadata(state: &Arc<AppState>, issuer_url: &str) -> any
 // Wrapper to catch and log JSON deserialization errors
 async fn verify_with_logging(
     state: State<Arc<AppState>>,
-    result: Result<Json<VerifyRequest>, JsonRejection>,
-) -> Result<Json<VerifyResponse>, (StatusCode, String)> {
+    result: Result<Json<VerifyReq>, JsonRejection>,
+) -> Result<Json<VerifyResp>, (StatusCode, String)> {
     info!("📥 /v1/verify request received");
 
     match result {
@@ -189,8 +173,8 @@ async fn verify_with_logging(
 // ---------- Verification handler with expiration checking ----------
 async fn verify(
     State(st): State<Arc<AppState>>,
-    Json(req): Json<VerifyRequest>,
-) -> Result<Json<VerifyResponse>, (StatusCode, String)> {
+    Json(req): Json<VerifyReq>,
+) -> Result<Json<VerifyResp>, (StatusCode, String)> {
     info!("🔍 Starting verification for issuer={}", req.issuer_id);
 
     // 1) Lookup issuer
@@ -287,8 +271,9 @@ async fn verify(
         &null_key[..16]
     );
 
-    Ok(Json(VerifyResponse {
+    Ok(Json(VerifyResp {
         ok: true,
+        error: None,
         verified_at: now,
     }))
 }

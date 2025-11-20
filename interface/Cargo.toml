@@ -7,6 +7,7 @@ edition = "2021"
 anyhow = "1"
 base64ct = { version = "1.8", default-features = false }
 crypto = { path = "../crypto", features = ["voprf-p256"] }
+common = { path = "../common" } # <--- ADD THIS
 rand = "0.8"
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
