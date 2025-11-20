@@ -62,7 +62,8 @@ fn challenge_scalar(
     }
 
     let digest = hasher.finalize();
-    Scalar::reduce_bytes(FieldBytes::from_slice(&digest))
+    // Fix: Pass the digest directly. Both are GenericArray<u8, U32>.
+    Scalar::reduce_bytes(&digest)
 }
 
 /// Create a DLEQ proof that 'y = k·G' and 'b = k·a' for the same 'k'.
@@ -128,8 +129,9 @@ pub fn encode_proof(proof: &DleqProof) -> [u8; 64] {
 
 /// Deserialize proof from bytes.
 pub fn decode_proof(bytes: &[u8; 64]) -> DleqProof {
-    let c = Scalar::reduce_bytes(FieldBytes::from_slice(&bytes[..32]));
-    let s = Scalar::reduce_bytes(FieldBytes::from_slice(&bytes[32..]));
+    // Fix: Use clone_from_slice to avoid deprecated from_slice for references
+    let c = Scalar::reduce_bytes(&FieldBytes::clone_from_slice(&bytes[..32]));
+    let s = Scalar::reduce_bytes(&FieldBytes::clone_from_slice(&bytes[32..]));
     DleqProof { c, s }
 }
 

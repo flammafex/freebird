@@ -25,9 +25,5 @@ base64ct       = { version = "1.8", features = ["alloc"] }
 generic-array  = "0.14"
 zeroize        = "1"
 
-# NOTE: The external voprf crate is NOT used. We use our custom P-256 implementation.
-# If you need Ristretto255 VOPRF, create a separate feature flag and wrapper.
-
-[patch.crates-io]
-# Enforce a single generic-array version to prevent trait-bound conflicts
-generic-array = "0.14.9"
+[dev-dependencies]
+proptest = "1.4"  # <--- Add this line

@@ -3,7 +3,7 @@
 use anyhow::{anyhow, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use common::api::{IssueReq, IssueResp, VerifyReq, VerifyResp}; // <--- IMPORT SHARED TYPES
-use crypto::vendor::voprf_p256::oprf::Client;
+use crypto::voprf::core::Client;
 use rand::RngCore;
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
