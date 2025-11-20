@@ -23,8 +23,9 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
-use webauthn_rs::prelude::*;
+use webauthn_rs::prelude::Passkey;
 
+// --- Types ---
 /// Serializable credential data for storage
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredCredential {
@@ -40,36 +41,59 @@ pub struct StoredCredential {
     pub last_used_at: Option<i64>,
 }
 
-/// Redis-backed credential store
+// --- Abstraction ---
+
+/// Unified wrapper for storage backends
+#[derive(Clone)]
+pub enum CredentialStore {
+    Redis(RedisCredStore),
+    InMemory(InMemoryCredStore),
+}
+
+impl CredentialStore {
+    pub async fn save(&self, cred_id: Vec<u8>, credential: Passkey, user_id_hash: String) -> Result<()> {
+        match self {
+            Self::Redis(s) => s.save(cred_id, credential, user_id_hash).await,
+            Self::InMemory(s) => s.save(cred_id, credential, user_id_hash).await,
+        }
+    }
+
+    pub async fn load(&self, cred_id: &[u8]) -> Result<Option<StoredCredential>> {
+        match self {
+            Self::Redis(s) => s.load(cred_id).await,
+            Self::InMemory(s) => s.load(cred_id).await,
+        }
+    }
+
+    pub async fn load_user_credentials(&self, user_id_hash: &str) -> Result<Vec<StoredCredential>> {
+        match self {
+            Self::Redis(s) => s.load_user_credentials(user_id_hash).await,
+            Self::InMemory(s) => s.load_user_credentials(user_id_hash).await,
+        }
+    }
+
+    pub async fn update_last_used(&self, cred_id: &[u8]) -> Result<()> {
+        match self {
+            Self::Redis(s) => s.update_last_used(cred_id).await,
+            Self::InMemory(s) => s.update_last_used(cred_id).await,
+        }
+    }
+}
+
+// --- Redis Backend ---
+
 #[derive(Clone)]
 pub struct RedisCredStore {
     client: redis::Client,
-    /// Optional TTL for credentials (in seconds)
-    /// None = no expiration
     credential_ttl: Option<u64>,
 }
 
+
 impl RedisCredStore {
-    /// Create a new Redis credential store
-    ///
-    /// # Arguments
-    ///
-    /// * `redis_url` - Redis connection URL (redis://host:port or rediss://host:port)
-    /// * `credential_ttl` - Optional TTL in seconds for credential expiration
     pub fn new(redis_url: &str, credential_ttl: Option<u64>) -> Result<Self> {
         let client = redis::Client::open(redis_url)
             .with_context(|| format!("Failed to connect to Redis at {}", redis_url))?;
-
-        info!(
-            redis_url = %redis_url,
-            ttl = ?credential_ttl,
-            "Initialized Redis WebAuthn credential store"
-        );
-
-        Ok(Self {
-            client,
-            credential_ttl,
-        })
+        Ok(Self { client, credential_ttl })
     }
 
     /// Get async connection with retry logic

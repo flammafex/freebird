@@ -5,11 +5,7 @@ pub mod routes;
 pub mod startup;
 pub mod sybil_resistance;
 pub mod voprf_core;
-
-#[cfg(feature = "human-gate-webauthn")]
-pub mod webauthn_ctx;
-#[cfg(feature = "human-gate-webauthn")]
-pub mod webauthn_store;
+pub mod webauthn;
 
 // Re-export for convenience
 pub use main_state::AppStateWithSybil;

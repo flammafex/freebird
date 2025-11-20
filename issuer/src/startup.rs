@@ -12,7 +12,7 @@ use crate::{
     AppStateWithSybil,
 };
 #[cfg(feature = "human-gate-webauthn")]
-use crate::{webauthn_ctx, webauthn_store};
+use crate::webauthn;
 
 use anyhow::{Context, Result};
 use axum::{routing::{get, post}, Router};
@@ -76,35 +76,36 @@ impl Application {
             }
         });
 
-        // 2. WebAuthn Setup (Simplified for brevity, logic matches previous step)
+        // 2. WebAuthn Setup
         #[cfg(feature = "human-gate-webauthn")]
         let webauthn_state = if let Some(wa_conf) = &config.webauthn_config {
-             let ctx = webauthn_ctx::WebAuthnCtx::new(
+             info!("🔐 Initializing WebAuthn subsystem for RP: {}", wa_conf.rp_id);
+             
+             let ctx = webauthn::WebAuthnCtx::new(
                  wa_conf.rp_id.clone(), 
                  wa_conf.rp_name.clone(), 
                  wa_conf.rp_origin.clone()
              ).context("Failed to create WebAuthn context")?;
 
              let store = if let Some(url) = &wa_conf.redis_url {
-                 routes::webauthn::CredentialStore::Redis(
-                     webauthn_store::RedisCredStore::new(url, wa_conf.cred_ttl)
+                 info!("Using Redis for WebAuthn credentials");
+                 webauthn::CredentialStore::Redis(
+                     webauthn::RedisCredStore::new(url, wa_conf.cred_ttl)
                          .context("Failed to connect to WebAuthn Redis")?
                  )
              } else {
-                 routes::webauthn::CredentialStore::InMemory(webauthn_store::InMemoryCredStore::new())
+                 warn!("⚠️  Using in-memory WebAuthn credential storage");
+                 webauthn::CredentialStore::InMemory(webauthn::InMemoryCredStore::new())
              };
 
-             Some(Arc::new(routes::webauthn::WebAuthnState {
+             Some(Arc::new(webauthn::WebAuthnState {
                  webauthn: ctx,
                  cred_store: store,
-                 sessions: Arc::new(RwLock::new(std::collections::HashMap::new())),
+                 sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
              }))
         } else {
             None
         };
-        #[cfg(not(feature = "human-gate-webauthn"))]
-        let webauthn_state: Option<()> = None;
-
         // 3. Sybil Resistance Setup (Simplified for brevity, logic matches previous step)
         let mut invitation_system: Option<Arc<InvitationSystem>> = None;
         let sybil_checker: Option<Arc<dyn SybilResistance>> = match config.sybil_config.mode.as_str() {
@@ -140,8 +141,16 @@ impl Application {
             #[cfg(feature = "human-gate-webauthn")]
             "webauthn" => {
                  if let Some(wa) = &webauthn_state {
-                    Some(Arc::new(sybil_resistance::WebAuthnGate::new(wa.clone(), config.sybil_config.webauthn_max_proof_age)))
-                 } else { None }
+                    info!("✅ Sybil resistance: WebAuthn");
+                    // Use the new path
+                    Some(Arc::new(webauthn::WebAuthnGate::new(
+                        wa.clone(),
+                        config.sybil_config.webauthn_max_proof_age
+                    )))
+                 } else {
+                    warn!("⚠️  WebAuthn Sybil resistance selected but not configured");
+                    None
+                }
             }
             "combined" => Some(Arc::new(CombinedSybilResistance::new(vec![
                 Box::new(ProofOfWork::new(config.sybil_config.pow_difficulty)),
@@ -176,13 +185,11 @@ impl Application {
         // Use `let app` to shadow the variable, allowing the type change from Router<S> to Router<()>
         let mut app = app.with_state(app_state);
 
-        #[cfg(feature = "human-gate-webauthn")]
+       #[cfg(feature = "human-gate-webauthn")]
         if let Some(wa) = &webauthn_state {
-            let wa_router = Router::new()
-                .route("/register/start", post(routes::webauthn::start_registration))
-                .route("/register/finish", post(routes::webauthn::finish_registration))
-                .with_state(wa.clone());
-            app = app.nest("/webauthn", wa_router);
+            // Use the factory function we created in handlers.rs
+            // Note: `webauthn::router` handles the attestation check logic internally now!
+            app = app.nest("/webauthn", webauthn::router(wa.clone()));
         }
 
         if let Some(key) = config.admin_api_key {
