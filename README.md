@@ -203,7 +203,7 @@ Configuration is handled via environment variables.
 ### Phase 2: Ecosystem (Current)
 - [x] JavaScript/TypeScript SDK
 - [x] Docker support
-- [ ] Nostr NIP-98 Integration
+- [ ] Nostr NIP-VOPRF Integration
 - [ ] Python & Go Clients
 - [ ] Prometheus Metrics
 

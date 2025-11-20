@@ -1,4 +1,4 @@
-# NIP-98: Anonymous Authorization via VOPRF
+# NIP-VOPRF: Anonymous Authorization via VOPRF
 
 `draft` `optional` `author:freebird`
 
