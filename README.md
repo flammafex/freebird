@@ -70,6 +70,17 @@ Resources depend on your anticipated user base and Sybil resistance complexity.
     * **Reverse Proxy:** Nginx, Caddy, or Cloud LB required for TLS termination.
     * **Entropy:** System must provide sufficient entropy (>1000 available) for key generation.
 
+### Checking System Entropy
+
+To ensure sufficient randomness for cryptographic operations, verify your system's available entropy:
+
+```bash
+cat /proc/sys/kernel/random/entropy_avail
+```
+
+* **Target Value:** > 1000
+* **Action:** If the value is low (< 1000), install a daemon like `haveged` to replenish the pool.
+
 ### Build Requirements (Manual)
 
 If building from source instead of using Docker:
