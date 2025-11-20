@@ -1,0 +1,69 @@
+services:
+  # ----------------------------------------------------------------------------
+  # ISSUER
+  # ----------------------------------------------------------------------------
+  issuer:
+    build:
+      context: .
+      target: issuer
+    image: freebird-issuer:latest
+    ports:
+      - "8081:8081"
+    volumes:
+      # Persist keys and invitations
+      - issuer-data:/data
+    environment:
+      - RUST_LOG=info,freebird=debug
+      - ISSUER_ID=issuer:docker:v1
+      - SYBIL_RESISTANCE=invitation
+      # Auto-generate admin key if not set (for dev convenience)
+      # In prod, pass this via secrets
+      - ADMIN_API_KEY=dev-admin-key-must-be-at-least-32-characters-long
+      - SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
+    networks:
+      - freebird-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/.well-known/issuer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------------------------------
+  # VERIFIER
+  # ----------------------------------------------------------------------------
+  verifier:
+    build:
+      context: .
+      target: verifier
+    image: freebird-verifier:latest
+    ports:
+      - "8082:8082"
+    environment:
+      - RUST_LOG=info
+      # Internal docker DNS name for issuer
+      - ISSUER_URL=http://issuer:8081/.well-known/issuer
+      - REDIS_URL=redis://redis:6379
+      - MAX_CLOCK_SKEW_SECS=300
+    depends_on:
+      issuer:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - freebird-net
+
+  # ----------------------------------------------------------------------------
+  # INFRASTRUCTURE
+  # ----------------------------------------------------------------------------
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis-data:/data
+    networks:
+      - freebird-net
+
+volumes:
+  redis-data:
+  issuer-data:
+networks:
+  freebird-net:
