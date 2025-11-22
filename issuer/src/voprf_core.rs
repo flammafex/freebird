@@ -14,6 +14,7 @@ pub struct VoprfCore {
     server: Server,
     ctx: Vec<u8>,
     _sk: IssuerSecret,
+    mac_key: [u8; 32], // Derived MAC key for token metadata binding
     pub pubkey_b64: String,
     pub kid: String,
 }
@@ -24,13 +25,23 @@ impl VoprfCore {
         let server = Server::from_secret_key(sk, ctx)
             .map_err(|_| anyhow!("invalid secret key"))?;
 
+        // Derive MAC key from server secret key using HKDF
+        // This provides key separation between VOPRF and MAC operations
+        let mac_key = crypto::derive_mac_key(&sk, b"freebird:mac:v1");
+
         Ok(Self {
             server,
             ctx: ctx.to_vec(),
             _sk: IssuerSecret(sk),
+            mac_key,
             pubkey_b64,
             kid,
         })
+    }
+
+    /// Get the MAC key for token metadata binding
+    pub fn mac_key(&self) -> &[u8; 32] {
+        &self.mac_key
     }
 
     pub fn evaluate_b64(&self, blinded_b64: &str) -> Result<String> {
@@ -58,14 +69,14 @@ impl VoprfCore {
             })?;
 
         // 4. Sanity check the output size
-        // Expected: 33 (A) + 33 (B) + 64 (DLEQ proof) = 130 bytes
-        if token.len() != 130 {
+        // Expected: 1 (VERSION) + 33 (A) + 33 (B) + 64 (DLEQ proof) = 131 bytes
+        if token.len() != 131 {
             error!(
-                "❌ token size mismatch: got {} bytes, expected 130",
+                "❌ token size mismatch: got {} bytes, expected 131",
                 token.len()
             );
             return Err(anyhow!(
-                "internal error: token size mismatch (got {}, expected 130)",
+                "internal error: token size mismatch (got {}, expected 131)",
                 token.len()
             ));
         }

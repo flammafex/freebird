@@ -387,6 +387,7 @@ dependencies = [
  "elliptic-curve",
  "generic-array",
  "hkdf",
+ "hmac",
  "p256",
  "proptest",
  "rand 0.8.5",

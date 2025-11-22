@@ -21,6 +21,7 @@ rand_core  = "0.6"
 # Helpers
 subtle         = "2.5"
 hkdf           = "0.12"
+hmac           = "0.12"
 base64ct       = { version = "1.8", features = ["alloc"] }
 generic-array  = "0.14"
 zeroize        = "1"
