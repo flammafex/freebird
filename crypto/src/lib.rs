@@ -16,6 +16,9 @@ type HmacSha256 = Hmac<Sha256>;
 pub mod voprf;
 use voprf as v;
 
+// Cryptographic provider abstraction for software and HSM backends
+pub mod provider;
+
 #[derive(Debug)]
 pub enum Error {
     Decode,

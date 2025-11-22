@@ -26,6 +26,31 @@ pub struct KeyConfig {
     pub sk_path: PathBuf,
     pub rotation_state_path: PathBuf,
     pub kid_override: Option<String>,
+    pub hsm: Option<HsmConfig>,
+}
+
+#[derive(Clone, Debug)]
+pub struct HsmConfig {
+    /// Path to PKCS#11 module (e.g., /usr/lib/softhsm/libsofthsm2.so)
+    pub module_path: String,
+    /// HSM slot number
+    pub slot: u64,
+    /// HSM PIN for authentication
+    pub pin: String,
+    /// Key label in HSM
+    pub key_label: String,
+    /// Mode: "storage" (key in HSM, ops in software) or "full" (all ops in HSM, not yet supported)
+    pub mode: HsmMode,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum HsmMode {
+    /// Keys stored in HSM, extracted for software VOPRF operations
+    /// Provides: Key protection at rest, fast operations
+    Storage,
+    /// All operations in HSM (not yet implemented)
+    /// Provides: Full HSM protection, slower operations
+    Full,
 }
 
 #[derive(Clone, Debug)]
@@ -93,7 +118,47 @@ impl KeyConfig {
             sk_path: env::var("ISSUER_SK_PATH").map(PathBuf::from).unwrap_or_else(|_| "issuer_sk.bin".into()),
             rotation_state_path: env::var("KEY_ROTATION_STATE_PATH").map(PathBuf::from).unwrap_or_else(|_| "key_rotation_state.json".into()),
             kid_override: env::var("KID").ok(),
+            hsm: HsmConfig::from_env(),
         }
+    }
+}
+
+impl HsmConfig {
+    fn from_env() -> Option<Self> {
+        // Only create HSM config if HSM_ENABLE is set to true
+        if !env_bool("HSM_ENABLE") {
+            return None;
+        }
+
+        // Parse HSM mode
+        let mode_str = env::var("HSM_MODE").unwrap_or_else(|_| "storage".to_string());
+        let mode = match mode_str.to_lowercase().as_str() {
+            "full" => HsmMode::Full,
+            "storage" | _ => HsmMode::Storage,
+        };
+
+        // Get required HSM configuration
+        let module_path = env::var("HSM_MODULE_PATH")
+            .expect("HSM_MODULE_PATH required when HSM_ENABLE=true");
+
+        let slot = env::var("HSM_SLOT")
+            .expect("HSM_SLOT required when HSM_ENABLE=true")
+            .parse()
+            .expect("HSM_SLOT must be a valid u64");
+
+        let pin = env::var("HSM_PIN")
+            .expect("HSM_PIN required when HSM_ENABLE=true");
+
+        let key_label = env::var("HSM_KEY_LABEL")
+            .expect("HSM_KEY_LABEL required when HSM_ENABLE=true");
+
+        Some(Self {
+            module_path,
+            slot,
+            pin,
+            key_label,
+            mode,
+        })
     }
 }
 
@@ -143,4 +208,125 @@ fn env_u64(key: &str, default: u64) -> u64 {
 
 fn env_u32(key: &str, default: u32) -> u32 {
     env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hsm_config_disabled_by_default() {
+        // Clear HSM environment variables
+        env::remove_var("HSM_ENABLE");
+        env::remove_var("HSM_MODULE_PATH");
+        env::remove_var("HSM_SLOT");
+        env::remove_var("HSM_PIN");
+        env::remove_var("HSM_KEY_LABEL");
+
+        let hsm_config = HsmConfig::from_env();
+        assert!(hsm_config.is_none(), "HSM should be disabled by default");
+    }
+
+    #[test]
+    fn test_hsm_config_storage_mode() {
+        // Set HSM environment variables
+        env::set_var("HSM_ENABLE", "true");
+        env::set_var("HSM_MODE", "storage");
+        env::set_var("HSM_MODULE_PATH", "/usr/lib/softhsm/libsofthsm2.so");
+        env::set_var("HSM_SLOT", "0");
+        env::set_var("HSM_PIN", "1234");
+        env::set_var("HSM_KEY_LABEL", "test-key");
+
+        let hsm_config = HsmConfig::from_env();
+        assert!(hsm_config.is_some(), "HSM should be enabled");
+
+        let config = hsm_config.unwrap();
+        assert_eq!(config.mode, HsmMode::Storage);
+        assert_eq!(config.module_path, "/usr/lib/softhsm/libsofthsm2.so");
+        assert_eq!(config.slot, 0);
+        assert_eq!(config.pin, "1234");
+        assert_eq!(config.key_label, "test-key");
+
+        // Cleanup
+        env::remove_var("HSM_ENABLE");
+        env::remove_var("HSM_MODE");
+        env::remove_var("HSM_MODULE_PATH");
+        env::remove_var("HSM_SLOT");
+        env::remove_var("HSM_PIN");
+        env::remove_var("HSM_KEY_LABEL");
+    }
+
+    #[test]
+    fn test_hsm_config_full_mode() {
+        env::set_var("HSM_ENABLE", "true");
+        env::set_var("HSM_MODE", "full");
+        env::set_var("HSM_MODULE_PATH", "/usr/lib/libykcs11.so");
+        env::set_var("HSM_SLOT", "1");
+        env::set_var("HSM_PIN", "5678");
+        env::set_var("HSM_KEY_LABEL", "yubikey");
+
+        let hsm_config = HsmConfig::from_env().expect("Should parse HSM config");
+        assert_eq!(hsm_config.mode, HsmMode::Full);
+
+        // Cleanup
+        env::remove_var("HSM_ENABLE");
+        env::remove_var("HSM_MODE");
+        env::remove_var("HSM_MODULE_PATH");
+        env::remove_var("HSM_SLOT");
+        env::remove_var("HSM_PIN");
+        env::remove_var("HSM_KEY_LABEL");
+    }
+
+    #[test]
+    fn test_hsm_config_defaults_to_storage() {
+        // Clear all HSM vars first to avoid test pollution
+        env::remove_var("HSM_ENABLE");
+        env::remove_var("HSM_MODE");
+        env::remove_var("HSM_MODULE_PATH");
+        env::remove_var("HSM_SLOT");
+        env::remove_var("HSM_PIN");
+        env::remove_var("HSM_KEY_LABEL");
+
+        // Now set required vars (but not HSM_MODE)
+        env::set_var("HSM_ENABLE", "true");
+        env::set_var("HSM_MODULE_PATH", "/usr/lib/softhsm/libsofthsm2.so");
+        env::set_var("HSM_SLOT", "0");
+        env::set_var("HSM_PIN", "1234");
+        env::set_var("HSM_KEY_LABEL", "test");
+
+        let hsm_config = HsmConfig::from_env().expect("Should parse HSM config");
+        assert_eq!(hsm_config.mode, HsmMode::Storage, "Should default to Storage mode");
+
+        // Cleanup
+        env::remove_var("HSM_ENABLE");
+        env::remove_var("HSM_MODE");
+        env::remove_var("HSM_MODULE_PATH");
+        env::remove_var("HSM_SLOT");
+        env::remove_var("HSM_PIN");
+        env::remove_var("HSM_KEY_LABEL");
+    }
+
+    #[test]
+    #[should_panic(expected = "HSM_MODULE_PATH required")]
+    fn test_hsm_config_missing_module_path() {
+        env::set_var("HSM_ENABLE", "true");
+        env::remove_var("HSM_MODULE_PATH");
+        env::set_var("HSM_SLOT", "0");
+        env::set_var("HSM_PIN", "1234");
+        env::set_var("HSM_KEY_LABEL", "test");
+
+        HsmConfig::from_env();
+    }
+
+    #[test]
+    #[should_panic(expected = "HSM_SLOT required")]
+    fn test_hsm_config_missing_slot() {
+        env::set_var("HSM_ENABLE", "true");
+        env::set_var("HSM_MODULE_PATH", "/usr/lib/softhsm/libsofthsm2.so");
+        env::remove_var("HSM_SLOT");
+        env::set_var("HSM_PIN", "1234");
+        env::set_var("HSM_KEY_LABEL", "test");
+
+        HsmConfig::from_env();
+    }
 }
