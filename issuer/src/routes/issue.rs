@@ -219,24 +219,48 @@ pub async fn handle(
         })?;
 
     // Extract token and kid from result
-    let evaluated_b64 = eval_result.token;
+    let token_b64 = eval_result.token;
     let kid_used = eval_result.kid;
 
     // Calculate expiration
     let exp = OffsetDateTime::now_utc().unix_timestamp() + state.exp_sec as i64;
 
+    // Get current epoch for key rotation
+    let epoch = state.current_epoch();
+
+    // Compute MAC over token + metadata to prevent tampering
+    // Decode token to get raw bytes
+    let token_bytes = Base64UrlUnpadded::decode_vec(&token_b64).map_err(|e| {
+        error!("failed to decode token for MAC computation: {e:?}");
+        (StatusCode::INTERNAL_SERVER_ERROR, "token encoding error".into())
+    })?;
+
+    // Derive epoch-specific MAC key and compute MAC over (token || kid || exp || issuer_id)
+    let mac_key = voprf.derive_mac_key_for_epoch(&state.issuer_id, epoch).await;
+    let mac = crypto::compute_token_mac(&mac_key, &token_bytes, &kid_used, exp, &state.issuer_id);
+
+    // Append MAC to token: [VERSION||A||B||Proof||MAC]
+    let mut token_with_mac = token_bytes;
+    token_with_mac.extend_from_slice(&mac);
+
+    // Encode final token
+    let final_token_b64 = Base64UrlUnpadded::encode_string(&token_with_mac);
+
     debug!(
-        "✅ token issued: kid={}, exp={}, sybil_verified={}",
-        state.kid,
+        "✅ token issued: kid={}, exp={}, epoch={}, sybil_verified={}, token_len={}",
+        kid_used,
         exp,
-        sybil_info.is_some()
+        epoch,
+        sybil_info.is_some(),
+        token_with_mac.len()
     );
 
     Ok(Json(IssueResp {
-        token: evaluated_b64,
+        token: final_token_b64,
         proof: String::new(),
-        kid: kid_used, // ✅ NEW - use the actual key ID
+        kid: kid_used,
         exp,
+        epoch,
         sybil_info,
     }))
 }
@@ -257,6 +281,8 @@ mod tests {
             behind_proxy: false,
             sybil_checker,
             invitation_system: None,
+            epoch_duration_sec: 86400,
+            epoch_retention: 2,
         }
     }
 

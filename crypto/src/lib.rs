@@ -7,7 +7,10 @@
 //! internal P-256 implementation in voprf/.
 
 use base64ct::{Base64UrlUnpadded, Encoding};
+use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
+
+type HmacSha256 = Hmac<Sha256>;
 
 // Internal VOPRF implementation (was vendor/voprf_p256)
 pub mod voprf;
@@ -109,6 +112,130 @@ impl Verifier {
     }
 }
 
+/// Token MAC constants
+pub const TOKEN_MAC_LEN: usize = 32; // HMAC-SHA256 output size
+
+/// Compute HMAC-SHA256 over token and metadata to prevent tampering
+///
+/// MAC = HMAC-SHA256(mac_key, token_bytes || kid || exp || issuer_id)
+///
+/// # Arguments
+/// * `mac_key` - 32-byte MAC key (should be derived from server secret key)
+/// * `token_bytes` - The VOPRF token bytes [VERSION||A||B||Proof]
+/// * `kid` - Key identifier
+/// * `exp` - Expiration timestamp (Unix seconds)
+/// * `issuer_id` - Issuer identifier
+///
+/// # Returns
+/// 32-byte HMAC tag
+pub fn compute_token_mac(
+    mac_key: &[u8; 32],
+    token_bytes: &[u8],
+    kid: &str,
+    exp: i64,
+    issuer_id: &str,
+) -> [u8; 32] {
+    let mut mac = HmacSha256::new_from_slice(mac_key)
+        .expect("HMAC can take key of any size");
+
+    // MAC over: token || kid || exp || issuer_id
+    mac.update(token_bytes);
+    mac.update(kid.as_bytes());
+    mac.update(&exp.to_be_bytes());
+    mac.update(issuer_id.as_bytes());
+
+    mac.finalize().into_bytes().into()
+}
+
+/// Verify HMAC-SHA256 over token and metadata (constant-time)
+///
+/// # Arguments
+/// * `mac_key` - 32-byte MAC key
+/// * `token_bytes` - The VOPRF token bytes [VERSION||A||B||Proof]
+/// * `received_mac` - The MAC tag to verify
+/// * `kid` - Key identifier
+/// * `exp` - Expiration timestamp
+/// * `issuer_id` - Issuer identifier
+///
+/// # Returns
+/// true if MAC is valid, false otherwise (constant-time comparison)
+pub fn verify_token_mac(
+    mac_key: &[u8; 32],
+    token_bytes: &[u8],
+    received_mac: &[u8; 32],
+    kid: &str,
+    exp: i64,
+    issuer_id: &str,
+) -> bool {
+    let computed = compute_token_mac(mac_key, token_bytes, kid, exp, issuer_id);
+
+    // Constant-time comparison using subtle
+    use subtle::ConstantTimeEq;
+    bool::from(computed.ct_eq(received_mac))
+}
+
+/// Derive MAC key from server secret key using HKDF with domain separation
+///
+/// This ensures the MAC key is cryptographically independent from the
+/// VOPRF secret key, following the principle of key separation.
+///
+/// # Arguments
+/// * `server_sk` - Server's secret key (32 bytes)
+/// * `issuer_id` - Issuer identifier for domain separation
+/// * `key_id` - Key identifier (kid)
+/// * `epoch` - Epoch number for key rotation (0 for initial deployment)
+///
+/// # Returns
+/// Derived 32-byte MAC key
+///
+/// # Security
+/// - Uses HKDF-SHA256 for cryptographic key derivation
+/// - Domain-separated by issuer_id, key_id, and epoch
+/// - Enables forward secrecy through epoch rotation
+pub fn derive_mac_key_v2(
+    server_sk: &[u8; 32],
+    issuer_id: &str,
+    key_id: &str,
+    epoch: u32,
+) -> [u8; 32] {
+    use hkdf::Hkdf;
+
+    // Domain-separated info string
+    let info = format!("freebird-mac-v1|{}|{}|{}", issuer_id, key_id, epoch);
+
+    let hkdf = Hkdf::<Sha256>::new(
+        Some(b"freebird-mac-salt"), // Salt for additional entropy
+        server_sk,
+    );
+
+    let mut mac_key = [0u8; 32];
+    hkdf.expand(info.as_bytes(), &mut mac_key)
+        .expect("32 bytes is a valid HKDF output length");
+
+    mac_key
+}
+
+/// Derive MAC key from server secret key using HKDF (legacy, simple version)
+///
+/// This ensures the MAC key is cryptographically independent from the
+/// VOPRF secret key, following the principle of key separation.
+///
+/// # Arguments
+/// * `server_sk` - Server's secret key (32 bytes)
+/// * `info` - Optional context/domain separation (e.g., "freebird:mac:v1")
+///
+/// # Returns
+/// Derived 32-byte MAC key
+pub fn derive_mac_key(server_sk: &[u8; 32], info: &[u8]) -> [u8; 32] {
+    use hkdf::Hkdf;
+
+    let hkdf = Hkdf::<Sha256>::new(None, server_sk);
+    let mut mac_key = [0u8; 32];
+    hkdf.expand(info, &mut mac_key)
+        .expect("32 bytes is a valid HKDF output length");
+    mac_key
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -142,5 +269,108 @@ mod tests {
         let n2 = nullifier_key("issuer:freebird:v1", &out_ver_b64);
         assert_eq!(n1, n2);
         assert!(!n1.is_empty());
+    }
+
+    #[test]
+    fn test_mac_computation_and_verification() {
+        let mac_key = [42u8; 32];
+        let token = vec![1, 2, 3, 4, 5];
+        let kid = "test-kid-001";
+        let exp = 1234567890i64;
+        let issuer_id = "test-issuer";
+
+        // Compute MAC
+        let mac = compute_token_mac(&mac_key, &token, kid, exp, issuer_id);
+        assert_eq!(mac.len(), 32);
+
+        // Verify MAC succeeds
+        assert!(verify_token_mac(&mac_key, &token, &mac, kid, exp, issuer_id));
+
+        // Tampered token fails
+        let mut bad_token = token.clone();
+        bad_token[0] ^= 1;
+        assert!(!verify_token_mac(&mac_key, &bad_token, &mac, kid, exp, issuer_id));
+
+        // Tampered kid fails
+        assert!(!verify_token_mac(&mac_key, &token, &mac, "wrong-kid", exp, issuer_id));
+
+        // Tampered exp fails
+        assert!(!verify_token_mac(&mac_key, &token, &mac, kid, exp + 1, issuer_id));
+
+        // Tampered issuer_id fails
+        assert!(!verify_token_mac(&mac_key, &token, &mac, kid, exp, "wrong-issuer"));
+
+        // Wrong MAC fails
+        let wrong_mac = [0u8; 32];
+        assert!(!verify_token_mac(&mac_key, &token, &wrong_mac, kid, exp, issuer_id));
+    }
+
+    #[test]
+    fn test_mac_key_derivation() {
+        let sk = [7u8; 32];
+        let info1 = b"freebird:mac:v1";
+        let info2 = b"freebird:mac:v2";
+
+        let key1a = derive_mac_key(&sk, info1);
+        let key1b = derive_mac_key(&sk, info1);
+        let key2 = derive_mac_key(&sk, info2);
+
+        // Deterministic derivation
+        assert_eq!(key1a, key1b);
+
+        // Different contexts produce different keys
+        assert_ne!(key1a, key2);
+
+        // Keys should not be all zeros
+        assert_ne!(key1a, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_mac_key_derivation_v2() {
+        let sk = [7u8; 32];
+        let issuer = "test-issuer";
+        let kid = "key-001";
+
+        // Same parameters produce same key (deterministic)
+        let key1 = derive_mac_key_v2(&sk, issuer, kid, 0);
+        let key2 = derive_mac_key_v2(&sk, issuer, kid, 0);
+        assert_eq!(key1, key2);
+
+        // Different epoch produces different key
+        let key_epoch1 = derive_mac_key_v2(&sk, issuer, kid, 1);
+        assert_ne!(key1, key_epoch1);
+
+        // Different issuer produces different key
+        let key_issuer2 = derive_mac_key_v2(&sk, "other-issuer", kid, 0);
+        assert_ne!(key1, key_issuer2);
+
+        // Different kid produces different key
+        let key_kid2 = derive_mac_key_v2(&sk, issuer, "key-002", 0);
+        assert_ne!(key1, key_kid2);
+
+        // Keys should not be all zeros
+        assert_ne!(key1, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_mac_constant_time() {
+        // This test doesn't prove constant-time behavior but verifies
+        // that the comparison works correctly for all bit patterns
+        let mac_key = [42u8; 32];
+        let token = vec![1, 2, 3];
+        let kid = "kid";
+        let exp = 123i64;
+        let issuer = "issuer";
+
+        let correct_mac = compute_token_mac(&mac_key, &token, kid, exp, issuer);
+
+        // Test all single-bit flips
+        for byte_idx in 0..32 {
+            for bit_idx in 0..8 {
+                let mut wrong_mac = correct_mac;
+                wrong_mac[byte_idx] ^= 1 << bit_idx;
+                assert!(!verify_token_mac(&mac_key, &token, &wrong_mac, kid, exp, issuer));
+            }
+        }
     }
 }

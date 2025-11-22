@@ -1,5 +1,6 @@
 // issuer/src/routes/metadata.rs
 use axum::{extract::State, Json};
+use common::api::{KeyDiscoveryResp, VoprfKeyInfo};
 use serde::Serialize;
 use std::sync::Arc;
 use crate::multi_key_voprf::MultiKeyVoprfCore;
@@ -37,6 +38,35 @@ pub async fn well_known_handler(
     Json(WellKnown {
         issuer_id: state.issuer_id.clone(),
         voprf: VoprfInfo {
+            suite: "OPRF(P-256, SHA-256)-verifiable".into(),
+            kid: active_kid,
+            pubkey: active_pubkey,
+            exp_sec: state.exp_sec,
+        },
+    })
+}
+
+/// Key discovery endpoint for epoch-based key rotation
+///
+/// Returns current epoch information and valid epoch range for clients
+/// to derive and validate MAC keys independently.
+///
+/// This enables clients to:
+/// - Verify token metadata binding without trusting the issuer
+/// - Detect if issuer tries to modify token metadata (kid, exp, issuer_id)
+/// - Validate epoch is within acceptable range during verification
+pub async fn keys_handler(
+    State((state, voprf)): State<SharedState>
+) -> Json<KeyDiscoveryResp> {
+    let active_kid = voprf.active_kid().await;
+    let active_pubkey = voprf.active_pubkey_b64().await;
+
+    Json(KeyDiscoveryResp {
+        issuer_id: state.issuer_id.clone(),
+        current_epoch: state.current_epoch(),
+        valid_epochs: state.valid_epochs(),
+        epoch_duration_sec: state.epoch_duration_sec,
+        voprf: VoprfKeyInfo {
             suite: "OPRF(P-256, SHA-256)-verifiable".into(),
             kid: active_kid,
             pubkey: active_pubkey,

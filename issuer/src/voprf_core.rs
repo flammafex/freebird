@@ -13,7 +13,7 @@ pub struct IssuerSecret(pub [u8; 32]);
 pub struct VoprfCore {
     server: Server,
     ctx: Vec<u8>,
-    _sk: IssuerSecret,
+    sk: [u8; 32], // Store secret key for epoch-based MAC key derivation
     pub pubkey_b64: String,
     pub kid: String,
 }
@@ -27,10 +27,15 @@ impl VoprfCore {
         Ok(Self {
             server,
             ctx: ctx.to_vec(),
-            _sk: IssuerSecret(sk),
+            sk,
             pubkey_b64,
             kid,
         })
+    }
+
+    /// Derive MAC key for a specific epoch
+    pub fn derive_mac_key_for_epoch(&self, issuer_id: &str, epoch: u32) -> [u8; 32] {
+        crypto::derive_mac_key_v2(&self.sk, issuer_id, &self.kid, epoch)
     }
 
     pub fn evaluate_b64(&self, blinded_b64: &str) -> Result<String> {
@@ -58,14 +63,14 @@ impl VoprfCore {
             })?;
 
         // 4. Sanity check the output size
-        // Expected: 33 (A) + 33 (B) + 64 (DLEQ proof) = 130 bytes
-        if token.len() != 130 {
+        // Expected: 1 (VERSION) + 33 (A) + 33 (B) + 64 (DLEQ proof) = 131 bytes
+        if token.len() != 131 {
             error!(
-                "❌ token size mismatch: got {} bytes, expected 130",
+                "❌ token size mismatch: got {} bytes, expected 131",
                 token.len()
             );
             return Err(anyhow!(
-                "internal error: token size mismatch (got {}, expected 130)",
+                "internal error: token size mismatch (got {}, expected 131)",
                 token.len()
             ));
         }

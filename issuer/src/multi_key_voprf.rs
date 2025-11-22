@@ -210,6 +210,11 @@ impl MultiKeyVoprfCore {
         self.active_key.read().await.pubkey_b64.clone()
     }
 
+    /// Derive MAC key for the active key and given epoch
+    pub async fn derive_mac_key_for_epoch(&self, issuer_id: &str, epoch: u32) -> [u8; 32] {
+        self.active_key.read().await.derive_mac_key_for_epoch(issuer_id, epoch)
+    }
+
     /// Evaluate a blinded element using the active key
     ///
     /// Returns the evaluation token and the key ID used

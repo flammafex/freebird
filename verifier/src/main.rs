@@ -9,11 +9,12 @@ use axum::{
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use common::logging;
+use rayon::prelude::*;
 use serde::Deserialize;
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::{Duration, Instant}};
 use tokio::{net::TcpListener, sync::RwLock, time::sleep};
 use tracing::{debug, error, info, warn};
-use common::api::{VerifyReq, VerifyResp};
+use common::api::{VerifyReq, VerifyResp, BatchVerifyReq, BatchVerifyResp, VerifyResult, TokenToVerify};
 
 // FIX: Import from the library crate instead of local mod
 use verifier::store::{SpendStore, StoreBackend};
@@ -24,6 +25,34 @@ struct AppState {
     store: Arc<dyn SpendStore>,
     /// Maximum acceptable clock skew in seconds (default: 300 = 5 minutes)
     max_clock_skew_secs: i64,
+    /// Issuer secret key for epoch-based MAC key derivation
+    issuer_sk: [u8; 32],
+    /// Epoch configuration
+    epoch_duration_sec: u64,
+    epoch_retention: u32,
+}
+
+impl AppState {
+    /// Calculate current epoch based on Unix timestamp
+    fn current_epoch(&self) -> u32 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        (now / self.epoch_duration_sec) as u32
+    }
+
+    /// Check if an epoch is valid (within acceptable range)
+    fn is_epoch_valid(&self, epoch: u32) -> bool {
+        let current = self.current_epoch();
+        let min_valid = current.saturating_sub(self.epoch_retention);
+        epoch >= min_valid && epoch <= current
+    }
+
+    /// Derive MAC key for a specific epoch
+    fn derive_mac_key_for_epoch(&self, issuer_id: &str, kid: &str, epoch: u32) -> [u8; 32] {
+        crypto::derive_mac_key_v2(&self.issuer_sk, issuer_id, kid, epoch)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -40,7 +69,7 @@ struct VoprfInfo {
     exp_sec: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct IssuerInfo {
     pubkey_bytes: Vec<u8>,
     kid: String,
@@ -59,6 +88,31 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(300); // Default: 5 minutes
 
     info!("⏰ Clock skew tolerance: {} seconds", max_clock_skew_secs);
+
+    // ---------- Epoch-based Key Configuration ----------
+    // The verifier needs the issuer's secret key to derive epoch-specific MAC keys
+    // In production deployments, issuer and verifier are managed by the same entity
+    let issuer_secret = std::env::var("ISSUER_SECRET_KEY")
+        .context("ISSUER_SECRET_KEY environment variable not set")?;
+
+    // Decode hex secret key
+    let sk_bytes: [u8; 32] = hex::decode(&issuer_secret)
+        .context("Invalid ISSUER_SECRET_KEY hex encoding")?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("ISSUER_SECRET_KEY must be exactly 32 bytes (64 hex chars)"))?;
+
+    // Epoch configuration
+    let epoch_duration_sec = std::env::var("EPOCH_DURATION_SEC")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(86400); // Default: 1 day
+
+    let epoch_retention = std::env::var("EPOCH_RETENTION")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2); // Default: accept 2 previous epochs
+
+    info!("🔐 Epoch-based MAC key derivation configured: duration={}s, retention={}", epoch_duration_sec, epoch_retention);
 
     // ---------- Backend selection ----------
     let backend = if let Ok(url) = std::env::var("REDIS_URL") {
@@ -80,6 +134,9 @@ async fn main() -> anyhow::Result<()> {
         issuers: Arc::new(RwLock::new(HashMap::new())),
         store,
         max_clock_skew_secs,
+        issuer_sk: sk_bytes,
+        epoch_duration_sec,
+        epoch_retention,
     });
 
     // Background refresh loop
@@ -105,6 +162,7 @@ async fn main() -> anyhow::Result<()> {
     // ---------- Router ----------
     let app = Router::new()
         .route("/v1/verify", post(verify_with_logging))
+        .route("/v1/verify/batch", post(batch_verify))
         .with_state(state);
 
     // ---------- Serve ----------
@@ -233,11 +291,71 @@ async fn verify(
         // expiration checking but maintains backward compatibility.
     }
 
-    // 3) Verify DLEQ token and derive PRF output
+    // 3) Validate epoch is within acceptable range
+    if !st.is_epoch_valid(req.epoch) {
+        error!(
+            "❌ Invalid epoch: got {}, current={}, min_valid={}",
+            req.epoch,
+            st.current_epoch(),
+            st.current_epoch().saturating_sub(st.epoch_retention)
+        );
+        return Err((StatusCode::BAD_REQUEST, "invalid epoch".to_string()));
+    }
+
+    debug!("✅ Epoch {} is valid", req.epoch);
+
+    // 4) Verify MAC over token metadata (constant-time)
+    //    This must happen BEFORE VOPRF verification to prevent tampering
+    let exp_value = req.exp.ok_or_else(|| {
+        error!("❌ Token missing expiration field");
+        (StatusCode::BAD_REQUEST, "token must include expiration".to_string())
+    })?;
+
+    // Decode token to split MAC from token data
+    let token_with_mac = Base64UrlUnpadded::decode_vec(&req.token_b64).map_err(|e| {
+        error!("❌ Failed to decode token: {:?}", e);
+        (StatusCode::BAD_REQUEST, "invalid token encoding".to_string())
+    })?;
+
+    // Token format: [VERSION||A||B||Proof||MAC]
+    // Expected: 131 bytes (VOPRF) + 32 bytes (MAC) = 163 bytes
+    if token_with_mac.len() != 163 {
+        error!("❌ Invalid token length: got {} bytes, expected 163", token_with_mac.len());
+        return Err((StatusCode::BAD_REQUEST, "invalid token length".to_string()));
+    }
+
+    // Split token and MAC
+    let (token_data, mac_bytes) = token_with_mac.split_at(131);
+    let received_mac: [u8; 32] = mac_bytes.try_into().expect("MAC is 32 bytes");
+
+    // Derive epoch-specific MAC key
+    let mac_key = st.derive_mac_key_for_epoch(&req.issuer_id, &issuer.kid, req.epoch);
+
+    // Verify MAC in constant time
+    let mac_valid = crypto::verify_token_mac(
+        &mac_key,
+        token_data,
+        &received_mac,
+        &issuer.kid,
+        exp_value,
+        &req.issuer_id,
+    );
+
+    if !mac_valid {
+        error!("❌ MAC verification failed - token metadata tampered");
+        return Err((StatusCode::UNAUTHORIZED, "verification failed".to_string()));
+    }
+
+    debug!("✅ MAC verified - token metadata authentic");
+
+    // 4) Verify DLEQ token and derive PRF output (without MAC)
     debug!("Verifying DLEQ token with context len={}", issuer.ctx.len());
     let verifier = crypto::Verifier::new(&issuer.ctx);
+
+    // Pass only the token data (without MAC) to VOPRF verifier
+    let token_data_b64 = Base64UrlUnpadded::encode_string(token_data);
     let out_b64 = verifier
-        .verify(&req.token_b64, &issuer.pubkey_bytes)
+        .verify(&token_data_b64, &issuer.pubkey_bytes)
         .map_err(|e| {
             error!("Token cryptographic verification failed: {:?}", e);
             (StatusCode::UNAUTHORIZED, "verification failed".into())
@@ -276,6 +394,211 @@ async fn verify(
         ok: true,
         error: None,
         verified_at: now,
+    }))
+}
+
+/// Maximum batch size for batch verification
+const MAX_BATCH_SIZE: usize = 10_000;
+
+/// Minimum batch size for parallel processing
+const MIN_PARALLEL_BATCH_SIZE: usize = 10;
+
+// ---------- Batch Verification Handler ----------
+async fn batch_verify(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<BatchVerifyReq>,
+) -> Result<Json<BatchVerifyResp>, (StatusCode, String)> {
+    let start = Instant::now();
+    let batch_size = req.tokens.len();
+
+    info!(
+        "🔥 /v1/verify/batch: size={}, issuer={}",
+        batch_size, req.issuer_id
+    );
+
+    // --- VALIDATION ---
+    if batch_size == 0 {
+        return Err((StatusCode::BAD_REQUEST, "batch cannot be empty".to_string()));
+    }
+
+    if batch_size > MAX_BATCH_SIZE {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("batch size {} exceeds maximum {}", batch_size, MAX_BATCH_SIZE),
+        ));
+    }
+
+    // --- LOOKUP ISSUER (once for all tokens) ---
+    let issuers = st.issuers.read().await;
+    let issuer = issuers.get(&req.issuer_id).ok_or_else(|| {
+        error!("Issuer not found: {}", req.issuer_id);
+        (StatusCode::UNAUTHORIZED, "verification failed".to_string())
+    })?;
+
+    // Clone issuer data so we can drop the lock before parallel processing
+    let issuer_clone = issuer.clone();
+    let issuer_id = req.issuer_id.clone();
+    drop(issuers);
+
+    info!("✅ Issuer found: kid={}", issuer_clone.kid);
+
+    // --- PARALLEL VERIFICATION ---
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+
+    // Helper function to verify a single token
+    let verify_one = |token_req: &TokenToVerify| -> VerifyResult {
+        // 1) Validate epoch is within acceptable range
+        if !st.is_epoch_valid(token_req.epoch) {
+            return VerifyResult::Error {
+                message: format!("invalid epoch: {}", token_req.epoch),
+                code: "invalid_epoch".to_string(),
+            };
+        }
+
+        // 2) Check expiration
+        if let Some(exp) = token_req.exp {
+            if now > exp + st.max_clock_skew_secs {
+                return VerifyResult::Error {
+                    message: "token expired".to_string(),
+                    code: "expired".to_string(),
+                };
+            }
+
+            if exp > now + issuer_clone.exp_sec as i64 + st.max_clock_skew_secs {
+                return VerifyResult::Error {
+                    message: "invalid token expiration".to_string(),
+                    code: "invalid_expiration".to_string(),
+                };
+            }
+        } else {
+            return VerifyResult::Error {
+                message: "token must include expiration".to_string(),
+                code: "missing_expiration".to_string(),
+            };
+        }
+
+        let exp_value = token_req.exp.unwrap();
+
+        // 3) Decode and validate token length
+        let token_with_mac = match Base64UrlUnpadded::decode_vec(&token_req.token_b64) {
+            Ok(t) => t,
+            Err(_) => {
+                return VerifyResult::Error {
+                    message: "invalid token encoding".to_string(),
+                    code: "invalid_encoding".to_string(),
+                };
+            }
+        };
+
+        if token_with_mac.len() != 163 {
+            return VerifyResult::Error {
+                message: format!("invalid token length: got {} bytes, expected 163", token_with_mac.len()),
+                code: "invalid_length".to_string(),
+            };
+        }
+
+        // 4) Verify MAC with epoch-specific key
+        let (token_data, mac_bytes) = token_with_mac.split_at(131);
+        let received_mac: [u8; 32] = match mac_bytes.try_into() {
+            Ok(m) => m,
+            Err(_) => {
+                return VerifyResult::Error {
+                    message: "invalid MAC".to_string(),
+                    code: "invalid_mac".to_string(),
+                };
+            }
+        };
+
+        // Derive epoch-specific MAC key
+        let mac_key = st.derive_mac_key_for_epoch(&issuer_id, &issuer_clone.kid, token_req.epoch);
+
+        let mac_valid = crypto::verify_token_mac(
+            &mac_key,
+            token_data,
+            &received_mac,
+            &issuer_clone.kid,
+            exp_value,
+            &issuer_id,
+        );
+
+        if !mac_valid {
+            return VerifyResult::Error {
+                message: "MAC verification failed".to_string(),
+                code: "mac_verification_failed".to_string(),
+            };
+        }
+
+        // 4) Verify VOPRF token
+        let verifier = crypto::Verifier::new(&issuer_clone.ctx);
+        let token_data_b64 = Base64UrlUnpadded::encode_string(token_data);
+        let out_b64 = match verifier.verify(&token_data_b64, &issuer_clone.pubkey_bytes) {
+            Ok(o) => o,
+            Err(_) => {
+                return VerifyResult::Error {
+                    message: "cryptographic verification failed".to_string(),
+                    code: "voprf_verification_failed".to_string(),
+                };
+            }
+        };
+
+        // 5) Check for replay - this is the only part that needs to be async
+        // We'll handle this synchronously in the parallel loop by using block_on
+        let null_key = crypto::nullifier_key(&issuer_id, &out_b64);
+        let spend_key = format!("freebird:spent:{}:{}", issuer_id, null_key);
+
+        // Use tokio::runtime::Handle to bridge rayon and tokio
+        let handle = tokio::runtime::Handle::current();
+        let spent = handle.block_on(async {
+            st.store
+                .mark_spent(&spend_key, Duration::from_secs(issuer_clone.exp_sec))
+                .await
+        });
+
+        match spent {
+            Ok(true) => VerifyResult::Success {
+                verified_at: now,
+            },
+            Ok(false) => VerifyResult::Error {
+                message: "token already used".to_string(),
+                code: "replay_detected".to_string(),
+            },
+            Err(_) => VerifyResult::Error {
+                message: "store error".to_string(),
+                code: "store_error".to_string(),
+            },
+        }
+    };
+
+    // Process tokens in parallel or sequentially based on batch size
+    let results: Vec<VerifyResult> = if batch_size < MIN_PARALLEL_BATCH_SIZE {
+        debug!("using sequential processing for small batch (n={})", batch_size);
+        req.tokens.iter().map(verify_one).collect()
+    } else {
+        debug!("using parallel processing for batch (n={})", batch_size);
+        req.tokens.par_iter().map(verify_one).collect()
+    };
+
+    // --- AGGREGATE RESULTS ---
+    let successful = results
+        .iter()
+        .filter(|r| matches!(r, VerifyResult::Success { .. }))
+        .count();
+    let failed = batch_size - successful;
+
+    let total_time_ms = start.elapsed().as_millis() as u64;
+    let throughput = (successful as f64 / total_time_ms as f64) * 1000.0;
+
+    info!(
+        "📊 Batch verify metrics: total={}ms, success={}/{}, throughput={:.0} tok/s",
+        total_time_ms, successful, batch_size, throughput
+    );
+
+    Ok(Json(BatchVerifyResp {
+        results,
+        successful,
+        failed,
+        processing_time_ms: total_time_ms,
+        throughput,
     }))
 }
 

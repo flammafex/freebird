@@ -10,6 +10,7 @@ use std::{
 };
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
+use subtle::ConstantTimeEq;
 
 //
 // ─── REDIS LUA SCRIPT ────────────────────────────────────────────────
@@ -63,6 +64,17 @@ pub trait SpendStore: Send + Sync {
 }
 
 //
+// ─── CONSTANT-TIME STRING COMPARISON ────────────────────────────────
+//
+/// Constant-time comparison for nullifier keys to prevent timing attacks
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    bool::from(a.as_bytes().ct_eq(b.as_bytes()))
+}
+
+//
 // ─── IN-MEMORY BACKEND ───────────────────────────────────────────────
 //
 #[derive(Default)]
@@ -79,7 +91,17 @@ impl SpendStore for InMemoryStore {
         // purge expired
         map.retain(|_, &mut exp| exp > now);
 
-        if map.contains_key(key) {
+        // Use constant-time comparison to check for key existence
+        // This prevents timing attacks on nullifier lookup
+        let mut found = false;
+        for stored_key in map.keys() {
+            if constant_time_eq(stored_key, key) {
+                found = true;
+                break;
+            }
+        }
+
+        if found {
             debug!(%key, "replay detected (in-memory)");
             Ok(false)
         } else {
