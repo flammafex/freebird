@@ -50,6 +50,7 @@
 //! ```
 
 use anyhow::{anyhow, Context, Result};
+use elliptic_curve::subtle::ConstantTimeEq;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
@@ -63,6 +64,22 @@ use crate::voprf_core::VoprfCore;
 /// Current timestamp in seconds since Unix epoch
 fn now() -> u64 {
     OffsetDateTime::now_utc().unix_timestamp() as u64
+}
+
+/// Constant-time string comparison for key IDs
+///
+/// This prevents timing attacks that could leak information about which
+/// key IDs are in use or the timing of key rotation events.
+///
+/// # Security
+///
+/// While key IDs are typically public metadata, using constant-time comparison
+/// provides defense-in-depth by preventing any potential timing side-channels.
+fn constant_time_str_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    bool::from(a.as_bytes().ct_eq(b.as_bytes()))
 }
 
 /// Metadata about a deprecated key
@@ -229,19 +246,27 @@ impl MultiKeyVoprfCore {
     /// Verify a token with a specific key ID
     ///
     /// This supports both active and deprecated keys
+    ///
+    /// # Security
+    ///
+    /// Uses constant-time string comparison for key ID matching to prevent
+    /// timing side-channels, providing defense-in-depth even though key IDs
+    /// are typically public metadata.
     pub async fn verify_with_kid(&self, token_b64: &str, kid: &str) -> Result<String> {
-        // Try active key first
+        // Try active key first (constant-time comparison)
         {
             let active = self.active_key.read().await;
-            if active.kid == kid {
+            if constant_time_str_eq(&active.kid, kid) {
                 return self.verify_with_voprf(&active, token_b64);
             }
         }
 
-        // Try deprecated keys
+        // Try deprecated keys (constant-time comparison)
         let deprecated = self.deprecated_keys.read().await;
-        if let Some(dep_key) = deprecated.get(kid) {
-            return self.verify_with_voprf(&dep_key.voprf, token_b64);
+        for (stored_kid, dep_key) in deprecated.iter() {
+            if constant_time_str_eq(stored_kid, kid) {
+                return self.verify_with_voprf(&dep_key.voprf, token_b64);
+            }
         }
 
         Err(anyhow!("unknown key ID: {}", kid))
@@ -609,5 +634,138 @@ mod tests {
         let keys = core.list_keys().await;
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].kid, "key-new");
+    }
+
+    #[test]
+    fn test_constant_time_str_eq() {
+        // Test basic equality
+        assert!(constant_time_str_eq("key-001", "key-001"));
+        assert!(constant_time_str_eq("", ""));
+
+        // Test inequality
+        assert!(!constant_time_str_eq("key-001", "key-002"));
+        assert!(!constant_time_str_eq("short", "longer-string"));
+        assert!(!constant_time_str_eq("longer-string", "short"));
+
+        // Test that all character positions are checked
+        assert!(!constant_time_str_eq("key-001", "key-002")); // Last char differs
+        assert!(!constant_time_str_eq("aey-001", "key-001")); // First char differs
+        assert!(!constant_time_str_eq("key-001", "key-101")); // Middle char differs
+
+        // Test edge cases
+        assert!(!constant_time_str_eq("key-001", "KEY-001")); // Case sensitivity
+        assert!(!constant_time_str_eq("key-001 ", "key-001")); // Trailing space
+        assert!(!constant_time_str_eq(" key-001", "key-001")); // Leading space
+    }
+
+    #[tokio::test]
+    async fn test_verify_with_kid_constant_time() {
+        let ctx = b"test_context";
+        let sk1 = [1u8; 32];
+        let sk2 = [2u8; 32];
+        let sk3 = [3u8; 32];
+
+        let core = MultiKeyVoprfCore::new(
+            sk1,
+            "pubkey1".to_string(),
+            "key-2024-01".to_string(),
+            ctx,
+        )
+        .unwrap();
+
+        // Add multiple deprecated keys
+        core.rotate_key(
+            sk2,
+            "pubkey2".to_string(),
+            "key-2024-02".to_string(),
+            Some(3600),
+        )
+        .await
+        .unwrap();
+
+        core.rotate_key(
+            sk3,
+            "pubkey3".to_string(),
+            "key-2024-03".to_string(),
+            Some(3600),
+        )
+        .await
+        .unwrap();
+
+        // Test verifying with active key
+        let result = core.verify_with_kid("test-token", "key-2024-03").await;
+        assert!(result.is_ok());
+
+        // Test verifying with deprecated keys
+        let result = core.verify_with_kid("test-token", "key-2024-02").await;
+        assert!(result.is_ok());
+
+        let result = core.verify_with_kid("test-token", "key-2024-01").await;
+        assert!(result.is_ok());
+
+        // Test with non-existent key
+        let result = core.verify_with_kid("test-token", "key-2024-99").await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unknown key ID"));
+
+        // Test with similar but different key IDs (constant-time should handle these)
+        let result = core.verify_with_kid("test-token", "key-2024-0").await; // Missing last char
+        assert!(result.is_err());
+
+        let result = core.verify_with_kid("test-token", "key-2024-031").await; // Extra char
+        assert!(result.is_err());
+
+        let result = core.verify_with_kid("test-token", "KEY-2024-03").await; // Different case
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_constant_time_key_matching_patterns() {
+        // Test that constant-time comparison works for various key ID patterns
+        let ctx = b"test";
+        let sk = [42u8; 32];
+
+        // Test with different key ID formats
+        let test_cases = vec![
+            ("key-001", "key-001", true),
+            ("key-001", "key-002", false),
+            ("a", "a", true),
+            ("a", "b", false),
+            ("very-long-key-identifier-12345", "very-long-key-identifier-12345", true),
+            ("very-long-key-identifier-12345", "very-long-key-identifier-12346", false),
+            ("key", "key-", false), // Length mismatch
+            ("", "", true),          // Empty strings
+        ];
+
+        for (kid1, kid2, expected) in test_cases {
+            let core = MultiKeyVoprfCore::new(
+                sk,
+                format!("pubkey-{}", kid1),
+                kid1.to_string(),
+                ctx,
+            )
+            .unwrap();
+
+            let result = core.verify_with_kid("token", kid2).await;
+
+            if expected {
+                assert!(
+                    result.is_ok(),
+                    "Expected kid '{}' to match '{}', but it didn't",
+                    kid1,
+                    kid2
+                );
+            } else {
+                assert!(
+                    result.is_err(),
+                    "Expected kid '{}' not to match '{}', but it did",
+                    kid1,
+                    kid2
+                );
+            }
+        }
     }
 }

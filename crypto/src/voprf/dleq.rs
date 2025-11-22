@@ -17,6 +17,7 @@ use p256::{
 };
 use rand_core::{CryptoRng, RngCore};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 /// A DLEQ proof (challenge `c` and response `s`).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -122,7 +123,11 @@ pub fn verify(
     }
 
     let c_check = challenge_scalar(g, y, a, b, &t1_prime, &t2_prime, &full_dst);
-    c_check == proof.c
+
+    // Use constant-time comparison to prevent timing attacks
+    // This prevents attackers from using timing side-channels to extract
+    // information about the expected challenge scalar
+    bool::from(c_check.to_bytes().ct_eq(&proof.c.to_bytes()))
 }
 
 /// Serialize proof to 64 bytes.
@@ -181,5 +186,97 @@ mod tests {
         let mut proof = prove(&k, &g, &y, &a, &b, &mut rng, None);
         proof.s = proof.s + Scalar::ONE;
         assert!(!verify(&g, &y, &a, &b, &proof, None));
+    }
+
+    #[test]
+    fn test_constant_time_verification() {
+        // This test verifies that the comparison is constant-time by checking
+        // that all single-bit flips in the challenge scalar are rejected
+        let mut rng = OsRng;
+        let k = Scalar::random(&mut rng);
+        let g = AffinePoint::GENERATOR;
+        let a = (ProjectivePoint::GENERATOR * Scalar::random(&mut rng)).to_affine();
+        let y = (ProjectivePoint::from(g) * k).to_affine();
+        let b = (ProjectivePoint::from(a) * k).to_affine();
+
+        // Generate a valid proof
+        let proof = prove(&k, &g, &y, &a, &b, &mut rng, Some(b"test"));
+
+        // Verify the original proof is valid
+        assert!(verify(&g, &y, &a, &b, &proof, Some(b"test")));
+
+        // Test all single-bit flips in the challenge scalar
+        // This ensures that the comparison is actually checking all bits
+        let mut c_bytes = proof.c.to_bytes();
+        for byte_idx in 0..32 {
+            for bit_idx in 0..8 {
+                // Flip a single bit
+                c_bytes[byte_idx] ^= 1 << bit_idx;
+
+                // Create modified proof
+                let c_modified = Scalar::reduce_bytes(&FieldBytes::clone_from_slice(&c_bytes));
+                let modified_proof = DleqProof {
+                    c: c_modified,
+                    s: proof.s,
+                };
+
+                // Verification should fail for any single-bit flip
+                assert!(
+                    !verify(&g, &y, &a, &b, &modified_proof, Some(b"test")),
+                    "Failed to detect bit flip at byte {} bit {}",
+                    byte_idx,
+                    bit_idx
+                );
+
+                // Flip the bit back
+                c_bytes[byte_idx] ^= 1 << bit_idx;
+            }
+        }
+    }
+
+    #[test]
+    fn test_proof_rejection_patterns() {
+        // Test that verification properly rejects various types of invalid proofs
+        let mut rng = OsRng;
+        let k = Scalar::random(&mut rng);
+        let g = AffinePoint::GENERATOR;
+        let a = (ProjectivePoint::GENERATOR * Scalar::random(&mut rng)).to_affine();
+        let y = (ProjectivePoint::from(g) * k).to_affine();
+        let b = (ProjectivePoint::from(a) * k).to_affine();
+
+        // Generate a valid proof
+        let proof = prove(&k, &g, &y, &a, &b, &mut rng, Some(b"test"));
+        assert!(verify(&g, &y, &a, &b, &proof, Some(b"test")));
+
+        // Test 1: Modified challenge (c -> c + 1)
+        let bad_proof_1 = DleqProof {
+            c: proof.c + Scalar::ONE,
+            s: proof.s,
+        };
+        assert!(!verify(&g, &y, &a, &b, &bad_proof_1, Some(b"test")));
+
+        // Test 2: Modified response (s -> s + 1)
+        let bad_proof_2 = DleqProof {
+            c: proof.c,
+            s: proof.s + Scalar::ONE,
+        };
+        assert!(!verify(&g, &y, &a, &b, &bad_proof_2, Some(b"test")));
+
+        // Test 3: Wrong domain separation tag
+        assert!(!verify(&g, &y, &a, &b, &proof, Some(b"wrong-dst")));
+
+        // Test 4: Swapped c and s
+        let bad_proof_3 = DleqProof {
+            c: proof.s,
+            s: proof.c,
+        };
+        assert!(!verify(&g, &y, &a, &b, &bad_proof_3, Some(b"test")));
+
+        // Test 5: Zero challenge (should fail)
+        let bad_proof_4 = DleqProof {
+            c: Scalar::ZERO,
+            s: proof.s,
+        };
+        assert!(!verify(&g, &y, &a, &b, &bad_proof_4, Some(b"test")));
     }
 }
