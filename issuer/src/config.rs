@@ -17,6 +17,8 @@ pub struct Config {
     pub sybil_config: SybilConfig,
     pub webauthn_config: Option<WebAuthnConfig>,
     pub admin_api_key: Option<String>,
+    pub epoch_duration_sec: u64,
+    pub epoch_retention: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -65,6 +67,10 @@ impl Config {
         let behind_proxy = env_bool("BEHIND_PROXY");
         let admin_api_key = env::var("ADMIN_API_KEY").ok().filter(|k| !k.is_empty());
 
+        // Epoch configuration for key rotation
+        let epoch_duration_sec = env_u64("EPOCH_DURATION_SEC", 86400); // Default: 1 day
+        let epoch_retention = env_u32("EPOCH_RETENTION", 2); // Default: accept 2 previous epochs
+
         Ok(Self {
             issuer_id,
             bind_addr,
@@ -75,6 +81,8 @@ impl Config {
             sybil_config: SybilConfig::from_env(),
             webauthn_config: WebAuthnConfig::from_env(),
             admin_api_key,
+            epoch_duration_sec,
+            epoch_retention,
         })
     }
 }

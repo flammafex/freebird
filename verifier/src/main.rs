@@ -25,8 +25,34 @@ struct AppState {
     store: Arc<dyn SpendStore>,
     /// Maximum acceptable clock skew in seconds (default: 300 = 5 minutes)
     max_clock_skew_secs: i64,
-    /// MAC key for token metadata verification (derived from issuer secret)
-    mac_key: [u8; 32],
+    /// Issuer secret key for epoch-based MAC key derivation
+    issuer_sk: [u8; 32],
+    /// Epoch configuration
+    epoch_duration_sec: u64,
+    epoch_retention: u32,
+}
+
+impl AppState {
+    /// Calculate current epoch based on Unix timestamp
+    fn current_epoch(&self) -> u32 {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        (now / self.epoch_duration_sec) as u32
+    }
+
+    /// Check if an epoch is valid (within acceptable range)
+    fn is_epoch_valid(&self, epoch: u32) -> bool {
+        let current = self.current_epoch();
+        let min_valid = current.saturating_sub(self.epoch_retention);
+        epoch >= min_valid && epoch <= current
+    }
+
+    /// Derive MAC key for a specific epoch
+    fn derive_mac_key_for_epoch(&self, issuer_id: &str, kid: &str, epoch: u32) -> [u8; 32] {
+        crypto::derive_mac_key_v2(&self.issuer_sk, issuer_id, kid, epoch)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -63,8 +89,8 @@ async fn main() -> anyhow::Result<()> {
 
     info!("⏰ Clock skew tolerance: {} seconds", max_clock_skew_secs);
 
-    // ---------- MAC Key Configuration ----------
-    // The verifier needs the issuer's secret key to derive the MAC key
+    // ---------- Epoch-based Key Configuration ----------
+    // The verifier needs the issuer's secret key to derive epoch-specific MAC keys
     // In production deployments, issuer and verifier are managed by the same entity
     let issuer_secret = std::env::var("ISSUER_SECRET_KEY")
         .context("ISSUER_SECRET_KEY environment variable not set")?;
@@ -75,10 +101,18 @@ async fn main() -> anyhow::Result<()> {
         .try_into()
         .map_err(|_| anyhow::anyhow!("ISSUER_SECRET_KEY must be exactly 32 bytes (64 hex chars)"))?;
 
-    // Derive MAC key (using legacy version for now - will upgrade to v2)
-    let mac_key = crypto::derive_mac_key(&sk_bytes, b"freebird:mac:v1");
+    // Epoch configuration
+    let epoch_duration_sec = std::env::var("EPOCH_DURATION_SEC")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(86400); // Default: 1 day
 
-    info!("🔐 MAC key derived for token metadata verification");
+    let epoch_retention = std::env::var("EPOCH_RETENTION")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2); // Default: accept 2 previous epochs
+
+    info!("🔐 Epoch-based MAC key derivation configured: duration={}s, retention={}", epoch_duration_sec, epoch_retention);
 
     // ---------- Backend selection ----------
     let backend = if let Ok(url) = std::env::var("REDIS_URL") {
@@ -100,7 +134,9 @@ async fn main() -> anyhow::Result<()> {
         issuers: Arc::new(RwLock::new(HashMap::new())),
         store,
         max_clock_skew_secs,
-        mac_key,
+        issuer_sk: sk_bytes,
+        epoch_duration_sec,
+        epoch_retention,
     });
 
     // Background refresh loop
@@ -255,7 +291,20 @@ async fn verify(
         // expiration checking but maintains backward compatibility.
     }
 
-    // 3) Verify MAC over token metadata (constant-time)
+    // 3) Validate epoch is within acceptable range
+    if !st.is_epoch_valid(req.epoch) {
+        error!(
+            "❌ Invalid epoch: got {}, current={}, min_valid={}",
+            req.epoch,
+            st.current_epoch(),
+            st.current_epoch().saturating_sub(st.epoch_retention)
+        );
+        return Err((StatusCode::BAD_REQUEST, "invalid epoch".to_string()));
+    }
+
+    debug!("✅ Epoch {} is valid", req.epoch);
+
+    // 4) Verify MAC over token metadata (constant-time)
     //    This must happen BEFORE VOPRF verification to prevent tampering
     let exp_value = req.exp.ok_or_else(|| {
         error!("❌ Token missing expiration field");
@@ -279,9 +328,12 @@ async fn verify(
     let (token_data, mac_bytes) = token_with_mac.split_at(131);
     let received_mac: [u8; 32] = mac_bytes.try_into().expect("MAC is 32 bytes");
 
+    // Derive epoch-specific MAC key
+    let mac_key = st.derive_mac_key_for_epoch(&req.issuer_id, &issuer.kid, req.epoch);
+
     // Verify MAC in constant time
     let mac_valid = crypto::verify_token_mac(
-        &st.mac_key,
+        &mac_key,
         token_data,
         &received_mac,
         &issuer.kid,
@@ -395,7 +447,15 @@ async fn batch_verify(
 
     // Helper function to verify a single token
     let verify_one = |token_req: &TokenToVerify| -> VerifyResult {
-        // 1) Check expiration
+        // 1) Validate epoch is within acceptable range
+        if !st.is_epoch_valid(token_req.epoch) {
+            return VerifyResult::Error {
+                message: format!("invalid epoch: {}", token_req.epoch),
+                code: "invalid_epoch".to_string(),
+            };
+        }
+
+        // 2) Check expiration
         if let Some(exp) = token_req.exp {
             if now > exp + st.max_clock_skew_secs {
                 return VerifyResult::Error {
@@ -419,7 +479,7 @@ async fn batch_verify(
 
         let exp_value = token_req.exp.unwrap();
 
-        // 2) Decode and validate token length
+        // 3) Decode and validate token length
         let token_with_mac = match Base64UrlUnpadded::decode_vec(&token_req.token_b64) {
             Ok(t) => t,
             Err(_) => {
@@ -437,7 +497,7 @@ async fn batch_verify(
             };
         }
 
-        // 3) Verify MAC
+        // 4) Verify MAC with epoch-specific key
         let (token_data, mac_bytes) = token_with_mac.split_at(131);
         let received_mac: [u8; 32] = match mac_bytes.try_into() {
             Ok(m) => m,
@@ -449,8 +509,11 @@ async fn batch_verify(
             }
         };
 
+        // Derive epoch-specific MAC key
+        let mac_key = st.derive_mac_key_for_epoch(&issuer_id, &issuer_clone.kid, token_req.epoch);
+
         let mac_valid = crypto::verify_token_mac(
-            &st.mac_key,
+            &mac_key,
             token_data,
             &received_mac,
             &issuer_clone.kid,

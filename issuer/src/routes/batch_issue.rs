@@ -118,13 +118,14 @@ fn validate_blinded_element(blinded_b64: &str) -> Result<Vec<u8>, String> {
 // / 1. SIMD: Batch point operations (requires custom implementation)
 // / 2. GPU: Offload to GPU for large batches (>10k tokens)
 // / 3. Hardware crypto: Use CPU crypto extensions (AES-NI, SHA-NI)
-async fn evaluate_token(voprf: &MultiKeyVoprfCore, blinded_b64: &str, exp: i64) -> TokenResult {
+async fn evaluate_token(voprf: &MultiKeyVoprfCore, blinded_b64: &str, exp: i64, epoch: u32) -> TokenResult {
     match voprf.evaluate_b64(blinded_b64).await {
         Ok(eval_result) => TokenResult::Success {
             token: eval_result.token,
             proof: String::new(),
             kid: eval_result.kid,
             exp,
+            epoch,
         },
         Err(e) => TokenResult::Error {
             message: e.to_string(),
@@ -263,8 +264,9 @@ pub async fn handle_batch(
     // --- PARALLEL VOPRF EVALUATION ---
     let voprf_start = Instant::now();
 
-    // Calculate expiration once for all tokens
+    // Calculate expiration and epoch once for all tokens
     let exp = OffsetDateTime::now_utc().unix_timestamp() + state.exp_sec as i64;
+    let epoch = state.current_epoch();
 
     // Choose processing strategy based on batch size
     let results = if batch_size < MIN_PARALLEL_BATCH_SIZE {
@@ -280,7 +282,7 @@ pub async fn handle_batch(
             match validate_blinded_element(blinded_b64) {
                 Ok(_) => {
                     // Evaluate VOPRF
-                    results.push(evaluate_token(&voprf, blinded_b64, exp).await);
+                    results.push(evaluate_token(&voprf, blinded_b64, exp, epoch).await);
                 }
                 Err(e) => {
                     results.push(TokenResult::Error {
@@ -315,7 +317,7 @@ pub async fn handle_batch(
                     Ok(_) => {
                         // Use blocking task to await async evaluation
                         handle.block_on(async {
-                            evaluate_token(&voprf, &req.blinded_elements[idx], exp).await
+                            evaluate_token(&voprf, &req.blinded_elements[idx], exp, epoch).await
                         })
                     }
                     Err(e) => TokenResult::Error {
@@ -330,14 +332,14 @@ pub async fn handle_batch(
     let voprf_time_ms = voprf_start.elapsed().as_millis() as u64;
 
     // --- APPEND MACs TO TOKENS ---
-    // Get MAC key for metadata binding
-    let mac_key = voprf.active_mac_key().await;
+    // Derive epoch-specific MAC key for metadata binding (epoch was calculated earlier)
+    let mac_key = voprf.derive_mac_key_for_epoch(&state.issuer_id, epoch).await;
 
     // Process each result and append MAC to successful tokens
     let results: Vec<TokenResult> = results
         .into_iter()
         .map(|result| match result {
-            TokenResult::Success { token, proof, kid, exp } => {
+            TokenResult::Success { token, proof, kid, exp, epoch: token_epoch } => {
                 // Decode token to get raw bytes
                 match Base64UrlUnpadded::decode_vec(&token) {
                     Ok(token_bytes) => {
@@ -362,6 +364,7 @@ pub async fn handle_batch(
                             proof,
                             kid,
                             exp,
+                            epoch: token_epoch,
                         }
                     }
                     Err(e) => {

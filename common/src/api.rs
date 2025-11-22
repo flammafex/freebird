@@ -35,6 +35,9 @@ pub struct IssueResp {
     /// Expiration timestamp (Unix seconds)
     pub exp: i64,
 
+    /// Epoch used for MAC key derivation
+    pub epoch: u32,
+
     /// Optional Sybil resistance verification info
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sybil_info: Option<SybilInfo>,
@@ -81,6 +84,7 @@ pub enum TokenResult {
         proof: String,
         kid: String,
         exp: i64,
+        epoch: u32,
     },
     Error {
         message: String,
@@ -96,11 +100,14 @@ pub enum TokenResult {
 pub struct VerifyReq {
     pub token_b64: String,
     pub issuer_id: String,
-    
+
     /// Optional: Token expiration time (Unix timestamp)
     /// If provided, verifier checks clock skew against this.
     #[serde(default)]
     pub exp: Option<i64>,
+
+    /// Epoch used for MAC key derivation
+    pub epoch: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -132,6 +139,9 @@ pub struct TokenToVerify {
     /// If provided, verifier checks clock skew against this.
     #[serde(default)]
     pub exp: Option<i64>,
+
+    /// Epoch used for MAC key derivation
+    pub epoch: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -183,4 +193,25 @@ pub enum SybilProof {
         timestamp: i64,
     },
     None,
+}
+
+// ============================================================================
+// Key Management Types
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct KeyDiscoveryResp {
+    pub issuer_id: String,
+    pub current_epoch: u32,
+    pub valid_epochs: Vec<u32>,
+    pub epoch_duration_sec: u64,
+    pub voprf: VoprfKeyInfo,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VoprfKeyInfo {
+    pub suite: String,
+    pub kid: String,
+    pub pubkey: String,
+    pub exp_sec: u64,
 }

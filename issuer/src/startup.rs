@@ -169,6 +169,8 @@ impl Application {
             behind_proxy: config.behind_proxy,
             sybil_checker: sybil_checker.clone(),
             invitation_system: invitation_system.clone(),
+            epoch_duration_sec: config.epoch_duration_sec,
+            epoch_retention: config.epoch_retention,
         });
 
         let app_state = (state.clone(), voprf.clone());
@@ -177,6 +179,7 @@ impl Application {
         // Note: routes::metadata::well_known_handler must exist!
         let mut app = Router::new()
             .route("/.well-known/issuer", get(routes::metadata::well_known_handler))
+            .route("/.well-known/keys", get(routes::metadata::keys_handler))
             .route("/v1/oprf/issue", post(routes::issue::handle))
             .route("/v1/oprf/issue/batch", post(routes::batch_issue::handle_batch))
             .layer(DefaultBodyLimit::max(64 * 1024));

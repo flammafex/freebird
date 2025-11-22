@@ -13,8 +13,7 @@ pub struct IssuerSecret(pub [u8; 32]);
 pub struct VoprfCore {
     server: Server,
     ctx: Vec<u8>,
-    _sk: IssuerSecret,
-    mac_key: [u8; 32], // Derived MAC key for token metadata binding
+    sk: [u8; 32], // Store secret key for epoch-based MAC key derivation
     pub pubkey_b64: String,
     pub kid: String,
 }
@@ -25,23 +24,18 @@ impl VoprfCore {
         let server = Server::from_secret_key(sk, ctx)
             .map_err(|_| anyhow!("invalid secret key"))?;
 
-        // Derive MAC key from server secret key using HKDF
-        // This provides key separation between VOPRF and MAC operations
-        let mac_key = crypto::derive_mac_key(&sk, b"freebird:mac:v1");
-
         Ok(Self {
             server,
             ctx: ctx.to_vec(),
-            _sk: IssuerSecret(sk),
-            mac_key,
+            sk,
             pubkey_b64,
             kid,
         })
     }
 
-    /// Get the MAC key for token metadata binding
-    pub fn mac_key(&self) -> &[u8; 32] {
-        &self.mac_key
+    /// Derive MAC key for a specific epoch
+    pub fn derive_mac_key_for_epoch(&self, issuer_id: &str, epoch: u32) -> [u8; 32] {
+        crypto::derive_mac_key_v2(&self.sk, issuer_id, &self.kid, epoch)
     }
 
     pub fn evaluate_b64(&self, blinded_b64: &str) -> Result<String> {

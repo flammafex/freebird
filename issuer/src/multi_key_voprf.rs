@@ -210,9 +210,9 @@ impl MultiKeyVoprfCore {
         self.active_key.read().await.pubkey_b64.clone()
     }
 
-    /// Get the active key's MAC key for token metadata binding
-    pub async fn active_mac_key(&self) -> [u8; 32] {
-        *self.active_key.read().await.mac_key()
+    /// Derive MAC key for the active key and given epoch
+    pub async fn derive_mac_key_for_epoch(&self, issuer_id: &str, epoch: u32) -> [u8; 32] {
+        self.active_key.read().await.derive_mac_key_for_epoch(issuer_id, epoch)
     }
 
     /// Evaluate a blinded element using the active key
