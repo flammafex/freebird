@@ -4,30 +4,58 @@ use anyhow::{anyhow, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use tracing::{debug, error};
 use zeroize::{Zeroize, ZeroizeOnDrop};
-use crypto::voprf::core::Server;
+use std::sync::Arc;
 
 // Ensure IssuerSecret is defined if not imported
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct IssuerSecret(pub [u8; 32]);
 
+/// VOPRF core using pluggable crypto provider (software or HSM)
 pub struct VoprfCore {
-    server: Server,
+    /// Crypto provider (software or HSM)
+    provider: Arc<dyn crypto::provider::CryptoProvider>,
+
+    /// Context (cached from provider)
     ctx: Vec<u8>,
-    sk: [u8; 32], // Store secret key for epoch-based MAC key derivation
+
+    /// Public key base64 (cached)
     pub pubkey_b64: String,
+
+    /// Key ID (cached)
     pub kid: String,
 }
 
 impl VoprfCore {
+    /// Create a new VoprfCore with a software crypto provider
+    ///
+    /// This is the default constructor that uses software-based cryptography.
+    /// For HSM support, use `from_provider` instead.
     pub fn new(sk: [u8; 32], pubkey_b64: String, kid: String, ctx: &[u8]) -> Result<Self> {
-        // Initialize the server with the secret key and context
-        let server = Server::from_secret_key(sk, ctx)
-            .map_err(|_| anyhow!("invalid secret key"))?;
+        // Create software provider
+        let provider = crypto::provider::software::SoftwareCryptoProvider::new(
+            sk,
+            kid.clone(),
+            ctx.to_vec(),
+        )?;
 
         Ok(Self {
-            server,
+            provider: Arc::new(provider),
             ctx: ctx.to_vec(),
-            sk,
+            pubkey_b64,
+            kid,
+        })
+    }
+
+    /// Create a new VoprfCore from a crypto provider
+    ///
+    /// This allows using HSM-backed providers or custom implementations.
+    pub fn from_provider(provider: Arc<dyn crypto::provider::CryptoProvider>, pubkey_b64: String) -> Result<Self> {
+        let kid = provider.key_id().to_string();
+        let ctx = provider.context().to_vec();
+
+        Ok(Self {
+            provider,
+            ctx,
             pubkey_b64,
             kid,
         })
@@ -35,7 +63,17 @@ impl VoprfCore {
 
     /// Derive MAC key for a specific epoch
     pub fn derive_mac_key_for_epoch(&self, issuer_id: &str, epoch: u32) -> [u8; 32] {
-        crypto::derive_mac_key_v2(&self.sk, issuer_id, &self.kid, epoch)
+        // Use async runtime to call async provider method
+        let provider = self.provider.clone();
+        let issuer_id = issuer_id.to_string();
+        let kid = self.kid.clone();
+
+        // Block on async call (we're in a sync context)
+        tokio::runtime::Handle::current().block_on(async move {
+            provider.derive_mac_key(&issuer_id, &kid, epoch)
+                .await
+                .expect("MAC key derivation should not fail")
+        })
     }
 
     pub fn evaluate_b64(&self, blinded_b64: &str) -> Result<String> {
@@ -54,13 +92,14 @@ impl VoprfCore {
             ));
         }
 
-        // 3. Perform Evaluation (No panic catching needed)
-        // We map the internal crypto error to a generic anyhow error to avoid leaking details.
-        let token = self.server.evaluate(&blinded)
-            .map_err(|e| {
-                error!("❌ VOPRF evaluation failed: {:?}", e);
-                anyhow!("VOPRF evaluation failed")
-            })?;
+        // 3. Perform Evaluation using provider
+        let provider = self.provider.clone();
+        let token = tokio::runtime::Handle::current().block_on(async move {
+            provider.voprf_evaluate(&blinded).await
+        }).map_err(|e| {
+            error!("❌ VOPRF evaluation failed: {:?}", e);
+            anyhow!("VOPRF evaluation failed")
+        })?;
 
         // 4. Sanity check the output size
         // Expected: 1 (VERSION) + 33 (A) + 33 (B) + 64 (DLEQ proof) = 131 bytes
@@ -78,7 +117,7 @@ impl VoprfCore {
         // 5. Encode and Return
         let encoded = Base64UrlUnpadded::encode_string(&token);
         debug!("✅ evaluate_b64 succeeded (encoded len={})", encoded.len());
-        
+
         Ok(encoded)
     }
 

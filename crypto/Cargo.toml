@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 [features]
 default = ["voprf-p256"]
 voprf-p256 = []
+pkcs11 = ["cryptoki"]
 
 [dependencies]
 # Core curve + math for P-256 VOPRF implementation
@@ -25,6 +26,12 @@ hmac           = "0.12"
 base64ct       = { version = "1.8", features = ["alloc"] }
 generic-array  = "0.14"
 zeroize        = "1"
+anyhow         = "1"
+
+# HSM / PKCS#11 support (optional)
+cryptoki       = { version = "0.6", optional = true }
+async-trait    = "0.1"
 
 [dev-dependencies]
-proptest = "1.4"  # <--- Add this line
+proptest = "1.4"
+tokio = { version = "1", features = ["rt", "macros"] }
