@@ -35,3 +35,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tower_governor = "0.5"
 subtle = "2.5"
 hex = "0.4"
+rayon = "1.10"

@@ -115,6 +115,47 @@ pub struct VerifyResp {
 }
 
 // ============================================================================
+// Batch Verification Types
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchVerifyReq {
+    pub tokens: Vec<TokenToVerify>,
+    pub issuer_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TokenToVerify {
+    pub token_b64: String,
+
+    /// Optional: Token expiration time (Unix timestamp)
+    /// If provided, verifier checks clock skew against this.
+    #[serde(default)]
+    pub exp: Option<i64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct BatchVerifyResp {
+    pub results: Vec<VerifyResult>,
+    pub successful: usize,
+    pub failed: usize,
+    pub processing_time_ms: u64,
+    pub throughput: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+pub enum VerifyResult {
+    Success {
+        verified_at: i64,
+    },
+    Error {
+        message: String,
+        code: String,
+    },
+}
+
+// ============================================================================
 // Sybil Proof Types
 // ============================================================================
 

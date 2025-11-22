@@ -9,11 +9,12 @@ use axum::{
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use common::logging;
+use rayon::prelude::*;
 use serde::Deserialize;
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::{Duration, Instant}};
 use tokio::{net::TcpListener, sync::RwLock, time::sleep};
 use tracing::{debug, error, info, warn};
-use common::api::{VerifyReq, VerifyResp};
+use common::api::{VerifyReq, VerifyResp, BatchVerifyReq, BatchVerifyResp, VerifyResult, TokenToVerify};
 
 // FIX: Import from the library crate instead of local mod
 use verifier::store::{SpendStore, StoreBackend};
@@ -42,7 +43,7 @@ struct VoprfInfo {
     exp_sec: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct IssuerInfo {
     pubkey_bytes: Vec<u8>,
     kid: String,
@@ -125,6 +126,7 @@ async fn main() -> anyhow::Result<()> {
     // ---------- Router ----------
     let app = Router::new()
         .route("/v1/verify", post(verify_with_logging))
+        .route("/v1/verify/batch", post(batch_verify))
         .with_state(state);
 
     // ---------- Serve ----------
@@ -340,6 +342,200 @@ async fn verify(
         ok: true,
         error: None,
         verified_at: now,
+    }))
+}
+
+/// Maximum batch size for batch verification
+const MAX_BATCH_SIZE: usize = 10_000;
+
+/// Minimum batch size for parallel processing
+const MIN_PARALLEL_BATCH_SIZE: usize = 10;
+
+// ---------- Batch Verification Handler ----------
+async fn batch_verify(
+    State(st): State<Arc<AppState>>,
+    Json(req): Json<BatchVerifyReq>,
+) -> Result<Json<BatchVerifyResp>, (StatusCode, String)> {
+    let start = Instant::now();
+    let batch_size = req.tokens.len();
+
+    info!(
+        "🔥 /v1/verify/batch: size={}, issuer={}",
+        batch_size, req.issuer_id
+    );
+
+    // --- VALIDATION ---
+    if batch_size == 0 {
+        return Err((StatusCode::BAD_REQUEST, "batch cannot be empty".to_string()));
+    }
+
+    if batch_size > MAX_BATCH_SIZE {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("batch size {} exceeds maximum {}", batch_size, MAX_BATCH_SIZE),
+        ));
+    }
+
+    // --- LOOKUP ISSUER (once for all tokens) ---
+    let issuers = st.issuers.read().await;
+    let issuer = issuers.get(&req.issuer_id).ok_or_else(|| {
+        error!("Issuer not found: {}", req.issuer_id);
+        (StatusCode::UNAUTHORIZED, "verification failed".to_string())
+    })?;
+
+    // Clone issuer data so we can drop the lock before parallel processing
+    let issuer_clone = issuer.clone();
+    let issuer_id = req.issuer_id.clone();
+    drop(issuers);
+
+    info!("✅ Issuer found: kid={}", issuer_clone.kid);
+
+    // --- PARALLEL VERIFICATION ---
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+
+    // Helper function to verify a single token
+    let verify_one = |token_req: &TokenToVerify| -> VerifyResult {
+        // 1) Check expiration
+        if let Some(exp) = token_req.exp {
+            if now > exp + st.max_clock_skew_secs {
+                return VerifyResult::Error {
+                    message: "token expired".to_string(),
+                    code: "expired".to_string(),
+                };
+            }
+
+            if exp > now + issuer_clone.exp_sec as i64 + st.max_clock_skew_secs {
+                return VerifyResult::Error {
+                    message: "invalid token expiration".to_string(),
+                    code: "invalid_expiration".to_string(),
+                };
+            }
+        } else {
+            return VerifyResult::Error {
+                message: "token must include expiration".to_string(),
+                code: "missing_expiration".to_string(),
+            };
+        }
+
+        let exp_value = token_req.exp.unwrap();
+
+        // 2) Decode and validate token length
+        let token_with_mac = match Base64UrlUnpadded::decode_vec(&token_req.token_b64) {
+            Ok(t) => t,
+            Err(_) => {
+                return VerifyResult::Error {
+                    message: "invalid token encoding".to_string(),
+                    code: "invalid_encoding".to_string(),
+                };
+            }
+        };
+
+        if token_with_mac.len() != 163 {
+            return VerifyResult::Error {
+                message: format!("invalid token length: got {} bytes, expected 163", token_with_mac.len()),
+                code: "invalid_length".to_string(),
+            };
+        }
+
+        // 3) Verify MAC
+        let (token_data, mac_bytes) = token_with_mac.split_at(131);
+        let received_mac: [u8; 32] = match mac_bytes.try_into() {
+            Ok(m) => m,
+            Err(_) => {
+                return VerifyResult::Error {
+                    message: "invalid MAC".to_string(),
+                    code: "invalid_mac".to_string(),
+                };
+            }
+        };
+
+        let mac_valid = crypto::verify_token_mac(
+            &st.mac_key,
+            token_data,
+            &received_mac,
+            &issuer_clone.kid,
+            exp_value,
+            &issuer_id,
+        );
+
+        if !mac_valid {
+            return VerifyResult::Error {
+                message: "MAC verification failed".to_string(),
+                code: "mac_verification_failed".to_string(),
+            };
+        }
+
+        // 4) Verify VOPRF token
+        let verifier = crypto::Verifier::new(&issuer_clone.ctx);
+        let token_data_b64 = Base64UrlUnpadded::encode_string(token_data);
+        let out_b64 = match verifier.verify(&token_data_b64, &issuer_clone.pubkey_bytes) {
+            Ok(o) => o,
+            Err(_) => {
+                return VerifyResult::Error {
+                    message: "cryptographic verification failed".to_string(),
+                    code: "voprf_verification_failed".to_string(),
+                };
+            }
+        };
+
+        // 5) Check for replay - this is the only part that needs to be async
+        // We'll handle this synchronously in the parallel loop by using block_on
+        let null_key = crypto::nullifier_key(&issuer_id, &out_b64);
+        let spend_key = format!("freebird:spent:{}:{}", issuer_id, null_key);
+
+        // Use tokio::runtime::Handle to bridge rayon and tokio
+        let handle = tokio::runtime::Handle::current();
+        let spent = handle.block_on(async {
+            st.store
+                .mark_spent(&spend_key, Duration::from_secs(issuer_clone.exp_sec))
+                .await
+        });
+
+        match spent {
+            Ok(true) => VerifyResult::Success {
+                verified_at: now,
+            },
+            Ok(false) => VerifyResult::Error {
+                message: "token already used".to_string(),
+                code: "replay_detected".to_string(),
+            },
+            Err(_) => VerifyResult::Error {
+                message: "store error".to_string(),
+                code: "store_error".to_string(),
+            },
+        }
+    };
+
+    // Process tokens in parallel or sequentially based on batch size
+    let results: Vec<VerifyResult> = if batch_size < MIN_PARALLEL_BATCH_SIZE {
+        debug!("using sequential processing for small batch (n={})", batch_size);
+        req.tokens.iter().map(verify_one).collect()
+    } else {
+        debug!("using parallel processing for batch (n={})", batch_size);
+        req.tokens.par_iter().map(verify_one).collect()
+    };
+
+    // --- AGGREGATE RESULTS ---
+    let successful = results
+        .iter()
+        .filter(|r| matches!(r, VerifyResult::Success { .. }))
+        .count();
+    let failed = batch_size - successful;
+
+    let total_time_ms = start.elapsed().as_millis() as u64;
+    let throughput = (successful as f64 / total_time_ms as f64) * 1000.0;
+
+    info!(
+        "📊 Batch verify metrics: total={}ms, success={}/{}, throughput={:.0} tok/s",
+        total_time_ms, successful, batch_size, throughput
+    );
+
+    Ok(Json(BatchVerifyResp {
+        results,
+        successful,
+        failed,
+        processing_time_ms: total_time_ms,
+        throughput,
     }))
 }
 
