@@ -213,8 +213,10 @@ fn env_u32(key: &str, default: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
+    #[serial]
     fn test_hsm_config_disabled_by_default() {
         // Clear HSM environment variables
         env::remove_var("HSM_ENABLE");
@@ -228,6 +230,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_hsm_config_storage_mode() {
         // Set HSM environment variables
         env::set_var("HSM_ENABLE", "true");
@@ -257,6 +260,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_hsm_config_full_mode() {
         env::set_var("HSM_ENABLE", "true");
         env::set_var("HSM_MODE", "full");
@@ -278,6 +282,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_hsm_config_defaults_to_storage() {
         // Clear all HSM vars first to avoid test pollution
         env::remove_var("HSM_ENABLE");
@@ -307,6 +312,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     #[should_panic(expected = "HSM_MODULE_PATH required")]
     fn test_hsm_config_missing_module_path() {
         env::set_var("HSM_ENABLE", "true");
@@ -319,6 +325,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     #[should_panic(expected = "HSM_SLOT required")]
     fn test_hsm_config_missing_slot() {
         env::set_var("HSM_ENABLE", "true");
