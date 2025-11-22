@@ -45,3 +45,5 @@ chrono = { version = "0.4", optional = true }
 async-trait = "0.1"  # For async trait implementations
 redis = { version = "0.24", features = ["aio", "tokio-comp"], optional = true }
 
+[dev-dependencies]
+serial_test = "3"
