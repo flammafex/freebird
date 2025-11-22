@@ -174,7 +174,48 @@ pub fn verify_token_mac(
     bool::from(computed.ct_eq(received_mac))
 }
 
-/// Derive MAC key from server secret key using HKDF
+/// Derive MAC key from server secret key using HKDF with domain separation
+///
+/// This ensures the MAC key is cryptographically independent from the
+/// VOPRF secret key, following the principle of key separation.
+///
+/// # Arguments
+/// * `server_sk` - Server's secret key (32 bytes)
+/// * `issuer_id` - Issuer identifier for domain separation
+/// * `key_id` - Key identifier (kid)
+/// * `epoch` - Epoch number for key rotation (0 for initial deployment)
+///
+/// # Returns
+/// Derived 32-byte MAC key
+///
+/// # Security
+/// - Uses HKDF-SHA256 for cryptographic key derivation
+/// - Domain-separated by issuer_id, key_id, and epoch
+/// - Enables forward secrecy through epoch rotation
+pub fn derive_mac_key_v2(
+    server_sk: &[u8; 32],
+    issuer_id: &str,
+    key_id: &str,
+    epoch: u32,
+) -> [u8; 32] {
+    use hkdf::Hkdf;
+
+    // Domain-separated info string
+    let info = format!("freebird-mac-v1|{}|{}|{}", issuer_id, key_id, epoch);
+
+    let hkdf = Hkdf::<Sha256>::new(
+        Some(b"freebird-mac-salt"), // Salt for additional entropy
+        server_sk,
+    );
+
+    let mut mac_key = [0u8; 32];
+    hkdf.expand(info.as_bytes(), &mut mac_key)
+        .expect("32 bytes is a valid HKDF output length");
+
+    mac_key
+}
+
+/// Derive MAC key from server secret key using HKDF (legacy, simple version)
 ///
 /// This ensures the MAC key is cryptographically independent from the
 /// VOPRF secret key, following the principle of key separation.
@@ -282,6 +323,33 @@ mod tests {
 
         // Keys should not be all zeros
         assert_ne!(key1a, [0u8; 32]);
+    }
+
+    #[test]
+    fn test_mac_key_derivation_v2() {
+        let sk = [7u8; 32];
+        let issuer = "test-issuer";
+        let kid = "key-001";
+
+        // Same parameters produce same key (deterministic)
+        let key1 = derive_mac_key_v2(&sk, issuer, kid, 0);
+        let key2 = derive_mac_key_v2(&sk, issuer, kid, 0);
+        assert_eq!(key1, key2);
+
+        // Different epoch produces different key
+        let key_epoch1 = derive_mac_key_v2(&sk, issuer, kid, 1);
+        assert_ne!(key1, key_epoch1);
+
+        // Different issuer produces different key
+        let key_issuer2 = derive_mac_key_v2(&sk, "other-issuer", kid, 0);
+        assert_ne!(key1, key_issuer2);
+
+        // Different kid produces different key
+        let key_kid2 = derive_mac_key_v2(&sk, issuer, "key-002", 0);
+        assert_ne!(key1, key_kid2);
+
+        // Keys should not be all zeros
+        assert_ne!(key1, [0u8; 32]);
     }
 
     #[test]

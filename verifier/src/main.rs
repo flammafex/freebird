@@ -24,6 +24,8 @@ struct AppState {
     store: Arc<dyn SpendStore>,
     /// Maximum acceptable clock skew in seconds (default: 300 = 5 minutes)
     max_clock_skew_secs: i64,
+    /// MAC key for token metadata verification (derived from issuer secret)
+    mac_key: [u8; 32],
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -60,6 +62,23 @@ async fn main() -> anyhow::Result<()> {
 
     info!("⏰ Clock skew tolerance: {} seconds", max_clock_skew_secs);
 
+    // ---------- MAC Key Configuration ----------
+    // The verifier needs the issuer's secret key to derive the MAC key
+    // In production deployments, issuer and verifier are managed by the same entity
+    let issuer_secret = std::env::var("ISSUER_SECRET_KEY")
+        .context("ISSUER_SECRET_KEY environment variable not set")?;
+
+    // Decode hex secret key
+    let sk_bytes: [u8; 32] = hex::decode(&issuer_secret)
+        .context("Invalid ISSUER_SECRET_KEY hex encoding")?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("ISSUER_SECRET_KEY must be exactly 32 bytes (64 hex chars)"))?;
+
+    // Derive MAC key (using legacy version for now - will upgrade to v2)
+    let mac_key = crypto::derive_mac_key(&sk_bytes, b"freebird:mac:v1");
+
+    info!("🔐 MAC key derived for token metadata verification");
+
     // ---------- Backend selection ----------
     let backend = if let Ok(url) = std::env::var("REDIS_URL") {
         StoreBackend::Redis(url)
@@ -80,6 +99,7 @@ async fn main() -> anyhow::Result<()> {
         issuers: Arc::new(RwLock::new(HashMap::new())),
         store,
         max_clock_skew_secs,
+        mac_key,
     });
 
     // Background refresh loop
@@ -233,11 +253,55 @@ async fn verify(
         // expiration checking but maintains backward compatibility.
     }
 
-    // 3) Verify DLEQ token and derive PRF output
+    // 3) Verify MAC over token metadata (constant-time)
+    //    This must happen BEFORE VOPRF verification to prevent tampering
+    let exp_value = req.exp.ok_or_else(|| {
+        error!("❌ Token missing expiration field");
+        (StatusCode::BAD_REQUEST, "token must include expiration".to_string())
+    })?;
+
+    // Decode token to split MAC from token data
+    let token_with_mac = Base64UrlUnpadded::decode_vec(&req.token_b64).map_err(|e| {
+        error!("❌ Failed to decode token: {:?}", e);
+        (StatusCode::BAD_REQUEST, "invalid token encoding".to_string())
+    })?;
+
+    // Token format: [VERSION||A||B||Proof||MAC]
+    // Expected: 131 bytes (VOPRF) + 32 bytes (MAC) = 163 bytes
+    if token_with_mac.len() != 163 {
+        error!("❌ Invalid token length: got {} bytes, expected 163", token_with_mac.len());
+        return Err((StatusCode::BAD_REQUEST, "invalid token length".to_string()));
+    }
+
+    // Split token and MAC
+    let (token_data, mac_bytes) = token_with_mac.split_at(131);
+    let received_mac: [u8; 32] = mac_bytes.try_into().expect("MAC is 32 bytes");
+
+    // Verify MAC in constant time
+    let mac_valid = crypto::verify_token_mac(
+        &st.mac_key,
+        token_data,
+        &received_mac,
+        &issuer.kid,
+        exp_value,
+        &req.issuer_id,
+    );
+
+    if !mac_valid {
+        error!("❌ MAC verification failed - token metadata tampered");
+        return Err((StatusCode::UNAUTHORIZED, "verification failed".to_string()));
+    }
+
+    debug!("✅ MAC verified - token metadata authentic");
+
+    // 4) Verify DLEQ token and derive PRF output (without MAC)
     debug!("Verifying DLEQ token with context len={}", issuer.ctx.len());
     let verifier = crypto::Verifier::new(&issuer.ctx);
+
+    // Pass only the token data (without MAC) to VOPRF verifier
+    let token_data_b64 = Base64UrlUnpadded::encode_string(token_data);
     let out_b64 = verifier
-        .verify(&req.token_b64, &issuer.pubkey_bytes)
+        .verify(&token_data_b64, &issuer.pubkey_bytes)
         .map_err(|e| {
             error!("Token cryptographic verification failed: {:?}", e);
             (StatusCode::UNAUTHORIZED, "verification failed".into())

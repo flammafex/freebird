@@ -2969,6 +2969,7 @@ dependencies = [
  "base64ct",
  "common",
  "crypto",
+ "hex",
  "redis",
  "reqwest 0.12.24",
  "serde",

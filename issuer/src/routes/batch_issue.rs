@@ -329,6 +329,55 @@ pub async fn handle_batch(
 
     let voprf_time_ms = voprf_start.elapsed().as_millis() as u64;
 
+    // --- APPEND MACs TO TOKENS ---
+    // Get MAC key for metadata binding
+    let mac_key = voprf.active_mac_key().await;
+
+    // Process each result and append MAC to successful tokens
+    let results: Vec<TokenResult> = results
+        .into_iter()
+        .map(|result| match result {
+            TokenResult::Success { token, proof, kid, exp } => {
+                // Decode token to get raw bytes
+                match Base64UrlUnpadded::decode_vec(&token) {
+                    Ok(token_bytes) => {
+                        // Compute MAC over (token || kid || exp || issuer_id)
+                        let mac = crypto::compute_token_mac(
+                            &mac_key,
+                            &token_bytes,
+                            &kid,
+                            exp,
+                            &state.issuer_id,
+                        );
+
+                        // Append MAC: [VERSION||A||B||Proof||MAC]
+                        let mut token_with_mac = token_bytes;
+                        token_with_mac.extend_from_slice(&mac);
+
+                        // Re-encode to base64url
+                        let final_token = Base64UrlUnpadded::encode_string(&token_with_mac);
+
+                        TokenResult::Success {
+                            token: final_token,
+                            proof,
+                            kid,
+                            exp,
+                        }
+                    }
+                    Err(e) => {
+                        error!("failed to decode token for MAC: {:?}", e);
+                        TokenResult::Error {
+                            message: "token encoding error".to_string(),
+                            code: "mac_computation_failed".to_string(),
+                        }
+                    }
+                }
+            }
+            // Pass through errors unchanged
+            err => err,
+        })
+        .collect();
+
     // --- AGGREGATE RESULTS ---
     let successful = results
         .iter()
