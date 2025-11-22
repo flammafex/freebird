@@ -13,7 +13,8 @@ use std::time::Duration;
 struct SavedToken {
     token_b64: String,
     issuer_id: String,
-    exp: i64, // NEW: Save expiration time
+    exp: i64,
+    epoch: u32, // Epoch for key rotation
 }
 
 #[tokio::main]
@@ -102,12 +103,12 @@ async fn normal_flow() -> Result<()> {
         .build()?;
 
     // Issue token
-    let (token_b64, issuer_id, exp) = issue_token(&http, issuer_url, ctx).await?;
+    let (token_b64, issuer_id, exp, epoch) = issue_token(&http, issuer_url, ctx).await?;
 
-    println!("✅ Token issued: exp={} ({}s from now)", exp, exp - now());
+    println!("✅ Token issued: exp={} ({}s from now), epoch={}", exp, exp - now(), epoch);
 
     // Verify token
-    let success = verify_token(&http, verifier_url, &token_b64, &issuer_id, exp).await?;
+    let success = verify_token(&http, verifier_url, &token_b64, &issuer_id, exp, epoch).await?;
 
     if success {
         println!("✅ SUCCESS! Token verified");
@@ -129,11 +130,11 @@ async fn test_replay_attack() -> Result<()> {
 
     // Issue token
     println!("\n📥 Step 1: Issuing fresh token...");
-    let (token_b64, issuer_id, exp) = issue_token(&http, issuer_url, ctx).await?;
+    let (token_b64, issuer_id, exp, epoch) = issue_token(&http, issuer_url, ctx).await?;
 
     // First verification (should succeed)
     println!("\n✅ Step 2: First verification attempt...");
-    let success1 = verify_token(&http, verifier_url, &token_b64, &issuer_id, exp).await?;
+    let success1 = verify_token(&http, verifier_url, &token_b64, &issuer_id, exp, epoch).await?;
 
     if !success1 {
         println!("❌ First verification failed! Something is wrong.");
@@ -147,7 +148,7 @@ async fn test_replay_attack() -> Result<()> {
 
     // Second verification with SAME token (should fail)
     println!("\n🔁 Step 3: Replay attack - reusing the same token...");
-    let success2 = verify_token(&http, verifier_url, &token_b64, &issuer_id, exp).await?;
+    let success2 = verify_token(&http, verifier_url, &token_b64, &issuer_id, exp, epoch).await?;
 
     if !success2 {
         println!("✅ REPLAY PROTECTION WORKING! Token was rejected on second use.");
@@ -175,7 +176,7 @@ async fn test_expired_token() -> Result<()> {
 
     // Issue token
     println!("\n📥 Step 1: Issuing token...");
-    let (token_b64, issuer_id, real_exp) = issue_token(&http, issuer_url, ctx).await?;
+    let (token_b64, issuer_id, real_exp, epoch) = issue_token(&http, issuer_url, ctx).await?;
     println!("✅ Token issued with exp={}", real_exp);
 
     // Try to verify with a past expiration time
@@ -183,7 +184,7 @@ async fn test_expired_token() -> Result<()> {
     println!("\n⏰ Step 2: Attempting verification with expired timestamp...");
     println!("   Fake exp: {} (600s ago)", fake_exp);
 
-    let success = verify_token(&http, verifier_url, &token_b64, &issuer_id, fake_exp).await?;
+    let success = verify_token(&http, verifier_url, &token_b64, &issuer_id, fake_exp, epoch).await?;
 
     if !success {
         println!("✅ EXPIRATION VALIDATION WORKING! Expired token was rejected.");
@@ -204,17 +205,19 @@ async fn save_token_mode() -> Result<()> {
         .timeout(Duration::from_secs(5))
         .build()?;
 
-    let (token_b64, issuer_id, exp) = issue_token(&http, issuer_url, ctx).await?;
+    let (token_b64, issuer_id, exp, epoch) = issue_token(&http, issuer_url, ctx).await?;
 
     let saved = SavedToken {
         token_b64,
         issuer_id,
         exp,
+        epoch,
     };
 
     std::fs::write("token.json", serde_json::to_string_pretty(&saved)?)?;
     println!("\n💾 Token saved to token.json");
     println!("   Expiration: {} ({}s from now)", exp, exp - now());
+    println!("   Epoch: {}", epoch);
     println!("   Run 'interface.exe --load' to attempt replay");
 
     Ok(())
@@ -245,6 +248,7 @@ async fn load_token_mode() -> Result<()> {
         &saved.token_b64,
         &saved.issuer_id,
         saved.exp,
+        saved.epoch,
     )
     .await?;
 
@@ -275,8 +279,8 @@ async fn stress_test(count: usize) -> Result<()> {
         print!("Token {}/{}: ", i, count);
 
         match issue_token(&http, issuer_url, ctx).await {
-            Ok((token_b64, issuer_id, exp)) => {
-                match verify_token(&http, verifier_url, &token_b64, &issuer_id, exp).await {
+            Ok((token_b64, issuer_id, exp, epoch)) => {
+                match verify_token(&http, verifier_url, &token_b64, &issuer_id, exp, epoch).await {
                     Ok(true) => {
                         println!("✅ SUCCESS");
                         successes += 1;
@@ -309,7 +313,7 @@ async fn issue_token(
     http: &HttpClient,
     issuer_url: &str,
     ctx: &[u8],
-) -> Result<(String, String, i64)> {
+) -> Result<(String, String, i64, u32)> {
     // Initialize OPRF client
     let mut client = Client::new(ctx);
 
@@ -361,7 +365,7 @@ async fn issue_token(
 
     let token_b64 = Base64UrlUnpadded::encode_string(&token_raw);
 
-    Ok((token_b64, issuer_id, issue_resp.exp))
+    Ok((token_b64, issuer_id, issue_resp.exp, issue_resp.epoch))
 }
 
 async fn verify_token(
@@ -370,14 +374,16 @@ async fn verify_token(
     token_b64: &str,
     issuer_id: &str,
     exp: i64,
+    epoch: u32,
 ) -> Result<bool> {
-    // Send to verifier with expiration time
+    // Send to verifier with expiration time and epoch
     let resp = http
         .post(format!("{verifier_url}/v1/verify"))
         .json(&VerifyReq {
             token_b64: token_b64.to_string(),
             issuer_id: issuer_id.to_string(),
             exp: Some(exp), // Include expiration for validation
+            epoch,          // Include epoch for key rotation
         })
         .send()
         .await?;
