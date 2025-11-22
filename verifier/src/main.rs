@@ -14,6 +14,7 @@ use serde::Deserialize;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::{Duration, Instant}};
 use tokio::{net::TcpListener, sync::RwLock, time::sleep};
 use tracing::{debug, error, info, warn};
+use zeroize::Zeroizing;
 use common::api::{VerifyReq, VerifyResp, BatchVerifyReq, BatchVerifyResp, VerifyResult, TokenToVerify};
 
 // FIX: Import from the library crate instead of local mod
@@ -329,7 +330,8 @@ async fn verify(
     let received_mac: [u8; 32] = mac_bytes.try_into().expect("MAC is 32 bytes");
 
     // Derive epoch-specific MAC key
-    let mac_key = st.derive_mac_key_for_epoch(&req.issuer_id, &issuer.kid, req.epoch);
+    // Wrap in Zeroizing to ensure the key is securely erased from memory after use
+    let mac_key = Zeroizing::new(st.derive_mac_key_for_epoch(&req.issuer_id, &issuer.kid, req.epoch));
 
     // Verify MAC in constant time
     let mac_valid = crypto::verify_token_mac(
@@ -510,7 +512,8 @@ async fn batch_verify(
         };
 
         // Derive epoch-specific MAC key
-        let mac_key = st.derive_mac_key_for_epoch(&issuer_id, &issuer_clone.kid, token_req.epoch);
+        // Wrap in Zeroizing to ensure the key is securely erased from memory after use
+        let mac_key = Zeroizing::new(st.derive_mac_key_for_epoch(&issuer_id, &issuer_clone.kid, token_req.epoch));
 
         let mac_valid = crypto::verify_token_mac(
             &mac_key,

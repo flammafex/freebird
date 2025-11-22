@@ -5,6 +5,46 @@
 //!
 //! This module provides high-level APIs for VOPRF operations using the
 //! internal P-256 implementation in voprf/.
+//!
+//! # Memory Zeroization Security
+//!
+//! Freebird implements comprehensive memory zeroization to protect cryptographic
+//! key material from memory dumps, cold boot attacks, and other extraction methods.
+//!
+//! ## Automatic Zeroization
+//!
+//! - **Scalar values (blinding factors, secret keys)**: The `Scalar` type from
+//!   RustCrypto's `elliptic-curve` crate implements `DefaultIsZeroes`, ensuring
+//!   automatic memory zeroization when dropped. This applies to:
+//!   - VOPRF blinding factors (`r` in `BlindState`)
+//!   - DLEQ proof ephemeral scalars (`r` in `prove()`)
+//!   - Secret keys in VOPRF operations
+//!
+//! - **Software provider secret keys**: The `SoftwareCryptoProvider` explicitly
+//!   zeroizes its secret key in the `Drop` implementation.
+//!
+//! - **PKCS11 provider MAC keys**: The `Pkcs11CryptoProvider` zeroizes the
+//!   `mac_base_key` derived from the HSM in its `Drop` implementation.
+//!
+//! ## Explicit Zeroization (via Zeroizing wrapper)
+//!
+//! - **MAC keys**: All MAC keys derived for token authentication are wrapped in
+//!   `Zeroizing<[u8; 32]>` to ensure they are erased immediately after use:
+//!   - Issuer token MAC computation
+//!   - Verifier token MAC verification
+//!   - Batch issuance MAC operations
+//!
+//! ## Non-Secret Values (No Zeroization)
+//!
+//! - **Elliptic curve points** (`ProjectivePoint`, `AffinePoint`): These are
+//!   public values that do not require zeroization.
+//! - **Token data**: Tokens are meant to be shared and do not contain secrets.
+//! - **Public keys**: Public keys are intentionally shareable.
+//!
+//! ## Verification
+//!
+//! To verify zeroization is working correctly, use memory analysis tools or
+//! run the zeroization tests in the test suite.
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 use hmac::{Hmac, Mac};

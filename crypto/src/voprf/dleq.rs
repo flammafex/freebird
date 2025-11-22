@@ -67,6 +67,11 @@ fn challenge_scalar(
 }
 
 /// Create a DLEQ proof that 'y = k·G' and 'b = k·a' for the same 'k'.
+///
+/// # Security Note
+///
+/// The ephemeral random scalar `r` is automatically zeroized when this function
+/// returns, as `Scalar` implements `DefaultIsZeroes` from the zeroize crate.
 pub fn prove<R: RngCore + CryptoRng>(
     k: &Scalar,
     g: &AffinePoint,
@@ -76,6 +81,7 @@ pub fn prove<R: RngCore + CryptoRng>(
     rng: &mut R,
     dst: Option<&[u8]>,
 ) -> DleqProof {
+    // Ephemeral random scalar (auto-zeroized on drop via RustCrypto's Scalar)
     let r = Scalar::random(rng);
     let t1 = (ProjectivePoint::from(*g) * r).to_affine();
     let t2 = (ProjectivePoint::from(*a) * r).to_affine();

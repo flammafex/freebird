@@ -17,6 +17,7 @@ use axum::{
 use base64ct::{Base64UrlUnpadded, Encoding};
 use time::OffsetDateTime;
 use tracing::{debug, error, info, warn};
+use zeroize::Zeroizing;
 
 use crate::multi_key_voprf::MultiKeyVoprfCore;
 use common::api::{IssueReq, IssueResp, SybilInfo};
@@ -236,7 +237,8 @@ pub async fn handle(
     })?;
 
     // Derive epoch-specific MAC key and compute MAC over (token || kid || exp || issuer_id)
-    let mac_key = voprf.derive_mac_key_for_epoch(&state.issuer_id, epoch).await;
+    // Wrap in Zeroizing to ensure the key is securely erased from memory after use
+    let mac_key = Zeroizing::new(voprf.derive_mac_key_for_epoch(&state.issuer_id, epoch).await);
     let mac = crypto::compute_token_mac(&mac_key, &token_bytes, &kid_used, exp, &state.issuer_id);
 
     // Append MAC to token: [VERSION||A||B||Proof||MAC]

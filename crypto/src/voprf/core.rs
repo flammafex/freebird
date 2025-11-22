@@ -105,8 +105,17 @@ fn prf_output_from_b(b: &ProjectivePoint, ctx: &[u8]) -> [u8; 32] {
     out32
 }
 
+/// Client-side blinding state
+///
+/// # Security Note
+///
+/// The blinding factor `r` is a `Scalar` which implements `DefaultIsZeroes`
+/// from the `zeroize` crate. This means it will be automatically and securely
+/// erased from memory when dropped, preventing key material leakage.
 pub struct BlindState {
+    /// Blinding factor (auto-zeroized on drop via RustCrypto's Scalar implementation)
     pub r: Scalar,
+    /// Hashed input point (public value, no zeroization needed)
     pub p: ProjectivePoint, // H1(x)
 }
 

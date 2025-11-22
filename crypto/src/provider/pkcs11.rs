@@ -37,6 +37,7 @@ use cryptoki::mechanism::Mechanism;
 use cryptoki::types::AuthPin;
 use cryptoki::slot::Slot;
 use std::sync::Arc;
+use zeroize::Zeroize;
 
 use super::CryptoProvider;
 
@@ -353,8 +354,13 @@ impl CryptoProvider for Pkcs11CryptoProvider {
 
 impl Drop for Pkcs11CryptoProvider {
     fn drop(&mut self) {
+        // Zeroize the MAC base key to prevent it from lingering in memory
+        // This is critical for HSM hybrid mode security - the key material
+        // derived from the HSM should be protected even after extraction
+        self.mac_base_key.zeroize();
+
         // Sessions are created on-demand and closed after use
-        // No cleanup needed here
+        // No additional cleanup needed
     }
 }
 

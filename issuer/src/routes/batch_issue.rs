@@ -35,6 +35,7 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use rayon::prelude::*;
 use time::OffsetDateTime;
 use tracing::{debug, error, info, instrument, warn};
+use zeroize::Zeroizing;
 use crate::multi_key_voprf::MultiKeyVoprfCore;
 use common::api::{BatchIssueReq, BatchIssueResp, TokenResult, SybilInfo};
 use crate::routes::issue::extract_client_data;
@@ -333,7 +334,8 @@ pub async fn handle_batch(
 
     // --- APPEND MACs TO TOKENS ---
     // Derive epoch-specific MAC key for metadata binding (epoch was calculated earlier)
-    let mac_key = voprf.derive_mac_key_for_epoch(&state.issuer_id, epoch).await;
+    // Wrap in Zeroizing to ensure the key is securely erased from memory after use
+    let mac_key = Zeroizing::new(voprf.derive_mac_key_for_epoch(&state.issuer_id, epoch).await);
 
     // Process each result and append MAC to successful tokens
     let results: Vec<TokenResult> = results
