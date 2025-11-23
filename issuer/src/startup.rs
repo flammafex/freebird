@@ -171,7 +171,6 @@ impl Application {
             invitation_system: invitation_system.clone(),
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
-            token_format: config.token_format,
         });
 
         let app_state = (state.clone(), voprf.clone());

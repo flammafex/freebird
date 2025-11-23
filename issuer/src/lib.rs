@@ -15,17 +15,6 @@ pub use main_state::AppStateWithSybil;
 pub mod main_state {
     use std::sync::Arc;
     use crate::sybil_resistance::{invitation::InvitationSystem, SybilResistance};
-    
-    /// Token authentication format
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum TokenFormat {
-        /// V1: MAC-based (163 bytes = 131 VOPRF + 32 MAC)
-        /// Requires verifier to have issuer secret key
-        MacBased,
-        /// V2: Signature-based (195 bytes = 131 VOPRF + 64 ECDSA)
-        /// Federation-ready: verifier only needs public key
-        SignatureBased,
-    }
 
     #[derive(Clone)]
     pub struct AppStateWithSybil {
@@ -41,8 +30,6 @@ pub mod main_state {
         pub epoch_duration_sec: u64,
         /// Number of previous epochs to accept (for graceful rotation)
         pub epoch_retention: u32,
-        /// Token authentication format (MAC or Signature)
-        pub token_format: TokenFormat,
     }
 
     impl AppStateWithSybil {

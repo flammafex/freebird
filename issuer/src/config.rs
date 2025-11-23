@@ -5,7 +5,6 @@ use anyhow::{Context, Result};
 use std::env;
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use crate::main_state::TokenFormat;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -20,7 +19,6 @@ pub struct Config {
     pub admin_api_key: Option<String>,
     pub epoch_duration_sec: u64,
     pub epoch_retention: u32,
-    pub token_format: TokenFormat,
 }
 
 #[derive(Clone, Debug)]
@@ -98,16 +96,6 @@ impl Config {
         let epoch_duration_sec = env_u64("EPOCH_DURATION_SEC", 86400); // Default: 1 day
         let epoch_retention = env_u32("EPOCH_RETENTION", 2); // Default: accept 2 previous epochs
 
-        // Token format configuration
-        let token_format = match env::var("TOKEN_FORMAT")
-            .unwrap_or_else(|_| "mac".to_string())
-            .to_lowercase()
-            .as_str()
-        {
-            "signature" | "sig" | "ecdsa" => TokenFormat::SignatureBased,
-            "mac" | "hmac" | _ => TokenFormat::MacBased,
-        };
-
         Ok(Self {
             issuer_id,
             bind_addr,
@@ -120,7 +108,6 @@ impl Config {
             admin_api_key,
             epoch_duration_sec,
             epoch_retention,
-            token_format,
         })
     }
 }
