@@ -56,6 +56,15 @@ export type SybilProof =
       last_issuance: number;
       hmac_proof: string;
     }
+  | {
+      type: 'proof_of_diversity';
+      user_id_hash: string;
+      diversity_score: number;
+      unique_networks: number;
+      unique_devices: number;
+      first_seen: number;
+      hmac_proof: string;
+    }
   | { type: 'none' };
 
 /**

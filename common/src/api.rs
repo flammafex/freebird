@@ -199,6 +199,14 @@ pub enum SybilProof {
         last_issuance: i64,     // Unix timestamp of last issuance
         hmac_proof: String,     // HMAC(secret, all fields) - prevents forgery
     },
+    ProofOfDiversity {
+        user_id_hash: String,   // Blake3(username + salt)
+        diversity_score: u8,    // 0-100 score
+        unique_networks: u32,   // Count of unique networks observed
+        unique_devices: u32,    // Count of unique devices observed
+        first_seen: i64,        // Unix timestamp of first observation
+        hmac_proof: String,     // HMAC(secret, all fields)
+    },
     None,
 }
 

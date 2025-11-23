@@ -23,6 +23,7 @@ Comprehensive comparison of all Sybil resistance mechanisms in Freebird.
 | **Proof-of-Work** | ✅ Production | ✅✅ Moderate | Computation | ✅ High | Public services |
 | **Rate Limiting** | ✅ Production | ✅ Weak | Time | ✅✅ Good | Simple throttling |
 | **Progressive Trust** | ✅ Production | ✅✅ Strong | Time | ✅✅✅ Excellent | Gradual access, loyalty rewards |
+| **Proof of Diversity** | ✅ Production | ✅✅✅ Strong | Behavioral | ✅✅ Good | Anti-botnet, diversity analysis |
 | **WebAuthn** | ✅ Production | ✅✅✅ Strong | Zero | ✅✅ Good | Hardware-backed, biometric |
 | **Combined** | ✅ Production | ✅✅✅ Strong | Multiple | ✅✅ Good | Defense-in-depth |
 
@@ -311,7 +312,87 @@ See [Progressive Trust Guide](PROGRESSIVE_TRUST.md) for complete documentation.
 
 ---
 
-## 6. WebAuthn (Hardware Authenticators)
+## 6. Proof of Diversity ⭐ (Anti-Botnet)
+
+### Configuration
+
+```bash
+export SYBIL_RESISTANCE=proof_of_diversity
+export SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE=40  # Default
+export SYBIL_PROOF_OF_DIVERSITY_PERSISTENCE_PATH="proof_of_diversity.json"
+export SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE_SECS=300
+export SYBIL_PROOF_OF_DIVERSITY_SECRET="$(openssl rand -base64 32)"
+export SYBIL_PROOF_OF_DIVERSITY_SALT="$(openssl rand -hex 16)"
+./target/release/issuer
+```
+
+### How It Works
+
+1. **Server observes** network diversity (unique ASNs/IPs) and device diversity (unique User-Agents)
+2. **Privacy-preserving** - All fingerprints are hashed with per-user salts
+3. **Diversity score** calculated: `(networks × 30) + (devices × 20) + min(days, 50)`
+4. **Minimum score** required to pass verification
+5. **HMAC-signed proofs** prevent forgery
+
+### Diversity Scoring (Default)
+
+```
+Max score: ~100
+- 3 unique networks = 90 points
+- 3 unique devices = 60 points
+- 50+ days active = 50 points
+
+Example:
+- Home WiFi + Work WiFi + Mobile Data = 90 pts
+- iPhone + MacBook = 40 pts
+- Total: 130 pts (well above 40 minimum)
+```
+
+### Properties
+
+**Advantages:**
+- ✅✅✅ **Strong botnet detection** (uniform IPs/devices fail)
+- ✅✅ **Privacy-preserving** (all fingerprints hashed)
+- ✅✅ **Natural user behavior** (real users naturally diverse)
+- ✅ **Unforgeable** (HMAC-signed proofs)
+- ✅ **Persistent state** (survives restarts)
+
+**Disadvantages:**
+- ⚠️ **VPN users** (may appear less diverse)
+- ⚠️ **Single-device users** (lower scores)
+- ⚠️ **Requires observation** (tracks network/device patterns)
+
+### Security
+
+**Attack Vectors:**
+1. **VPN rotation:** Simulate diversity with VPN switching
+   - **Mitigation:** Combine with Progressive Trust (time-based)
+2. **Browser fingerprint spoofing:** Fake diverse User-Agents
+   - **Mitigation:** Combine with WebAuthn (hardware binding)
+3. **Patient diverse botnet:** Very sophisticated attack
+   - **Mitigation:** Very difficult and expensive to execute
+
+**Strengths:**
+- Directly targets botnet behavioral patterns
+- Privacy-preserving (no raw IPs/User-Agents stored)
+- HMAC proofs prevent forgery
+- Works well with other mechanisms
+
+### Use Cases
+
+- ✅ **Public APIs** (vulnerable to botnet abuse)
+- ✅ **Content platforms** (fighting spam farms)
+- ✅ **Anti-fraud systems** (detecting automated attacks)
+- ✅ **Rate limiting bypass** (legitimate diverse users)
+- ⚠️ **VPN-heavy user bases** (may need lower minimum score)
+
+### Detailed Guide
+
+See [Proof of Diversity Guide](PROOF_OF_DIVERSITY.md) for complete documentation.
+
+---
+
+## 7. WebAuthn (Hardware Authenticators)
 
 *For full WebAuthn documentation, see [WEBAUTHN.md](WEBAUTHN.md)*
 
@@ -326,7 +407,7 @@ See [Progressive Trust Guide](PROGRESSIVE_TRUST.md) for complete documentation.
 
 ---
 
-## 7. Combined Resistance (Defense-in-Depth)
+## 8. Combined Resistance (Defense-in-Depth)
 
 ### Configuration
 

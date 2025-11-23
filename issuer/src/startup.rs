@@ -188,6 +188,22 @@ impl Application {
                 info!("✅ Sybil resistance: Progressive Trust");
                 Some(sys)
             }
+            "proof_of_diversity" => {
+                let pod_config = sybil_resistance::ProofOfDiversityConfig {
+                    min_score: config.sybil_config.proof_of_diversity_min_score,
+                    persistence_path: config.sybil_config.proof_of_diversity_persistence_path.clone(),
+                    autosave_interval_secs: config.sybil_config.proof_of_diversity_autosave_interval,
+                    hmac_secret: config.sybil_config.proof_of_diversity_hmac_secret.clone(),
+                    fingerprint_salt: config.sybil_config.proof_of_diversity_fingerprint_salt.clone(),
+                };
+
+                let sys = sybil_resistance::ProofOfDiversitySystem::new(pod_config)
+                    .await
+                    .context("Failed to initialize Proof of Diversity system")?;
+
+                info!("✅ Sybil resistance: Proof of Diversity");
+                Some(sys)
+            }
             "combined" => Some(Arc::new(CombinedSybilResistance::new(vec![
                 Box::new(ProofOfWork::new(config.sybil_config.pow_difficulty)),
                 Box::new(RateLimit::new(Duration::from_secs(config.sybil_config.rate_limit_secs))),

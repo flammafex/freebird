@@ -72,6 +72,12 @@ pub struct SybilConfig {
     pub progressive_trust_autosave_interval: u64,
     pub progressive_trust_hmac_secret: Option<String>,
     pub progressive_trust_salt: String,
+    // Proof of Diversity configuration
+    pub proof_of_diversity_min_score: u8,
+    pub proof_of_diversity_persistence_path: PathBuf,
+    pub proof_of_diversity_autosave_interval: u64,
+    pub proof_of_diversity_hmac_secret: Option<String>,
+    pub proof_of_diversity_fingerprint_salt: String,
 }
 
 #[derive(Clone, Debug)]
@@ -197,6 +203,15 @@ impl SybilConfig {
             progressive_trust_autosave_interval: env_u64("SYBIL_PROGRESSIVE_TRUST_AUTOSAVE_SECS", 300),
             progressive_trust_hmac_secret: env::var("SYBIL_PROGRESSIVE_TRUST_SECRET").ok(),
             progressive_trust_salt: env::var("SYBIL_PROGRESSIVE_TRUST_SALT")
+                .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
+            // Proof of Diversity
+            proof_of_diversity_min_score: env_u32("SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE", 40) as u8,
+            proof_of_diversity_persistence_path: env::var("SYBIL_PROOF_OF_DIVERSITY_PERSISTENCE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "proof_of_diversity.json".into()),
+            proof_of_diversity_autosave_interval: env_u64("SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE_SECS", 300),
+            proof_of_diversity_hmac_secret: env::var("SYBIL_PROOF_OF_DIVERSITY_SECRET").ok(),
+            proof_of_diversity_fingerprint_salt: env::var("SYBIL_PROOF_OF_DIVERSITY_SALT")
                 .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
         }
     }

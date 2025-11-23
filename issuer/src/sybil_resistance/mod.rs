@@ -27,12 +27,14 @@ pub mod invitation;
 pub mod proof_of_work;
 pub mod rate_limit;
 pub mod progressive_trust;
+pub mod proof_of_diversity;
 
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
 pub use invitation::ClientData;
 pub use proof_of_work::ProofOfWork;
 pub use rate_limit::RateLimit;
 pub use progressive_trust::{ProgressiveTrustSystem, ProgressiveTrustConfig, TrustLevel};
+pub use proof_of_diversity::{ProofOfDiversitySystem, ProofOfDiversityConfig};
 #[cfg(feature = "human-gate-webauthn")]
 pub use crate::webauthn::gate::WebAuthnGate;
 
