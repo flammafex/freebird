@@ -158,6 +158,20 @@ impl Verifier {
 /// Token MAC constants
 pub const TOKEN_MAC_LEN: usize = 32; // HMAC-SHA256 output size
 
+/// Token signature constants (for public-key metadata authentication)
+pub const TOKEN_SIGNATURE_LEN: usize = 64; // ECDSA signature (r: 32 bytes, s: 32 bytes)
+
+/// Token format versions
+///
+/// These distinguish between different token authentication schemes to enable
+/// backward-compatible migration from MAC-based to signature-based auth.
+pub const TOKEN_FORMAT_V1_MAC: u8 = 0x01;       // VOPRF (131) + MAC (32) = 163 bytes
+pub const TOKEN_FORMAT_V2_SIGNATURE: u8 = 0x02; // VOPRF (131) + ECDSA (64) = 195 bytes
+
+/// Total token lengths including authentication
+pub const TOKEN_LEN_V1: usize = 131 + TOKEN_MAC_LEN;       // 163 bytes
+pub const TOKEN_LEN_V2: usize = 131 + TOKEN_SIGNATURE_LEN; // 195 bytes
+
 /// Compute HMAC-SHA256 over token and metadata to prevent tampering
 ///
 /// MAC = HMAC-SHA256(mac_key, token_bytes || kid || exp || issuer_id)
@@ -215,6 +229,118 @@ pub fn verify_token_mac(
     // Constant-time comparison using subtle
     use subtle::ConstantTimeEq;
     bool::from(computed.ct_eq(received_mac))
+}
+
+// ============================================================================
+// ECDSA Signature-based Metadata Authentication (Federation-Ready)
+// ============================================================================
+//
+// This provides an alternative to HMAC-based MAC that enables multi-issuer
+// federation. Instead of requiring verifiers to possess issuer secret keys,
+// verifiers only need public keys to verify token metadata signatures.
+//
+// This is the cryptographic foundation for Layer 1 of multi-issuer federation.
+
+/// Compute ECDSA signature over token metadata to prevent tampering
+///
+/// This replaces the HMAC-based MAC scheme with public-key signatures,
+/// enabling verifiers to authenticate tokens using only the issuer's public key.
+///
+/// Signature = ECDSA_Sign(issuer_sk, SHA256(token_bytes || kid || exp || issuer_id))
+///
+/// # Arguments
+/// * `issuer_sk` - Issuer's ECDSA secret key (32 bytes)
+/// * `token_bytes` - The VOPRF token bytes [VERSION||A||B||Proof] (131 bytes)
+/// * `kid` - Key identifier
+/// * `exp` - Expiration timestamp (Unix seconds)
+/// * `issuer_id` - Issuer identifier
+///
+/// # Returns
+/// 64-byte ECDSA signature (r || s, each 32 bytes)
+///
+/// # Security
+/// - Uses deterministic ECDSA (RFC 6979) for reproducibility
+/// - Signs over SHA256 hash of metadata (standard ECDSA message preparation)
+/// - Same P-256 curve as VOPRF operations
+pub fn compute_token_signature(
+    issuer_sk: &[u8; 32],
+    token_bytes: &[u8],
+    kid: &str,
+    exp: i64,
+    issuer_id: &str,
+) -> Result<[u8; 64], Error> {
+    use p256::ecdsa::{SigningKey, signature::Signer};
+
+    // Construct message to sign (same as MAC scheme)
+    let mut msg = Vec::new();
+    msg.extend_from_slice(token_bytes);
+    msg.extend_from_slice(kid.as_bytes());
+    msg.extend_from_slice(&exp.to_be_bytes());
+    msg.extend_from_slice(issuer_id.as_bytes());
+
+    // Hash the message (ECDSA signs the hash, not raw message)
+    let msg_hash = Sha256::digest(&msg);
+
+    // Create signing key from secret key bytes
+    let signing_key = SigningKey::from_bytes(issuer_sk.into())
+        .map_err(|_| Error::Internal)?;
+
+    // Sign (uses deterministic ECDSA by default in p256 crate)
+    let signature: p256::ecdsa::Signature = signing_key.sign(&msg_hash);
+
+    // Convert to raw 64-byte format (r || s)
+    Ok(signature.to_bytes().into())
+}
+
+/// Verify ECDSA signature over token metadata (constant-time)
+///
+/// Verifies that the token metadata signature is valid using the issuer's
+/// public key. This enables federation because verifiers don't need secret keys.
+///
+/// # Arguments
+/// * `issuer_pubkey` - Issuer's public key (33 bytes, SEC1 compressed)
+/// * `token_bytes` - The VOPRF token bytes [VERSION||A||B||Proof] (131 bytes)
+/// * `received_signature` - The signature to verify (64 bytes, r || s)
+/// * `kid` - Key identifier
+/// * `exp` - Expiration timestamp (Unix seconds)
+/// * `issuer_id` - Issuer identifier
+///
+/// # Returns
+/// true if signature is valid, false otherwise (constant-time comparison)
+pub fn verify_token_signature(
+    issuer_pubkey: &[u8],
+    token_bytes: &[u8],
+    received_signature: &[u8; 64],
+    kid: &str,
+    exp: i64,
+    issuer_id: &str,
+) -> bool {
+    use p256::ecdsa::{VerifyingKey, signature::Verifier};
+
+    // Construct message (same as signing)
+    let mut msg = Vec::new();
+    msg.extend_from_slice(token_bytes);
+    msg.extend_from_slice(kid.as_bytes());
+    msg.extend_from_slice(&exp.to_be_bytes());
+    msg.extend_from_slice(issuer_id.as_bytes());
+
+    // Hash the message
+    let msg_hash = Sha256::digest(&msg);
+
+    // Parse public key (SEC1 compressed format)
+    let verifying_key = match VerifyingKey::from_sec1_bytes(issuer_pubkey) {
+        Ok(key) => key,
+        Err(_) => return false,
+    };
+
+    // Parse signature
+    let signature = match p256::ecdsa::Signature::from_bytes(received_signature.into()) {
+        Ok(sig) => sig,
+        Err(_) => return false,
+    };
+
+    // Verify signature (constant-time in the underlying implementation)
+    verifying_key.verify(&msg_hash, &signature).is_ok()
 }
 
 /// Derive MAC key from server secret key using HKDF with domain separation
@@ -415,5 +541,156 @@ mod tests {
                 assert!(!verify_token_mac(&mac_key, &token, &wrong_mac, kid, exp, issuer));
             }
         }
+    }
+
+    // ========================================================================
+    // Signature-based Authentication Tests
+    // ========================================================================
+
+    #[test]
+    fn test_signature_computation_and_verification() {
+        let sk = [7u8; 32];
+        let ctx = b"freebird-v1";
+
+        // Create server to get public key
+        let server = Server::from_secret_key(sk, ctx).unwrap();
+        let pubkey = server.public_key_sec1_compressed();
+
+        let token = vec![1, 2, 3, 4, 5];
+        let kid = "test-kid-001";
+        let exp = 1234567890i64;
+        let issuer_id = "test-issuer";
+
+        // Compute signature
+        let signature = compute_token_signature(&sk, &token, kid, exp, issuer_id).unwrap();
+        assert_eq!(signature.len(), 64);
+
+        // Verify signature succeeds
+        assert!(verify_token_signature(&pubkey, &token, &signature, kid, exp, issuer_id));
+
+        // Tampered token fails
+        let mut bad_token = token.clone();
+        bad_token[0] ^= 1;
+        assert!(!verify_token_signature(&pubkey, &bad_token, &signature, kid, exp, issuer_id));
+
+        // Tampered kid fails
+        assert!(!verify_token_signature(&pubkey, &token, &signature, "wrong-kid", exp, issuer_id));
+
+        // Tampered exp fails
+        assert!(!verify_token_signature(&pubkey, &token, &signature, kid, exp + 1, issuer_id));
+
+        // Tampered issuer_id fails
+        assert!(!verify_token_signature(&pubkey, &token, &signature, kid, exp, "wrong-issuer"));
+
+        // Wrong signature fails
+        let wrong_signature = [0u8; 64];
+        assert!(!verify_token_signature(&pubkey, &token, &wrong_signature, kid, exp, issuer_id));
+
+        // Tampered signature fails
+        let mut bad_signature = signature;
+        bad_signature[0] ^= 1;
+        assert!(!verify_token_signature(&pubkey, &token, &bad_signature, kid, exp, issuer_id));
+    }
+
+    #[test]
+    fn test_signature_determinism() {
+        let sk = [7u8; 32];
+        let ctx = b"freebird-v1";
+        let server = Server::from_secret_key(sk, ctx).unwrap();
+        let pubkey = server.public_key_sec1_compressed();
+
+        let token = vec![1, 2, 3, 4, 5];
+        let kid = "test-kid-001";
+        let exp = 1234567890i64;
+        let issuer_id = "test-issuer";
+
+        // Signatures should be deterministic (RFC 6979)
+        let sig1 = compute_token_signature(&sk, &token, kid, exp, issuer_id).unwrap();
+        let sig2 = compute_token_signature(&sk, &token, kid, exp, issuer_id).unwrap();
+        assert_eq!(sig1, sig2);
+
+        // Both should verify
+        assert!(verify_token_signature(&pubkey, &token, &sig1, kid, exp, issuer_id));
+        assert!(verify_token_signature(&pubkey, &token, &sig2, kid, exp, issuer_id));
+    }
+
+    #[test]
+    fn test_signature_different_keys() {
+        let sk1 = [7u8; 32];
+        let sk2 = [8u8; 32];
+        let ctx = b"freebird-v1";
+
+        let server1 = Server::from_secret_key(sk1, ctx).unwrap();
+        let server2 = Server::from_secret_key(sk2, ctx).unwrap();
+        let pubkey1 = server1.public_key_sec1_compressed();
+        let pubkey2 = server2.public_key_sec1_compressed();
+
+        let token = vec![1, 2, 3, 4, 5];
+        let kid = "test-kid-001";
+        let exp = 1234567890i64;
+        let issuer_id = "test-issuer";
+
+        // Sign with key 1
+        let sig1 = compute_token_signature(&sk1, &token, kid, exp, issuer_id).unwrap();
+
+        // Verify with key 1's public key succeeds
+        assert!(verify_token_signature(&pubkey1, &token, &sig1, kid, exp, issuer_id));
+
+        // Verify with key 2's public key fails
+        assert!(!verify_token_signature(&pubkey2, &token, &sig1, kid, exp, issuer_id));
+    }
+
+    #[test]
+    fn test_signature_invalid_pubkey() {
+        let sk = [7u8; 32];
+        let token = vec![1, 2, 3, 4, 5];
+        let kid = "test-kid-001";
+        let exp = 1234567890i64;
+        let issuer_id = "test-issuer";
+
+        let signature = compute_token_signature(&sk, &token, kid, exp, issuer_id).unwrap();
+
+        // Invalid public key (not a valid SEC1 compressed point)
+        let bad_pubkey = [0xFFu8; 33];
+        assert!(!verify_token_signature(&bad_pubkey, &token, &signature, kid, exp, issuer_id));
+
+        // Wrong length public key
+        let short_pubkey = [0x02u8; 32];
+        assert!(!verify_token_signature(&short_pubkey, &token, &signature, kid, exp, issuer_id));
+    }
+
+    #[test]
+    fn test_signature_with_real_voprf_token() {
+        // End-to-end test with actual VOPRF token
+        let sk = [7u8; 32];
+        let ctx = b"freebird-v1";
+
+        let server = Server::from_secret_key(sk, ctx).unwrap();
+        let pk = server.public_key_sec1_compressed();
+
+        // Generate a real VOPRF token
+        let mut client = Client::new(ctx);
+        let (blinded_b64, st) = client.blind(b"hello world").unwrap();
+        let eval_b64 = server.evaluate_with_proof(&blinded_b64).unwrap();
+        let (token_b64, _) = client.finalize(st, &eval_b64, &pk).unwrap();
+
+        // Decode token to bytes
+        let token_bytes = base64ct::Base64UrlUnpadded::decode_vec(&token_b64).unwrap();
+        assert_eq!(token_bytes.len(), 131); // VOPRF token is 131 bytes
+
+        let kid = "test-kid-001";
+        let exp = 1234567890i64;
+        let issuer_id = "issuer:freebird:v1";
+
+        // Sign the real token
+        let signature = compute_token_signature(&sk, &token_bytes, kid, exp, issuer_id).unwrap();
+
+        // Verify signature
+        assert!(verify_token_signature(&pk, &token_bytes, &signature, kid, exp, issuer_id));
+
+        // Tampered token should fail
+        let mut bad_token = token_bytes.clone();
+        bad_token[0] ^= 1;
+        assert!(!verify_token_signature(&pk, &bad_token, &signature, kid, exp, issuer_id));
     }
 }
