@@ -269,30 +269,6 @@ The `.env.example` file contains **all** available configuration options with de
 
 ---
 
-## Roadmap
-
-God mapped the road. I'm just walking it. Hand in hand with Lady Wisdom.
-
----
-
-## Contributing
-
-From who? You? 🙄
-
-- No more "a"political chuds.
-- No more sociopath "hackers" with the "news".
-- No more blockchain bros.
-- No more nilhist image board posters.
-- No more business majors.
-
-- I've had it with all of you.
-- The robot and I are gonna ruin you.
-- There won't be any snakes left in the grass.
-- Not one.
-- See ya, losers.
-
----
-
 ## License
 
 **Apache License 2.0**
