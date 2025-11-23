@@ -159,7 +159,14 @@ impl Application {
             _ => None
         };
 
-        // 4. App State & Router
+        // 4. Federation Store
+        let federation_data_dir = std::path::PathBuf::from("./data/federation");
+        let federation_store = crate::federation_store::FederationStore::new(&federation_data_dir)
+            .await
+            .context("Failed to initialize federation store")?;
+        info!("✅ Federation store initialized at {:?}", federation_data_dir);
+
+        // 5. App State & Router
         let state = Arc::new(AppStateWithSybil {
             issuer_id: config.issuer_id.clone(),
             kid: kid.clone(),
@@ -171,6 +178,7 @@ impl Application {
             invitation_system: invitation_system.clone(),
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
+            federation_store: federation_store.clone(),
         });
 
         let app_state = (state.clone(), voprf.clone());
@@ -199,7 +207,7 @@ impl Application {
         if let Some(key) = config.admin_api_key {
             if key.len() >= 32 {
                 if let Some(inv_sys) = invitation_system {
-                    let admin = routes::admin_router(inv_sys, voprf, key);
+                    let admin = routes::admin_router(inv_sys, voprf.clone(), federation_store.clone(), key);
                     app = app.nest("/admin", admin);
                 }
             }

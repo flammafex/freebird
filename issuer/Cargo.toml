@@ -47,3 +47,4 @@ redis = { version = "0.24", features = ["aio", "tokio-comp"], optional = true }
 
 [dev-dependencies]
 serial_test = "3"
+tempfile = "3"

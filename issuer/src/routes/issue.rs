@@ -272,10 +272,14 @@ pub async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::federation_store::FederationStore;
     use crate::sybil_resistance::{NoSybilResistance, ProofOfWork, SybilResistance};
     use std::sync::Arc;
 
-    fn mock_state(sybil_checker: Option<Arc<dyn SybilResistance>>) -> AppStateWithSybil {
+    async fn mock_state(sybil_checker: Option<Arc<dyn SybilResistance>>) -> AppStateWithSybil {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let federation_store = FederationStore::new(temp_dir.path()).await.unwrap();
+
         AppStateWithSybil {
             issuer_id: "test-issuer".into(),
             kid: "test-key-001".into(),
@@ -287,24 +291,25 @@ mod tests {
             invitation_system: None,
             epoch_duration_sec: 86400,
             epoch_retention: 2,
+            federation_store,
         }
     }
 
-    #[test]
-    fn test_state_no_sybil() {
-        let state = mock_state(None);
+    #[tokio::test]
+    async fn test_state_no_sybil() {
+        let state = mock_state(None).await;
         assert!(state.sybil_checker.is_none());
     }
 
-    #[test]
-    fn test_state_with_pow() {
-        let state = mock_state(Some(Arc::new(ProofOfWork::new(16))));
+    #[tokio::test]
+    async fn test_state_with_pow() {
+        let state = mock_state(Some(Arc::new(ProofOfWork::new(16)))).await;
         assert!(state.sybil_checker.is_some());
     }
 
-    #[test]
-    fn test_state_with_no_sybil_explicit() {
-        let state = mock_state(Some(Arc::new(NoSybilResistance)));
+    #[tokio::test]
+    async fn test_state_with_no_sybil_explicit() {
+        let state = mock_state(Some(Arc::new(NoSybilResistance))).await;
         assert!(state.sybil_checker.is_some());
     }
 

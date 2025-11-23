@@ -41,6 +41,8 @@ pub struct AdminState {
     pub invitation_system: Arc<InvitationSystem>,
     /// Reference to the multi-key VOPRF core
     pub multi_key_voprf: Arc<MultiKeyVoprfCore>,
+    /// Reference to the federation store
+    pub federation_store: crate::federation_store::FederationStore,
     /// Admin API key for authentication
     pub api_key: String,
 }
@@ -149,6 +151,32 @@ pub struct CleanupKeysResponse {
 pub struct ForceRemoveKeyResponse {
     pub ok: bool,
     pub kid: String,
+    pub message: String,
+}
+
+/// Request to add a vouch
+#[derive(Debug, Deserialize)]
+pub struct AddVouchRequest {
+    pub vouch: common::federation::Vouch,
+}
+
+/// Request to add a revocation
+#[derive(Debug, Deserialize)]
+pub struct AddRevocationRequest {
+    pub revocation: common::federation::Revocation,
+}
+
+/// Response for vouch operations
+#[derive(Debug, Serialize)]
+pub struct VouchResponse {
+    pub ok: bool,
+    pub message: String,
+}
+
+/// Response for revocation operations
+#[derive(Debug, Serialize)]
+pub struct RevocationResponse {
+    pub ok: bool,
     pub message: String,
 }
 
@@ -506,17 +534,135 @@ pub async fn force_remove_key_handler(
 }
 
 // ============================================================================
+// Federation Management Handlers
+// ============================================================================
+
+/// Add a vouch to the federation store
+async fn add_vouch_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Json(req): Json<AddVouchRequest>,
+) -> Result<Json<VouchResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    state
+        .federation_store
+        .add_vouch(req.vouch.clone())
+        .await
+        .map_err(|e| AdminError::InvalidRequest(e.to_string()))?;
+
+    info!("Admin: added vouch for {}", req.vouch.vouched_issuer_id);
+
+    Ok(Json(VouchResponse {
+        ok: true,
+        message: format!("Vouch for {} added successfully", req.vouch.vouched_issuer_id),
+    }))
+}
+
+/// Remove a vouch from the federation store
+async fn remove_vouch_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(issuer_id): Path<String>,
+) -> Result<Json<VouchResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    state
+        .federation_store
+        .remove_vouch(&issuer_id)
+        .await
+        .map_err(|e| AdminError::UserNotFound(e.to_string()))?;
+
+    info!("Admin: removed vouch for {}", issuer_id);
+
+    Ok(Json(VouchResponse {
+        ok: true,
+        message: format!("Vouch for {} removed successfully", issuer_id),
+    }))
+}
+
+/// List all vouches
+async fn list_vouches_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<common::federation::Vouch>>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let vouches = state.federation_store.get_vouches().await;
+
+    Ok(Json(vouches))
+}
+
+/// Add a revocation to the federation store
+async fn add_revocation_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Json(req): Json<AddRevocationRequest>,
+) -> Result<Json<RevocationResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    state
+        .federation_store
+        .add_revocation(req.revocation.clone())
+        .await
+        .map_err(|e| AdminError::InvalidRequest(e.to_string()))?;
+
+    info!("Admin: added revocation for {}", req.revocation.revoked_issuer_id);
+
+    Ok(Json(RevocationResponse {
+        ok: true,
+        message: format!("Revocation for {} added successfully", req.revocation.revoked_issuer_id),
+    }))
+}
+
+/// Remove a revocation from the federation store
+async fn remove_revocation_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(issuer_id): Path<String>,
+) -> Result<Json<RevocationResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    state
+        .federation_store
+        .remove_revocation(&issuer_id)
+        .await
+        .map_err(|e| AdminError::UserNotFound(e.to_string()))?;
+
+    info!("Admin: removed revocation for {}", issuer_id);
+
+    Ok(Json(RevocationResponse {
+        ok: true,
+        message: format!("Revocation for {} removed successfully", issuer_id),
+    }))
+}
+
+/// List all revocations
+async fn list_revocations_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<common::federation::Revocation>>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let revocations = state.federation_store.get_revocations().await;
+
+    Ok(Json(revocations))
+}
+
+// ============================================================================
 // Router Configuration
 // ============================================================================
 
 pub fn admin_router(
     invitation_system: Arc<InvitationSystem>,
     multi_key_voprf: Arc<MultiKeyVoprfCore>,
+    federation_store: crate::federation_store::FederationStore,
     api_key: String,
 ) -> axum::Router {
     let state = Arc::new(AdminState {
         invitation_system,
         multi_key_voprf,
+        federation_store,
         api_key,
     });
 
@@ -537,5 +683,12 @@ pub fn admin_router(
             "/keys/:kid",
             axum::routing::delete(force_remove_key_handler),
         )
+        // Federation management routes
+        .route("/federation/vouches", axum::routing::get(list_vouches_handler))
+        .route("/federation/vouches", axum::routing::post(add_vouch_handler))
+        .route("/federation/vouches/:issuer_id", axum::routing::delete(remove_vouch_handler))
+        .route("/federation/revocations", axum::routing::get(list_revocations_handler))
+        .route("/federation/revocations", axum::routing::post(add_revocation_handler))
+        .route("/federation/revocations/:issuer_id", axum::routing::delete(remove_revocation_handler))
         .with_state(state)
 }
