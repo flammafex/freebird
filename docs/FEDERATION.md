@@ -1,39 +1,40 @@
 # Multi-Issuer Federation
 
-Freebird is designed from the ground up for multi-issuer federation. Verifiers authenticate tokens using only issuer public keys - no shared secrets required.
+Freebird implements a two-layer federation architecture that enables true multi-issuer scenarios without shared secrets.
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Architecture](#architecture)
-3. [Token Format](#token-format)
+2. [Layer 1: Signature-Based Authentication](#layer-1-signature-based-authentication)
+3. [Layer 2: Trust Graph Federation](#layer-2-trust-graph-federation)
 4. [Configuration](#configuration)
-5. [Security Considerations](#security-considerations)
-6. [Example Scenarios](#example-scenarios)
+5. [Security](#security)
+6. [Use Cases](#use-cases)
 
 ## Overview
 
 ### What is Multi-Issuer Federation?
 
-Multi-issuer federation allows verifiers to authenticate tokens from multiple independent issuers using only public keys. This eliminates the need for shared secrets between issuers and verifiers, making true multi-issuer scenarios possible.
+Multi-issuer federation allows verifiers to authenticate tokens from multiple independent issuers. Freebird implements this through two layers:
+
+- **Layer 1**: Signature-based authentication using public keys (no shared secrets)
+- **Layer 2**: ActivityPub-style trust graphs for distributed trust
 
 ### Key Benefits
 
 - **No Shared Secrets**: Verifiers only need issuer public keys
-- **Multi-Issuer Support**: Authenticate tokens from multiple independent issuers
-- **Simple Architecture**: One token format, one authentication method
-- **Federation-Ready**: Foundation for ActivityPub-style trust networks (Layer 2, coming soon)
+- **True Multi-Issuer**: Authenticate tokens from multiple independent issuers
+- **Trust Networks**: Issuers vouch for each other cryptographically
+- **Decentralized**: No central authority required
+- **Scalable**: Trust graph traversal with configurable policies
 
-### Use Cases
+---
 
-1. **Federated Networks**: Multiple independent issuers serve a common verifier pool
-2. **Microservices**: Different services issue tokens for different purposes
-3. **Geographic Distribution**: Regional issuers with global verifiers
-4. **Trust Networks**: Issuers vouch for each other (Layer 2, coming soon)
+## Layer 1: Signature-Based Authentication
 
-## Architecture
+Layer 1 provides the cryptographic foundation for multi-issuer federation using ECDSA signatures.
 
-### Signature-Based Authentication
+### Architecture
 
 ```
 ┌─────────┐                    ┌──────────┐
@@ -52,12 +53,12 @@ Multi-issuer federation allows verifiers to authenticate tokens from multiple in
 **Advantages**:
 - Verifier only needs public key (no secrets)
 - Supports tokens from multiple independent issuers
-- Foundation for trust network federation
+- Foundation for Layer 2 trust networks
 - Clean, simple design
 
-## Token Format
+### Token Format
 
-### Signature-Based Token (195 bytes)
+#### Signature-Based Token (195 bytes)
 
 ```
 ┌─────────────────────────────────────────┐
@@ -78,157 +79,35 @@ Total: 195 bytes
 - **VOPRF Token** (131 bytes): Cryptographic proof from blind signature protocol
 - **ECDSA Signature** (64 bytes): Metadata authentication using P-256
 
-## Configuration
+### Public Key Discovery
 
-### Issuer Configuration
+Verifiers obtain issuer public keys through:
 
-Issuers automatically generate signature-based tokens. No configuration required beyond standard setup.
+#### 1. Manual Configuration
+Pre-configured trusted issuers in verifier config.
 
-#### Example Configuration
-
-```bash
-# Standard issuer configuration
-ISSUER_ID="issuer:example:v1"
-BIND_ADDR="0.0.0.0:8081"
-TOKEN_TTL_MIN=10
-EPOCH_DURATION_SEC=86400
-EPOCH_RETENTION=2
-```
-
-### Verifier Configuration
-
-Verifiers automatically verify signature-based tokens using issuer public keys.
-
-#### Example Configuration
-
-```bash
-# Standard verifier configuration
-BIND_ADDR="0.0.0.0:8082"
-MAX_CLOCK_SKEW_SECS=300
-EPOCH_DURATION_SEC=86400
-EPOCH_RETENTION=2
-```
-
-**Note**: No secret key required! Verifier operates entirely with public keys.
-
-## Security Considerations
-
-### Cryptographic Properties
-
-#### ECDSA Signatures
-- **Algorithm**: P-256 (secp256r1) ECDSA
-- **Determinism**: RFC 6979 (deterministic k generation)
-- **Hash**: SHA-256
-- **Security Level**: ~128-bit (matching P-256 VOPRF)
-
-#### Signature Verification
-```rust
-// Verifier checks:
-let signature_valid = crypto::verify_token_signature(
-    &issuer_pubkey,      // Only public key needed!
-    &token_bytes,
-    &received_signature,
-    &kid,
-    exp,
-    &issuer_id,
-);
-```
-
-### Attack Resistance
-
-#### Tampering Protection
-- ✅ **Token Modification**: Signature becomes invalid
-- ✅ **Metadata Forgery**: Signature covers `kid`, `exp`, `issuer_id`
-- ✅ **Replay Protection**: Nullifier system (unchanged)
-- ✅ **Double Spending**: Nullifier system (unchanged)
-
-#### Constant-Time Operations
-- ✅ **Signature Verification**: Not timing-sensitive (public key crypto)
-- ✅ **Key Matching**: Constant-time string comparison (defense-in-depth)
-
-### Public Key Distribution
-
-#### Trust Establishment
-
-Verifiers must obtain authentic issuer public keys through:
-
-1. **Manual Configuration**: Pre-configured trusted issuers
-2. **HTTPS Discovery**: Fetch from `/.well-known/issuer` endpoint
-3. **Layer 2 Federation**: Trust graph vouching (coming soon)
-
-#### Example: Public Key Discovery
-
+#### 2. HTTPS Discovery
 ```bash
 # Fetch issuer metadata
 curl https://issuer.example.com/.well-known/issuer
 
-# Response includes public key
+# Response
 {
   "issuer_id": "issuer:example:v1",
-  "suite": "OPRF(P-256, SHA-256)-verifiable",
-  "pubkey": "<base64-encoded-public-key>",
-  "kid": "exmpl-2025-01-15"
+  "voprf": {
+    "suite": "OPRF(P-256, SHA-256)-verifiable",
+    "pubkey": "<base64-encoded-public-key>",
+    "kid": "exmpl-2025-01-15",
+    "exp_sec": 600
+  }
 }
 ```
 
-### Best Practices
+#### 3. Layer 2 Trust Graph
+Automatic discovery through cryptographic vouching (see below).
 
-1. **Key Rotation**: Use epoch-based rotation (already supported)
-2. **Public Key Pinning**: Validate issuer public keys on first use
-3. **HTTPS Only**: Always fetch public keys over HTTPS
-4. **Audit Logs**: Monitor token verification for anomalies
-5. **Clock Sync**: Keep issuer/verifier clocks synchronized (NTP)
+### Example: Multi-Issuer Verification
 
-## Example Scenarios
-
-### Scenario 1: Single Issuer
-
-**Architecture**:
-```
-Issuer A (PK_A) ──┐
-                  ├─→ Verifier (has PK_A)
-                  │
-Clients ──────────┘
-```
-
-**Configuration**:
-```bash
-# Issuer A
-ISSUER_ID="issuer:a:v1"
-
-# Verifier (no secrets!)
-# Verifier maintains registry of (issuer_id → public_key) mappings
-```
-
-### Scenario 2: Multi-Issuer Federation
-
-**Architecture**:
-```
-Issuer A (PK_A) ──┐
-                  │
-Issuer B (PK_B) ──┼─→ Verifier (has PK_A, PK_B, PK_C)
-                  │
-Issuer C (PK_C) ──┘
-```
-
-**Configuration**:
-
-```bash
-# Issuer A
-ISSUER_ID="issuer:a:v1"
-
-# Issuer B
-ISSUER_ID="issuer:b:v1"
-
-# Issuer C
-ISSUER_ID="issuer:c:v1"
-
-# Verifier (no secrets!)
-# Verifier maintains registry of (issuer_id → public_key) mappings
-# Fetched from /.well-known/issuer endpoints
-```
-
-**Token Verification**:
 ```rust
 // Verifier detects issuer and verifies with correct public key
 let issuer = lookup_issuer(&req.issuer_id)?;
@@ -242,73 +121,471 @@ let valid = verify_token_signature(
 );
 ```
 
-### Scenario 3: Geographic Distribution
+---
 
-**Use Case**: Regional issuers, global verifiers
+## Layer 2: Trust Graph Federation
 
-```
-┌─────────────────────────────────────────┐
-│ Region: North America                   │
-│ Issuer NA (issuer:na:v1)                │
-│ PK_NA: <public-key>                     │
-└─────────────────────────────────────────┘
-                  │
-                  │ Tokens (195 bytes)
-                  │
-┌─────────────────▼─────────────────────┐
-│ Global Verifier Pool                  │
-│ - Verifier 1 (has PK_NA, PK_EU, PK_AP)│
-│ - Verifier 2 (has PK_NA, PK_EU, PK_AP)│
-│ - Verifier 3 (has PK_NA, PK_EU, PK_AP)│
-└────────────────────────────────────────┘
-                  ▲
-                  │ Tokens (195 bytes)
-                  │
-┌─────────────────┴─────────────────────┐
-│ Region: Europe                        │
-│ Issuer EU (issuer:eu:v1)              │
-│ PK_EU: <public-key>                   │
-└───────────────────────────────────────┘
+Layer 2 enables ActivityPub-style federation where issuers vouch for each other, creating a decentralized trust network.
+
+### Key Concepts
+
+#### 1. Vouches
+
+A **vouch** is a cryptographically signed statement from one issuer (voucher) asserting trust in another issuer (vouchee).
+
+**Structure**:
+```rust
+pub struct Vouch {
+    pub voucher_issuer_id: String,      // "issuer:mozilla:v1"
+    pub vouched_issuer_id: String,      // "issuer:eff:v1"
+    pub vouched_pubkey: Vec<u8>,        // EFF's public key
+    pub expires_at: i64,                // Unix timestamp
+    pub created_at: i64,                // Unix timestamp
+    pub trust_level: Option<u8>,        // 0-100 (optional)
+    pub signature: [u8; 64],            // ECDSA signature
+}
 ```
 
-**Benefits**:
-- Regional issuers operate independently
-- Verifiers accept tokens from any region
-- No secret key sharing across regions
-- Simplified key management
+**Signature covers**: `voucher_issuer_id || vouched_issuer_id || vouched_pubkey || expires_at || created_at`
 
-### Scenario 4: Microservices Architecture
+**Example JSON**:
+```json
+{
+  "voucher_issuer_id": "issuer:mozilla:v1",
+  "vouched_issuer_id": "issuer:eff:v1",
+  "vouched_pubkey": "AzQ1...base64...",
+  "expires_at": 1735689600,
+  "created_at": 1704067200,
+  "trust_level": 90,
+  "signature": "r7K9...base64..."
+}
+```
 
-**Use Case**: Different services issue tokens for different scopes
+#### 2. Revocations
 
+A **revocation** removes trust from an issuer.
+
+**Structure**:
+```rust
+pub struct Revocation {
+    pub revoker_issuer_id: String,
+    pub revoked_issuer_id: String,
+    pub revoked_at: i64,
+    pub reason: Option<String>,
+    pub signature: [u8; 64],
+}
+```
+
+#### 3. Federation Metadata
+
+Issuers publish their trust graph at `/.well-known/federation`:
+
+```bash
+curl https://issuer:mozilla:v1/.well-known/federation
+```
+
+```json
+{
+  "issuer_id": "issuer:mozilla:v1",
+  "vouches": [
+    {
+      "voucher_issuer_id": "issuer:mozilla:v1",
+      "vouched_issuer_id": "issuer:eff:v1",
+      "vouched_pubkey": "AzQ1...",
+      "expires_at": 1735689600,
+      "created_at": 1704067200,
+      "trust_level": 90,
+      "signature": "r7K9..."
+    }
+  ],
+  "revocations": [],
+  "updated_at": 1704067200,
+  "cache_ttl_secs": 3600
+}
+```
+
+#### 4. Trust Policy
+
+Verifiers configure trust policies to control federation behavior:
+
+```rust
+pub struct TrustPolicy {
+    pub enabled: bool,                  // Enable/disable federation
+    pub max_trust_depth: u32,           // Max graph traversal depth (default: 2)
+    pub min_trust_paths: u32,           // Min independent paths required (default: 1)
+    pub require_direct_trust: bool,     // Only accept direct vouches from roots
+    pub trusted_roots: Vec<String>,     // Explicitly trusted root issuers
+    pub blocked_issuers: Vec<String>,   // Explicitly blocked issuers
+    pub refresh_interval_secs: u64,     // Metadata cache TTL (default: 3600)
+    pub min_trust_level: u8,            // Minimum trust level (default: 50)
+}
+```
+
+### Trust Graph Traversal
+
+When a verifier receives a token from an unknown issuer, it traverses the trust graph using BFS:
+
+1. **Check Explicit Trust**: Is the issuer a trusted root? Is it blocked?
+2. **Fetch Metadata**: Get `/.well-known/federation` from trusted roots
+3. **Build Trust Paths**: Follow vouches up to `max_trust_depth` hops
+4. **Verify Signatures**: Validate all vouch and revocation signatures
+5. **Make Decision**: Accept if `trust_paths >= min_trust_paths`
+
+**Example Trust Graph**:
+```
+Mozilla (root) ───vouches──→ EFF ───vouches──→ Alice
+       │
+       └─────vouches──→ Bob
+```
+
+With policy `{trusted_roots: ["issuer:mozilla:v1"], max_trust_depth: 2, min_trust_paths: 1}`:
+- **EFF**: ✅ Trusted (1 path via Mozilla, depth=1)
+- **Alice**: ✅ Trusted (1 path via Mozilla→EFF, depth=2)
+- **Bob**: ✅ Trusted (1 path via Mozilla, depth=1)
+- **Charlie**: ❌ Not trusted (no paths found)
+
+### Creating Vouches
+
+#### Step 1: Create Vouch Structure
+
+```rust
+use common::federation::Vouch;
+use crypto::Server;
+
+let ctx = b"freebird:v1";
+let voucher_sk = [0x42u8; 32]; // Voucher's secret key
+
+// Get vouchee's public key
+let vouchee_pubkey = fetch_issuer_pubkey("issuer:eff:v1").await?;
+
+let mut vouch = Vouch {
+    voucher_issuer_id: "issuer:mozilla:v1".to_string(),
+    vouched_issuer_id: "issuer:eff:v1".to_string(),
+    vouched_pubkey: vouchee_pubkey,
+    expires_at: now + (365 * 24 * 3600),  // 1 year
+    created_at: now,
+    trust_level: Some(90),
+    signature: [0u8; 64],  // Will be filled
+};
+```
+
+#### Step 2: Sign the Vouch
+
+```rust
+let signature = vouch.sign(&voucher_sk)?;
+vouch.signature = signature;
+```
+
+#### Step 3: Publish via Admin API
+
+```bash
+curl -X POST \
+  -H "X-Admin-Key: $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"vouch": {...}}' \
+  http://localhost:8080/admin/federation/vouches
+```
+
+### Admin API
+
+Layer 2 includes REST endpoints for managing federation:
+
+```bash
+# List vouches
+GET /admin/federation/vouches
+
+# Add vouch
+POST /admin/federation/vouches
+{
+  "vouch": {
+    "voucher_issuer_id": "issuer:a:v1",
+    "vouched_issuer_id": "issuer:b:v1",
+    "vouched_pubkey": "...",
+    "expires_at": 1735689600,
+    "created_at": 1704067200,
+    "trust_level": 80,
+    "signature": "..."
+  }
+}
+
+# Remove vouch
+DELETE /admin/federation/vouches/:issuer_id
+
+# List revocations
+GET /admin/federation/revocations
+
+# Add revocation
+POST /admin/federation/revocations
+
+# Remove revocation
+DELETE /admin/federation/revocations/:issuer_id
+```
+
+All endpoints require `X-Admin-Key` header authentication.
+
+### Persistent Storage
+
+Vouches and revocations are stored in `./data/federation/`:
+- `vouches.json` - All active vouches
+- `revocations.json` - All active revocations
+
+Files are pretty-printed JSON for easy inspection and manual editing.
+
+---
+
+## Configuration
+
+### Issuer Configuration (Layer 1)
+
+```bash
+# Standard issuer configuration
+ISSUER_ID="issuer:example:v1"
+BIND_ADDR="0.0.0.0:8081"
+TOKEN_TTL_MIN=10
+EPOCH_DURATION_SEC=86400
+EPOCH_RETENTION=2
+```
+
+No additional configuration needed - signature-based tokens are automatic.
+
+### Issuer Configuration (Layer 2)
+
+```bash
+# Enable admin API for federation management
+ADMIN_API_KEY="<64-character-key>"
+
+# Federation data stored in ./data/federation/
+```
+
+### Verifier Configuration (Layer 1)
+
+```bash
+# Standard verifier configuration
+BIND_ADDR="0.0.0.0:8082"
+MAX_CLOCK_SKEW_SECS=300
+EPOCH_DURATION_SEC=86400
+EPOCH_RETENTION=2
+```
+
+**Note**: No secret key required! Verifier operates entirely with public keys.
+
+### Verifier Configuration (Layer 2)
+
+```rust
+use verifier::federation::TrustGraph;
+use common::federation::TrustPolicy;
+
+let policy = TrustPolicy {
+    enabled: true,
+    max_trust_depth: 2,
+    min_trust_paths: 1,
+    trusted_roots: vec![
+        "issuer:mozilla:v1".to_string(),
+        "issuer:eff:v1".to_string(),
+    ],
+    blocked_issuers: vec![
+        "issuer:compromised:v1".to_string(),
+    ],
+    refresh_interval_secs: 3600,
+    min_trust_level: 50,
+    ..Default::default()
+};
+
+let trust_graph = TrustGraph::new(policy);
+
+// Check trust before accepting tokens
+if !trust_graph.is_trusted(&issuer_id, &issuer_pubkey).await {
+    return Err("Issuer not trusted");
+}
+```
+
+---
+
+## Security
+
+### Layer 1 Security
+
+#### ECDSA Signatures
+- **Algorithm**: P-256 (secp256r1) ECDSA
+- **Determinism**: RFC 6979 (deterministic k generation)
+- **Hash**: SHA-256
+- **Security Level**: ~128-bit
+
+#### Attack Resistance
+- ✅ **Token Modification**: Signature becomes invalid
+- ✅ **Metadata Forgery**: Signature covers `kid`, `exp`, `issuer_id`
+- ✅ **Replay Protection**: Nullifier system
+- ✅ **Double Spending**: Nullifier system
+
+### Layer 2 Security
+
+#### Signature Verification
+All vouches and revocations are cryptographically verified:
+
+```rust
+// Verify vouch signature with voucher's public key
+let voucher_pubkey = fetch_pubkey(&vouch.voucher_issuer_id).await?;
+assert!(vouch.verify(&voucher_pubkey));
+
+// Verify revocation signature with revoker's public key
+let revoker_pubkey = fetch_pubkey(&revocation.revoker_issuer_id).await?;
+assert!(revocation.verify(&revoker_pubkey));
+```
+
+#### Time Validation
+Vouches have expiration times with clock skew tolerance (5 minutes):
+
+```rust
+let now = current_timestamp();
+assert!(vouch.is_valid_at(now, MAX_CLOCK_SKEW_SECS));
+```
+
+#### Trust Level Enforcement
+Vouches below `min_trust_level` are ignored:
+
+```rust
+if let Some(level) = vouch.trust_level {
+    assert!(level >= policy.min_trust_level);
+}
+```
+
+#### Revocation Checking
+Always check revocations before trusting vouches:
+
+```rust
+if is_revoked(&issuer_id, &metadata.revocations, now).await {
+    return false;  // Don't trust revoked issuer
+}
+```
+
+#### Metadata Caching
+- Federation metadata cached with TTL (default: 1 hour)
+- Public keys cached with TTL
+- Prevents DoS attacks via rate limiting
+
+### Best Practices
+
+1. **HTTPS Only**: Always fetch metadata over HTTPS
+2. **Key Rotation**: Use epoch-based rotation
+3. **Public Key Pinning**: Validate on first use
+4. **Audit Logs**: Monitor federation operations
+5. **Clock Sync**: Keep clocks synchronized (NTP)
+6. **Trust Roots**: Carefully select trusted root issuers
+7. **Review Vouches**: Regularly audit trust graph
+
+---
+
+## Use Cases
+
+### Scenario 1: Single Issuer (Layer 1)
+
+**Architecture**:
+```
+Issuer A (PK_A) ──┐
+                  ├─→ Verifier (has PK_A)
+Clients ──────────┘
+```
+
+**Benefits**: Simple, no shared secrets, verifier only needs public key.
+
+### Scenario 2: Multi-Issuer Federation (Layer 1)
+
+**Architecture**:
+```
+Issuer A (PK_A) ──┐
+Issuer B (PK_B) ──┼─→ Verifier (has PK_A, PK_B, PK_C)
+Issuer C (PK_C) ──┘
+```
+
+**Benefits**: Multiple independent issuers, verifier maintains public key registry.
+
+### Scenario 3: University Consortium (Layer 2)
+
+**Trust Graph**:
+```
+UC Berkeley (root) ───vouches──→ Stanford ───vouches──→ MIT
+       │
+       └─────vouches──→ UCLA
+```
+
+**Policy**:
+```rust
+TrustPolicy {
+    trusted_roots: ["issuer:berkeley:v1"],
+    max_trust_depth: 2,
+    min_trust_paths: 1,
+    min_trust_level: 80,
+    ..Default::default()
+}
+```
+
+**Benefits**: Consortium members vouch for each other, automated trust propagation.
+
+### Scenario 4: Geographic Federation (Layer 2)
+
+**Trust Graph**:
+```
+USA Gov (root) ───vouches──→ California DMV
+                        └──→ New York DMV
+
+EU Commission (root) ───vouches──→ Germany eID
+                               └──→ France eID
+```
+
+**Policy**:
+```rust
+TrustPolicy {
+    trusted_roots: vec![
+        "issuer:usa-gov:v1",
+        "issuer:eu-commission:v1",
+    ],
+    max_trust_depth: 1,  // Only direct vouches
+    require_direct_trust: true,
+    min_trust_level: 95,
+    ..Default::default()
+}
+```
+
+**Benefits**: Government-level trust anchors, regional issuers, strict trust policy.
+
+### Scenario 5: Web of Trust (Layer 2)
+
+**Trust Graph**:
+```
+Alice ───vouches──→ Bob ───vouches──→ Charlie
+  │                   │
+  └─────────vouches───┘
+```
+
+**Policy**:
+```rust
+TrustPolicy {
+    trusted_roots: vec!["issuer:alice:v1"],
+    max_trust_depth: 2,
+    min_trust_paths: 2,  // Require 2 independent paths
+    min_trust_level: 70,
+    ..Default::default()
+}
+```
+
+**Result**: Charlie trusted (2 paths: Alice→Bob→Charlie and Alice→Charlie)
+
+### Scenario 6: Microservices (Layer 1)
+
+**Architecture**:
 ```
 Auth Service    (issuer:auth:v1)  ──┐
 Payment Service (issuer:pay:v1)   ──┼─→ API Gateway
 Content Service (issuer:cdn:v1)   ──┘   (verifies all)
 ```
 
-**Configuration**:
-```bash
-# Each service issues its own tokens
-# Auth Service
-ISSUER_ID="issuer:auth:v1"
+**Benefits**: Different services issue tokens, gateway verifies with public keys only.
 
-# Payment Service
-ISSUER_ID="issuer:pay:v1"
-
-# Content Service
-ISSUER_ID="issuer:cdn:v1"
-
-# API Gateway (verifier)
-# Maintains public key registry for all services
-# No service secret keys in gateway!
-```
+---
 
 ## Testing
 
-### Integration Tests
-
-Run the comprehensive federation test suite:
+### Layer 1 Tests
 
 ```bash
 # Test signature-based token flow
@@ -316,34 +593,38 @@ cargo test --package integration_tests --test signature_based_tokens
 
 # Should see:
 # ✅ test_signature_based_token_generation ... ok
-# ✅ test_mac_vs_signature_token_sizes ... ok
 # ✅ test_signature_determinism ... ok
 # ✅ test_signature_tampering_detection ... ok
 # ✅ test_federation_scenario ... ok
 ```
 
+### Layer 2 Tests
+
+```bash
+# Test federation metadata
+cargo test --test federation_metadata
+
+# Test trust graph
+cargo test --package verifier federation::
+
+# Test federation store
+cargo test --package issuer federation_store::
+```
+
 ### Manual Testing
 
-#### Issue a Token
+#### Layer 1: Issue and Verify Token
 
 ```bash
 # Start issuer
 cargo run --bin issuer
 
-# Request token (from client)
+# Request token
 curl -X POST http://localhost:8081/v1/oprf/issue \
   -H "Content-Type: application/json" \
-  -d '{
-    "blinded_element_b64": "<blinded-element>"
-  }'
+  -d '{"blinded_element_b64": "<blinded-element>"}'
 
-# Response includes 195-byte token
-```
-
-#### Verify in Federation Mode
-
-```bash
-# Start verifier (no secret key required!)
+# Start verifier
 cargo run --bin verifier
 
 # Verify token
@@ -355,32 +636,47 @@ curl -X POST http://localhost:8082/v1/verify \
     "epoch": 12345,
     "exp": 1234567890
   }'
-
-# Should succeed with only public key!
 ```
 
-## Future Work: Layer 2 Federation
+#### Layer 2: Manage Federation
 
-Layer 1 (current implementation) provides the cryptographic foundation. Layer 2 (planned) will add:
+```bash
+# List vouches
+curl -H "X-Admin-Key: $KEY" \
+  http://localhost:8080/admin/federation/vouches
 
-- **Issuer Discovery Protocol**: ActivityPub-style `.well-known/federation` endpoints
-- **Cryptographic Vouching**: Issuers sign vouches for other issuers
-- **Trust Graph**: Build and traverse issuer trust networks
-- **Revocation**: Distributed revocation of compromised issuers
-- **Federation Policies**: Configurable trust requirements
+# Add vouch
+curl -X POST \
+  -H "X-Admin-Key: $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"vouch": {...}}' \
+  http://localhost:8080/admin/federation/vouches
 
-Stay tuned for Layer 2 implementation!
+# Check federation metadata
+curl http://localhost:8080/.well-known/federation
+```
+
+---
 
 ## References
 
+### Standards
 - [RFC 6979](https://tools.ietf.org/html/rfc6979) - Deterministic ECDSA
 - [SEC 1](https://www.secg.org/sec1-v2.pdf) - Elliptic Curve Cryptography
-- [NIST SP 800-186](https://csrc.nist.gov/publications/detail/sp/800-186/final) - Discrete Log Crypto (P-256)
-- [ActivityPub](https://www.w3.org/TR/activitypub/) - Federated Social Networks (inspiration for Layer 2)
+- [NIST SP 800-186](https://csrc.nist.gov/publications/detail/sp/800-186/final) - P-256
+- [ActivityPub](https://www.w3.org/TR/activitypub/) - Federated Networks (inspiration)
+
+### Documentation
+- [How It Works](./HOW_IT_WORKS.md) - VOPRF protocol details
+- [Security](./SECURITY.md) - Security architecture
+- [API Reference](./API.md) - HTTP endpoints
+- [Configuration](./CONFIGURATION.md) - Configuration reference
+
+---
 
 ## Support
 
-For questions or issues related to federation:
-- GitHub Issues: https://github.com/flammafex/freebird/issues
-- Documentation: `docs/`
-- Security: See `SECURITY.md`
+For questions or issues:
+- **GitHub Issues**: https://github.com/flammafex/freebird/issues
+- **Documentation**: `docs/`
+- **Security**: See `SECURITY.md`
