@@ -277,7 +277,16 @@ God mapped the road. I'm just walking it. Hand in hand with Lady Wisdom.
 
 ## Contributing
 
-From who? You?
+From who? You? 🙄
+
+No more apolitical chuds.
+No more blockchain bros.
+No more image board posters.
+No more business majors.
+
+I've had it with all of you.
+The robot and I are gonna wreck you.
+See ya, losers.
 
 ---
 
