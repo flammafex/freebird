@@ -309,6 +309,7 @@ mod tests {
             invitation_system: None,
             epoch_duration_sec: 86400,
             epoch_retention: 2,
+            token_format: crate::main_state::TokenFormat::MacBased,
         }
     }
 
