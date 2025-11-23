@@ -26,8 +26,9 @@ struct AppState {
     store: Arc<dyn SpendStore>,
     /// Maximum acceptable clock skew in seconds (default: 300 = 5 minutes)
     max_clock_skew_secs: i64,
-    /// Issuer secret key for epoch-based MAC key derivation
-    issuer_sk: [u8; 32],
+    /// Issuer secret key for epoch-based MAC key derivation (optional - only needed for MAC-based tokens)
+    /// Signature-based tokens don't require the secret key
+    issuer_sk: Option<[u8; 32]>,
     /// Epoch configuration
     epoch_duration_sec: u64,
     epoch_retention: u32,
@@ -50,9 +51,12 @@ impl AppState {
         epoch >= min_valid && epoch <= current
     }
 
-    /// Derive MAC key for a specific epoch
-    fn derive_mac_key_for_epoch(&self, issuer_id: &str, kid: &str, epoch: u32) -> [u8; 32] {
-        crypto::derive_mac_key_v2(&self.issuer_sk, issuer_id, kid, epoch)
+    /// Derive MAC key for a specific epoch (only works if issuer_sk is set)
+    fn derive_mac_key_for_epoch(&self, issuer_id: &str, kid: &str, epoch: u32) -> Result<[u8; 32], String> {
+        match &self.issuer_sk {
+            Some(sk) => Ok(crypto::derive_mac_key_v2(sk, issuer_id, kid, epoch)),
+            None => Err("MAC verification requires ISSUER_SECRET_KEY to be set".to_string()),
+        }
     }
 }
 
@@ -91,16 +95,23 @@ async fn main() -> anyhow::Result<()> {
     info!("⏰ Clock skew tolerance: {} seconds", max_clock_skew_secs);
 
     // ---------- Epoch-based Key Configuration ----------
-    // The verifier needs the issuer's secret key to derive epoch-specific MAC keys
-    // In production deployments, issuer and verifier are managed by the same entity
-    let issuer_secret = std::env::var("ISSUER_SECRET_KEY")
-        .context("ISSUER_SECRET_KEY environment variable not set")?;
+    // The verifier's secret key is OPTIONAL:
+    // - Required for MAC-based tokens (V1, 163 bytes)
+    // - NOT required for signature-based tokens (V2, 195 bytes - federation mode)
+    let issuer_sk = if let Ok(issuer_secret) = std::env::var("ISSUER_SECRET_KEY") {
+        // Decode hex secret key
+        let sk_bytes: [u8; 32] = hex::decode(&issuer_secret)
+            .context("Invalid ISSUER_SECRET_KEY hex encoding")?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("ISSUER_SECRET_KEY must be exactly 32 bytes (64 hex chars)"))?;
 
-    // Decode hex secret key
-    let sk_bytes: [u8; 32] = hex::decode(&issuer_secret)
-        .context("Invalid ISSUER_SECRET_KEY hex encoding")?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("ISSUER_SECRET_KEY must be exactly 32 bytes (64 hex chars)"))?;
+        info!("🔐 MAC-based token support enabled (requires secret key)");
+        Some(sk_bytes)
+    } else {
+        warn!("⚠️  ISSUER_SECRET_KEY not set - only signature-based tokens (V2) will be supported");
+        warn!("⚠️  MAC-based tokens (V1) will be rejected");
+        None
+    };
 
     // Epoch configuration
     let epoch_duration_sec = std::env::var("EPOCH_DURATION_SEC")
@@ -113,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(2); // Default: accept 2 previous epochs
 
-    info!("🔐 Epoch-based MAC key derivation configured: duration={}s, retention={}", epoch_duration_sec, epoch_retention);
+    info!("🔐 Epoch configuration: duration={}s, retention={}", epoch_duration_sec, epoch_retention);
 
     // ---------- Backend selection ----------
     let backend = if let Ok(url) = std::env::var("REDIS_URL") {
@@ -135,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
         issuers: Arc::new(RwLock::new(HashMap::new())),
         store,
         max_clock_skew_secs,
-        issuer_sk: sk_bytes,
+        issuer_sk,
         epoch_duration_sec,
         epoch_retention,
     });
@@ -305,56 +316,93 @@ async fn verify(
 
     debug!("✅ Epoch {} is valid", req.epoch);
 
-    // 4) Verify MAC over token metadata (constant-time)
-    //    This must happen BEFORE VOPRF verification to prevent tampering
+    // 4) Authenticate token metadata (MAC or Signature, auto-detected by length)
     let exp_value = req.exp.ok_or_else(|| {
         error!("❌ Token missing expiration field");
         (StatusCode::BAD_REQUEST, "token must include expiration".to_string())
     })?;
 
-    // Decode token to split MAC from token data
-    let token_with_mac = Base64UrlUnpadded::decode_vec(&req.token_b64).map_err(|e| {
+    // Decode token to determine format
+    let token_with_auth = Base64UrlUnpadded::decode_vec(&req.token_b64).map_err(|e| {
         error!("❌ Failed to decode token: {:?}", e);
         (StatusCode::BAD_REQUEST, "invalid token encoding".to_string())
     })?;
 
-    // Token format: [VERSION||A||B||Proof||MAC]
-    // Expected: 131 bytes (VOPRF) + 32 bytes (MAC) = 163 bytes
-    if token_with_mac.len() != 163 {
-        error!("❌ Invalid token length: got {} bytes, expected 163", token_with_mac.len());
-        return Err((StatusCode::BAD_REQUEST, "invalid token length".to_string()));
-    }
+    // Auto-detect token format based on length:
+    // - 163 bytes = V1 (131 VOPRF + 32 MAC)
+    // - 195 bytes = V2 (131 VOPRF + 64 ECDSA Signature)
+    let (token_data, auth_type) = match token_with_auth.len() {
+        163 => {
+            // V1: MAC-based authentication
+            debug!("🔍 Detected MAC-based token (V1, 163 bytes)");
 
-    // Split token and MAC
-    let (token_data, mac_bytes) = token_with_mac.split_at(131);
-    let received_mac: [u8; 32] = mac_bytes.try_into().expect("MAC is 32 bytes");
+            // Split token and MAC
+            let (token_data, mac_bytes) = token_with_auth.split_at(131);
+            let received_mac: [u8; 32] = mac_bytes.try_into().expect("MAC is 32 bytes");
 
-    // Derive epoch-specific MAC key
-    // Wrap in Zeroizing to ensure the key is securely erased from memory after use
-    let mac_key = Zeroizing::new(st.derive_mac_key_for_epoch(&req.issuer_id, &issuer.kid, req.epoch));
+            // Derive epoch-specific MAC key
+            let mac_key_raw = st.derive_mac_key_for_epoch(&req.issuer_id, &issuer.kid, req.epoch)
+                .map_err(|e| {
+                    error!("❌ Cannot verify MAC token: {}", e);
+                    (StatusCode::INTERNAL_SERVER_ERROR, e)
+                })?;
+            let mac_key = Zeroizing::new(mac_key_raw);
 
-    // Verify MAC in constant time
-    let mac_valid = crypto::verify_token_mac(
-        &mac_key,
-        token_data,
-        &received_mac,
-        &issuer.kid,
-        exp_value,
-        &req.issuer_id,
-    );
+            // Verify MAC in constant time
+            let mac_valid = crypto::verify_token_mac(
+                &mac_key,
+                token_data,
+                &received_mac,
+                &issuer.kid,
+                exp_value,
+                &req.issuer_id,
+            );
 
-    if !mac_valid {
-        error!("❌ MAC verification failed - token metadata tampered");
-        return Err((StatusCode::UNAUTHORIZED, "verification failed".to_string()));
-    }
+            if !mac_valid {
+                error!("❌ MAC verification failed - token metadata tampered");
+                return Err((StatusCode::UNAUTHORIZED, "verification failed".to_string()));
+            }
 
-    debug!("✅ MAC verified - token metadata authentic");
+            debug!("✅ MAC verified - token metadata authentic");
+            (token_data, "MAC")
+        }
+        195 => {
+            // V2: Signature-based authentication (federation-ready!)
+            debug!("🔍 Detected signature-based token (V2, 195 bytes)");
 
-    // 4) Verify DLEQ token and derive PRF output (without MAC)
+            // Split token and signature
+            let (token_data, sig_bytes) = token_with_auth.split_at(131);
+            let received_signature: [u8; 64] = sig_bytes.try_into().expect("Signature is 64 bytes");
+
+            // Verify signature using issuer's public key
+            let sig_valid = crypto::verify_token_signature(
+                &issuer.pubkey_bytes,
+                token_data,
+                &received_signature,
+                &issuer.kid,
+                exp_value,
+                &req.issuer_id,
+            );
+
+            if !sig_valid {
+                error!("❌ Signature verification failed - token metadata tampered or invalid");
+                return Err((StatusCode::UNAUTHORIZED, "verification failed".to_string()));
+            }
+
+            debug!("✅ Signature verified - token metadata authentic (federation mode!)");
+            (token_data, "ECDSA")
+        }
+        len => {
+            error!("❌ Invalid token length: got {} bytes, expected 163 (MAC) or 195 (Signature)", len);
+            return Err((StatusCode::BAD_REQUEST, "invalid token length".to_string()));
+        }
+    };
+
+    // 5) Verify DLEQ token and derive PRF output
     debug!("Verifying DLEQ token with context len={}", issuer.ctx.len());
     let verifier = crypto::Verifier::new(&issuer.ctx);
 
-    // Pass only the token data (without MAC) to VOPRF verifier
+    // Pass only the token data (without authentication) to VOPRF verifier
     let token_data_b64 = Base64UrlUnpadded::encode_string(token_data);
     let out_b64 = verifier
         .verify(&token_data_b64, &issuer.pubkey_bytes)
@@ -384,11 +432,12 @@ async fn verify(
         return Err((StatusCode::UNAUTHORIZED, "verification failed".into()));
     }
 
-    // 5) Success
+    // 6) Success
     info!(
-        "✅ Token verified successfully: issuer={}, kid={}, nullifier={}",
+        "✅ Token verified successfully: issuer={}, kid={}, auth={}, nullifier={}",
         req.issuer_id,
         issuer.kid,
+        auth_type,
         &null_key[..16]
     );
 
@@ -481,8 +530,8 @@ async fn batch_verify(
 
         let exp_value = token_req.exp.unwrap();
 
-        // 3) Decode and validate token length
-        let token_with_mac = match Base64UrlUnpadded::decode_vec(&token_req.token_b64) {
+        // 3) Decode and auto-detect token format
+        let token_with_auth = match Base64UrlUnpadded::decode_vec(&token_req.token_b64) {
             Ok(t) => t,
             Err(_) => {
                 return VerifyResult::Error {
@@ -492,44 +541,89 @@ async fn batch_verify(
             }
         };
 
-        if token_with_mac.len() != 163 {
-            return VerifyResult::Error {
-                message: format!("invalid token length: got {} bytes, expected 163", token_with_mac.len()),
-                code: "invalid_length".to_string(),
-            };
-        }
+        // Auto-detect token format and verify authentication
+        let token_data = match token_with_auth.len() {
+            163 => {
+                // V1: MAC-based authentication
+                let (token_data, mac_bytes) = token_with_auth.split_at(131);
+                let received_mac: [u8; 32] = match mac_bytes.try_into() {
+                    Ok(m) => m,
+                    Err(_) => {
+                        return VerifyResult::Error {
+                            message: "invalid MAC".to_string(),
+                            code: "invalid_mac".to_string(),
+                        };
+                    }
+                };
 
-        // 4) Verify MAC with epoch-specific key
-        let (token_data, mac_bytes) = token_with_mac.split_at(131);
-        let received_mac: [u8; 32] = match mac_bytes.try_into() {
-            Ok(m) => m,
-            Err(_) => {
+                // Derive epoch-specific MAC key
+                let mac_key_raw = match st.derive_mac_key_for_epoch(&issuer_id, &issuer_clone.kid, token_req.epoch) {
+                    Ok(key) => key,
+                    Err(e) => {
+                        return VerifyResult::Error {
+                            message: format!("MAC key derivation failed: {}", e),
+                            code: "mac_derivation_failed".to_string(),
+                        };
+                    }
+                };
+                let mac_key = Zeroizing::new(mac_key_raw);
+
+                let mac_valid = crypto::verify_token_mac(
+                    &mac_key,
+                    token_data,
+                    &received_mac,
+                    &issuer_clone.kid,
+                    exp_value,
+                    &issuer_id,
+                );
+
+                if !mac_valid {
+                    return VerifyResult::Error {
+                        message: "MAC verification failed".to_string(),
+                        code: "mac_verification_failed".to_string(),
+                    };
+                }
+
+                token_data
+            }
+            195 => {
+                // V2: Signature-based authentication
+                let (token_data, sig_bytes) = token_with_auth.split_at(131);
+                let received_signature: [u8; 64] = match sig_bytes.try_into() {
+                    Ok(s) => s,
+                    Err(_) => {
+                        return VerifyResult::Error {
+                            message: "invalid signature".to_string(),
+                            code: "invalid_signature".to_string(),
+                        };
+                    }
+                };
+
+                let sig_valid = crypto::verify_token_signature(
+                    &issuer_clone.pubkey_bytes,
+                    token_data,
+                    &received_signature,
+                    &issuer_clone.kid,
+                    exp_value,
+                    &issuer_id,
+                );
+
+                if !sig_valid {
+                    return VerifyResult::Error {
+                        message: "signature verification failed".to_string(),
+                        code: "signature_verification_failed".to_string(),
+                    };
+                }
+
+                token_data
+            }
+            len => {
                 return VerifyResult::Error {
-                    message: "invalid MAC".to_string(),
-                    code: "invalid_mac".to_string(),
+                    message: format!("invalid token length: got {} bytes, expected 163 (MAC) or 195 (Signature)", len),
+                    code: "invalid_length".to_string(),
                 };
             }
         };
-
-        // Derive epoch-specific MAC key
-        // Wrap in Zeroizing to ensure the key is securely erased from memory after use
-        let mac_key = Zeroizing::new(st.derive_mac_key_for_epoch(&issuer_id, &issuer_clone.kid, token_req.epoch));
-
-        let mac_valid = crypto::verify_token_mac(
-            &mac_key,
-            token_data,
-            &received_mac,
-            &issuer_clone.kid,
-            exp_value,
-            &issuer_id,
-        );
-
-        if !mac_valid {
-            return VerifyResult::Error {
-                message: "MAC verification failed".to_string(),
-                code: "mac_verification_failed".to_string(),
-            };
-        }
 
         // 4) Verify VOPRF token
         let verifier = crypto::Verifier::new(&issuer_clone.ctx);
