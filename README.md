@@ -70,23 +70,11 @@ Resources depend on your anticipated user base and Sybil resistance complexity.
     * **Reverse Proxy:** Nginx, Caddy, or Cloud LB required for TLS termination.
     * **Entropy:** System must provide sufficient entropy (>1000 available) for key generation.
 
-### Checking System Entropy
+### Build Requirements
 
-To ensure sufficient randomness for cryptographic operations, verify your system's available entropy:
-
-```bash
-cat /proc/sys/kernel/random/entropy_avail
-```
-
-* **Target Value:** > 1000
-* **Action:** If the value is low (< 1000), install a daemon like `haveged` to replenish the pool.
-
-### Build Requirements (Manual)
-
-If building from source instead of using Docker:
-
-* **Language:** Rust **1.70+**
-* **System Packages:** `pkg-config`, `libssl-dev` (OpenSSL is required for `reqwest`)
+* **Docker:** Recommended for deployment
+* **Rust 1.70+:** If building from source
+* **System Entropy:** > 1000 (check with `cat /proc/sys/kernel/random/entropy_avail`)
 ---
 
 ## Technical Implementation
@@ -246,23 +234,11 @@ Configuration is handled via environment variables.
 
 ## Roadmap
 
-### Phase 1: Core Stabilization (Completed)
-- [x] VOPRF implementation (P-256)
-- [x] Sybil resistance (Invitation, PoW, Rate Limit)
-- [x] Redis backend & Persistence
-- [x] Key Rotation & Admin API
+**Completed:** P-256 VOPRF • Sybil Resistance • Redis Backend • Key Rotation • Admin API • TypeScript SDK • Docker Support
 
-### Phase 2: Ecosystem (Current)
-- [x] JavaScript/TypeScript SDK
-- [x] Docker support
-- [ ] Nostr NIP-VOPRF Integration
-- [ ] Python & Go Clients
-- [ ] Prometheus Metrics
+**In Progress:** Nostr Integration • Python/Go Clients • Prometheus Metrics
 
-### Phase 3: Expansion
-- [ ] HSM / Cloud KMS support for key storage
-- [ ] Privacy Pass IETF Standardization compliance
-- [ ] Mobile SDKs (iOS/Android)
+**Planned:** HSM/KMS Support • Privacy Pass IETF Compliance • Mobile SDKs
 
 ---
 
