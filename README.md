@@ -281,10 +281,7 @@ The `.env.example` file contains **all** available configuration options with de
 
 ## Contributing
 
-We need help with:
-- **Security Review**: Auditing the VOPRF and DLEQ implementation.
-- **Integrations**: Plugins for Matrix, Mastodon, and Nostr.
-- **Documentation**: Deployment guides for Kubernetes and specialized use cases.
+No.
 
 ---
 
