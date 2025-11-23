@@ -229,32 +229,56 @@ pub async fn handle(
     // Get current epoch for key rotation
     let epoch = state.current_epoch();
 
-    // Compute MAC over token + metadata to prevent tampering
+    // Authenticate token metadata (MAC or Signature depending on configuration)
     // Decode token to get raw bytes
     let token_bytes = Base64UrlUnpadded::decode_vec(&token_b64).map_err(|e| {
-        error!("failed to decode token for MAC computation: {e:?}");
+        error!("failed to decode token for authentication: {e:?}");
         (StatusCode::INTERNAL_SERVER_ERROR, "token encoding error".into())
     })?;
 
-    // Derive epoch-specific MAC key and compute MAC over (token || kid || exp || issuer_id)
-    // Wrap in Zeroizing to ensure the key is securely erased from memory after use
-    let mac_key = Zeroizing::new(voprf.derive_mac_key_for_epoch(&state.issuer_id, epoch).await);
-    let mac = crypto::compute_token_mac(&mac_key, &token_bytes, &kid_used, exp, &state.issuer_id);
+    // Apply authentication based on token format configuration
+    use crate::main_state::TokenFormat;
+    let (final_token_bytes, auth_type) = match state.token_format {
+        TokenFormat::MacBased => {
+            // V1: MAC-based authentication (163 bytes = 131 VOPRF + 32 MAC)
+            // Derive epoch-specific MAC key and compute MAC over (token || kid || exp || issuer_id)
+            // Wrap in Zeroizing to ensure the key is securely erased from memory after use
+            let mac_key = Zeroizing::new(voprf.derive_mac_key_for_epoch(&state.issuer_id, epoch).await);
+            let mac = crypto::compute_token_mac(&mac_key, &token_bytes, &kid_used, exp, &state.issuer_id);
 
-    // Append MAC to token: [VERSION||A||B||Proof||MAC]
-    let mut token_with_mac = token_bytes;
-    token_with_mac.extend_from_slice(&mac);
+            // Append MAC to token: [VOPRF_Token||MAC]
+            let mut token_with_mac = token_bytes;
+            token_with_mac.extend_from_slice(&mac);
+            (token_with_mac, "MAC")
+        }
+        TokenFormat::SignatureBased => {
+            // V2: Signature-based authentication (195 bytes = 131 VOPRF + 64 ECDSA)
+            // Sign token metadata with issuer's secret key
+            let signature = voprf.sign_token_metadata(&token_bytes, &kid_used, exp, &state.issuer_id)
+                .await
+                .map_err(|e| {
+                    error!("failed to sign token metadata: {e:?}");
+                    (StatusCode::INTERNAL_SERVER_ERROR, "signature generation error".into())
+                })?;
+
+            // Append signature to token: [VOPRF_Token||Signature]
+            let mut token_with_sig = token_bytes;
+            token_with_sig.extend_from_slice(&signature);
+            (token_with_sig, "ECDSA")
+        }
+    };
 
     // Encode final token
-    let final_token_b64 = Base64UrlUnpadded::encode_string(&token_with_mac);
+    let final_token_b64 = Base64UrlUnpadded::encode_string(&final_token_bytes);
 
     debug!(
-        "✅ token issued: kid={}, exp={}, epoch={}, sybil_verified={}, token_len={}",
+        "✅ token issued: kid={}, exp={}, epoch={}, auth={}, sybil_verified={}, token_len={}",
         kid_used,
         exp,
         epoch,
+        auth_type,
         sybil_info.is_some(),
-        token_with_mac.len()
+        final_token_bytes.len()
     );
 
     Ok(Json(IssueResp {

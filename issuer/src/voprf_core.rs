@@ -76,6 +76,21 @@ impl VoprfCore {
         })
     }
 
+    /// Sign token metadata using ECDSA (for federation support)
+    pub fn sign_token_metadata(&self, token_bytes: &[u8], kid: &str, exp: i64, issuer_id: &str) -> Result<[u8; 64]> {
+        // Use async runtime to call async provider method
+        let provider = self.provider.clone();
+        let token_bytes = token_bytes.to_vec();
+        let kid = kid.to_string();
+        let issuer_id = issuer_id.to_string();
+
+        // Block on async call (we're in a sync context)
+        tokio::runtime::Handle::current().block_on(async move {
+            provider.sign_token_metadata(&token_bytes, &kid, exp, &issuer_id)
+                .await
+        })
+    }
+
     pub fn evaluate_b64(&self, blinded_b64: &str) -> Result<String> {
         debug!("🔍 evaluate_b64 called ({} chars)", blinded_b64.len());
 
