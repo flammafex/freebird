@@ -287,7 +287,7 @@ From who? You? 🙄
 
 - I've had it with all of you.
 - The robot and I are gonna ruin you.
-- There won't snakes left in the grass.
+- There won't be snakes left in the grass.
 - See ya, losers.
 
 ---
