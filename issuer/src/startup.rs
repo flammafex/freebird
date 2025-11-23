@@ -106,7 +106,15 @@ impl Application {
         } else {
             None
         };
-        // 3. Sybil Resistance Setup (Simplified for brevity, logic matches previous step)
+
+        // 3. Federation Store (needed before Sybil setup for Federated Trust)
+        let federation_data_dir = std::path::PathBuf::from("./data/federation");
+        let federation_store = crate::federation_store::FederationStore::new(&federation_data_dir)
+            .await
+            .context("Failed to initialize federation store")?;
+        info!("✅ Federation store initialized at {:?}", federation_data_dir);
+
+        // 4. Sybil Resistance Setup
         let mut invitation_system: Option<Arc<InvitationSystem>> = None;
         let sybil_checker: Option<Arc<dyn SybilResistance>> = match config.sybil_config.mode.as_str() {
             "pow" | "proof_of_work" => Some(Arc::new(ProofOfWork::new(config.sybil_config.pow_difficulty))),
@@ -223,19 +231,39 @@ impl Application {
                 info!("✅ Sybil resistance: Multi-Party Vouching");
                 Some(sys)
             }
+            "federated_trust" => {
+                let trust_policy = common::federation::TrustPolicy {
+                    enabled: config.sybil_config.federated_trust_enabled,
+                    max_trust_depth: config.sybil_config.federated_trust_max_depth,
+                    min_trust_paths: config.sybil_config.federated_trust_min_paths,
+                    require_direct_trust: config.sybil_config.federated_trust_require_direct,
+                    trusted_roots: config.sybil_config.federated_trust_trusted_roots.clone(),
+                    blocked_issuers: config.sybil_config.federated_trust_blocked_issuers.clone(),
+                    refresh_interval_secs: config.sybil_config.federated_trust_cache_ttl_secs,
+                    min_trust_level: config.sybil_config.federated_trust_min_trust_level,
+                };
+
+                let ft_config = sybil_resistance::FederatedTrustConfig {
+                    trust_policy,
+                    federation_store: Arc::new(federation_store.clone()),
+                    our_issuer_id: config.issuer_id.clone(),
+                    cache_ttl_secs: config.sybil_config.federated_trust_cache_ttl_secs,
+                    max_token_age_secs: config.sybil_config.federated_trust_max_token_age_secs,
+                };
+
+                let sys = sybil_resistance::FederatedTrustSystem::new(ft_config)
+                    .await
+                    .context("Failed to initialize Federated Trust system")?;
+
+                info!("✅ Sybil resistance: Federated Trust");
+                Some(sys)
+            }
             "combined" => Some(Arc::new(CombinedSybilResistance::new(vec![
                 Box::new(ProofOfWork::new(config.sybil_config.pow_difficulty)),
                 Box::new(RateLimit::new(Duration::from_secs(config.sybil_config.rate_limit_secs))),
             ]))),
             _ => None
         };
-
-        // 4. Federation Store
-        let federation_data_dir = std::path::PathBuf::from("./data/federation");
-        let federation_store = crate::federation_store::FederationStore::new(&federation_data_dir)
-            .await
-            .context("Failed to initialize federation store")?;
-        info!("✅ Federation store initialized at {:?}", federation_data_dir);
 
         // 5. App State & Router
         let state = Arc::new(AppStateWithSybil {

@@ -82,6 +82,13 @@ export type SybilProof =
       hmac_proof: string;
       timestamp: number;
     }
+  | {
+      type: 'federated_trust';
+      source_issuer_id: string;
+      source_token_b64: string;
+      token_exp: number;
+      trust_path: string[];
+    }
   | { type: 'none' };
 
 /**
