@@ -22,6 +22,16 @@ export interface IssuerMetadata {
 }
 
 /**
+ * A single vouch proof for Multi-Party Vouching
+ */
+export interface VouchProof {
+  voucher_id: string;
+  vouchee_id: string;
+  timestamp: number;
+  signature: string;
+}
+
+/**
  * Supported Sybil resistance proof types.
  * Mirrors the enum in `common/src/api.rs`
  */
@@ -64,6 +74,13 @@ export type SybilProof =
       unique_devices: number;
       first_seen: number;
       hmac_proof: string;
+    }
+  | {
+      type: 'multi_party_vouching';
+      vouchee_id_hash: string;
+      vouches: VouchProof[];
+      hmac_proof: string;
+      timestamp: number;
     }
   | { type: 'none' };
 

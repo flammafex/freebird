@@ -169,6 +169,15 @@ pub enum VerifyResult {
 // Sybil Proof Types
 // ============================================================================
 
+/// A single vouch proof for Multi-Party Vouching
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VouchProof {
+    pub voucher_id: String,
+    pub vouchee_id: String,
+    pub timestamp: i64,
+    pub signature: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SybilProof {
@@ -206,6 +215,12 @@ pub enum SybilProof {
         unique_devices: u32,    // Count of unique devices observed
         first_seen: i64,        // Unix timestamp of first observation
         hmac_proof: String,     // HMAC(secret, all fields)
+    },
+    MultiPartyVouching {
+        vouchee_id_hash: String,  // Blake3(username + salt)
+        vouches: Vec<VouchProof>, // List of vouch proofs
+        hmac_proof: String,       // HMAC(secret, all fields)
+        timestamp: i64,           // Unix timestamp of proof generation
     },
     None,
 }
