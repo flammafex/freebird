@@ -74,3 +74,28 @@ pub async fn keys_handler(
         },
     })
 }
+
+/// Federation metadata endpoint (Layer 2 Federation)
+///
+/// Returns information about which issuers this issuer trusts (vouches)
+/// and which it has revoked. This enables ActivityPub-style federation
+/// where verifiers can traverse trust graphs to make authorization decisions.
+///
+/// For now, this returns empty vouches/revocations as a placeholder.
+/// Full federation management will be added in subsequent commits.
+pub async fn federation_handler(
+    State((state, _voprf)): State<SharedState>
+) -> Json<common::federation::FederationMetadata> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    Json(common::federation::FederationMetadata {
+        issuer_id: state.issuer_id.clone(),
+        vouches: Vec::new(), // TODO: Load from persistent storage
+        revocations: Vec::new(), // TODO: Load from persistent storage
+        updated_at: now,
+        cache_ttl_secs: Some(3600), // 1 hour cache
+    })
+}
