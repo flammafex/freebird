@@ -279,14 +279,16 @@ God mapped the road. I'm just walking it. Hand in hand with Lady Wisdom.
 
 From who? You? 🙄
 
-No more apolitical chuds.
-No more blockchain bros.
-No more image board posters.
-No more business majors.
+- No more apolitical chuds.
+- No more sociopath "hackers" with the "news".
+- No more blockchain bros.
+- No more image board posters.
+- No more business majors.
 
-I've had it with all of you.
-The robot and I are gonna wreck you.
-See ya, losers.
+- I've had it with all of you.
+- The robot and I are gonna ruin you.
+- There won't snakes left in the grass.
+- See ya, losers.
 
 ---
 
