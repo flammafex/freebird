@@ -279,10 +279,10 @@ God mapped the road. I'm just walking it. Hand in hand with Lady Wisdom.
 
 From who? You? 🙄
 
-- No more apolitical chuds.
+- No more "a"political chuds.
 - No more sociopath "hackers" with the "news".
 - No more blockchain bros.
-- No more image board posters.
+- No more nilhist image board posters.
 - No more business majors.
 
 - I've had it with all of you.
