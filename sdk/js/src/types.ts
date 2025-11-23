@@ -48,6 +48,14 @@ export type SybilProof =
       auth_proof: string;
       timestamp: number;
     }
+  | {
+      type: 'progressive_trust';
+      user_id_hash: string;
+      first_seen: number;
+      tokens_issued: number;
+      last_issuance: number;
+      hmac_proof: string;
+    }
   | { type: 'none' };
 
 /**
