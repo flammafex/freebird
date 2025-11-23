@@ -384,6 +384,80 @@ pub fn derive_mac_key_v2(
     mac_key
 }
 
+// ============================================================================
+// Generic Message Signatures (for Layer 2 Federation)
+// ============================================================================
+//
+// These functions provide generic ECDSA signing/verification for any message,
+// used by Layer 2 federation for vouches, revocations, and other trust signals.
+
+/// Sign an arbitrary message with an issuer's secret key
+///
+/// This is a generic signing function used for federation messages like
+/// vouches and revocations. Uses deterministic ECDSA (RFC 6979).
+///
+/// # Arguments
+/// * `secret_key` - Issuer's 32-byte secret key
+/// * `message` - The message bytes to sign
+///
+/// # Returns
+/// 64-byte ECDSA signature (r || s) or error
+pub fn sign_message(
+    secret_key: &[u8; 32],
+    message: &[u8],
+) -> Result<[u8; 64], Error> {
+    use p256::ecdsa::{SigningKey, signature::Signer};
+
+    // Hash the message first
+    let msg_hash = Sha256::digest(message);
+
+    // Create signing key from secret
+    let signing_key = SigningKey::from_bytes(secret_key.into())
+        .map_err(|_| Error::Internal)?;
+
+    // Sign (deterministic, using RFC 6979)
+    let signature: p256::ecdsa::Signature = signing_key.sign(&msg_hash);
+
+    Ok(signature.to_bytes().into())
+}
+
+/// Verify an arbitrary message signature with an issuer's public key
+///
+/// This is a generic verification function used for federation messages.
+///
+/// # Arguments
+/// * `public_key` - Issuer's public key (SEC1 compressed, 33 bytes)
+/// * `message` - The message bytes that were signed
+/// * `signature` - The 64-byte ECDSA signature to verify
+///
+/// # Returns
+/// true if signature is valid, false otherwise
+pub fn verify_message_signature(
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8; 64],
+) -> bool {
+    use p256::ecdsa::{VerifyingKey, signature::Verifier};
+
+    // Hash the message
+    let msg_hash = Sha256::digest(message);
+
+    // Parse public key
+    let verifying_key = match VerifyingKey::from_sec1_bytes(public_key) {
+        Ok(key) => key,
+        Err(_) => return false,
+    };
+
+    // Parse signature
+    let sig = match p256::ecdsa::Signature::from_bytes(signature.into()) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    // Verify signature
+    verifying_key.verify(&msg_hash, &sig).is_ok()
+}
+
 /// Derive MAC key from server secret key using HKDF (legacy, simple version)
 ///
 /// This ensures the MAC key is cryptographically independent from the
@@ -692,5 +766,98 @@ mod tests {
         let mut bad_token = token_bytes.clone();
         bad_token[0] ^= 1;
         assert!(!verify_token_signature(&pk, &bad_token, &signature, kid, exp, issuer_id));
+    }
+
+    // Generic message signing tests (for Layer 2 Federation)
+
+    #[test]
+    fn test_generic_message_signing() {
+        let sk = [42u8; 32];
+        let ctx = b"freebird-v1";
+        let server = Server::from_secret_key(sk, ctx).unwrap();
+        let pubkey = server.public_key_sec1_compressed();
+
+        let message = b"Hello, Federation!";
+
+        // Sign message
+        let signature = sign_message(&sk, message).unwrap();
+        assert_eq!(signature.len(), 64);
+
+        // Verify signature
+        assert!(verify_message_signature(&pubkey, message, &signature));
+
+        // Wrong message should fail
+        let wrong_message = b"Wrong message";
+        assert!(!verify_message_signature(&pubkey, wrong_message, &signature));
+
+        // Wrong public key should fail
+        let sk2 = [43u8; 32];
+        let server2 = Server::from_secret_key(sk2, ctx).unwrap();
+        let pubkey2 = server2.public_key_sec1_compressed();
+        assert!(!verify_message_signature(&pubkey2, message, &signature));
+    }
+
+    #[test]
+    fn test_generic_message_determinism() {
+        let sk = [42u8; 32];
+        let message = b"Deterministic test message";
+
+        // Same inputs should produce same signature (RFC 6979)
+        let sig1 = sign_message(&sk, message).unwrap();
+        let sig2 = sign_message(&sk, message).unwrap();
+        assert_eq!(sig1, sig2);
+    }
+
+    #[test]
+    fn test_generic_message_different_lengths() {
+        let sk = [42u8; 32];
+        let ctx = b"freebird-v1";
+        let server = Server::from_secret_key(sk, ctx).unwrap();
+        let pubkey = server.public_key_sec1_compressed();
+
+        // Test with messages of different lengths
+        let short_msg = b"Hi";
+        let long_msg = b"This is a much longer message that tests whether the signing function handles variable-length inputs correctly.";
+
+        let sig_short = sign_message(&sk, short_msg).unwrap();
+        let sig_long = sign_message(&sk, long_msg).unwrap();
+
+        assert!(verify_message_signature(&pubkey, short_msg, &sig_short));
+        assert!(verify_message_signature(&pubkey, long_msg, &sig_long));
+
+        // Cross-verification should fail
+        assert!(!verify_message_signature(&pubkey, short_msg, &sig_long));
+        assert!(!verify_message_signature(&pubkey, long_msg, &sig_short));
+    }
+
+    #[test]
+    fn test_generic_message_empty() {
+        let sk = [42u8; 32];
+        let ctx = b"freebird-v1";
+        let server = Server::from_secret_key(sk, ctx).unwrap();
+        let pubkey = server.public_key_sec1_compressed();
+
+        // Empty message should still work
+        let empty_msg = b"";
+        let sig = sign_message(&sk, empty_msg).unwrap();
+        assert!(verify_message_signature(&pubkey, empty_msg, &sig));
+    }
+
+    #[test]
+    fn test_generic_message_invalid_signature_bytes() {
+        let sk = [42u8; 32];
+        let ctx = b"freebird-v1";
+        let server = Server::from_secret_key(sk, ctx).unwrap();
+        let pubkey = server.public_key_sec1_compressed();
+
+        let message = b"Test message";
+
+        // Invalid signature (all zeros)
+        let bad_sig = [0u8; 64];
+        assert!(!verify_message_signature(&pubkey, message, &bad_sig));
+
+        // Invalid signature (all 0xFF)
+        let bad_sig2 = [0xFFu8; 64];
+        assert!(!verify_message_signature(&pubkey, message, &bad_sig2));
     }
 }
