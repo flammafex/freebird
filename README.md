@@ -160,17 +160,40 @@ const isValid = await client.verifyToken(token);
 
 ## Quick Start
 
-### 1. Run with Docker
+### 🐳 Docker (Recommended)
 
-The fastest way to spin up the entire stack (Issuer, Verifier, Redis):
+The fastest way to get Freebird running is with Docker:
 
 ```bash
 git clone https://github.com/yourusername/freebird.git
 cd freebird
-docker-compose up --build
+
+# Copy and optionally customize the environment configuration
+cp .env.example .env
+
+# Start all services (Issuer, Verifier, Redis)
+docker compose up --build
 ```
 
-### 2. Build from Source
+**That's it!** Freebird is now running:
+- **Issuer:** http://localhost:8081
+- **Verifier:** http://localhost:8082
+- **Admin API:** http://localhost:8081/api/admin (requires `ADMIN_API_KEY`)
+
+**Verify deployment:**
+```bash
+curl http://localhost:8081/.well-known/issuer
+```
+
+📖 **[Read the complete Docker Quickstart Guide →](DOCKER_QUICKSTART.md)**
+
+The guide includes:
+- Detailed configuration options
+- API examples (cURL, TypeScript SDK, Rust CLI)
+- Troubleshooting common issues
+- Production deployment checklist
+
+### 🦀 Build from Source
 
 ```bash
 # Prerequisites: Rust 1.70+
@@ -193,25 +216,39 @@ cargo build --release
 
 ## Configuration
 
-Configuration is handled via environment variables.
+Freebird is configured via environment variables. For Docker deployments, use the `.env` file.
 
-### Issuer Configuration
+### Quick Configuration
 
+```bash
+# Copy the example configuration
+cp .env.example .env
+
+# Edit with your preferred editor
+nano .env
+```
+
+The `.env.example` file contains **all** available configuration options with detailed comments and sensible defaults.
+
+### Key Configuration Variables
+
+**Issuer:**
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ISSUER_ID` | `issuer:freebird:v1` | Unique identifier for this issuer |
 | `BIND_ADDR` | `0.0.0.0:8081` | Listening address |
-| `SYBIL_RESISTANCE` | `none` | `invitation`, `pow`, `rate_limit`, `webauthn`, or `combined` |
+| `SYBIL_RESISTANCE` | `none` | `invitation`, `pow`, `rate_limit`, `webauthn`, `combined`, etc. |
 | `ADMIN_API_KEY` | (None) | Required for Admin API (min 32 chars) |
-| `WEBAUTHN_RP_ID` | (None) | Relying Party ID (required if using WebAuthn) |
+| `EPOCH_DURATION_SEC` | `86400` | Key rotation epoch duration (seconds) |
 
-### Verifier Configuration
-
+**Verifier:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ISSUER_URL` | `http://localhost:8081` | URL to fetch issuer public keys |
-| `REDIS_URL` | (None) | If set, uses Redis for nullifier storage (Persistence) |
-| `MAX_CLOCKS_SKEW_SECS` | `300` | Tolerance for timestamp validation |
+| `ISSUER_URL` | `http://localhost:8081/.well-known/issuer` | Issuer metadata URL |
+| `REDIS_URL` | (None) | Redis URL for persistent nullifier storage |
+| `MAX_CLOCK_SKEW_SECS` | `300` | Clock skew tolerance (seconds) |
+
+📖 **See [.env.example](.env.example) for the complete configuration reference** with all 56+ available options.
 
 ---
 
