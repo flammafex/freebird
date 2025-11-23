@@ -78,6 +78,15 @@ pub struct SybilConfig {
     pub proof_of_diversity_autosave_interval: u64,
     pub proof_of_diversity_hmac_secret: Option<String>,
     pub proof_of_diversity_fingerprint_salt: String,
+    // Multi-Party Vouching configuration
+    pub multi_party_vouching_required_vouchers: u32,
+    pub multi_party_vouching_cooldown_secs: u64,
+    pub multi_party_vouching_expires_secs: u64,
+    pub multi_party_vouching_new_user_wait_secs: u64,
+    pub multi_party_vouching_persistence_path: PathBuf,
+    pub multi_party_vouching_autosave_interval: u64,
+    pub multi_party_vouching_hmac_secret: Option<String>,
+    pub multi_party_vouching_salt: String,
 }
 
 #[derive(Clone, Debug)]
@@ -212,6 +221,18 @@ impl SybilConfig {
             proof_of_diversity_autosave_interval: env_u64("SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE_SECS", 300),
             proof_of_diversity_hmac_secret: env::var("SYBIL_PROOF_OF_DIVERSITY_SECRET").ok(),
             proof_of_diversity_fingerprint_salt: env::var("SYBIL_PROOF_OF_DIVERSITY_SALT")
+                .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
+            // Multi-Party Vouching
+            multi_party_vouching_required_vouchers: env_u32("SYBIL_MULTI_PARTY_VOUCHING_REQUIRED", 3),
+            multi_party_vouching_cooldown_secs: env_u64("SYBIL_MULTI_PARTY_VOUCHING_COOLDOWN_SECS", 3600),
+            multi_party_vouching_expires_secs: env_u64("SYBIL_MULTI_PARTY_VOUCHING_EXPIRES_SECS", 2592000),
+            multi_party_vouching_new_user_wait_secs: env_u64("SYBIL_MULTI_PARTY_VOUCHING_NEW_USER_WAIT_SECS", 2592000),
+            multi_party_vouching_persistence_path: env::var("SYBIL_MULTI_PARTY_VOUCHING_PERSISTENCE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "multi_party_vouching.json".into()),
+            multi_party_vouching_autosave_interval: env_u64("SYBIL_MULTI_PARTY_VOUCHING_AUTOSAVE_SECS", 300),
+            multi_party_vouching_hmac_secret: env::var("SYBIL_MULTI_PARTY_VOUCHING_SECRET").ok(),
+            multi_party_vouching_salt: env::var("SYBIL_MULTI_PARTY_VOUCHING_SALT")
                 .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
         }
     }

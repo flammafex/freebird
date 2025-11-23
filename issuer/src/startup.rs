@@ -204,6 +204,25 @@ impl Application {
                 info!("✅ Sybil resistance: Proof of Diversity");
                 Some(sys)
             }
+            "multi_party_vouching" => {
+                let mpv_config = sybil_resistance::MultiPartyVouchingConfig {
+                    required_vouchers: config.sybil_config.multi_party_vouching_required_vouchers,
+                    voucher_cooldown_secs: config.sybil_config.multi_party_vouching_cooldown_secs,
+                    vouch_expires_secs: config.sybil_config.multi_party_vouching_expires_secs,
+                    new_user_can_vouch_after_secs: config.sybil_config.multi_party_vouching_new_user_wait_secs,
+                    persistence_path: config.sybil_config.multi_party_vouching_persistence_path.clone(),
+                    autosave_interval_secs: config.sybil_config.multi_party_vouching_autosave_interval,
+                    hmac_secret: config.sybil_config.multi_party_vouching_hmac_secret.clone(),
+                    user_id_salt: config.sybil_config.multi_party_vouching_salt.clone(),
+                };
+
+                let sys = sybil_resistance::MultiPartyVouchingSystem::new(mpv_config)
+                    .await
+                    .context("Failed to initialize Multi-Party Vouching system")?;
+
+                info!("✅ Sybil resistance: Multi-Party Vouching");
+                Some(sys)
+            }
             "combined" => Some(Arc::new(CombinedSybilResistance::new(vec![
                 Box::new(ProofOfWork::new(config.sybil_config.pow_difficulty)),
                 Box::new(RateLimit::new(Duration::from_secs(config.sybil_config.rate_limit_secs))),
