@@ -222,6 +222,12 @@ pub enum SybilProof {
         hmac_proof: String,       // HMAC(secret, all fields)
         timestamp: i64,           // Unix timestamp of proof generation
     },
+    FederatedTrust {
+        source_issuer_id: String,  // ID of the issuer that issued the source token
+        source_token_b64: String,  // Base64url-encoded token from source issuer
+        token_exp: i64,            // Expiration timestamp of source token
+        trust_path: Vec<String>,   // Trust path from source to us (optional)
+    },
     None,
 }
 

@@ -29,6 +29,7 @@ pub mod rate_limit;
 pub mod progressive_trust;
 pub mod proof_of_diversity;
 pub mod multi_party_vouching;
+pub mod federated_trust;
 
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
 pub use invitation::ClientData;
@@ -37,6 +38,7 @@ pub use rate_limit::RateLimit;
 pub use progressive_trust::{ProgressiveTrustSystem, ProgressiveTrustConfig, TrustLevel};
 pub use proof_of_diversity::{ProofOfDiversitySystem, ProofOfDiversityConfig};
 pub use multi_party_vouching::{MultiPartyVouchingSystem, MultiPartyVouchingConfig};
+pub use federated_trust::{FederatedTrustSystem, FederatedTrustConfig};
 #[cfg(feature = "human-gate-webauthn")]
 pub use crate::webauthn::gate::WebAuthnGate;
 

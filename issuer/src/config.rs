@@ -87,6 +87,16 @@ pub struct SybilConfig {
     pub multi_party_vouching_autosave_interval: u64,
     pub multi_party_vouching_hmac_secret: Option<String>,
     pub multi_party_vouching_salt: String,
+    // Federated Trust configuration
+    pub federated_trust_enabled: bool,
+    pub federated_trust_max_depth: u32,
+    pub federated_trust_min_paths: u32,
+    pub federated_trust_require_direct: bool,
+    pub federated_trust_min_trust_level: u8,
+    pub federated_trust_cache_ttl_secs: u64,
+    pub federated_trust_max_token_age_secs: i64,
+    pub federated_trust_trusted_roots: Vec<String>,
+    pub federated_trust_blocked_issuers: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -234,6 +244,22 @@ impl SybilConfig {
             multi_party_vouching_hmac_secret: env::var("SYBIL_MULTI_PARTY_VOUCHING_SECRET").ok(),
             multi_party_vouching_salt: env::var("SYBIL_MULTI_PARTY_VOUCHING_SALT")
                 .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
+            // Federated Trust
+            federated_trust_enabled: env_bool("SYBIL_FEDERATED_TRUST_ENABLED"),
+            federated_trust_max_depth: env_u32("SYBIL_FEDERATED_TRUST_MAX_DEPTH", 2),
+            federated_trust_min_paths: env_u32("SYBIL_FEDERATED_TRUST_MIN_PATHS", 1),
+            federated_trust_require_direct: env_bool("SYBIL_FEDERATED_TRUST_REQUIRE_DIRECT"),
+            federated_trust_min_trust_level: env_u32("SYBIL_FEDERATED_TRUST_MIN_TRUST_LEVEL", 50) as u8,
+            federated_trust_cache_ttl_secs: env_u64("SYBIL_FEDERATED_TRUST_CACHE_TTL_SECS", 3600),
+            federated_trust_max_token_age_secs: env_u64("SYBIL_FEDERATED_TRUST_MAX_TOKEN_AGE_SECS", 600) as i64,
+            federated_trust_trusted_roots: env::var("SYBIL_FEDERATED_TRUST_TRUSTED_ROOTS")
+                .ok()
+                .map(|s| s.split(',').map(|s| s.to_string()).collect())
+                .unwrap_or_default(),
+            federated_trust_blocked_issuers: env::var("SYBIL_FEDERATED_TRUST_BLOCKED_ISSUERS")
+                .ok()
+                .map(|s| s.split(',').map(|s| s.to_string()).collect())
+                .unwrap_or_default(),
         }
     }
 }

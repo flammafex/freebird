@@ -25,6 +25,7 @@ Comprehensive comparison of all Sybil resistance mechanisms in Freebird.
 | **Progressive Trust** | ✅ Production | ✅✅ Strong | Time | ✅✅✅ Excellent | Gradual access, loyalty rewards |
 | **Proof of Diversity** | ✅ Production | ✅✅✅ Strong | Behavioral | ✅✅ Good | Anti-botnet, diversity analysis |
 | **Multi-Party Vouching** | ✅ Production | ✅✅✅ Strong | Social | ✅✅ Good | Collective accountability, consensus |
+| **Federated Trust** | ✅ Production | ✅✅ Moderate | Federation | ✅✅✅ Excellent | Cross-issuer interoperability |
 | **WebAuthn** | ✅ Production | ✅✅✅ Strong | Zero | ✅✅ Good | Hardware-backed, biometric |
 | **Combined** | ✅ Production | ✅✅✅ Strong | Multiple | ✅✅ Good | Defense-in-depth |
 
@@ -475,7 +476,93 @@ See [Multi-Party Vouching Guide](MULTI_PARTY_VOUCHING.md) for complete documenta
 
 ---
 
-## 8. WebAuthn (Hardware Authenticators)
+## 8. Federated Trust ⭐ (Cross-Issuer)
+
+### Configuration
+
+```bash
+export SYBIL_RESISTANCE=federated_trust
+export SYBIL_FEDERATED_TRUST_ENABLED=true
+export SYBIL_FEDERATED_TRUST_MAX_DEPTH=2
+export SYBIL_FEDERATED_TRUST_REQUIRE_DIRECT=false
+export SYBIL_FEDERATED_TRUST_MIN_TRUST_LEVEL=50
+export SYBIL_FEDERATED_TRUST_CACHE_TTL_SECS=3600
+export SYBIL_FEDERATED_TRUST_MAX_TOKEN_AGE_SECS=600
+export SYBIL_FEDERATED_TRUST_TRUSTED_ROOTS="issuer:root:v1,issuer:partner:v1"
+export SYBIL_FEDERATED_TRUST_BLOCKED_ISSUERS=""
+./target/release/issuer
+```
+
+### How It Works
+
+1. **User has token from Source Issuer** (Issuer A)
+2. **User presents token to Target Issuer** (Issuer B) via Federated Trust proof
+3. **Target Issuer verifies**:
+   - Token hasn't expired
+   - Token isn't too old (anti-replay)
+   - Source issuer is in trust graph (direct or indirect vouch)
+   - Trust path is valid
+4. **Target Issuer issues new token** to user
+
+### Trust Graph Example
+
+```
+Stanford vouches for MIT (trust_level: 90)
+MIT vouches for Harvard (trust_level: 90)
+
+Student with MIT token can access:
+- Stanford resources (direct vouch, depth 1)
+- Harvard resources (indirect vouch via MIT, depth 2)
+```
+
+### Properties
+
+**Advantages:**
+- ✅✅✅ **Zero user friction** (just present existing token)
+- ✅✅✅ **Cross-issuer interoperability** (federation benefits)
+- ✅✅✅ **Privacy-preserving** (no additional identity verification)
+- ✅✅ **Cryptographically verifiable** (ECDSA-signed vouches)
+- ✅ **Configurable trust policy** (depth, levels, trusted roots)
+- ✅ **Anti-replay protection** (token age limits)
+
+**Disadvantages:**
+- ⚠️ **Compromised issuer risk** (if trusted issuer compromised, unlimited tokens)
+- ⚠️ **Bootstrap dependency** (requires existing federation)
+- ⚠️ **Trust dilution** (indirect trust weaker than direct)
+- ⚠️ **Moderate Sybil resistance** (only as strong as source issuer)
+
+### Security
+
+**Attack Vectors:**
+1. **Compromised trusted issuer:** Attacker controls vouched issuer → generates unlimited tokens
+   - **Mitigation:** Vet trusted roots carefully, use revocation, monitor anomalies
+2. **Trust graph manipulation:** Complex trust paths to gain access
+   - **Mitigation:** Require direct trust, limit max depth, blocked issuer list
+3. **Token theft:** Stolen tokens used to obtain new tokens
+   - **Mitigation:** Short token age limits, rate limiting, anomaly detection
+
+**Strengths:**
+- ECDSA P-256 vouches (unforgeable)
+- Token age limits (prevent replay)
+- Trust graph validation (path integrity)
+- Blocked issuer list (known bad actors)
+
+### Use Cases
+
+- ✅ **Academic consortiums** (students access resources across universities)
+- ✅ **Healthcare networks** (patients access federated facilities)
+- ✅ **Enterprise multi-cloud** (unified access across providers)
+- ✅ **Open source communities** (contributors across projects)
+- ✅ **Government federations** (cross-agency interoperability)
+- ⚠️ **Standalone applications** (no federation = no benefit)
+
+### Detailed Guide
+
+See [Federated Trust Guide](FEDERATED_TRUST.md) for complete documentation.
+
+---
+
+## 9. WebAuthn (Hardware Authenticators)
 
 *For full WebAuthn documentation, see [WEBAUTHN.md](WEBAUTHN.md)*
 
@@ -490,7 +577,7 @@ See [Multi-Party Vouching Guide](MULTI_PARTY_VOUCHING.md) for complete documenta
 
 ---
 
-## 9. Combined Resistance (Defense-in-Depth)
+## 10. Combined Resistance (Defense-in-Depth)
 
 ### Configuration
 
@@ -565,7 +652,12 @@ Client must provide proof satisfying **at least one** configured mechanism:
 | Invitation | ✅✅✅ | ✅✅✅ | ✅✅✅ | ✅✅✅ |
 | Proof-of-Work | ✅✅✅ | ✅✅ | ❌ | ✅✅✅ |
 | Rate Limiting | ✅✅ | ❌ | ❌ | ❌ |
-| Combined | ✅✅✅ | ✅✅ | ✅ | ✅✅ |
+| Progressive Trust | ✅✅✅ | ✅✅ | ✅✅ | ✅✅ |
+| Proof of Diversity | ✅✅✅ | ✅✅ | ✅✅ | ✅ |
+| Multi-Party Vouching | ✅✅✅ | ✅✅✅ | ✅✅✅ | ✅✅✅ |
+| Federated Trust | ✅✅ | ✅✅ | ✅✅ | ✅✅✅ |
+| WebAuthn | ✅✅✅ | ✅✅✅ | ✅✅✅ | ✅✅✅ |
+| Combined | ✅✅✅ | ✅✅✅ | ✅✅ | ✅✅ |
 
 ### Privacy Impact
 
@@ -575,6 +667,11 @@ Client must provide proof satisfying **at least one** configured mechanism:
 | Invitation | Invite graph (pseudonymous) | Low | Low |
 | Proof-of-Work | None | None | None |
 | Rate Limiting | IP hash, timestamp | Medium | Low |
+| Progressive Trust | Hashed user ID, timestamps | Low | Very Low |
+| Proof of Diversity | Hashed networks/devices | Low | Very Low |
+| Multi-Party Vouching | Vouch graph (pseudonymous) | Low | Low |
+| Federated Trust | Source issuer ID, token | Very Low | Very Low |
+| WebAuthn | Credential ID, public key | Low | Low |
 | Combined | Varies | Varies | Low |
 
 ### User Experience
@@ -585,6 +682,11 @@ Client must provide proof satisfying **at least one** configured mechanism:
 | Invitation | Medium | Instant (after invite) | ⚠️ Requires inviter |
 | Proof-of-Work | Low | ~1-30 seconds | ⚠️ Requires computation |
 | Rate Limiting | None | Instant | ✅ Universal |
+| Progressive Trust | Very Low | Instant | ✅ Universal (starts limited) |
+| Proof of Diversity | Very Low | Instant | ✅ Universal (starts limited) |
+| Multi-Party Vouching | Medium | Instant (after vouches) | ⚠️ Requires vouchers |
+| Federated Trust | None | Instant | ⚠️ Requires federated token |
+| WebAuthn | Low | ~1-3 seconds | ⚠️ Requires hardware |
 | Combined | Varies | Varies | ⚠️ Most restrictive |
 
 ---
@@ -614,12 +716,20 @@ Client must provide proof satisfying **at least one** configured mechanism:
 ✅ Very low friction required  
 ✅ Don't need strong Sybil resistance  
 
+### Choose Federated Trust If:
+
+✅ Building a federation with other issuers
+✅ Users already have tokens from trusted issuers
+✅ Want zero friction for federated users
+✅ Need cross-organizational interoperability
+✅ Have established trust relationships
+
 ### Choose Combined If:
 
-✅ Need defense-in-depth  
-✅ High-security application  
-✅ Can tolerate multiple proofs  
-✅ Want flexibility (users choose mechanism)  
+✅ Need defense-in-depth
+✅ High-security application
+✅ Can tolerate multiple proofs
+✅ Want flexibility (users choose mechanism)
 
 ---
 
@@ -674,6 +784,11 @@ export SYBIL_RATE_LIMIT_SECS=3600  # Plus rate limiting
 ## Related Documentation
 
 - [Invitation System](INVITATION_SYSTEM.md) - Complete invitation guide
+- [Progressive Trust](PROGRESSIVE_TRUST.md) - Time-based trust escalation
+- [Proof of Diversity](PROOF_OF_DIVERSITY.md) - Anti-botnet behavioral analysis
+- [Multi-Party Vouching](MULTI_PARTY_VOUCHING.md) - Social consensus vouching
+- [Federated Trust](FEDERATED_TRUST.md) - Cross-issuer interoperability
+- [WebAuthn](WEBAUTHN.md) - Hardware-backed authentication
 - [Configuration](CONFIGURATION.md) - Environment variables
 - [Security Model](SECURITY.md) - Threat model and guarantees
 - [API Reference](API.md) - Sybil proof formats
