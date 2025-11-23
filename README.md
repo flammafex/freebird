@@ -127,6 +127,7 @@ If building from source instead of using Docker:
 - ✅ **Batch Issuance**: High-throughput parallel issuance using `rayon`
 - ✅ **Key Rotation**: Zero-downtime rotation with grace periods for deprecated keys
 - ✅ **Storage Backends**: In-memory (dev) and Redis (prod) support
+- ✅ **Multi-Issuer Federation**: Signature-based tokens enable verifiers to authenticate tokens from multiple issuers (see [`FEDERATION.md`](docs/FEDERATION.md))
 - ✅ **Admin API**: HTTP endpoints for user management, key rotation, and stats
 
 **Sybil Resistance Mechanisms:**

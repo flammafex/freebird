@@ -71,6 +71,38 @@ pub trait CryptoProvider: Send + Sync {
         epoch: u32,
     ) -> Result<[u8; 32]>;
 
+    /// Sign token metadata using ECDSA (for federation support)
+    ///
+    /// Signs the token metadata with the issuer's secret key using ECDSA.
+    /// This enables multi-issuer federation because verifiers only need
+    /// the public key to verify signatures (unlike MAC which requires secret key).
+    ///
+    /// Signs: `SHA256(token_bytes || kid || exp || issuer_id)`
+    ///
+    /// # Arguments
+    ///
+    /// * `token_bytes` - The VOPRF token bytes [VERSION||A||B||Proof] (131 bytes)
+    /// * `kid` - Key identifier
+    /// * `exp` - Expiration timestamp (Unix seconds)
+    /// * `issuer_id` - Issuer identifier
+    ///
+    /// # Returns
+    ///
+    /// A 64-byte ECDSA signature (r || s, each 32 bytes)
+    ///
+    /// # Security
+    ///
+    /// - HSM implementations MUST perform signing entirely within the HSM
+    /// - Uses deterministic ECDSA (RFC 6979) for reproducibility
+    /// - Signature is over SHA256 hash of metadata
+    async fn sign_token_metadata(
+        &self,
+        token_bytes: &[u8],
+        kid: &str,
+        exp: i64,
+        issuer_id: &str,
+    ) -> Result<[u8; 64]>;
+
     /// Get the public key corresponding to the secret key
     ///
     /// Returns the P-256 public key in SEC1 compressed format (33 bytes)

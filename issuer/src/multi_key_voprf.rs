@@ -232,6 +232,11 @@ impl MultiKeyVoprfCore {
         self.active_key.read().await.derive_mac_key_for_epoch(issuer_id, epoch)
     }
 
+    /// Sign token metadata using the active key (for federation support)
+    pub async fn sign_token_metadata(&self, token_bytes: &[u8], kid: &str, exp: i64, issuer_id: &str) -> Result<[u8; 64]> {
+        self.active_key.read().await.sign_token_metadata(token_bytes, kid, exp, issuer_id)
+    }
+
     /// Evaluate a blinded element using the active key
     ///
     /// Returns the evaluation token and the key ID used

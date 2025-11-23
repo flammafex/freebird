@@ -21,6 +21,7 @@ Complete navigation guide for all Freebird documentation.
 | Document | Size | Purpose | Read Time |
 |----------|------|---------|-----------|
 | [How It Works](docs/HOW_IT_WORKS.md) | 20KB | VOPRF protocol deep dive | 15 min |
+| [Multi-Issuer Federation](docs/FEDERATION.md) | 24KB | Signature-based tokens & federation | 18 min |
 | [Security Model](docs/SECURITY.md) | 15KB | Threat model and guarantees | 12 min |
 | [Sybil Resistance](docs/SYBIL_RESISTANCE.md) | 13KB | Compare all 5 mechanisms | 10 min |
 
@@ -117,6 +118,7 @@ The invitation system is Freebird's recommended Sybil resistance mechanism.
 ### Cryptography & Protocol
 
 - [How It Works](docs/HOW_IT_WORKS.md) - VOPRF explained
+- [Multi-Issuer Federation](docs/FEDERATION.md) - Signature-based tokens
 - [Security Model](docs/SECURITY.md) - Guarantees and limitations
 - [Key Management](docs/KEY_MANAGEMENT.md) - Key lifecycle
 
@@ -141,10 +143,10 @@ The invitation system is Freebird's recommended Sybil resistance mechanism.
 
 ## 📊 Documentation Statistics
 
-**Total:** 12 comprehensive documents (152KB)
+**Total:** 13 comprehensive documents (176KB)
 
 **Breakdown:**
-- **Core Concepts:** 3 docs (48KB)
+- **Core Concepts:** 4 docs (72KB)
 - **Configuration:** 3 docs (30KB)
 - **Operations:** 3 docs (41KB)
 - **API Reference:** 2 docs (21KB)

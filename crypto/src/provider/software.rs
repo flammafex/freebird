@@ -102,6 +102,24 @@ impl CryptoProvider for SoftwareCryptoProvider {
         ))
     }
 
+    async fn sign_token_metadata(
+        &self,
+        token_bytes: &[u8],
+        kid: &str,
+        exp: i64,
+        issuer_id: &str,
+    ) -> Result<[u8; 64]> {
+        // Use the existing ECDSA signature function
+        crate::compute_token_signature(
+            &self.secret_key,
+            token_bytes,
+            kid,
+            exp,
+            issuer_id,
+        )
+        .map_err(|e| anyhow::anyhow!("signature generation failed: {:?}", e))
+    }
+
     fn public_key(&self) -> &[u8] {
         &self.public_key
     }
@@ -187,6 +205,58 @@ mod tests {
         // Different issuers should produce different keys
         let key_issuer2 = provider.derive_mac_key("issuer2", "kid1", 0).await.unwrap();
         assert_ne!(key_epoch0, key_issuer2);
+    }
+
+    #[tokio::test]
+    async fn test_signature_signing_and_verification() {
+        let sk = [42u8; 32];
+        let kid = "test-key-001".to_string();
+        let ctx = b"test-context".to_vec();
+
+        let provider = SoftwareCryptoProvider::new(sk, kid, ctx).unwrap();
+
+        let token = vec![1, 2, 3, 4, 5];
+        let kid_str = "test-kid";
+        let exp = 1234567890i64;
+        let issuer_id = "test-issuer";
+
+        // Sign metadata
+        let signature = provider
+            .sign_token_metadata(&token, kid_str, exp, issuer_id)
+            .await
+            .unwrap();
+
+        assert_eq!(signature.len(), 64);
+
+        // Verify signature using public key
+        let pubkey = provider.public_key();
+        let valid = crate::verify_token_signature(pubkey, &token, &signature, kid_str, exp, issuer_id);
+        assert!(valid);
+
+        // Tampering should fail verification
+        let mut bad_token = token.clone();
+        bad_token[0] ^= 1;
+        let invalid = crate::verify_token_signature(pubkey, &bad_token, &signature, kid_str, exp, issuer_id);
+        assert!(!invalid);
+    }
+
+    #[tokio::test]
+    async fn test_signature_determinism() {
+        let sk = [42u8; 32];
+        let kid = "test-key-001".to_string();
+        let ctx = b"test-context".to_vec();
+
+        let provider = SoftwareCryptoProvider::new(sk, kid, ctx).unwrap();
+
+        let token = vec![1, 2, 3];
+        let kid_str = "kid";
+        let exp = 123i64;
+        let issuer_id = "issuer";
+
+        // Signatures should be deterministic (RFC 6979)
+        let sig1 = provider.sign_token_metadata(&token, kid_str, exp, issuer_id).await.unwrap();
+        let sig2 = provider.sign_token_metadata(&token, kid_str, exp, issuer_id).await.unwrap();
+        assert_eq!(sig1, sig2);
     }
 
     #[tokio::test]

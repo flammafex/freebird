@@ -15,7 +15,7 @@ pub use main_state::AppStateWithSybil;
 pub mod main_state {
     use std::sync::Arc;
     use crate::sybil_resistance::{invitation::InvitationSystem, SybilResistance};
-    
+
     #[derive(Clone)]
     pub struct AppStateWithSybil {
         pub issuer_id: String,
