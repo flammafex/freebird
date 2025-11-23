@@ -81,6 +81,10 @@ export WEBAUTHN_CRED_TTL_SECS=31536000             # 1 year (optional)
 export SYBIL_RESISTANCE=webauthn                   # Enable WebAuthn gate
 export WEBAUTHN_MAX_PROOF_AGE=300                  # 5 minutes
 
+# Security: Proof Secret (RECOMMENDED for production)
+export WEBAUTHN_PROOF_SECRET="your-random-secret-here"  # Makes proofs unforgeable
+# If not set, a deterministic key is derived from RP_ID (less secure)
+
 # Optional: Combine with other mechanisms
 export SYBIL_RESISTANCE=combined
 export SYBIL_COMBINED_MECHANISMS=webauthn,rate_limit
@@ -94,6 +98,7 @@ export WEBAUTHN_RP_ID=issuer.example.com
 export WEBAUTHN_RP_NAME="Example Corp Freebird"
 export WEBAUTHN_RP_ORIGIN=https://issuer.example.com
 export WEBAUTHN_REDIS_URL=redis://redis.internal:6379
+export WEBAUTHN_PROOF_SECRET="$(openssl rand -base64 32)"  # Generate random secret
 export SYBIL_RESISTANCE=combined
 export SYBIL_COMBINED_MECHANISMS=webauthn,rate_limit
 export SYBIL_RATE_LIMIT_SECS=3600
@@ -311,12 +316,19 @@ curl -X POST https://issuer.example.com/v1/oprf/issue \
    export WEBAUTHN_MAX_PROOF_AGE=300  # 5 minutes
    ```
 
-3. **Credential Lifecycle Management**
+3. **Use a Strong Proof Secret** ⚠️ **CRITICAL**
+   ```bash
+   # Generate a cryptographically random secret
+   export WEBAUTHN_PROOF_SECRET="$(openssl rand -base64 32)"
+   # Without this, proofs use a deterministic key (less secure)
+   ```
+
+4. **Credential Lifecycle Management**
    ```bash
    export WEBAUTHN_CRED_TTL_SECS=31536000  # Expire after 1 year
    ```
 
-4. **Monitor Registration Patterns**
+5. **Monitor Registration Patterns**
    - Alert on unusual registration spikes
    - Track credentials per user (prevent device farming)
 
