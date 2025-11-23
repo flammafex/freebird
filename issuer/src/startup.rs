@@ -152,6 +152,58 @@ impl Application {
                     None
                 }
             }
+            "progressive_trust" => {
+                // Parse trust levels from config
+                let levels: Vec<sybil_resistance::TrustLevel> = config.sybil_config.progressive_trust_levels
+                    .iter()
+                    .filter_map(|level_str| {
+                        let parts: Vec<&str> = level_str.split(':').collect();
+                        if parts.len() == 3 {
+                            let min_age_secs = parts[0].parse().ok()?;
+                            let max_tokens_per_period = parts[1].parse().ok()?;
+                            let cooldown_secs = parts[2].parse().ok()?;
+                            Some(sybil_resistance::TrustLevel {
+                                min_age_secs,
+                                max_tokens_per_period,
+                                cooldown_secs,
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                let pt_config = sybil_resistance::ProgressiveTrustConfig {
+                    levels,
+                    persistence_path: config.sybil_config.progressive_trust_persistence_path.clone(),
+                    autosave_interval_secs: config.sybil_config.progressive_trust_autosave_interval,
+                    hmac_secret: config.sybil_config.progressive_trust_hmac_secret.clone(),
+                    user_id_salt: config.sybil_config.progressive_trust_salt.clone(),
+                };
+
+                let sys = sybil_resistance::ProgressiveTrustSystem::new(pt_config)
+                    .await
+                    .context("Failed to initialize Progressive Trust system")?;
+
+                info!("✅ Sybil resistance: Progressive Trust");
+                Some(sys)
+            }
+            "proof_of_diversity" => {
+                let pod_config = sybil_resistance::ProofOfDiversityConfig {
+                    min_score: config.sybil_config.proof_of_diversity_min_score,
+                    persistence_path: config.sybil_config.proof_of_diversity_persistence_path.clone(),
+                    autosave_interval_secs: config.sybil_config.proof_of_diversity_autosave_interval,
+                    hmac_secret: config.sybil_config.proof_of_diversity_hmac_secret.clone(),
+                    fingerprint_salt: config.sybil_config.proof_of_diversity_fingerprint_salt.clone(),
+                };
+
+                let sys = sybil_resistance::ProofOfDiversitySystem::new(pod_config)
+                    .await
+                    .context("Failed to initialize Proof of Diversity system")?;
+
+                info!("✅ Sybil resistance: Proof of Diversity");
+                Some(sys)
+            }
             "combined" => Some(Arc::new(CombinedSybilResistance::new(vec![
                 Box::new(ProofOfWork::new(config.sybil_config.pow_difficulty)),
                 Box::new(RateLimit::new(Duration::from_secs(config.sybil_config.rate_limit_secs))),

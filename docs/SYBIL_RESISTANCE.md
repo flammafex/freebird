@@ -22,6 +22,9 @@ Comprehensive comparison of all Sybil resistance mechanisms in Freebird.
 | **Invitation** | ✅ Production | ✅✅✅ Strong | Social | ✅✅ Good | Communities, high-value |
 | **Proof-of-Work** | ✅ Production | ✅✅ Moderate | Computation | ✅ High | Public services |
 | **Rate Limiting** | ✅ Production | ✅ Weak | Time | ✅✅ Good | Simple throttling |
+| **Progressive Trust** | ✅ Production | ✅✅ Strong | Time | ✅✅✅ Excellent | Gradual access, loyalty rewards |
+| **Proof of Diversity** | ✅ Production | ✅✅✅ Strong | Behavioral | ✅✅ Good | Anti-botnet, diversity analysis |
+| **WebAuthn** | ✅ Production | ✅✅✅ Strong | Zero | ✅✅ Good | Hardware-backed, biometric |
 | **Combined** | ✅ Production | ✅✅✅ Strong | Multiple | ✅✅ Good | Defense-in-depth |
 
 ---
@@ -232,7 +235,179 @@ SHA-256("freebird:client:" || ip_address || user_agent_hash)[0..16]
 
 ---
 
-## 5. Combined Resistance (Defense-in-Depth)
+## 5. Progressive Trust ⭐ (Recommended)
+
+### Configuration
+
+```bash
+export SYBIL_RESISTANCE=progressive_trust
+export SYBIL_PROGRESSIVE_TRUST_LEVELS="0:1:86400,2592000:10:3600,7776000:100:60"
+export SYBIL_PROGRESSIVE_TRUST_PERSISTENCE_PATH="progressive_trust.json"
+export SYBIL_PROGRESSIVE_TRUST_AUTOSAVE_SECS=300
+export SYBIL_PROGRESSIVE_TRUST_SECRET="$(openssl rand -base64 32)"
+export SYBIL_PROGRESSIVE_TRUST_SALT="$(openssl rand -hex 16)"
+./target/release/issuer
+```
+
+### How It Works
+
+1. **New users** start at Level 0 with limited access (e.g., 1 token/day)
+2. **Consistent usage** over time unlocks higher trust levels
+3. **Veteran users** (90+ days) get significantly higher limits
+4. **Server tracks**: first seen, tokens issued, last issuance
+5. **HMAC-signed proofs** prevent forgery
+
+### Trust Levels (Default)
+
+| Level | Min Age | Tokens | Cooldown | Description |
+|-------|---------|--------|----------|-------------|
+| 0 | 0 days | 1 | 24 hours | New users |
+| 1 | 30 days | 10 | 1 hour | Trusted users |
+| 2 | 90 days | 100 | 1 minute | Veterans |
+
+**Format**: `min_age_secs:max_tokens:cooldown_secs`
+
+### Properties
+
+**Advantages:**
+- ✅✅✅ **Low friction** (anyone can start)
+- ✅✅✅ **Strong Sybil resistance** (time is unforgeable)
+- ✅✅✅ **Privacy-preserving** (no biometrics, only hashed user IDs)
+- ✅✅ **Rewards loyalty** (long-term users get more)
+- ✅✅ **Natural bot defense** (bots can't scale fast)
+- ✅ **Configurable** (adjust levels for your use case)
+
+**Disadvantages:**
+- ⚠️ **Patient attackers** (can wait 90 days)
+- ⚠️ **Account farming** (create many accounts and wait)
+- ⚠️ **Initial limits** (new legitimate users start restricted)
+
+### Security
+
+**Attack Vectors:**
+1. **Account farming:** Create many accounts and wait
+   - **Mitigation:** Combine with Proof of Diversity or Multi-Party Vouching
+2. **Stolen accounts:** High-trust accounts have value
+   - **Mitigation:** Combine with WebAuthn (hardware binding)
+3. **Patient Sybil:** Wait months to reach high tier
+   - **Mitigation:** Acceptable (significantly raises attack cost)
+
+**Strengths:**
+- Time cannot be faked (server-controlled timestamps)
+- HMAC-based proofs (unforgeable)
+- Privacy-preserving (salted Blake3 hashes)
+- Persistent state (survives restarts)
+
+### Use Cases
+
+- ✅ **Public APIs** (gradual access ramp-up)
+- ✅ **Content platforms** (limit spam from new accounts)
+- ✅ **Community platforms** (reward long-term members)
+- ✅ **Token-gated services** (tiered membership)
+- ✅ **Freemium apps** (free tier with trust-based limits)
+
+### Detailed Guide
+
+See [Progressive Trust Guide](PROGRESSIVE_TRUST.md) for complete documentation.
+
+---
+
+## 6. Proof of Diversity ⭐ (Anti-Botnet)
+
+### Configuration
+
+```bash
+export SYBIL_RESISTANCE=proof_of_diversity
+export SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE=40  # Default
+export SYBIL_PROOF_OF_DIVERSITY_PERSISTENCE_PATH="proof_of_diversity.json"
+export SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE_SECS=300
+export SYBIL_PROOF_OF_DIVERSITY_SECRET="$(openssl rand -base64 32)"
+export SYBIL_PROOF_OF_DIVERSITY_SALT="$(openssl rand -hex 16)"
+./target/release/issuer
+```
+
+### How It Works
+
+1. **Server observes** network diversity (unique ASNs/IPs) and device diversity (unique User-Agents)
+2. **Privacy-preserving** - All fingerprints are hashed with per-user salts
+3. **Diversity score** calculated: `(networks × 30) + (devices × 20) + min(days, 50)`
+4. **Minimum score** required to pass verification
+5. **HMAC-signed proofs** prevent forgery
+
+### Diversity Scoring (Default)
+
+```
+Max score: ~100
+- 3 unique networks = 90 points
+- 3 unique devices = 60 points
+- 50+ days active = 50 points
+
+Example:
+- Home WiFi + Work WiFi + Mobile Data = 90 pts
+- iPhone + MacBook = 40 pts
+- Total: 130 pts (well above 40 minimum)
+```
+
+### Properties
+
+**Advantages:**
+- ✅✅✅ **Strong botnet detection** (uniform IPs/devices fail)
+- ✅✅ **Privacy-preserving** (all fingerprints hashed)
+- ✅✅ **Natural user behavior** (real users naturally diverse)
+- ✅ **Unforgeable** (HMAC-signed proofs)
+- ✅ **Persistent state** (survives restarts)
+
+**Disadvantages:**
+- ⚠️ **VPN users** (may appear less diverse)
+- ⚠️ **Single-device users** (lower scores)
+- ⚠️ **Requires observation** (tracks network/device patterns)
+
+### Security
+
+**Attack Vectors:**
+1. **VPN rotation:** Simulate diversity with VPN switching
+   - **Mitigation:** Combine with Progressive Trust (time-based)
+2. **Browser fingerprint spoofing:** Fake diverse User-Agents
+   - **Mitigation:** Combine with WebAuthn (hardware binding)
+3. **Patient diverse botnet:** Very sophisticated attack
+   - **Mitigation:** Very difficult and expensive to execute
+
+**Strengths:**
+- Directly targets botnet behavioral patterns
+- Privacy-preserving (no raw IPs/User-Agents stored)
+- HMAC proofs prevent forgery
+- Works well with other mechanisms
+
+### Use Cases
+
+- ✅ **Public APIs** (vulnerable to botnet abuse)
+- ✅ **Content platforms** (fighting spam farms)
+- ✅ **Anti-fraud systems** (detecting automated attacks)
+- ✅ **Rate limiting bypass** (legitimate diverse users)
+- ⚠️ **VPN-heavy user bases** (may need lower minimum score)
+
+### Detailed Guide
+
+See [Proof of Diversity Guide](PROOF_OF_DIVERSITY.md) for complete documentation.
+
+---
+
+## 7. WebAuthn (Hardware Authenticators)
+
+*For full WebAuthn documentation, see [WEBAUTHN.md](WEBAUTHN.md)*
+
+### Quick Overview
+
+**What**: Biometric authentication (Face ID, Touch ID, security keys)
+**Strength**: ✅✅✅ Very Strong
+**Cost**: Zero (no computation)
+**Privacy**: ✅✅ Good (hardware-backed, no surveillance)
+
+**Best for**: Hardware-backed Sybil resistance without computational cost
+
+---
+
+## 8. Combined Resistance (Defense-in-Depth)
 
 ### Configuration
 

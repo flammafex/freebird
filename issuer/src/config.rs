@@ -55,7 +55,7 @@ pub enum HsmMode {
 
 #[derive(Clone, Debug)]
 pub struct SybilConfig {
-    pub mode: String, // "none", "invitation", "pow", "rate_limit", "combined"
+    pub mode: String, // "none", "invitation", "pow", "rate_limit", "progressive_trust", "combined"
     pub pow_difficulty: u32,
     pub rate_limit_secs: u64,
     pub invite_per_user: u32,
@@ -66,6 +66,18 @@ pub struct SybilConfig {
     pub invite_autosave_interval_secs: u64,
     pub bootstrap_users: Option<String>,
     pub webauthn_max_proof_age: Option<i64>,
+    // Progressive Trust configuration
+    pub progressive_trust_levels: Vec<String>, // Format: "age_secs:tokens:cooldown_secs"
+    pub progressive_trust_persistence_path: PathBuf,
+    pub progressive_trust_autosave_interval: u64,
+    pub progressive_trust_hmac_secret: Option<String>,
+    pub progressive_trust_salt: String,
+    // Proof of Diversity configuration
+    pub proof_of_diversity_min_score: u8,
+    pub proof_of_diversity_persistence_path: PathBuf,
+    pub proof_of_diversity_autosave_interval: u64,
+    pub proof_of_diversity_hmac_secret: Option<String>,
+    pub proof_of_diversity_fingerprint_salt: String,
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +176,13 @@ impl HsmConfig {
 
 impl SybilConfig {
     fn from_env() -> Self {
+        // Parse progressive trust levels from env
+        let progressive_trust_levels = env::var("SYBIL_PROGRESSIVE_TRUST_LEVELS")
+            .unwrap_or_else(|_| "0:1:86400,2592000:10:3600,7776000:100:60".to_string())
+            .split(',')
+            .map(|s| s.to_string())
+            .collect();
+
         Self {
             mode: env::var("SYBIL_RESISTANCE").unwrap_or_else(|_| "none".to_string()),
             pow_difficulty: env_u32("SYBIL_POW_DIFFICULTY", 20),
@@ -176,6 +195,24 @@ impl SybilConfig {
             invite_autosave_interval_secs: env_u64("SYBIL_INVITE_AUTOSAVE_INTERVAL_SECS", 300),
             bootstrap_users: env::var("SYBIL_INVITE_BOOTSTRAP_USERS").ok(),
             webauthn_max_proof_age: env::var("WEBAUTHN_MAX_PROOF_AGE").ok().and_then(|s| s.parse().ok()),
+            // Progressive Trust
+            progressive_trust_levels,
+            progressive_trust_persistence_path: env::var("SYBIL_PROGRESSIVE_TRUST_PERSISTENCE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "progressive_trust.json".into()),
+            progressive_trust_autosave_interval: env_u64("SYBIL_PROGRESSIVE_TRUST_AUTOSAVE_SECS", 300),
+            progressive_trust_hmac_secret: env::var("SYBIL_PROGRESSIVE_TRUST_SECRET").ok(),
+            progressive_trust_salt: env::var("SYBIL_PROGRESSIVE_TRUST_SALT")
+                .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
+            // Proof of Diversity
+            proof_of_diversity_min_score: env_u32("SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE", 40) as u8,
+            proof_of_diversity_persistence_path: env::var("SYBIL_PROOF_OF_DIVERSITY_PERSISTENCE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "proof_of_diversity.json".into()),
+            proof_of_diversity_autosave_interval: env_u64("SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE_SECS", 300),
+            proof_of_diversity_hmac_secret: env::var("SYBIL_PROOF_OF_DIVERSITY_SECRET").ok(),
+            proof_of_diversity_fingerprint_salt: env::var("SYBIL_PROOF_OF_DIVERSITY_SALT")
+                .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
         }
     }
 }

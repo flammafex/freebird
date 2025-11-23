@@ -185,12 +185,27 @@ pub enum SybilProof {
         code: String,
         signature: String,
     },
-    // Note: WebAuthn fields are strings/integers, so they verify 
+    // Note: WebAuthn fields are strings/integers, so they verify
     // fine even if the backend doesn't have the webauthn crate enabled.
     WebAuthn {
         username: String,
         auth_proof: String,
         timestamp: i64,
+    },
+    ProgressiveTrust {
+        user_id_hash: String,   // Blake3(username + salt) - privacy preserving
+        first_seen: i64,        // Unix timestamp of first issuance
+        tokens_issued: u32,     // Lifetime token count
+        last_issuance: i64,     // Unix timestamp of last issuance
+        hmac_proof: String,     // HMAC(secret, all fields) - prevents forgery
+    },
+    ProofOfDiversity {
+        user_id_hash: String,   // Blake3(username + salt)
+        diversity_score: u8,    // 0-100 score
+        unique_networks: u32,   // Count of unique networks observed
+        unique_devices: u32,    // Count of unique devices observed
+        first_seen: i64,        // Unix timestamp of first observation
+        hmac_proof: String,     // HMAC(secret, all fields)
     },
     None,
 }
