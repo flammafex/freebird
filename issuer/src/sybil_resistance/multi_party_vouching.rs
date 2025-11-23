@@ -452,6 +452,7 @@ impl SybilResistance for MultiPartyVouchingSystem {
 mod tests {
     use super::*;
     use p256::ecdsa::SigningKey;
+    use p256::ecdsa::signature::Signer;
     use rand::rngs::OsRng;
 
     #[tokio::test]
