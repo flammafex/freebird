@@ -180,6 +180,7 @@ impl Application {
         let mut app = Router::new()
             .route("/.well-known/issuer", get(routes::metadata::well_known_handler))
             .route("/.well-known/keys", get(routes::metadata::keys_handler))
+            .route("/.well-known/federation", get(routes::metadata::federation_handler))
             .route("/v1/oprf/issue", post(routes::issue::handle))
             .route("/v1/oprf/issue/batch", post(routes::batch_issue::handle_batch))
             .layer(DefaultBodyLimit::max(64 * 1024));
