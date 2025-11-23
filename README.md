@@ -271,13 +271,13 @@ The `.env.example` file contains **all** available configuration options with de
 
 ## Roadmap
 
-No.
+God mapped the road. I'm just walking it.
 
 ---
 
 ## Contributing
 
-No.
+From who? You?
 
 ---
 
