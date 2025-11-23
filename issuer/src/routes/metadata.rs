@@ -80,9 +80,6 @@ pub async fn keys_handler(
 /// Returns information about which issuers this issuer trusts (vouches)
 /// and which it has revoked. This enables ActivityPub-style federation
 /// where verifiers can traverse trust graphs to make authorization decisions.
-///
-/// For now, this returns empty vouches/revocations as a placeholder.
-/// Full federation management will be added in subsequent commits.
 pub async fn federation_handler(
     State((state, _voprf)): State<SharedState>
 ) -> Json<common::federation::FederationMetadata> {
@@ -91,10 +88,14 @@ pub async fn federation_handler(
         .unwrap()
         .as_secs() as i64;
 
+    // Load vouches and revocations from storage
+    let vouches = state.federation_store.get_vouches().await;
+    let revocations = state.federation_store.get_revocations().await;
+
     Json(common::federation::FederationMetadata {
         issuer_id: state.issuer_id.clone(),
-        vouches: Vec::new(), // TODO: Load from persistent storage
-        revocations: Vec::new(), // TODO: Load from persistent storage
+        vouches,
+        revocations,
         updated_at: now,
         cache_ttl_secs: Some(3600), // 1 hour cache
     })

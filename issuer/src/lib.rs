@@ -1,4 +1,5 @@
 pub mod config;
+pub mod federation_store;
 pub mod keys;
 pub mod multi_key_voprf;
 pub mod routes;
@@ -14,6 +15,7 @@ pub use main_state::AppStateWithSybil;
 // Let's create a small internal module for it or put it in lib.rs directly.
 pub mod main_state {
     use std::sync::Arc;
+    use crate::federation_store::FederationStore;
     use crate::sybil_resistance::{invitation::InvitationSystem, SybilResistance};
 
     #[derive(Clone)]
@@ -30,6 +32,8 @@ pub mod main_state {
         pub epoch_duration_sec: u64,
         /// Number of previous epochs to accept (for graceful rotation)
         pub epoch_retention: u32,
+        /// Federation storage for vouches and revocations
+        pub federation_store: FederationStore,
     }
 
     impl AppStateWithSybil {
