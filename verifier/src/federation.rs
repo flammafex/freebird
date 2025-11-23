@@ -8,7 +8,7 @@
 //! from other trusted issuers.
 
 use anyhow::{Context, Result};
-use common::federation::{FederationMetadata, TrustPolicy, Vouch};
+use common::federation::{FederationMetadata, Revocation, TrustPolicy, Vouch};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -191,6 +191,15 @@ impl TrustGraph {
                     continue;
                 }
 
+                // Skip if vouched issuer has been revoked
+                if self.is_revoked(&vouch.vouched_issuer_id, &metadata.revocations, now) {
+                    debug!(
+                        "Issuer {} has been revoked by {}, skipping",
+                        vouch.vouched_issuer_id, current_id
+                    );
+                    continue;
+                }
+
                 // Check if this vouch points to our target
                 if vouch.vouched_issuer_id == target_issuer_id {
                     // Verify the vouch is valid
@@ -322,6 +331,30 @@ impl TrustGraph {
         true
     }
 
+    /// Check if an issuer has been revoked
+    ///
+    /// Checks if the issuer appears in the revocations list.
+    /// Revocations are considered valid regardless of timestamp (permanent).
+    fn is_revoked(
+        &self,
+        issuer_id: &str,
+        revocations: &[Revocation],
+        _now: i64,
+    ) -> bool {
+        for revocation in revocations {
+            if revocation.revoked_issuer_id == issuer_id {
+                // TODO: Verify the revocation signature using the revoker's public key
+                // For now, we trust that the metadata endpoint only returns valid revocations
+                debug!(
+                    "Issuer {} has been revoked (reason: {:?})",
+                    issuer_id, revocation.reason
+                );
+                return true;
+            }
+        }
+        false
+    }
+
     /// Clear the metadata cache
     pub async fn clear_cache(&self) {
         let mut cache = self.cache.write().await;
@@ -387,5 +420,35 @@ mod tests {
         let trusted = graph.is_trusted("issuer:root:v1", &[0u8; 33]).await;
 
         assert!(trusted, "Should trust root issuer");
+    }
+
+    #[test]
+    fn test_is_revoked() {
+        let policy = TrustPolicy::default();
+        let graph = TrustGraph::new(policy);
+        let now = current_timestamp();
+
+        // Create a revocation
+        let revocation = Revocation {
+            revoker_issuer_id: "issuer:a:v1".to_string(),
+            revoked_issuer_id: "issuer:bad:v1".to_string(),
+            revoked_at: now,
+            reason: Some("compromised".to_string()),
+            signature: [0u8; 64],
+        };
+
+        let revocations = vec![revocation];
+
+        // Should detect revoked issuer
+        assert!(
+            graph.is_revoked("issuer:bad:v1", &revocations, now),
+            "Should detect revoked issuer"
+        );
+
+        // Should not detect non-revoked issuer
+        assert!(
+            !graph.is_revoked("issuer:good:v1", &revocations, now),
+            "Should not detect non-revoked issuer"
+        );
     }
 }
