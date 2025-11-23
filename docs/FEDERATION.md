@@ -1,29 +1,28 @@
 # Multi-Issuer Federation
 
-Freebird supports multi-issuer federation through signature-based token authentication (Layer 1 Federation). This allows verifiers to authenticate tokens from multiple issuers without requiring shared secrets.
+Freebird is designed from the ground up for multi-issuer federation. Verifiers authenticate tokens using only issuer public keys - no shared secrets required.
 
 ## Table of Contents
 
 1. [Overview](#overview)
 2. [Architecture](#architecture)
-3. [Token Formats](#token-formats)
+3. [Token Format](#token-format)
 4. [Configuration](#configuration)
-5. [Migration Guide](#migration-guide)
-6. [Security Considerations](#security-considerations)
-7. [Example Scenarios](#example-scenarios)
+5. [Security Considerations](#security-considerations)
+6. [Example Scenarios](#example-scenarios)
 
 ## Overview
 
-### What is Layer 1 Federation?
+### What is Multi-Issuer Federation?
 
-Layer 1 Federation enables verifiers to authenticate tokens from multiple issuers using only public keys. This eliminates the need for shared secrets between issuers and verifiers, making true multi-issuer scenarios possible.
+Multi-issuer federation allows verifiers to authenticate tokens from multiple independent issuers using only public keys. This eliminates the need for shared secrets between issuers and verifiers, making true multi-issuer scenarios possible.
 
 ### Key Benefits
 
 - **No Shared Secrets**: Verifiers only need issuer public keys
 - **Multi-Issuer Support**: Authenticate tokens from multiple independent issuers
-- **Federation-Ready**: Foundation for ActivityPub-style trust networks (Layer 2)
-- **Backward Compatible**: Supports both MAC-based (V1) and signature-based (V2) tokens
+- **Simple Architecture**: One token format, one authentication method
+- **Federation-Ready**: Foundation for ActivityPub-style trust networks (Layer 2, coming soon)
 
 ### Use Cases
 
@@ -34,28 +33,7 @@ Layer 1 Federation enables verifiers to authenticate tokens from multiple issuer
 
 ## Architecture
 
-### MAC-Based Authentication (V1) - Legacy Mode
-
-```
-┌─────────┐                    ┌──────────┐
-│ Issuer  │──── Secret Key ────│ Verifier │
-└─────────┘                    └──────────┘
-     │                              │
-     │    Token (163 bytes)         │
-     │  ┌─────────────────┐         │
-     └─▶│ VOPRF (131)     │────────▶│
-        │ HMAC  (32)      │         │
-        └─────────────────┘         │
-                                    │
-        ⚠️ Verifier needs secret key!
-```
-
-**Limitations**:
-- Requires shared secret between issuer and verifier
-- Cannot support true multi-issuer federation
-- Suitable only when issuer and verifier are managed by the same entity
-
-### Signature-Based Authentication (V2) - Federation Mode
+### Signature-Based Authentication
 
 ```
 ┌─────────┐                    ┌──────────┐
@@ -75,26 +53,11 @@ Layer 1 Federation enables verifiers to authenticate tokens from multiple issuer
 - Verifier only needs public key (no secrets)
 - Supports tokens from multiple independent issuers
 - Foundation for trust network federation
-- Slightly larger tokens (32 bytes overhead) for federation capability
+- Clean, simple design
 
-## Token Formats
+## Token Format
 
-### V1: MAC-Based Token (163 bytes)
-
-```
-┌─────────────────────────────────────────┐
-│ VERSION (1)                             │
-│ Point A (33) - SEC1 compressed          │
-│ Point B (33) - SEC1 compressed          │
-│ DLEQ Proof (64) - c (32) + s (32)       │
-│ HMAC-SHA256 (32) - metadata MAC         │
-└─────────────────────────────────────────┘
-Total: 163 bytes
-```
-
-**Authentication**: HMAC over token metadata using epoch-specific MAC key derived from issuer secret
-
-### V2: Signature-Based Token (195 bytes)
+### Signature-Based Token (195 bytes)
 
 ```
 ┌─────────────────────────────────────────┐
@@ -111,130 +74,42 @@ Total: 195 bytes
 
 **Message Signed**: `token_bytes || kid || exp || issuer_id`
 
-### Auto-Detection
-
-Both issuer and verifier support automatic format detection based on token length:
-- 163 bytes → V1 (MAC-based)
-- 195 bytes → V2 (Signature-based)
-
-This enables seamless backward compatibility and gradual migration.
+**Components**:
+- **VOPRF Token** (131 bytes): Cryptographic proof from blind signature protocol
+- **ECDSA Signature** (64 bytes): Metadata authentication using P-256
 
 ## Configuration
 
 ### Issuer Configuration
 
-#### Enable Signature-Based Tokens
-
-Set the `TOKEN_FORMAT` environment variable:
-
-```bash
-# Use signature-based tokens (V2, federation-ready)
-TOKEN_FORMAT=signature
-
-# Or use MAC-based tokens (V1, legacy mode)
-TOKEN_FORMAT=mac  # default
-```
-
-**Valid values**: `signature`, `sig`, `ecdsa` (for V2) or `mac`, `hmac` (for V1)
+Issuers automatically generate signature-based tokens. No configuration required beyond standard setup.
 
 #### Example Configuration
 
 ```bash
-# Issuer configuration for federation mode
+# Standard issuer configuration
 ISSUER_ID="issuer:example:v1"
 BIND_ADDR="0.0.0.0:8081"
 TOKEN_TTL_MIN=10
-TOKEN_FORMAT=signature  # Enable signature-based tokens
 EPOCH_DURATION_SEC=86400
 EPOCH_RETENTION=2
 ```
 
 ### Verifier Configuration
 
-#### Federation Mode (Signature-Based Tokens Only)
+Verifiers automatically verify signature-based tokens using issuer public keys.
 
-**Do not set** `ISSUER_SECRET_KEY` - the verifier will operate in federation mode:
+#### Example Configuration
 
 ```bash
-# Verifier configuration for federation mode
+# Standard verifier configuration
 BIND_ADDR="0.0.0.0:8082"
 MAX_CLOCK_SKEW_SECS=300
 EPOCH_DURATION_SEC=86400
 EPOCH_RETENTION=2
-# ISSUER_SECRET_KEY not set - federation mode!
 ```
 
-**Behavior**:
-- ✅ Accepts signature-based tokens (V2, 195 bytes)
-- ❌ Rejects MAC-based tokens (V1, 163 bytes)
-- ℹ️  Logs warning at startup about limited token support
-
-#### Hybrid Mode (Both Token Formats)
-
-Set `ISSUER_SECRET_KEY` for backward compatibility:
-
-```bash
-# Verifier configuration for hybrid mode
-BIND_ADDR="0.0.0.0:8082"
-MAX_CLOCK_SKEW_SECS=300
-EPOCH_DURATION_SEC=86400
-EPOCH_RETENTION=2
-ISSUER_SECRET_KEY=<hex-encoded-32-byte-key>  # Enables MAC verification
-```
-
-**Behavior**:
-- ✅ Accepts signature-based tokens (V2, 195 bytes)
-- ✅ Accepts MAC-based tokens (V1, 163 bytes)
-- ⚠️  Still requires secret key (not true federation)
-
-## Migration Guide
-
-### Migrating from V1 to V2
-
-Follow these steps for a smooth migration:
-
-#### Step 1: Update Issuer to Dual Mode
-
-1. Deploy issuer with `TOKEN_FORMAT=signature`
-2. Existing clients will receive V2 tokens
-3. Old V1 tokens remain valid until expiration
-
-#### Step 2: Monitor Token Distribution
-
-Track token format distribution in logs:
-- Issuer logs: `✅ Token issued (auth=ECDSA)`
-- Verifier logs: `✅ Token verified (auth=ECDSA)`
-
-#### Step 3: Update Verifier Configuration
-
-Once all tokens are V2 (after `TOKEN_TTL_MIN` expires):
-1. Remove `ISSUER_SECRET_KEY` from verifier configuration
-2. Restart verifier in federation mode
-3. Verify logs show: `⚠️ ISSUER_SECRET_KEY not set - only signature-based tokens (V2) will be supported`
-
-#### Step 4: Verification
-
-Test both scenarios:
-```bash
-# Test V2 token verification
-curl -X POST http://verifier:8082/v1/verify \
-  -H "Content-Type: application/json" \
-  -d '{
-    "token_b64": "<v2-token>",
-    "issuer_id": "issuer:example:v1",
-    "epoch": 12345,
-    "exp": 1234567890
-  }'
-```
-
-### Rollback Plan
-
-If you need to rollback to V1:
-
-1. Redeploy issuer with `TOKEN_FORMAT=mac`
-2. Ensure verifier has `ISSUER_SECRET_KEY` set
-3. New tokens will be V1 (163 bytes)
-4. Existing V2 tokens remain valid until expiration
+**Note**: No secret key required! Verifier operates entirely with public keys.
 
 ## Security Considerations
 
@@ -269,7 +144,6 @@ let signature_valid = crypto::verify_token_signature(
 
 #### Constant-Time Operations
 - ✅ **Signature Verification**: Not timing-sensitive (public key crypto)
-- ✅ **MAC Verification**: Constant-time comparison (V1 mode)
 - ✅ **Key Matching**: Constant-time string comparison (defense-in-depth)
 
 ### Public Key Distribution
@@ -307,31 +181,23 @@ curl https://issuer.example.com/.well-known/issuer
 
 ## Example Scenarios
 
-### Scenario 1: Single Issuer Migration
+### Scenario 1: Single Issuer
 
-**Before** (V1 - Shared Secret):
+**Architecture**:
 ```
-Issuer A (secret: SK_A) ──┐
-                          ├─→ Verifier (has SK_A)
-                          │
-Clients ──────────────────┘
-```
-
-**After** (V2 - Public Key):
-```
-Issuer A (pubkey: PK_A) ──┐
-                          ├─→ Verifier (has PK_A)
-                          │
-Clients ──────────────────┘
+Issuer A (PK_A) ──┐
+                  ├─→ Verifier (has PK_A)
+                  │
+Clients ──────────┘
 ```
 
 **Configuration**:
 ```bash
 # Issuer A
-TOKEN_FORMAT=signature
+ISSUER_ID="issuer:a:v1"
 
-# Verifier (remove ISSUER_SECRET_KEY after migration)
-# ISSUER_SECRET_KEY not set
+# Verifier (no secrets!)
+# Verifier maintains registry of (issuer_id → public_key) mappings
 ```
 
 ### Scenario 2: Multi-Issuer Federation
@@ -350,15 +216,12 @@ Issuer C (PK_C) ──┘
 ```bash
 # Issuer A
 ISSUER_ID="issuer:a:v1"
-TOKEN_FORMAT=signature
 
 # Issuer B
 ISSUER_ID="issuer:b:v1"
-TOKEN_FORMAT=signature
 
 # Issuer C
 ISSUER_ID="issuer:c:v1"
-TOKEN_FORMAT=signature
 
 # Verifier (no secrets!)
 # Verifier maintains registry of (issuer_id → public_key) mappings
@@ -367,21 +230,16 @@ TOKEN_FORMAT=signature
 
 **Token Verification**:
 ```rust
-// Verifier auto-detects issuer and verifies with correct public key
-match token_length {
-    195 => {
-        let issuer = lookup_issuer(&req.issuer_id)?;
-        let valid = verify_token_signature(
-            &issuer.pubkey,
-            &token_data,
-            &signature,
-            &issuer.kid,
-            exp,
-            &req.issuer_id
-        );
-    }
-    // ...
-}
+// Verifier detects issuer and verifies with correct public key
+let issuer = lookup_issuer(&req.issuer_id)?;
+let valid = verify_token_signature(
+    &issuer.pubkey,
+    &token_data,
+    &signature,
+    &issuer.kid,
+    exp,
+    &req.issuer_id
+);
 ```
 
 ### Scenario 3: Geographic Distribution
@@ -434,15 +292,12 @@ Content Service (issuer:cdn:v1)   ──┘   (verifies all)
 # Each service issues its own tokens
 # Auth Service
 ISSUER_ID="issuer:auth:v1"
-TOKEN_FORMAT=signature
 
 # Payment Service
 ISSUER_ID="issuer:pay:v1"
-TOKEN_FORMAT=signature
 
 # Content Service
 ISSUER_ID="issuer:cdn:v1"
-TOKEN_FORMAT=signature
 
 # API Gateway (verifier)
 # Maintains public key registry for all services
@@ -469,12 +324,9 @@ cargo test --package integration_tests --test signature_based_tokens
 
 ### Manual Testing
 
-#### Issue a Signature-Based Token
+#### Issue a Token
 
 ```bash
-# Configure issuer for V2 tokens
-export TOKEN_FORMAT=signature
-
 # Start issuer
 cargo run --bin issuer
 
@@ -482,7 +334,7 @@ cargo run --bin issuer
 curl -X POST http://localhost:8081/v1/oprf/issue \
   -H "Content-Type: application/json" \
   -d '{
-    "blinded_b64": "<blinded-element>"
+    "blinded_element_b64": "<blinded-element>"
   }'
 
 # Response includes 195-byte token
@@ -491,8 +343,7 @@ curl -X POST http://localhost:8081/v1/oprf/issue \
 #### Verify in Federation Mode
 
 ```bash
-# Start verifier WITHOUT secret key
-unset ISSUER_SECRET_KEY
+# Start verifier (no secret key required!)
 cargo run --bin verifier
 
 # Verify token
@@ -510,7 +361,7 @@ curl -X POST http://localhost:8082/v1/verify \
 
 ## Future Work: Layer 2 Federation
 
-Layer 1 provides the cryptographic foundation. Layer 2 (planned) will add:
+Layer 1 (current implementation) provides the cryptographic foundation. Layer 2 (planned) will add:
 
 - **Issuer Discovery Protocol**: ActivityPub-style `.well-known/federation` endpoints
 - **Cryptographic Vouching**: Issuers sign vouches for other issuers

@@ -55,13 +55,13 @@ fn test_signature_based_token_generation() {
 
     assert_eq!(signature.len(), 64, "ECDSA signature should be 64 bytes");
 
-    // Step 6: Construct signature-based token (V2 format)
-    let mut signature_token = voprf_token.clone();
-    signature_token.extend_from_slice(&signature);
+    // Step 6: Construct final token
+    let mut final_token = voprf_token.clone();
+    final_token.extend_from_slice(&signature);
     assert_eq!(
-        signature_token.len(),
+        final_token.len(),
         195,
-        "Signature-based token should be 195 bytes (131 VOPRF + 64 signature)"
+        "Token should be 195 bytes (131 VOPRF + 64 signature)"
     );
 
     // Step 7: Verifier authenticates using ONLY the public key (no secret key!)
@@ -82,12 +82,12 @@ fn test_signature_based_token_generation() {
     println!("✅ Signature-based token test passed!");
     println!("   VOPRF token: {} bytes", voprf_token.len());
     println!("   Signature: {} bytes", signature.len());
-    println!("   Total token (V2): {} bytes", signature_token.len());
+    println!("   Total token: {} bytes", final_token.len());
 }
 
 #[test]
-fn test_mac_vs_signature_token_sizes() {
-    // Demonstrate the difference between MAC-based (V1) and signature-based (V2) tokens
+fn test_token_structure() {
+    // Demonstrate token structure: VOPRF (131 bytes) + ECDSA signature (64 bytes) = 195 bytes
     let ctx = b"freebird:v1";
     let sk = [0x42u8; 32];
     let server = Server::from_secret_key(sk, ctx).expect("server");
@@ -105,28 +105,20 @@ fn test_mac_vs_signature_token_sizes() {
     let exp = 9999999999i64;
     let issuer_id = "issuer:test";
 
-    // V1: MAC-based token (163 bytes)
-    let mac = crypto::compute_token_mac(&sk, &voprf_token, kid, exp, issuer_id);
-    let mut mac_token = voprf_token.clone();
-    mac_token.extend_from_slice(&mac);
-    assert_eq!(mac_token.len(), 163, "MAC token (V1) = 131 + 32 = 163 bytes");
-
-    // V2: Signature-based token (195 bytes)
+    // Signature-based token (195 bytes)
     let signature = crypto::compute_token_signature(&sk, &voprf_token, kid, exp, issuer_id)
         .expect("signature");
-    let mut sig_token = voprf_token.clone();
-    sig_token.extend_from_slice(&signature);
-    assert_eq!(
-        sig_token.len(),
-        195,
-        "Signature token (V2) = 131 + 64 = 195 bytes"
-    );
+    let mut token = voprf_token.clone();
+    token.extend_from_slice(&signature);
 
-    println!("✅ Token format comparison:");
-    println!("   V1 (MAC):       {} bytes", mac_token.len());
-    println!("   V2 (Signature): {} bytes", sig_token.len());
-    println!("   Overhead:       {} bytes (worth it for federation!)",
-             sig_token.len() - mac_token.len());
+    assert_eq!(voprf_token.len(), 131, "VOPRF token = 131 bytes");
+    assert_eq!(signature.len(), 64, "ECDSA signature = 64 bytes");
+    assert_eq!(token.len(), 195, "Total token = 131 + 64 = 195 bytes");
+
+    println!("✅ Token structure:");
+    println!("   VOPRF token: {} bytes (VERSION + Point A + Point B + DLEQ proof)", voprf_token.len());
+    println!("   ECDSA signature: {} bytes (r + s)", signature.len());
+    println!("   Total: {} bytes", token.len());
 }
 
 #[test]
