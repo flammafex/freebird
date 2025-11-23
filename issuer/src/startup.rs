@@ -178,7 +178,7 @@ impl Application {
             invitation_system: invitation_system.clone(),
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
-            federation_store,
+            federation_store: federation_store.clone(),
         });
 
         let app_state = (state.clone(), voprf.clone());
@@ -207,7 +207,7 @@ impl Application {
         if let Some(key) = config.admin_api_key {
             if key.len() >= 32 {
                 if let Some(inv_sys) = invitation_system {
-                    let admin = routes::admin_router(inv_sys, voprf, key);
+                    let admin = routes::admin_router(inv_sys, voprf.clone(), federation_store.clone(), key);
                     app = app.nest("/admin", admin);
                 }
             }
