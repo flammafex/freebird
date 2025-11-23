@@ -24,6 +24,7 @@ Comprehensive comparison of all Sybil resistance mechanisms in Freebird.
 | **Rate Limiting** | ✅ Production | ✅ Weak | Time | ✅✅ Good | Simple throttling |
 | **Progressive Trust** | ✅ Production | ✅✅ Strong | Time | ✅✅✅ Excellent | Gradual access, loyalty rewards |
 | **Proof of Diversity** | ✅ Production | ✅✅✅ Strong | Behavioral | ✅✅ Good | Anti-botnet, diversity analysis |
+| **Multi-Party Vouching** | ✅ Production | ✅✅✅ Strong | Social | ✅✅ Good | Collective accountability, consensus |
 | **WebAuthn** | ✅ Production | ✅✅✅ Strong | Zero | ✅✅ Good | Hardware-backed, biometric |
 | **Combined** | ✅ Production | ✅✅✅ Strong | Multiple | ✅✅ Good | Defense-in-depth |
 
@@ -392,7 +393,89 @@ See [Proof of Diversity Guide](PROOF_OF_DIVERSITY.md) for complete documentation
 
 ---
 
-## 7. WebAuthn (Hardware Authenticators)
+## 7. Multi-Party Vouching ⭐ (Social Consensus)
+
+### Configuration
+
+```bash
+export SYBIL_RESISTANCE=multi_party_vouching
+export SYBIL_MULTI_PARTY_VOUCHING_REQUIRED=3  # Number of vouchers required
+export SYBIL_MULTI_PARTY_VOUCHING_COOLDOWN_SECS=3600
+export SYBIL_MULTI_PARTY_VOUCHING_EXPIRES_SECS=2592000
+export SYBIL_MULTI_PARTY_VOUCHING_NEW_USER_WAIT_SECS=2592000
+export SYBIL_MULTI_PARTY_VOUCHING_SECRET="$(openssl rand -base64 32)"
+export SYBIL_MULTI_PARTY_VOUCHING_SALT="$(openssl rand -hex 16)"
+./target/release/issuer
+```
+
+### How It Works
+
+1. **New user requests access** - Provides their identity
+2. **Multiple existing users vouch** - N trusted users endorse (ECDSA-signed)
+3. **Threshold verification** - System checks N vouches are present and valid
+4. **Reputation tracking** - Vouchers build positive/negative reputation over time
+5. **HMAC-signed proofs** prevent forgery
+
+### Vouching Workflow
+
+```
+Day 0:    Alice vouches for Charlie (ECDSA signature)
+          Bob vouches for Charlie (ECDSA signature)
+          David vouches for Charlie (ECDSA signature)
+          → Charlie has 3 vouches (meets threshold)
+          → Charlie can request tokens
+
+Day 30:   Charlie is in good standing
+          → Alice, Bob, David: +1 successful_vouch
+
+Day 60:   Charlie can now vouch for others (waiting period passed)
+```
+
+### Properties
+
+**Advantages:**
+- ✅✅✅ **Strong Sybil resistance** (requires compromising N accounts)
+- ✅✅✅ **Collective accountability** (all vouchers affected if vouchee misbehaves)
+- ✅✅ **Reputation tracking** (vouchers build trust over time)
+- ✅✅ **Privacy-preserving** (hashed user IDs, no surveillance)
+- ✅ **Unforgeable** (ECDSA P-256 signatures + HMAC proofs)
+
+**Disadvantages:**
+- ⚠️ **Coordinated attack** (N colluding accounts can vouch for Sybils)
+- ⚠️ **Slower onboarding** (must collect N vouches)
+- ⚠️ **Bootstrap dependency** (needs initial trusted vouchers)
+
+### Security
+
+**Attack Vectors:**
+1. **N compromised accounts:** Coordinate to vouch for Sybil
+   - **Mitigation:** High threshold (5+), combine with Proof of Diversity
+2. **Social engineering:** Deceive legitimate vouchers
+   - **Mitigation:** Reputation tracking identifies bad vouchers
+3. **Sybil ring:** Create circular vouching network
+   - **Mitigation:** Combine with Progressive Trust (time-based)
+
+**Strengths:**
+- ECDSA P-256 signatures (unforgeable)
+- Collective accountability (distributed risk)
+- Reputation system (bad vouchers identified)
+- Privacy-preserving (hashed IDs)
+
+### Use Cases
+
+- ✅ **Community platforms** (trusted membership)
+- ✅ **High-value applications** (strong Sybil resistance)
+- ✅ **Decentralized systems** (no central authority)
+- ✅ **Privacy-conscious platforms** (no biometrics)
+- ⚠️ **Public APIs** (requires existing voucher network)
+
+### Detailed Guide
+
+See [Multi-Party Vouching Guide](MULTI_PARTY_VOUCHING.md) for complete documentation.
+
+---
+
+## 8. WebAuthn (Hardware Authenticators)
 
 *For full WebAuthn documentation, see [WEBAUTHN.md](WEBAUTHN.md)*
 
@@ -407,7 +490,7 @@ See [Proof of Diversity Guide](PROOF_OF_DIVERSITY.md) for complete documentation
 
 ---
 
-## 8. Combined Resistance (Defense-in-Depth)
+## 9. Combined Resistance (Defense-in-Depth)
 
 ### Configuration
 
