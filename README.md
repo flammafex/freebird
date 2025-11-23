@@ -234,11 +234,11 @@ Configuration is handled via environment variables.
 
 ## Roadmap
 
-**Completed:** P-256 VOPRF • Sybil Resistance • Redis Backend • Key Rotation • Admin API • TypeScript SDK • Docker Support
+**Completed:** P-256 VOPRF • Sybil Resistance • Redis Backend • Key Rotation • Admin API • TypeScript SDK • Docker Support • Multi-Issuer Federation • Nostr Integration • HSM/PKCS11 Support
 
-**In Progress:** Nostr Integration • Python/Go Clients • Prometheus Metrics
+**In Progress:** Python/Go Clients • Prometheus Metrics
 
-**Planned:** HSM/KMS Support • Privacy Pass IETF Compliance • Mobile SDKs
+**Planned:** Privacy Pass IETF Compliance • Mobile SDKs • Cloud KMS Integration
 
 ---
 
