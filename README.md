@@ -271,11 +271,7 @@ The `.env.example` file contains **all** available configuration options with de
 
 ## Roadmap
 
-**Completed:** P-256 VOPRF • Sybil Resistance • Redis Backend • Key Rotation • Admin API • TypeScript SDK • Docker Support • Multi-Issuer Federation • Nostr Integration • HSM/PKCS11 Support
-
-**In Progress:** Python/Go Clients • Prometheus Metrics
-
-**Planned:** Privacy Pass IETF Compliance • Mobile SDKs • Cloud KMS Integration
+No.
 
 ---
 
