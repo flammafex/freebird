@@ -31,7 +31,7 @@ Freebird uses **VOPRF (Verifiable Oblivious Pseudorandom Function)**, a cryptogr
 ┌────────┐                    ┌────────┐
 │  User  │────── token ──────▶│ Server │
 └────────┘                    └────────┘
-                              
+
 Server sees:
 ✗ Who you are
 ✗ When you accessed
@@ -53,7 +53,7 @@ Server sees:
 └────────┘          └─────────┘         └──────────┘
     │                                         ▲
     └──── unblind & finalize ────────────────┘
-    
+
 Issuer sees:
 ✓ Someone requested a token
 ✗ Cannot see original input
@@ -85,12 +85,12 @@ Breaking it down:
   - Input: Any data
   - Output: Fixed-size random-looking bytes
   - Property: Same input always produces same output
-  
+
 - **Oblivious (OPRF):** Server computes PRF without seeing the input
   - Client "blinds" (hides) their input
   - Server computes on blinded input
   - Client "unblinds" to recover result
-  
+
 - **Verifiable (VOPRF):** Client can verify server computed correctly
   - Server provides DLEQ proof
   - Client checks proof before accepting result
@@ -235,10 +235,10 @@ Without proof, client rejects the output
 fn hash_to_curve(input: &[u8]) -> Point {
     // 1. Expand input using SHA-256
     let hash = SHA256(domain_separator || input);
-    
+
     // 2. Map to curve point using SSWU
     let point = sswu_map(hash);
-    
+
     // 3. Clear cofactor (P-256 has cofactor 1, so this is a no-op)
     point
 }
@@ -533,14 +533,15 @@ for (nullifier, exp) in nullifier_db {
 
 ### vs. Coconut Credentials
 
-| Property | Coconut | VOPRF |
-|----------|---------|-------|
-| Distributed Trust | ✅ Yes (threshold) | ❌ No (single issuer) |
+| Property | Coconut | Freebird |
+|----------|---------|----------|
+| Threshold Issuance | ✅ Yes (distributed key) | ❌ No |
+| Multi-Issuer Support | ❌ No | ✅ Yes (federation) |
 | Attribute-Based | ✅ Yes | ❌ No (binary yes/no) |
 | Complexity | High | Low |
 | Maturity | Research | Standardizing |
 
-**Freebird prioritizes simplicity and self-hosting over distributed trust.**
+**Freebird supports multi-issuer federation (not threshold) where a single verifier can accept tokens from multiple independent issuers.** See [FEDERATION.md](FEDERATION.md) for details.
 
 ### vs. Privacy Pass (Cloudflare)
 
@@ -601,7 +602,7 @@ for (nullifier, exp) in nullifier_db {
 
 ## Related Documentation
 
-- [Cryptographic Details](CRYPTOGRAPHY.md) - Deep dive into math and proofs
+- [Multi-Issuer Federation](FEDERATION.md) - How verifiers accept tokens from multiple issuers
 - [Security Model](SECURITY.md) - Threat model and assumptions
 - [API Reference](API.md) - HTTP endpoints and data formats
 - [Configuration Guide](CONFIGURATION.md) - Tuning cryptographic parameters
@@ -627,6 +628,4 @@ for (nullifier, exp) in nullifier_db {
 
 ---
 
-**Questions or want to dive deeper?**
-
-Check the [Cryptography Deep Dive](CRYPTOGRAPHY.md) or open a GitHub issue for clarification.
+**Questions or want to dive deeper? Check [SECURITY.md](SECURITY.md) or open a GitHub issue for clarification.**
