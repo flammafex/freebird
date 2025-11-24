@@ -49,9 +49,15 @@ Complete security analysis, threat model, and guarantees for Freebird.
 - **Mechanism:** DLEQ proof (Schnorr-style zero-knowledge proof)
 - **Strength:** Cryptographic (soundness based on discrete log)
 
-✅ **Sybil Resistance** (with invitation system)
+✅ **Multi-Issuer Trust Distribution**
+- **Property:** Verifiers can accept tokens from multiple independent issuers
+- **Mechanism:** Signature-based token authentication with issuer key rotation
+- **Strength:** Cryptographic (ECDSA signatures)
+- **Note:** See [FEDERATION.md](FEDERATION.md) for details
+
+✅ **Sybil Resistance** (with appropriate mechanism)
 - **Property:** One token per human without biometrics
-- **Mechanism:** Trust-based social graph with ban trees
+- **Mechanism:** Trust-based social graph with ban trees (invitation system)
 - **Strength:** Social (depends on community enforcement)
 
 ---
@@ -61,15 +67,17 @@ Complete security analysis, threat model, and guarantees for Freebird.
 ### Trusted Components
 
 **We Trust:**
-- Issuer keeps secret key secure (not compromised)
-- Verifier doesn't collude with issuer (separate infrastructure)
+- Issuers keep secret keys secure (not compromised)
+- Verifier doesn't collude with specific issuer for timing correlation
 - System clocks are reasonably synchronized (within ±5 minutes)
 - Redis (if used) doesn't lose data unexpectedly
+- HSM/PKCS11 modules (if used) protect keys correctly
 
 **We Don't Trust:**
 - Network (assume passive eavesdropping)
 - Clients (may try to forge tokens, replay, etc.)
 - External parties (may try to steal tokens)
+- Any single issuer (multi-issuer federation distributes trust)
 
 ### Adversary Capabilities
 
@@ -80,14 +88,16 @@ Complete security analysis, threat model, and guarantees for Freebird.
 - Try to forge tokens (will fail cryptographic verification)
 - Steal tokens in transit (front-running attack)
 - Manipulate clocks within tolerance (±5 minutes)
+- Compromise one issuer in a federation (others remain trusted)
 
 **Adversary CANNOT:**
 - Break elliptic curve discrete logarithm (ECDLP)
-- Forge valid DLEQ proofs
+- Forge valid DLEQ proofs or ECDSA signatures
 - Link issuance to redemption (blinding protects)
 - Reuse tokens (nullifier tracking prevents)
 - Bypass invitation system without valid invitation
 - Predict invitee IDs (192 bits of entropy)
+- Extract keys from properly configured HSMs
 
 ---
 
@@ -171,9 +181,9 @@ Complete security analysis, threat model, and guarantees for Freebird.
 **Protection:**
 - ✅ DLEQ proof ensures issuer uses correct key
 - ✅ Public key verification
-- ⚠️ Requires client to verify DLEQ proof (currently in crypto layer)
+- ✅ Client crypto layer verifies proofs automatically
 
-**Status:** ⚠️ **Partially protected** - Clients must verify proofs
+**Status:** ✅ **Protected** - Clients verify DLEQ proofs
 
 ---
 
@@ -192,6 +202,7 @@ Complete security analysis, threat model, and guarantees for Freebird.
 **Protection:**
 - ✅ Deploy issuer and verifier on separate infrastructure
 - ✅ Different administrative access controls
+- ✅ Use multi-issuer federation (distributes trust)
 - ⚠️ Use anonymous communication networks (Tor, VPN)
 - ⚠️ Batch issuance/verification (timing obfuscation)
 
@@ -199,7 +210,28 @@ Complete security analysis, threat model, and guarantees for Freebird.
 
 ---
 
-### 6. Clock Manipulation
+### 6. Single Issuer Compromise (Federation Scenario)
+
+**Attack:**
+```
+1. Adversary compromises one issuer in federation
+2. Adversary tries to issue fraudulent tokens
+3. Other issuers remain uncompromised
+```
+
+**Impact:** MEDIUM - Limited to compromised issuer's tokens
+
+**Protection:**
+- ✅ Verifier maintains separate trust roots per issuer
+- ✅ Compromised issuer can be removed from trusted list
+- ✅ Other issuers continue operating normally
+- ✅ Users can request tokens from alternative issuers
+
+**Status:** ✅ **Mitigated via federation** - Trust distributed across issuers
+
+---
+
+### 7. Clock Manipulation
 
 **Attack:**
 ```
@@ -219,7 +251,7 @@ Complete security analysis, threat model, and guarantees for Freebird.
 
 ---
 
-### 7. Sybil Attack (Without Resistance)
+### 8. Sybil Attack (Without Resistance)
 
 **Attack:**
 ```
@@ -234,15 +266,16 @@ Complete security analysis, threat model, and guarantees for Freebird.
 - ✅ Invitation system (trust-based)
 - ✅ Proof-of-Work (computational cost)
 - ✅ Rate limiting (IP-based throttling)
+- ✅ WebAuthn/FIDO2 (hardware-backed proof of humanity)
 - ⚠️ All have trade-offs (see [Sybil Resistance](SYBIL_RESISTANCE.md))
 
 **Status:** ✅ **Protected with appropriate mechanism**
 
 ---
 
-### 8. Invitation System Attacks
+### 9. Invitation System Attacks
 
-**8a. Invitation Stealing**
+**9a. Invitation Stealing**
 
 **Attack:**
 ```
@@ -260,7 +293,7 @@ Complete security analysis, threat model, and guarantees for Freebird.
 
 **Status:** ⚠️ **Social/operational security**
 
-**8b. Sybil via Compromised Inviter**
+**9b. Sybil via Compromised Inviter**
 
 **Attack:**
 ```
@@ -277,6 +310,30 @@ Complete security analysis, threat model, and guarantees for Freebird.
 - ✅ Cooldown periods (limit invitation rate)
 
 **Status:** ✅ **Mitigated via ban system**
+
+---
+
+### 10. HSM/PKCS11 Attacks
+
+**Attack:**
+```
+1. Adversary attempts to extract keys from HSM
+2. Adversary tries timing attacks on HSM operations
+3. Adversary attempts firmware manipulation
+```
+
+**Impact:** CRITICAL - If successful, issuer key compromise
+
+**Protection:**
+- ✅ HSMs provide tamper-resistant key storage
+- ✅ Freebird uses hybrid mode (key storage only)
+- ✅ PKCS11 interface prevents key extraction
+- ⚠️ Physical security of HSM required
+- ⚠️ Firmware updates must be verified
+
+**Status:** ✅ **Protected with proper HSM deployment**
+
+See [HSM_HYBRID_MODE.md](HSM_HYBRID_MODE.md) for implementation details.
 
 ---
 
@@ -304,11 +361,12 @@ Complete security analysis, threat model, and guarantees for Freebird.
   - Invitation: Social engineering
   - PoW: Favors wealthy (better hardware)
   - Rate limiting: Bypassable (VPNs, proxies)
+  - WebAuthn: Requires hardware tokens
 - **Mitigation:** Defense-in-depth (combine mechanisms)
 
 ❌ **Issuer-Verifier Collusion**
 - **Problem:** Timing correlation can break anonymity
-- **Mitigation:** Separate infrastructure, batch operations
+- **Mitigation:** Separate infrastructure, batch operations, multi-issuer federation
 - **Note:** Requires operational security, not just cryptography
 
 ---
@@ -324,11 +382,14 @@ Complete security analysis, threat model, and guarantees for Freebird.
 ✅ Implement network segmentation (firewalls)
 ✅ Enable TLS/HTTPS for all communications
 ✅ Use reverse proxy for rate limiting
+✅ Consider multi-issuer federation for trust distribution
 ```
 
 **Key Management:**
 ```
-✅ Store keys in HSM or secret manager (Vault, AWS KMS)
+✅ Use HSM with PKCS11 interface (YubiHSM, Nitrokey HSM, etc.)
+✅ Alternative: Cloud KMS (AWS KMS, Google Cloud KMS, Azure Key Vault)
+✅ Hybrid mode: HSM for storage, software for VOPRF operations
 ✅ Use separate keys per environment (dev/staging/prod)
 ✅ Rotate keys quarterly
 ✅ Restrict key access (least privilege)
@@ -342,6 +403,7 @@ Complete security analysis, threat model, and guarantees for Freebird.
 ✅ Alert on replay attempts (security events)
 ✅ Log Sybil proof failures (attack detection)
 ✅ Monitor clock skew (timing issues)
+✅ Track issuer health in federation scenarios
 ```
 
 **Invitation System:**
@@ -365,13 +427,14 @@ Complete security analysis, threat model, and guarantees for Freebird.
 
 **Security Level:** 128 bits (P-256)
 
-**Broken If:** 
+**Broken If:**
 - Quantum computers with sufficient qubits (Shor's algorithm)
 - Breakthrough in classical discrete log algorithms
 
 **Impact on Freebird:**
 - Unforgeability relies on ECDLP
 - DLEQ proof security relies on ECDLP
+- ECDSA signatures (federation) rely on ECDLP
 - P-256 compromise = complete protocol break
 
 **2. Hash Function Security (SHA-256)**
@@ -385,6 +448,7 @@ Complete security analysis, threat model, and guarantees for Freebird.
 **Impact on Freebird:**
 - Hash-to-curve security (deterministic point mapping)
 - Nullifier uniqueness (collision = double-spend)
+- HMAC security (token metadata binding in federation)
 
 ### Standard Model vs Random Oracle Model
 
@@ -406,10 +470,11 @@ Complete security analysis, threat model, and guarantees for Freebird.
 |-----------|-----------|----------------|-------------------|
 | VOPRF | P-256 ECDLP | 128 bits | ❌ No |
 | DLEQ Proof | Schnorr | 128 bits | ❌ No |
-| Signatures | ECDSA P-256 | 128 bits | ❌ No |
+| Signatures (Federation) | ECDSA P-256 | 128 bits | ❌ No |
 | Hash | SHA-256 | 128 bits | ✅ Yes |
 | Nullifiers | SHA-256 | 128 bits | ✅ Yes |
 | Invitee IDs | SHA-256 (192 bits) | 128 bits | ✅ Yes |
+| HSM Storage | Hardware-dependent | Varies | Depends on HSM |
 
 **Overall Security:** 128 bits (limited by ECDLP)
 
@@ -446,6 +511,7 @@ Complete security analysis, threat model, and guarantees for Freebird.
 - Timing correlation between issuance/verification
 - Requires operational security (separate infrastructure)
 - No cryptographic proof
+- Multi-issuer federation reduces single point of failure
 
 **Sybil Resistance:**
 - Social/economic properties (invitation system, PoW)
@@ -482,6 +548,8 @@ Complete security analysis, threat model, and guarantees for Freebird.
 | Verifiability | ✅ Yes (DLEQ) | ✅ Yes (DLEQ) |
 | Replay Protection | ✅ Yes | ✅ Yes |
 | Sybil Resistance | CAPTCHA | Multiple options |
+| Multi-Issuer | Limited | ✅ Yes (federation) |
+| HSM Support | Unknown | ✅ Yes (PKCS11) |
 | Deployment | Centralized | Self-hosted |
 
 **Freebird provides equivalent cryptographic security with more deployment flexibility.**
@@ -503,6 +571,7 @@ Complete security analysis, threat model, and guarantees for Freebird.
 - No unsafe Rust in cryptographic code
 - Comprehensive test coverage
 - Based on well-studied protocols (VOPRF, Schnorr)
+- Constant-time operations verified (see SECURITY_AUDIT_CONSTANT_TIME.md)
 
 **Use in Production:**
 - ⚠️ Understand risks before deployment
@@ -536,6 +605,8 @@ Please report privately via:
 ## Related Documentation
 
 - [How It Works](HOW_IT_WORKS.md) - Cryptographic protocol details
+- [Multi-Issuer Federation](FEDERATION.md) - Trust distribution across issuers
+- [HSM Hybrid Mode](HSM_HYBRID_MODE.md) - Hardware key storage implementation
 - [Production Deployment](PRODUCTION.md) - Security hardening checklist
 - [Configuration](CONFIGURATION.md) - Security-related settings
 - [Sybil Resistance](SYBIL_RESISTANCE.md) - Mechanism comparison
