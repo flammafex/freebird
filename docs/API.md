@@ -23,13 +23,17 @@ Freebird consists of three HTTP services:
 | Service | Port | Purpose | Authentication |
 |---------|------|---------|----------------|
 | **Issuer** | 8081 | Issue anonymous tokens via VOPRF | Optional Sybil proof |
-| **Verifier** | 8082 | Verify tokens and check replay | None (public) |
+| **Verifier** | 8082 | Verify tokens from one or more issuers | None (public) |
 | **Admin** | 8081 | Manage invitation system | API key required |
 
 **Base URLs:**
 - Issuer: `http://localhost:8081` (default)
 - Verifier: `http://localhost:8082` (default)
 - Admin: `http://localhost:8081/admin` (optional)
+
+**Federation Support:**
+- Verifiers can accept tokens from multiple independent issuers
+- See [FEDERATION.md](FEDERATION.md) for multi-issuer configuration
 
 ---
 
@@ -39,7 +43,7 @@ Freebird consists of three HTTP services:
 
 **GET /.well-known/issuer**
 
-Returns public metadata about the issuer for verifier configuration.
+Returns public metadata about the issuer for verifier configuration and federation.
 
 **Request:**
 ```bash
@@ -58,6 +62,15 @@ curl http://localhost:8081/.well-known/issuer
   }
 }
 ```
+
+**Fields:**
+- `issuer_id`: Unique identifier for this issuer
+- `voprf.suite`: Cryptographic suite identifier
+- `voprf.kid`: Key identifier for current active key
+- `voprf.pubkey`: Base64-encoded P-256 public key
+- `voprf.exp_sec`: Default token expiration in seconds
+
+**Federation Note:** Verifiers use this endpoint to discover and verify issuer public keys.
 
 ---
 
@@ -92,6 +105,13 @@ Issues a single anonymous token via VOPRF evaluation.
 }
 ```
 
+**Request (No Sybil Resistance):**
+```json
+{
+  "blinded_element_b64": "A1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6..."
+}
+```
+
 **Response (200 OK):**
 ```json
 {
@@ -106,6 +126,13 @@ Issues a single anonymous token via VOPRF evaluation.
   }
 }
 ```
+
+**Token Formats:**
+
+- **Basic Token (131 bytes):** VOPRF evaluation result with DLEQ proof
+- **Signature-Based Token (195 bytes):** Includes ECDSA signature for federation support
+
+The token format depends on issuer configuration. Federation-enabled issuers return signature-based tokens that can be verified by any verifier with the issuer's public key.
 
 ---
 
@@ -236,7 +263,7 @@ Complete authentication and receive a proof for token issuance.
   "cred_id": "base64url_credential_id",
   "username": "alice",
   "authenticated_at": 1699454445,
-  "proof": "base64url_proof_string" 
+  "proof": "base64url_proof_string"
 }
 ```
 **Note:** The `proof` string returned here is what you send in the `sybil_proof.auth_proof` field when issuing a token.
@@ -252,7 +279,7 @@ Get Relying Party configuration.
 {
   "rp_id": "example.com",
   "rp_name": "Freebird Service",
-  "origin": "[https://example.com](https://example.com)"
+  "origin": "https://example.com"
 }
 ```
 
@@ -264,7 +291,7 @@ Get Relying Party configuration.
 
 **POST /v1/verify**
 
-Verifies a token with expiration checking and replay protection.
+Verifies a token with expiration checking and replay protection. Supports tokens from multiple issuers in federation scenarios.
 
 **Request:**
 ```json
@@ -274,6 +301,11 @@ Verifies a token with expiration checking and replay protection.
   "exp": 1699454445
 }
 ```
+
+**Fields:**
+- `token_b64`: Base64-encoded token (131 or 195 bytes depending on format)
+- `issuer_id`: Identifier of the issuer that created the token
+- `exp`: Unix timestamp when token expires
 
 **Response (200 OK - Success):**
 ```json
@@ -291,6 +323,24 @@ Verifies a token with expiration checking and replay protection.
 }
 ```
 
+**Error Reasons:**
+- Token expired (`exp < current_time`)
+- Token already used (replay attack)
+- Invalid signature or DLEQ proof
+- Unknown issuer (not in trusted issuer list)
+- Nullifier already exists in database
+
+**Federation Support:**
+
+In multi-issuer scenarios, the verifier:
+1. Looks up the issuer's public key using `issuer_id`
+2. Verifies the token's ECDSA signature (for signature-based tokens)
+3. Verifies the DLEQ proof
+4. Checks expiration and replay protection
+5. Records the nullifier to prevent reuse
+
+See [FEDERATION.md](FEDERATION.md) for configuration details.
+
 ---
 
 ## Admin API
@@ -298,6 +348,12 @@ Verifies a token with expiration checking and replay protection.
 See [Admin API Reference](ADMIN_API.md) for complete documentation.
 
 **Authentication:** All require `X-Admin-Key` header.
+
+**Available Endpoints:**
+- User management (invitation system)
+- Key rotation
+- Statistics and monitoring
+- Invitation generation and revocation
 
 ---
 
@@ -308,10 +364,20 @@ See [Admin API Reference](ADMIN_API.md) for complete documentation.
 | Code | Meaning | Example |
 |------|---------|---------|
 | 200 | OK | Successful request |
-| 400 | Bad Request | Invalid blinded element |
-| 403 | Forbidden | Sybil proof failed |
-| 401 | Unauthorized | Invalid admin key |
-| 500 | Internal Error | VOPRF evaluation failed |
+| 400 | Bad Request | Invalid blinded element or malformed JSON |
+| 401 | Unauthorized | Invalid admin key or token verification failed |
+| 403 | Forbidden | Sybil proof failed or required but missing |
+| 404 | Not Found | Unknown issuer in federation |
+| 500 | Internal Error | VOPRF evaluation failed or database error |
+
+**Error Response Format:**
+```json
+{
+  "error": "descriptive error message",
+  "code": "error_code",
+  "details": { /* optional additional context */ }
+}
+```
 
 ---
 
@@ -320,13 +386,51 @@ See [Admin API Reference](ADMIN_API.md) for complete documentation.
 **Issuer:**
 - Public: `GET /.well-known/issuer`
 - Optional Sybil proof: `POST /v1/oprf/issue`
+- Proof type depends on issuer configuration
 
 **WebAuthn:**
 - Public: Registration/Auth start endpoints
 - Session-bound: Finish endpoints require valid session ID
 
 **Verifier:**
-- All endpoints public (verification is the auth)
+- All endpoints public (token verification is the authentication)
+- Multi-issuer: Verifier maintains list of trusted issuers
 
 **Admin:**
 - All endpoints require `X-Admin-Key` header
+- Key must be at least 32 characters
+- Set via `ADMIN_API_KEY` environment variable
+
+---
+
+## Federation Configuration
+
+**Verifier Configuration:**
+
+To accept tokens from multiple issuers, configure the verifier with trusted issuer public keys:
+
+```bash
+# Environment variable (single issuer)
+ISSUER_URL=http://localhost:8081
+
+# Multi-issuer configuration (config file)
+# See FEDERATION.md for complete details
+```
+
+**Dynamic Issuer Discovery:**
+
+Verifiers can dynamically discover issuers via:
+1. Manual configuration (static list)
+2. HTTPS discovery (fetch from `.well-known/issuer`)
+3. Trust graph (Layer 2 federation with cryptographic vouching)
+
+See [FEDERATION.md](FEDERATION.md) for complete federation documentation.
+
+---
+
+## Related Documentation
+
+- [Multi-Issuer Federation](FEDERATION.md) - Federation architecture and configuration
+- [Admin API Reference](ADMIN_API.md) - Complete admin endpoint documentation
+- [Configuration Guide](CONFIGURATION.md) - Environment variables and settings
+- [How It Works](HOW_IT_WORKS.md) - VOPRF protocol details
