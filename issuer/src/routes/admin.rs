@@ -46,6 +46,9 @@ pub struct AdminState {
     pub federation_store: crate::federation_store::FederationStore,
     /// Admin API key for authentication
     pub api_key: String,
+    /// Reference to the WebAuthn credential store (if feature enabled)
+    #[cfg(feature = "human-gate-webauthn")]
+    pub webauthn_cred_store: crate::webauthn::CredentialStore,
 }
 
 // ============================================================================
@@ -202,6 +205,35 @@ pub struct VouchResponse {
 pub struct RevocationResponse {
     pub ok: bool,
     pub message: String,
+}
+
+/// Request to remove a WebAuthn credential
+#[derive(Debug, Deserialize)]
+pub struct RemoveCredentialRequest {
+    pub credential_id: String,
+}
+
+/// Response for credential removal
+#[derive(Debug, Serialize)]
+pub struct RemoveCredentialResponse {
+    pub ok: bool,
+    pub message: String,
+}
+
+/// WebAuthn credential summary for admin view
+#[derive(Debug, Serialize)]
+pub struct CredentialSummary {
+    pub credential_id: String,
+    pub user_id: String,
+    pub display_name: String,
+    pub registered_at: i64,
+    pub last_used_at: Option<i64>,
+}
+
+/// Query parameters for listing credentials
+#[derive(Debug, Deserialize)]
+pub struct ListCredentialsParams {
+    pub user_id: Option<String>,
 }
 
 /// User summary for list view
@@ -850,6 +882,85 @@ async fn list_revocations_handler(
 }
 
 // ============================================================================
+// WebAuthn Management Handlers
+// ============================================================================
+
+/// List all WebAuthn credentials, optionally filtered by user ID
+#[cfg(feature = "human-gate-webauthn")]
+async fn list_webauthn_credentials_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Query(params): Query<ListCredentialsParams>,
+) -> Result<Json<Vec<CredentialSummary>>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    // Get all credentials from store
+    let all_creds = state
+        .webauthn_cred_store
+        .list_all_credentials()
+        .await
+        .map_err(|e| AdminError::Internal(format!("Failed to list credentials: {}", e)))?;
+
+    // Filter by user_id if provided
+    let filtered_creds: Vec<CredentialSummary> = all_creds
+        .into_iter()
+        .filter(|cred| {
+            if let Some(ref user_id) = params.user_id {
+                cred.user_id_hash.contains(user_id) || cred.user_id_hash == *user_id
+            } else {
+                true
+            }
+        })
+        .map(|cred| {
+            let cred_id_b64 = base64ct::Base64UrlUnpadded::encode_string(&cred.cred_id);
+            CredentialSummary {
+                credential_id: cred_id_b64,
+                user_id: cred.user_id_hash.clone(),
+                display_name: format!("Credential for {}", &cred.user_id_hash[..8]),
+                registered_at: cred.registered_at,
+                last_used_at: cred.last_used_at,
+            }
+        })
+        .collect();
+
+    info!("Admin: listed WebAuthn credentials (count={})", filtered_creds.len());
+
+    Ok(Json(filtered_creds))
+}
+
+/// Remove a WebAuthn credential by ID
+#[cfg(feature = "human-gate-webauthn")]
+async fn remove_webauthn_credential_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Json(req): Json<RemoveCredentialRequest>,
+) -> Result<Json<RemoveCredentialResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    // Decode the credential ID from base64
+    let cred_id = base64ct::Base64UrlUnpadded::decode_vec(&req.credential_id)
+        .map_err(|_| AdminError::InvalidRequest("Invalid credential ID format".to_string()))?;
+
+    // Remove the credential
+    let deleted = state
+        .webauthn_cred_store
+        .delete(&cred_id)
+        .await
+        .map_err(|e| AdminError::Internal(format!("Failed to remove credential: {}", e)))?;
+
+    if !deleted {
+        return Err(AdminError::UserNotFound(req.credential_id.clone()));
+    }
+
+    warn!(credential_id = %req.credential_id, "Admin: removed WebAuthn credential");
+
+    Ok(Json(RemoveCredentialResponse {
+        ok: true,
+        message: format!("Credential {} removed successfully", req.credential_id),
+    }))
+}
+
+// ============================================================================
 // Router Configuration
 // ============================================================================
 
@@ -858,15 +969,19 @@ pub fn admin_router(
     multi_key_voprf: Arc<MultiKeyVoprfCore>,
     federation_store: crate::federation_store::FederationStore,
     api_key: String,
+    #[cfg(feature = "human-gate-webauthn")]
+    webauthn_cred_store: crate::webauthn::CredentialStore,
 ) -> axum::Router {
     let state = Arc::new(AdminState {
         invitation_system,
         multi_key_voprf,
         federation_store,
         api_key,
+        #[cfg(feature = "human-gate-webauthn")]
+        webauthn_cred_store,
     });
 
-    axum::Router::new()
+    let mut router = axum::Router::new()
         .route("/", axum::routing::get(admin_ui_handler))
         .route("/health", axum::routing::get(health_handler))
         .route("/stats", axum::routing::get(get_stats_handler))
@@ -894,6 +1009,15 @@ pub fn admin_router(
         .route("/federation/vouches/:issuer_id", axum::routing::delete(remove_vouch_handler))
         .route("/federation/revocations", axum::routing::get(list_revocations_handler))
         .route("/federation/revocations", axum::routing::post(add_revocation_handler))
-        .route("/federation/revocations/:issuer_id", axum::routing::delete(remove_revocation_handler))
-        .with_state(state)
+        .route("/federation/revocations/:issuer_id", axum::routing::delete(remove_revocation_handler));
+
+    // WebAuthn management routes (if feature enabled)
+    #[cfg(feature = "human-gate-webauthn")]
+    {
+        router = router
+            .route("/webauthn/credentials", axum::routing::get(list_webauthn_credentials_handler))
+            .route("/webauthn/credentials/remove", axum::routing::post(remove_webauthn_credential_handler));
+    }
+
+    router.with_state(state)
 }

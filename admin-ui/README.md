@@ -50,12 +50,11 @@ A minimal, single-page web interface for managing your Freebird deployment.
 - Real-time log refresh
 
 **🔐 WebAuthn Management Tab (NEW):**
-- Register new FIDO2 credentials and security keys
-- View all registered WebAuthn credentials
-- Search credentials by user ID
-- Monitor credential usage and creation dates
-- Remove credentials with one click
-- Support for biometric authentication and hardware keys
+- View all registered WebAuthn credentials ✅
+- Search credentials by user ID ✅
+- Monitor credential usage and creation dates ✅
+- Remove credentials with one click ✅
+- ⚠️ **Note:** Credential registration must be done through the user-facing `/webauthn` endpoints (requires browser WebAuthn API)
 
 ## Access
 
@@ -108,12 +107,12 @@ http://localhost:8081/admin
 | `/admin/keys` | GET | List all cryptographic keys |
 | `/admin/keys/rotate` | POST | Rotate to a new key with grace period |
 | `/admin/keys/cleanup` | POST | Remove expired keys |
-| `/admin/tokens/issue` | POST | Issue a test VOPRF token for a user |
-| `/admin/tokens/verify` | POST | Verify a token signature |
-| `/admin/audit` | GET | Retrieve audit logs with filtering |
-| `/admin/webauthn/register` | POST | Register a new WebAuthn credential |
-| `/admin/webauthn/credentials` | GET | List all WebAuthn credentials |
-| `/admin/webauthn/credentials/remove` | POST | Remove a WebAuthn credential |
+| `/admin/tokens/issue` | POST | Issue a test VOPRF token for a user ⚠️ *Not yet implemented* |
+| `/admin/tokens/verify` | POST | Verify a token signature ⚠️ *Not yet implemented* |
+| `/admin/audit` | GET | Retrieve audit logs with filtering ⚠️ *Not yet implemented* |
+| `/admin/webauthn/register` | POST | Register a new WebAuthn credential ⚠️ *Not implemented* (use user-facing `/webauthn` endpoints) |
+| `/admin/webauthn/credentials` | GET | List all WebAuthn credentials ✅ *Implemented* |
+| `/admin/webauthn/credentials/remove` | POST | Remove a WebAuthn credential ✅ *Implemented* |
 
 ## Development
 

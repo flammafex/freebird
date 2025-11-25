@@ -78,6 +78,20 @@ impl CredentialStore {
             Self::InMemory(s) => s.update_last_used(cred_id).await,
         }
     }
+
+    pub async fn delete(&self, cred_id: &[u8]) -> Result<bool> {
+        match self {
+            Self::Redis(s) => s.delete(cred_id).await,
+            Self::InMemory(s) => s.delete(cred_id).await,
+        }
+    }
+
+    pub async fn list_all_credentials(&self) -> Result<Vec<StoredCredential>> {
+        match self {
+            Self::Redis(s) => s.list_all_credentials().await,
+            Self::InMemory(s) => s.list_all_credentials().await,
+        }
+    }
 }
 
 // --- Redis Backend ---
@@ -296,6 +310,38 @@ impl RedisCredStore {
         let keys: Vec<String> = conn.keys("webauthn:cred:*").await?;
         Ok(keys.len())
     }
+
+    /// List all credentials in the system
+    pub async fn list_all_credentials(&self) -> Result<Vec<StoredCredential>> {
+        let mut conn = self.get_connection().await?;
+        let keys: Vec<String> = conn.keys("webauthn:cred:*").await?;
+
+        let mut credentials = Vec::new();
+        for key in keys {
+            let cred_json: Option<String> = conn.get(&key).await?;
+            if let Some(json) = cred_json {
+                match serde_json::from_str::<StoredCredential>(&json) {
+                    Ok(stored) => {
+                        credentials.push(StoredCredential {
+                            cred_id: stored.cred_id,
+                            credential: stored.credential,
+                            user_id_hash: stored.user_id_hash,
+                            registered_at: stored.registered_at,
+                            last_used_at: stored.last_used_at,
+                        });
+                    }
+                    Err(e) => warn!(
+                        key = %key,
+                        error = %e,
+                        "Failed to deserialize credential, skipping"
+                    ),
+                }
+            }
+        }
+
+        debug!(count = credentials.len(), "Listed all credentials");
+        Ok(credentials)
+    }
 }
 
 /// In-memory credential store (for development/testing)
@@ -353,6 +399,10 @@ impl InMemoryCredStore {
 
     pub async fn count_credentials(&self) -> Result<usize> {
         Ok(self.credentials.read().await.len())
+    }
+
+    pub async fn list_all_credentials(&self) -> Result<Vec<StoredCredential>> {
+        Ok(self.credentials.read().await.values().cloned().collect())
     }
 }
 

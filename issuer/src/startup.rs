@@ -469,7 +469,14 @@ impl Application {
         if let Some(key) = config.admin_api_key {
             if key.len() >= 32 {
                 if let Some(inv_sys) = invitation_system {
-                    let admin = routes::admin_router(inv_sys, voprf.clone(), federation_store.clone(), key);
+                    let admin = routes::admin_router(
+                        inv_sys,
+                        voprf.clone(),
+                        federation_store.clone(),
+                        key,
+                        #[cfg(feature = "human-gate-webauthn")]
+                        webauthn_state.as_ref().expect("WebAuthn feature enabled but state not initialized").cred_store.clone(),
+                    );
                     app = app.nest("/admin", admin);
                 }
             }
