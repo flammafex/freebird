@@ -4,18 +4,21 @@ A minimal, single-page web interface for managing your Freebird deployment.
 
 ## Features
 
-### Current Features (Phases 1-3 Complete)
+### Current Features (Phases 1-4 Complete)
 
 **📊 Dashboard Tab:**
 - View real-time system statistics
 - Monitor user counts, invitations, and redemptions
 - Check banned user statistics and system health
 - One-click refresh
+- **NEW:** Real-time activity charts with interactive visualization
+- **NEW:** Track user growth, invitations, and redemptions over time
 
 **👥 User Management Tab:**
 - View all users with search and filtering
 - Inspect detailed user profiles with reputation scores
 - View invitation trees and relationships
+- **NEW:** Interactive invitation tree visualization with Canvas graphics
 - Ban individual users or entire invitation trees (recursive bans)
 - Monitor user activity and invitation usage
 
@@ -32,12 +35,27 @@ A minimal, single-page web interface for managing your Freebird deployment.
 - Clean up expired keys
 - Monitor key status, public keys, and expiration times
 
-### Future Enhancements
+**🎟️ Token Testing Tab (NEW):**
+- Issue test VOPRF tokens for any user ID
+- Verify token signatures inline
+- Copy tokens and signatures to clipboard
+- Auto-fill verification form after issuance
+- View token expiration and validation details
 
-- **Phase 4:** Advanced visualization (interactive invitation tree graphs, real-time charts)
-- **Token Testing:** Inline token issuance and verification testing
-- **Audit Logs:** Comprehensive activity logging and search
-- **WebAuthn Management:** Register and manage FIDO2 credentials
+**📝 Audit Logs Tab (NEW):**
+- View comprehensive system activity logs
+- Search and filter logs by keyword
+- Filter by log level (info, warning, error, success)
+- Track user actions and system events
+- Real-time log refresh
+
+**🔐 WebAuthn Management Tab (NEW):**
+- Register new FIDO2 credentials and security keys
+- View all registered WebAuthn credentials
+- Search credentials by user ID
+- Monitor credential usage and creation dates
+- Remove credentials with one click
+- Support for biometric authentication and hardware keys
 
 ## Access
 
@@ -59,11 +77,12 @@ http://localhost:8081/admin
 
 ## Architecture
 
-- **Single HTML file** (~1300 lines) with embedded CSS and JavaScript
+- **Single HTML file** (~2100 lines) with embedded CSS and JavaScript
 - **No build step** required - served directly from the issuer binary
 - **No external dependencies** except water.css (CDN)
-- **Four-tab interface** with smooth navigation and state management
+- **Seven-tab interface** with smooth navigation and state management
 - **Modular JavaScript** with clean API client architecture
+- **Canvas-based visualizations** for charts and tree graphs
 - **LocalStorage** for API key persistence
 - **Responsive design** works on desktop and mobile browsers
 
@@ -89,6 +108,12 @@ http://localhost:8081/admin
 | `/admin/keys` | GET | List all cryptographic keys |
 | `/admin/keys/rotate` | POST | Rotate to a new key with grace period |
 | `/admin/keys/cleanup` | POST | Remove expired keys |
+| `/admin/tokens/issue` | POST | Issue a test VOPRF token for a user |
+| `/admin/tokens/verify` | POST | Verify a token signature |
+| `/admin/audit` | GET | Retrieve audit logs with filtering |
+| `/admin/webauthn/register` | POST | Register a new WebAuthn credential |
+| `/admin/webauthn/credentials` | GET | List all WebAuthn credentials |
+| `/admin/webauthn/credentials/remove` | POST | Remove a WebAuthn credential |
 
 ## Development
 
