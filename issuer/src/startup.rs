@@ -7,7 +7,8 @@ use crate::{
     keys, multi_key_voprf, routes,
     sybil_resistance::{
         self, invitation::{InvitationConfig, InvitationSystem},
-        CombinedSybilResistance, ProofOfWork, RateLimit, SybilResistance,
+        CombinedSybilResistance, CombinedOr, CombinedAnd, CombinedThreshold,
+        ProofOfWork, RateLimit, SybilResistance,
     },
     AppStateWithSybil,
 };
@@ -258,10 +259,172 @@ impl Application {
                 info!("✅ Sybil resistance: Federated Trust");
                 Some(sys)
             }
-            "combined" => Some(Arc::new(CombinedSybilResistance::new(vec![
-                Box::new(ProofOfWork::new(config.sybil_config.pow_difficulty)),
-                Box::new(RateLimit::new(Duration::from_secs(config.sybil_config.rate_limit_secs))),
-            ]))),
+            "combined" => {
+                info!("🔧 Building combined Sybil resistance with {} mode", config.sybil_config.combined_mode);
+
+                // Build mechanisms from config list
+                let mut mechanisms: Vec<Arc<dyn SybilResistance>> = Vec::new();
+
+                for mechanism_name in &config.sybil_config.combined_mechanisms {
+                    let mechanism_name = mechanism_name.trim();
+                    info!("  Adding mechanism: {}", mechanism_name);
+
+                    match mechanism_name {
+                        "pow" | "proof_of_work" => {
+                            mechanisms.push(Arc::new(ProofOfWork::new(config.sybil_config.pow_difficulty)));
+                        }
+                        "rate_limit" => {
+                            mechanisms.push(Arc::new(RateLimit::new(Duration::from_secs(config.sybil_config.rate_limit_secs))));
+                        }
+                        "invitation" => {
+                            let inv_conf = InvitationConfig {
+                                invites_per_user: config.sybil_config.invite_per_user,
+                                invite_cooldown_secs: config.sybil_config.invite_cooldown_secs,
+                                invite_expires_secs: config.sybil_config.invite_expires_secs,
+                                new_user_can_invite_after_secs: config.sybil_config.invite_new_user_wait_secs,
+                                persistence_path: config.sybil_config.invite_persistence_path.clone(),
+                                autosave_interval_secs: config.sybil_config.invite_autosave_interval_secs,
+                            };
+                            let signing_key = SigningKey::random(&mut OsRng);
+                            let sys = InvitationSystem::load_or_create(signing_key, inv_conf)
+                                .await
+                                .context("Failed to load invitation system for combined mode")?;
+                            mechanisms.push(Arc::new(sys));
+                        }
+                        #[cfg(feature = "human-gate-webauthn")]
+                        "webauthn" => {
+                            if let Some(wa) = &webauthn_state {
+                                mechanisms.push(Arc::new(webauthn::WebAuthnGate::new(
+                                    wa.clone(),
+                                    config.sybil_config.webauthn_max_proof_age
+                                )));
+                            } else {
+                                warn!("⚠️  WebAuthn requested in combined mode but not configured, skipping");
+                            }
+                        }
+                        "progressive_trust" => {
+                            let levels: Vec<sybil_resistance::TrustLevel> = config.sybil_config.progressive_trust_levels
+                                .iter()
+                                .filter_map(|level_str| {
+                                    let parts: Vec<&str> = level_str.split(':').collect();
+                                    if parts.len() == 3 {
+                                        let min_age_secs = parts[0].parse().ok()?;
+                                        let max_tokens_per_period = parts[1].parse().ok()?;
+                                        let cooldown_secs = parts[2].parse().ok()?;
+                                        Some(sybil_resistance::TrustLevel {
+                                            min_age_secs,
+                                            max_tokens_per_period,
+                                            cooldown_secs,
+                                        })
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .collect();
+
+                            let pt_config = sybil_resistance::ProgressiveTrustConfig {
+                                levels,
+                                persistence_path: config.sybil_config.progressive_trust_persistence_path.clone(),
+                                autosave_interval_secs: config.sybil_config.progressive_trust_autosave_interval,
+                                hmac_secret: config.sybil_config.progressive_trust_hmac_secret.clone(),
+                                user_id_salt: config.sybil_config.progressive_trust_salt.clone(),
+                            };
+
+                            let sys = sybil_resistance::ProgressiveTrustSystem::new(pt_config)
+                                .await
+                                .context("Failed to initialize Progressive Trust for combined mode")?;
+                            mechanisms.push(sys);
+                        }
+                        "proof_of_diversity" => {
+                            let pod_config = sybil_resistance::ProofOfDiversityConfig {
+                                min_score: config.sybil_config.proof_of_diversity_min_score,
+                                persistence_path: config.sybil_config.proof_of_diversity_persistence_path.clone(),
+                                autosave_interval_secs: config.sybil_config.proof_of_diversity_autosave_interval,
+                                hmac_secret: config.sybil_config.proof_of_diversity_hmac_secret.clone(),
+                                fingerprint_salt: config.sybil_config.proof_of_diversity_fingerprint_salt.clone(),
+                            };
+
+                            let sys = sybil_resistance::ProofOfDiversitySystem::new(pod_config)
+                                .await
+                                .context("Failed to initialize Proof of Diversity for combined mode")?;
+                            mechanisms.push(sys);
+                        }
+                        "multi_party_vouching" => {
+                            let mpv_config = sybil_resistance::MultiPartyVouchingConfig {
+                                required_vouchers: config.sybil_config.multi_party_vouching_required_vouchers,
+                                voucher_cooldown_secs: config.sybil_config.multi_party_vouching_cooldown_secs,
+                                vouch_expires_secs: config.sybil_config.multi_party_vouching_expires_secs,
+                                new_user_can_vouch_after_secs: config.sybil_config.multi_party_vouching_new_user_wait_secs,
+                                persistence_path: config.sybil_config.multi_party_vouching_persistence_path.clone(),
+                                autosave_interval_secs: config.sybil_config.multi_party_vouching_autosave_interval,
+                                hmac_secret: config.sybil_config.multi_party_vouching_hmac_secret.clone(),
+                                user_id_salt: config.sybil_config.multi_party_vouching_salt.clone(),
+                            };
+
+                            let sys = sybil_resistance::MultiPartyVouchingSystem::new(mpv_config)
+                                .await
+                                .context("Failed to initialize Multi-Party Vouching for combined mode")?;
+                            mechanisms.push(sys);
+                        }
+                        "federated_trust" => {
+                            let trust_policy = common::federation::TrustPolicy {
+                                enabled: config.sybil_config.federated_trust_enabled,
+                                max_trust_depth: config.sybil_config.federated_trust_max_depth,
+                                min_trust_paths: config.sybil_config.federated_trust_min_paths,
+                                require_direct_trust: config.sybil_config.federated_trust_require_direct,
+                                trusted_roots: config.sybil_config.federated_trust_trusted_roots.clone(),
+                                blocked_issuers: config.sybil_config.federated_trust_blocked_issuers.clone(),
+                                refresh_interval_secs: config.sybil_config.federated_trust_cache_ttl_secs,
+                                min_trust_level: config.sybil_config.federated_trust_min_trust_level,
+                            };
+
+                            let ft_config = sybil_resistance::FederatedTrustConfig {
+                                trust_policy,
+                                federation_store: Arc::new(federation_store.clone()),
+                                our_issuer_id: config.issuer_id.clone(),
+                                cache_ttl_secs: config.sybil_config.federated_trust_cache_ttl_secs,
+                                max_token_age_secs: config.sybil_config.federated_trust_max_token_age_secs,
+                            };
+
+                            let sys = sybil_resistance::FederatedTrustSystem::new(ft_config)
+                                .await
+                                .context("Failed to initialize Federated Trust for combined mode")?;
+                            mechanisms.push(sys);
+                        }
+                        unknown => {
+                            warn!("⚠️  Unknown mechanism '{}' in SYBIL_COMBINED_MECHANISMS, skipping", unknown);
+                        }
+                    }
+                }
+
+                if mechanisms.is_empty() {
+                    warn!("⚠️  No valid mechanisms configured for combined mode");
+                    None
+                } else {
+                    // Create the appropriate combiner based on mode
+                    let combiner: Arc<dyn SybilResistance> = match config.sybil_config.combined_mode.to_lowercase().as_str() {
+                        "or" => {
+                            info!("✅ Sybil resistance: Combined OR mode with {} mechanisms", mechanisms.len());
+                            Arc::new(CombinedOr::new(mechanisms))
+                        }
+                        "and" => {
+                            info!("✅ Sybil resistance: Combined AND mode with {} mechanisms", mechanisms.len());
+                            Arc::new(CombinedAnd::new(mechanisms))
+                        }
+                        "threshold" => {
+                            let threshold = config.sybil_config.combined_threshold as usize;
+                            info!("✅ Sybil resistance: Combined Threshold mode ({}/{} mechanisms)", threshold, mechanisms.len());
+                            Arc::new(CombinedThreshold::new(mechanisms, threshold)
+                                .context("Failed to create threshold combiner")?)
+                        }
+                        unknown => {
+                            warn!("⚠️  Unknown combined mode '{}', defaulting to OR", unknown);
+                            Arc::new(CombinedOr::new(mechanisms))
+                        }
+                    };
+                    Some(combiner)
+                }
+            }
             _ => None
         };
 

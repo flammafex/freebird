@@ -228,6 +228,10 @@ pub enum SybilProof {
         token_exp: i64,            // Expiration timestamp of source token
         trust_path: Vec<String>,   // Trust path from source to us (optional)
     },
+    /// Multiple proofs for AND/threshold combination modes
+    Multi {
+        proofs: Vec<SybilProof>,
+    },
     None,
 }
 

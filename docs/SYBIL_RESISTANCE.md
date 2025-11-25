@@ -579,19 +579,50 @@ See [Federated Trust Guide](FEDERATED_TRUST.md) for complete documentation.
 
 ## 10. Combined Resistance (Defense-in-Depth)
 
+Combine multiple Sybil resistance mechanisms with flexible logic modes.
+
 ### Configuration
+
+#### Basic Configuration (OR mode - default)
 
 ```bash
 export SYBIL_RESISTANCE=combined
+export SYBIL_COMBINED_MECHANISMS=pow,rate_limit
+export SYBIL_COMBINED_MODE=or  # Default
 export SYBIL_POW_DIFFICULTY=20
 export SYBIL_RATE_LIMIT_SECS=3600
 ./target/release/issuer
 ```
 
-### How It Works
+#### Advanced Configuration (Custom Mechanism List)
 
-Client must provide proof satisfying **at least one** configured mechanism:
+```bash
+export SYBIL_RESISTANCE=combined
+export SYBIL_COMBINED_MECHANISMS=pow,progressive_trust,invitation
+export SYBIL_COMBINED_MODE=or
+# Configure each mechanism as needed
+export SYBIL_POW_DIFFICULTY=24
+export SYBIL_PROGRESSIVE_TRUST_LEVELS="0:1:86400,2592000:10:3600"
+export SYBIL_INVITE_PER_USER=5
+./target/release/issuer
+```
 
+### Available Combination Modes
+
+#### 1. OR Mode (Flexible Choice)
+
+**Configuration:**
+```bash
+export SYBIL_COMBINED_MODE=or
+export SYBIL_COMBINED_MECHANISMS=pow,rate_limit,invitation
+```
+
+**How It Works:**
+- Client provides **ONE** proof
+- Proof must satisfy **ANY** configured mechanism
+- Client chooses which mechanism to use
+
+**Example Proof (PoW):**
 ```json
 {
   "sybil_proof": {
@@ -603,42 +634,201 @@ Client must provide proof satisfying **at least one** configured mechanism:
 }
 ```
 
-**OR**
-
+**Example Proof (Invitation):**
 ```json
 {
   "sybil_proof": {
-    "type": "rate_limit",
-    "client_id": "hashed_id",
-    "timestamp": 1699454445
+    "type": "invitation",
+    "code": "inv_abc123",
+    "signature": "base64_signature"
   }
 }
 ```
 
-### Current Implementation
+**Use Cases:**
+- ✅ **Graceful degradation** (fallback mechanisms)
+- ✅ **User choice** (different user preferences)
+- ✅ **Transition periods** (migrate between mechanisms)
 
-**Accepts ANY valid proof type** (OR logic).
+#### 2. AND Mode (Maximum Security)
 
-**Future Enhancement:** Require ALL configured mechanisms (AND logic):
-- Must have valid PoW AND pass rate limit
-- Stronger defense but more friction
+**Configuration:**
+```bash
+export SYBIL_COMBINED_MODE=and
+export SYBIL_COMBINED_MECHANISMS=pow,rate_limit,progressive_trust
+```
+
+**How It Works:**
+- Client provides **MULTIPLE** proofs (one for each mechanism)
+- **ALL** mechanisms must verify successfully
+- True defense-in-depth
+
+**Example Proof:**
+```json
+{
+  "sybil_proof": {
+    "type": "multi",
+    "proofs": [
+      {
+        "type": "proof_of_work",
+        "nonce": 123456,
+        "input": "...",
+        "timestamp": 1699454445
+      },
+      {
+        "type": "rate_limit",
+        "client_id": "hashed_id",
+        "timestamp": 1699454445
+      },
+      {
+        "type": "progressive_trust",
+        "user_id_hash": "...",
+        "first_seen": 1699454445,
+        "tokens_issued": 10,
+        "last_issuance": 1699454445,
+        "hmac_proof": "..."
+      }
+    ]
+  }
+}
+```
+
+**Use Cases:**
+- ✅ **Maximum security** (multiple independent barriers)
+- ✅ **High-value resources** (critical infrastructure)
+- ✅ **Regulated environments** (compliance requirements)
+
+**Trade-offs:**
+- ⚠️ **Higher friction** (more proofs to generate)
+- ⚠️ **Slower** (multiple verifications)
+- ⚠️ **More complex client implementation**
+
+#### 3. Threshold Mode (Flexible Security)
+
+**Configuration:**
+```bash
+export SYBIL_COMBINED_MODE=threshold
+export SYBIL_COMBINED_THRESHOLD=2
+export SYBIL_COMBINED_MECHANISMS=pow,rate_limit,progressive_trust,invitation
+```
+
+**How It Works:**
+- Client provides **MULTIPLE** proofs
+- At least **N** mechanisms must verify successfully
+- Balances security and flexibility
+
+**Example (2 out of 4 required):**
+```json
+{
+  "sybil_proof": {
+    "type": "multi",
+    "proofs": [
+      {
+        "type": "proof_of_work",
+        "nonce": 123456,
+        "input": "...",
+        "timestamp": 1699454445
+      },
+      {
+        "type": "progressive_trust",
+        "user_id_hash": "...",
+        "first_seen": 1699454445,
+        "tokens_issued": 10,
+        "last_issuance": 1699454445,
+        "hmac_proof": "..."
+      }
+    ]
+  }
+}
+```
+
+**Use Cases:**
+- ✅ **Adaptive security** (client chooses strongest proofs)
+- ✅ **Partial failures** (some mechanisms may be unavailable)
+- ✅ **Progressive hardening** (increase threshold over time)
+
+**Common Configurations:**
+- **2 of 3:** Moderate security, good availability
+- **3 of 5:** High security, flexible proof selection
+- **4 of 6:** Maximum security, still allows some failures
+
+### Supported Mechanisms in Combined Mode
+
+All mechanisms can be combined:
+
+| Mechanism | Config Name | Requirements |
+|-----------|-------------|--------------|
+| Proof of Work | `pow` | SYBIL_POW_DIFFICULTY |
+| Rate Limiting | `rate_limit` | SYBIL_RATE_LIMIT_SECS |
+| Invitation | `invitation` | SYBIL_INVITE_* configs |
+| Progressive Trust | `progressive_trust` | SYBIL_PROGRESSIVE_TRUST_* configs |
+| Proof of Diversity | `proof_of_diversity` | SYBIL_PROOF_OF_DIVERSITY_* configs |
+| Multi-Party Vouching | `multi_party_vouching` | SYBIL_MULTI_PARTY_VOUCHING_* configs |
+| Federated Trust | `federated_trust` | SYBIL_FEDERATED_TRUST_* configs |
+| WebAuthn | `webauthn` | WEBAUTHN_* configs |
+
+### Example Configurations
+
+#### Light Security (Public API)
+```bash
+export SYBIL_COMBINED_MODE=or
+export SYBIL_COMBINED_MECHANISMS=pow,rate_limit
+export SYBIL_POW_DIFFICULTY=20
+export SYBIL_RATE_LIMIT_SECS=3600
+```
+
+#### Medium Security (Community Service)
+```bash
+export SYBIL_COMBINED_MODE=threshold
+export SYBIL_COMBINED_THRESHOLD=2
+export SYBIL_COMBINED_MECHANISMS=pow,progressive_trust,invitation
+export SYBIL_POW_DIFFICULTY=24
+export SYBIL_INVITE_PER_USER=3
+```
+
+#### Maximum Security (Critical Infrastructure)
+```bash
+export SYBIL_COMBINED_MODE=and
+export SYBIL_COMBINED_MECHANISMS=invitation,progressive_trust,proof_of_diversity
+export SYBIL_INVITE_PER_USER=1
+export SYBIL_PROGRESSIVE_TRUST_LEVELS="7776000:1:86400"  # 90 days wait
+export SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE=70
+```
+
+#### Defense-in-Depth (Enterprise)
+```bash
+export SYBIL_COMBINED_MODE=threshold
+export SYBIL_COMBINED_THRESHOLD=3
+export SYBIL_COMBINED_MECHANISMS=pow,progressive_trust,proof_of_diversity,multi_party_vouching,webauthn
+export SYBIL_POW_DIFFICULTY=24
+export SYBIL_PROGRESSIVE_TRUST_LEVELS="0:1:86400,2592000:10:3600"
+export SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE=50
+export SYBIL_MULTI_PARTY_VOUCHING_REQUIRED=3
+# WebAuthn config...
+```
 
 ### Properties
 
 **Advantages:**
-- ✅✅✅ **Layered defense** (multiple barriers)
-- ✅ **Flexibility** (clients choose mechanism)
-- ✅ **Adaptive security** (add/remove mechanisms)
+- ✅✅✅ **Maximum flexibility** (choose mode and mechanisms)
+- ✅✅✅ **True defense-in-depth** (AND/Threshold modes)
+- ✅✅ **Graceful degradation** (OR/Threshold modes)
+- ✅ **Adaptive security** (adjust threshold dynamically)
+- ✅ **Mix complementary mechanisms** (computational + social + temporal)
 
 **Disadvantages:**
 - ⚠️ **Increased complexity** (multiple verification paths)
-- ⚠️ **Current OR logic** (not true defense-in-depth)
+- ⚠️ **Higher overhead** (AND/Threshold modes)
+- ⚠️ **More configuration** (each mechanism needs setup)
+- ⚠️ **Client complexity** (multi-proof generation for AND/Threshold)
 
 ### Use Cases
 
-- ✅ **High-security applications** (need multiple barriers)
-- ✅ **Graceful degradation** (if one mechanism fails, others work)
-- ✅ **Transition periods** (introduce new mechanism while keeping old)
+- ✅ **High-security applications** (need multiple independent barriers)
+- ✅ **Critical infrastructure** (AND mode with strong mechanisms)
+- ✅ **Gradual hardening** (start with OR, move to Threshold, then AND)
+- ✅ **Hybrid environments** (different user classes with different requirements)
+- ✅ **Regulatory compliance** (meet multiple security standards)
 
 ---
 
