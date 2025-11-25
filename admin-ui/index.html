@@ -11,10 +11,11 @@
             --success-color: #2ecc71;
             --error-color: #e74c3c;
             --warning-color: #f39c12;
+            --text-muted: #888;
         }
 
         body {
-            max-width: 1000px;
+            max-width: 1100px;
             margin: 0 auto;
             padding: 20px;
         }
@@ -74,6 +75,7 @@
             gap: 0;
             margin-bottom: 25px;
             border-bottom: 2px solid var(--border);
+            overflow-x: auto;
         }
 
         .tab {
@@ -84,6 +86,7 @@
             border-bottom: 3px solid transparent;
             transition: all 0.2s;
             font-size: 1em;
+            white-space: nowrap;
         }
 
         .tab:hover {
@@ -207,6 +210,65 @@
             margin-top: 5px;
         }
 
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 15px;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 10px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        th {
+            background: var(--background-alt);
+        }
+
+        .status-active {
+            color: var(--success-color);
+            font-weight: bold;
+        }
+
+        .status-banned {
+            color: var(--error-color);
+            font-weight: bold;
+        }
+
+        .action-btn {
+            padding: 4px 8px;
+            font-size: 0.85em;
+            margin-right: 5px;
+        }
+
+        /* Modal */
+        dialog {
+            background: var(--background);
+            color: var(--text-main);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            max-width: 600px;
+            width: 90%;
+            padding: 20px;
+        }
+
+        dialog::backdrop {
+            background: rgba(0, 0, 0, 0.5);
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+
         /* Messages */
         .message {
             padding: 15px;
@@ -270,15 +332,28 @@
         .mt-20 {
             margin-top: 20px;
         }
+        
+        /* Key Management */
+        .key-card {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+            background: var(--background);
+        }
+        .key-card.active { border-left: 5px solid var(--success-color); }
+        .key-card.deprecated { border-left: 5px solid var(--warning-color); }
     </style>
 </head>
 <body>
     <div class="header">
         <h1>🕊️ Freebird Admin</h1>
         <p>Authorization without identity. Privacy without compromise.</p>
+        <div id="systemHealthBadge" style="margin-top: 10px;">
+            <span class="badge">Checking...</span>
+        </div>
     </div>
-
-    <!-- API Key Configuration -->
+ccccc
     <div class="api-key-section">
         <label for="apiKey"><strong>Admin API Key</strong></label>
         <div class="form-row">
@@ -296,14 +371,12 @@
         <div id="apiKeyStatus" class="api-key-status"></div>
     </div>
 
-    <!-- Tab Navigation -->
     <div class="tabs">
         <button class="tab active" onclick="switchTab('dashboard')">📊 Dashboard</button>
+        <button class="tab" onclick="switchTab('users')">👥 Users</button>
         <button class="tab" onclick="switchTab('invitations')">🎫 Invitations</button>
-        <!-- Future tabs: Users, Keys, Settings -->
-    </div>
+        </div>
 
-    <!-- Dashboard Tab -->
     <div id="dashboard-tab" class="tab-content active">
         <h2>System Statistics</h2>
         <button onclick="loadStats()">🔄 Refresh</button>
@@ -313,7 +386,28 @@
         </div>
     </div>
 
-    <!-- Invitations Tab -->
+    <div id="users-tab" class="tab-content">
+        <h2>User Management</h2>
+        
+        <div class="form-row">
+            <div class="form-field">
+                <input type="text" id="userSearch" placeholder="Search users..." onkeyup="filterUsers()">
+            </div>
+            <button onclick="loadUsers()">🔄 Refresh List</button>
+        </div>
+
+        <div id="usersContainer">
+            <p class="text-small">Loading users...</p>
+        </div>
+    </div>
+
+    <dialog id="userModal">
+        <div id="userModalContent"></div>
+        <div style="margin-top: 20px; text-align: right;">
+            <button onclick="document.getElementById('userModal').close()">Close</button>
+        </div>
+    </dialog>
+
     <div id="invitations-tab" class="tab-content">
         <div class="form-section">
             <h3>🎫 Create Invitations</h3>
@@ -389,7 +483,8 @@
 
         let state = {
             apiKey: localStorage.getItem('freebirdAdminKey') || '',
-            currentTab: 'dashboard'
+            currentTab: 'dashboard',
+            users: []
         };
 
         // ============================================================================
@@ -419,7 +514,7 @@
                     const data = await response.json().catch(() => null);
 
                     if (!response.ok) {
-                        throw new Error(data?.message || `HTTP ${response.status}: ${response.statusText}`);
+                        throw new Error(data?.message || data?.error || `HTTP ${response.status}: ${response.statusText}`);
                     }
 
                     return data;
@@ -435,6 +530,24 @@
 
             async getStats() {
                 return this.request('/stats');
+            }
+
+            async getUsers() {
+                return this.request('/users');
+            }
+
+            async getUserDetails(userId) {
+                return this.request(`/users/${userId}`);
+            }
+
+            async banUser(userId, banTree) {
+                return this.request('/users/ban', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        user_id: userId,
+                        ban_tree: banTree
+                    })
+                });
             }
 
             async createInvitations(inviterId, count) {
@@ -485,6 +598,11 @@
             document.getElementById(`${tabName}-tab`).classList.add('active');
 
             state.currentTab = tabName;
+
+            // Auto-load data
+            if (tabName === 'users' && state.users.length === 0) {
+                loadUsers();
+            }
         }
 
         function copyToClipboard(text, buttonElement) {
@@ -558,10 +676,8 @@
                 showMessage('statsContainer', 'warning', '⚠️ Please configure your API key first');
                 return;
             }
-
             const container = document.getElementById('statsContainer');
             container.innerHTML = '<p><span class="spinner"></span> Loading statistics...</p>';
-
             try {
                 const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
                 const data = await api.getStats();
@@ -593,9 +709,171 @@
                         </div>
                     </div>
                     <p class="text-small" style="opacity: 0.6;">Last updated: ${timestamp}</p>
-                `;
+                `;s
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ Failed to load stats: ${error.message}</div>`;
+            }        
+        }
+
+        // ============================================================================
+        // User Management Functions
+        // ============================================================================
+
+        async function loadUsers() {
+            if (!state.apiKey) {
+                showMessage('usersContainer', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const container = document.getElementById('usersContainer');
+            container.innerHTML = '<p><span class="spinner"></span> Loading users...</p>';
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const users = await api.getUsers();
+                state.users = users; // Cache for filtering
+                renderUsersTable(users);
+            } catch (error) {
+                container.innerHTML = `<div class="message error">❌ Failed to load users: ${error.message}</div>`;
+            }
+        }
+
+        function renderUsersTable(users) {
+            const container = document.getElementById('usersContainer');
+            
+            if (users.length === 0) {
+                container.innerHTML = '<p>No users found.</p>';
+                return;
+            }
+
+            let html = `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>User ID</th>
+                            <th>Invites Left</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            users.forEach(user => {
+                const statusClass = user.banned ? 'status-banned' : 'status-active';
+                const statusText = user.banned ? 'BANNED' : 'Active';
+                
+                html += `
+                    <tr>
+                        <td class="text-mono">${user.user_id}</td>
+                        <td>${user.invites_remaining}</td>
+                        <td class="${statusClass}">${statusText}</td>
+                        <td>
+                            <button class="action-btn" onclick="showUserDetails('${user.user_id}')">Details</button>
+                            ${!user.banned ? `<button class="action-btn" style="background: var(--error-color); color: white;" onclick="confirmBan('${user.user_id}')">Ban</button>` : ''}
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        function filterUsers() {
+            const query = document.getElementById('userSearch').value.toLowerCase();
+            const filtered = state.users.filter(user => 
+                user.user_id.toLowerCase().includes(query)
+            );
+            renderUsersTable(filtered);
+        }
+
+        async function showUserDetails(userId) {
+            const modal = document.getElementById('userModal');
+            const content = document.getElementById('userModalContent');
+            
+            content.innerHTML = '<p><span class="spinner"></span> Loading details...</p>';
+            modal.showModal();
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const details = await api.getUserDetails(userId);
+                
+                const joined = new Date(details.joined_at * 1000).toLocaleString();
+                const lastInvite = details.last_invite_at ? new Date(details.last_invite_at * 1000).toLocaleString() : 'Never';
+                
+                let inviteesHtml = 'None';
+                if (details.invitees.length > 0) {
+                    inviteesHtml = '<ul style="margin: 0; padding-left: 20px;">' + 
+                        details.invitees.map(i => `<li class="text-mono">${i}</li>`).join('') + 
+                        '</ul>';
+                }
+
+                let html = `
+                    <h2>User: <span class="text-mono">${details.user_id}</span></h2>
+                    
+                    <div class="detail-row">
+                        <strong>Status:</strong>
+                        <span class="${details.banned ? 'status-banned' : 'status-active'}">
+                            ${details.banned ? 'BANNED' : 'Active'}
+                        </span>
+                    </div>
+                    <div class="detail-row">
+                        <strong>Joined:</strong>
+                        <span>${joined}</span>
+                    </div>
+                    <div class="detail-row">
+                        <strong>Reputation:</strong>
+                        <span>${(details.reputation * 100).toFixed(0)}%</span>
+                    </div>
+                    <div class="detail-row">
+                        <strong>Invites Remaining:</strong>
+                        <span>${details.invites_remaining}</span>
+                    </div>
+                    <div class="detail-row">
+                        <strong>Invites Used:</strong>
+                        <span>${details.invites_used.length}</span>
+                    </div>
+                    <div class="detail-row">
+                        <strong>Last Invite Sent:</strong>
+                        <span>${lastInvite}</span>
+                    </div>
+                    
+                    <h3>Invite Tree</h3>
+                    <div style="max-height: 200px; overflow-y: auto; background: var(--background-alt); padding: 10px; border-radius: 5px;">
+                        ${inviteesHtml}
+                    </div>
+
+                    <div style="margin-top: 20px; border-top: 1px solid var(--border); padding-top: 10px;">
+                        ${!details.banned ? `
+                            <button style="background: var(--error-color); color: white;" onclick="confirmBan('${details.user_id}')">Ban User</button>
+                            <button style="background: #c0392b; color: white;" onclick="confirmBan('${details.user_id}', true)">Ban Tree (Recursive)</button>
+                        ` : '<p class="status-banned">This user is banned.</p>'}
+                    </div>
+                `;
+                
+                content.innerHTML = html;
+            } catch (error) {
+                content.innerHTML = `<div class="message error">Failed to load details: ${error.message}</div>`;
+            }
+        }
+
+        async function confirmBan(userId, banTree = false) {
+            const msg = banTree 
+                ? `Are you sure you want to ban ${userId} AND all users they invited? This cannot be undone.`
+                : `Are you sure you want to ban ${userId}?`;
+            
+            if (!confirm(msg)) return;
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const result = await api.banUser(userId, banTree);
+                
+                alert(`Success! Banned ${result.banned_count} user(s).`);
+                document.getElementById('userModal').close();
+                loadUsers(); // Refresh list
+            } catch (error) {
+                alert(`Failed to ban user: ${error.message}`);
             }
         }
 
@@ -699,6 +977,9 @@
                 document.getElementById('apiKey').value = state.apiKey;
                 document.getElementById('apiKeyStatus').className = 'api-key-status success';
                 document.getElementById('apiKeyStatus').textContent = '✓ API key loaded from storage';
+                
+                // Auto-load stats
+                loadStats();
             }
         });
     </script>

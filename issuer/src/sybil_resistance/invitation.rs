@@ -105,21 +105,21 @@ mod hex_serde {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InviterState {
     /// User's identifier
-    user_id: String,
+    pub user_id: String,
     /// How many invites they have left
-    invites_remaining: u32,
+    pub invites_remaining: u32,
     /// List of invitation codes they've created
-    invites_sent: Vec<String>,
+    pub invites_sent: Vec<String>,
     /// List of invitation codes that were redeemed
-    invites_used: Vec<String>,
+    pub invites_used: Vec<String>,
     /// When this user joined (Unix timestamp)
-    joined_at: u64,
+    pub joined_at: u64,
     /// Last time they sent an invite (Unix timestamp)
-    last_invite_at: u64,
+    pub last_invite_at: u64,
     /// Trust score (0.0 = banned, 1.0 = perfect)
-    reputation: f64,
+    pub reputation: f64,
     /// Whether this user is banned
-    banned: bool,
+    pub banned: bool,
 }
 
 impl InviterState {
@@ -281,6 +281,21 @@ impl InvitationSystem {
         }
 
         Ok(system)
+    }
+    
+    pub async fn list_invitations(&self, limit: usize) -> Vec<Invitation> {
+        let state = self.state.read().await;
+        let mut invites: Vec<Invitation> = state.invitations.values().cloned().collect();
+        
+        // Sort by creation time descending
+        invites.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        
+        // Truncate to limit
+        if invites.len() > limit {
+            invites.truncate(limit);
+        }
+        
+        invites
     }
 
     /// Start background autosave task
