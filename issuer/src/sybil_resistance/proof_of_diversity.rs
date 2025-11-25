@@ -217,9 +217,9 @@ impl ProofOfDiversitySystem {
         hasher.update(b":");
         hasher.update(&record.first_seen.to_le_bytes());
         hasher.update(b":");
-        hasher.update(&record.unique_networks.len().to_le_bytes());
+        hasher.update(&(record.unique_networks.len() as u32).to_le_bytes());
         hasher.update(b":");
-        hasher.update(&record.unique_devices.len().to_le_bytes());
+        hasher.update(&(record.unique_devices.len() as u32).to_le_bytes());
         hasher.update(b":");
         hasher.update(&record.score.to_le_bytes());
         base64ct::Base64UrlUnpadded::encode_string(hasher.finalize().as_bytes())

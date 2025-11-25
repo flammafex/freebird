@@ -171,13 +171,11 @@ impl MultiPartyVouchingSystem {
         voucher_id: &str,
         vouchee_id: &str,
         signature: Signature,
+        timestamp: i64,
     ) -> Result<VouchProof> {
         let voucher_id_hash = self.hash_user_id(voucher_id);
         let vouchee_id_hash = self.hash_user_id(vouchee_id);
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs() as i64;
+        let now = timestamp;
 
         // Check if voucher exists
         let mut vouchers = self.vouchers.write().await;
@@ -486,34 +484,36 @@ mod tests {
             .unwrap();
 
         // Create vouches for new user "charlie"
+        let timestamp1 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
         let message1 = format!(
             "vouch:{}:{}",
             system.hash_user_id("charlie"),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
+            timestamp1
         );
         let sig1: Signature = voucher1_sk.sign(message1.as_bytes());
 
         tokio::time::sleep(Duration::from_secs(1)).await;
 
+        let timestamp2 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
         let message2 = format!(
             "vouch:{}:{}",
             system.hash_user_id("charlie"),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
+            timestamp2
         );
         let sig2: Signature = voucher2_sk.sign(message2.as_bytes());
 
         // Submit vouches
         system
-            .submit_vouch("alice", "charlie", sig1)
+            .submit_vouch("alice", "charlie", sig1, timestamp1)
             .await
             .unwrap();
-        system.submit_vouch("bob", "charlie", sig2).await.unwrap();
+        system.submit_vouch("bob", "charlie", sig2, timestamp2).await.unwrap();
 
         // Check vouches
         let vouches = system.check_vouches("charlie").await.unwrap();
