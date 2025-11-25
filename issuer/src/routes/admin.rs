@@ -17,9 +17,9 @@
 //! The API key should be configured via the `ADMIN_API_KEY` environment variable.
 
 use crate::multi_key_voprf::{KeyInfo, KeyStats, MultiKeyVoprfCore};
-use crate::sybil_resistance::invitation::{InvitationStats, InvitationSystem};
+use crate::sybil_resistance::invitation::{InvitationStats, InvitationSystem, InviterState};
 use axum::{
-    extract::{Path, State},
+    extract::{Path, State, Query},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
     Json,
@@ -203,6 +203,37 @@ pub struct RevocationResponse {
     pub ok: bool,
     pub message: String,
 }
+
+/// User summary for list view
+#[derive(Debug, Serialize)]
+pub struct UserSummary {
+    pub user_id: String,
+    pub invites_remaining: u32,
+    pub banned: bool,
+}
+
+/// Detailed user response
+#[derive(Debug, Serialize)]
+pub struct UserDetailsResponse {
+    pub user_id: String,
+    pub invites_remaining: u32,
+    pub invites_sent: Vec<String>,
+    pub invites_used: Vec<String>,
+    pub joined_at: u64,
+    pub last_invite_at: u64,
+    pub reputation: f64,
+    pub banned: bool,
+    pub invitees: Vec<String>,
+}
+
+/// Parameters for listing invitations
+#[derive(Debug, Deserialize)]
+pub struct ListInvitationsParams {
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+fn default_limit() -> usize { 50 }
 
 // ============================================================================
 // Error Types
@@ -500,6 +531,72 @@ pub async fn save_state_handler(
     })))
 }
 
+pub async fn list_users_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<UserSummary>>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let users = state.invitation_system.list_users().await;
+    let summaries = users
+        .into_iter()
+        .map(|(user_id, invites_remaining, banned)| UserSummary {
+            user_id,
+            invites_remaining,
+            banned,
+        })
+        .collect();
+
+    info!("Admin: listed users");
+    Ok(Json(summaries))
+}
+
+pub async fn get_user_details_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+) -> Result<Json<UserDetailsResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let (details, invitees) = state
+        .invitation_system
+        .get_user_details(&user_id)
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                AdminError::UserNotFound(user_id.clone())
+            } else {
+                AdminError::Internal(msg)
+            }
+        })?;
+
+    Ok(Json(UserDetailsResponse {
+        user_id: details.user_id,
+        invites_remaining: details.invites_remaining,
+        invites_sent: details.invites_sent,
+        invites_used: details.invites_used,
+        joined_at: details.joined_at,
+        last_invite_at: details.last_invite_at,
+        reputation: details.reputation,
+        banned: details.banned,
+        invitees,
+    }))
+}
+
+pub async fn list_invitations_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Query(params): Query<ListInvitationsParams>,
+) -> Result<Json<Vec<crate::sybil_resistance::invitation::Invitation>>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let invites = state.invitation_system.list_invitations(params.limit).await;
+    info!("Admin: listed recent invitations (count={})", invites.len());
+
+    Ok(Json(invites))
+}
+
 // ============================================================================
 // Key Management Handlers
 // ============================================================================
@@ -773,7 +870,10 @@ pub fn admin_router(
         .route("/", axum::routing::get(admin_ui_handler))
         .route("/health", axum::routing::get(health_handler))
         .route("/stats", axum::routing::get(get_stats_handler))
+        .route("/users", axum::routing::get(list_users_handler)) // <-- New
+        .route("/users/:user_id", axum::routing::get(get_user_details_handler)) // <-- New
         .route("/invites/grant", axum::routing::post(grant_invites_handler))
+        .route("/invitations", axum::routing::get(list_invitations_handler))
         .route("/invitations/create", axum::routing::post(create_invitations_handler))
         .route("/users/ban", axum::routing::post(ban_user_handler))
         .route(
