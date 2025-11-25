@@ -20,7 +20,7 @@
 //! }
 //! ```
 use anyhow::{anyhow, Result};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
 use common::api::SybilProof;
 
 pub mod invitation;
@@ -91,6 +91,173 @@ impl SybilResistance for CombinedSybilResistance {
         self.mechanisms.iter().any(|m| m.supports(proof))
     }
     fn cost(&self) -> u64 { 0 }
+}
+
+/// Combined OR: Client provides ONE proof, at least one mechanism must support it
+/// This is the same as CombinedSybilResistance but with an explicit name
+pub struct CombinedOr {
+    mechanisms: Vec<Arc<dyn SybilResistance>>,
+}
+
+impl CombinedOr {
+    pub fn new(mechanisms: Vec<Arc<dyn SybilResistance>>) -> Self {
+        Self { mechanisms }
+    }
+}
+
+impl SybilResistance for CombinedOr {
+    fn verify(&self, proof: &SybilProof) -> Result<()> {
+        let mut supported_count = 0;
+        for mechanism in &self.mechanisms {
+            if mechanism.supports(proof) {
+                supported_count += 1;
+                mechanism.verify(proof)?;
+            }
+        }
+        if supported_count == 0 {
+            return Err(anyhow!("proof type not supported by any configured mechanism"));
+        }
+        Ok(())
+    }
+    fn supports(&self, proof: &SybilProof) -> bool {
+        self.mechanisms.iter().any(|m| m.supports(proof))
+    }
+    fn cost(&self) -> u64 {
+        // Return average cost of all mechanisms
+        if self.mechanisms.is_empty() {
+            return 0;
+        }
+        self.mechanisms.iter().map(|m| m.cost()).sum::<u64>() / self.mechanisms.len() as u64
+    }
+}
+
+/// Combined AND: Client provides MULTIPLE proofs, ALL mechanisms must pass
+pub struct CombinedAnd {
+    mechanisms: Vec<Arc<dyn SybilResistance>>,
+}
+
+impl CombinedAnd {
+    pub fn new(mechanisms: Vec<Arc<dyn SybilResistance>>) -> Self {
+        Self { mechanisms }
+    }
+}
+
+impl SybilResistance for CombinedAnd {
+    fn verify(&self, proof: &SybilProof) -> Result<()> {
+        match proof {
+            SybilProof::Multi { proofs } => {
+                if proofs.len() != self.mechanisms.len() {
+                    return Err(anyhow!(
+                        "expected {} proofs for AND combination, got {}",
+                        self.mechanisms.len(),
+                        proofs.len()
+                    ));
+                }
+
+                // Each mechanism must find and verify its corresponding proof
+                for mechanism in &self.mechanisms {
+                    let mut verified = false;
+                    for proof in proofs {
+                        if mechanism.supports(proof) {
+                            mechanism.verify(proof)?;
+                            verified = true;
+                            break;
+                        }
+                    }
+                    if !verified {
+                        return Err(anyhow!("missing proof for one or more required mechanisms"));
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(anyhow!("AND combination requires Multi proof with all mechanisms")),
+        }
+    }
+
+    fn supports(&self, proof: &SybilProof) -> bool {
+        matches!(proof, SybilProof::Multi { .. })
+    }
+
+    fn cost(&self) -> u64 {
+        // Return sum of all mechanism costs
+        self.mechanisms.iter().map(|m| m.cost()).sum()
+    }
+}
+
+/// Combined Threshold: Client provides MULTIPLE proofs, at least N must pass
+pub struct CombinedThreshold {
+    mechanisms: Vec<Arc<dyn SybilResistance>>,
+    threshold: usize,
+}
+
+impl CombinedThreshold {
+    pub fn new(mechanisms: Vec<Arc<dyn SybilResistance>>, threshold: usize) -> Result<Self> {
+        if threshold == 0 {
+            return Err(anyhow!("threshold must be at least 1"));
+        }
+        if threshold > mechanisms.len() {
+            return Err(anyhow!(
+                "threshold ({}) cannot exceed number of mechanisms ({})",
+                threshold,
+                mechanisms.len()
+            ));
+        }
+        Ok(Self { mechanisms, threshold })
+    }
+}
+
+impl SybilResistance for CombinedThreshold {
+    fn verify(&self, proof: &SybilProof) -> Result<()> {
+        match proof {
+            SybilProof::Multi { proofs } => {
+                let mut passed = 0;
+                let mut errors = Vec::new();
+
+                // Try to verify each proof with its corresponding mechanism
+                for proof in proofs {
+                    for mechanism in &self.mechanisms {
+                        if mechanism.supports(proof) {
+                            match mechanism.verify(proof) {
+                                Ok(()) => {
+                                    passed += 1;
+                                    break;
+                                }
+                                Err(e) => {
+                                    errors.push(format!("{}", e));
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if passed >= self.threshold {
+                    Ok(())
+                } else {
+                    Err(anyhow!(
+                        "threshold not met: passed {}/{}, need {} (errors: {})",
+                        passed,
+                        proofs.len(),
+                        self.threshold,
+                        errors.join("; ")
+                    ))
+                }
+            }
+            _ => Err(anyhow!("threshold combination requires Multi proof")),
+        }
+    }
+
+    fn supports(&self, proof: &SybilProof) -> bool {
+        matches!(proof, SybilProof::Multi { .. })
+    }
+
+    fn cost(&self) -> u64 {
+        // Return average cost weighted by threshold
+        if self.mechanisms.is_empty() {
+            return 0;
+        }
+        let total_cost: u64 = self.mechanisms.iter().map(|m| m.cost()).sum();
+        (total_cost * self.threshold as u64) / self.mechanisms.len() as u64
+    }
 }
 
 pub fn current_timestamp() -> u64 {

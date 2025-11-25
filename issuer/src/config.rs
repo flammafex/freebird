@@ -97,6 +97,10 @@ pub struct SybilConfig {
     pub federated_trust_max_token_age_secs: i64,
     pub federated_trust_trusted_roots: Vec<String>,
     pub federated_trust_blocked_issuers: Vec<String>,
+    // Combined mode configuration
+    pub combined_mechanisms: Vec<String>, // e.g., ["pow", "rate_limit", "progressive_trust"]
+    pub combined_mode: String,            // "or", "and", "threshold"
+    pub combined_threshold: u32,          // Required number of mechanisms for threshold mode
 }
 
 #[derive(Clone, Debug)]
@@ -260,6 +264,14 @@ impl SybilConfig {
                 .ok()
                 .map(|s| s.split(',').map(|s| s.to_string()).collect())
                 .unwrap_or_default(),
+            // Combined mode configuration
+            combined_mechanisms: env::var("SYBIL_COMBINED_MECHANISMS")
+                .ok()
+                .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
+                .unwrap_or_else(|| vec!["pow".to_string(), "rate_limit".to_string()]),
+            combined_mode: env::var("SYBIL_COMBINED_MODE")
+                .unwrap_or_else(|_| "or".to_string()),
+            combined_threshold: env_u32("SYBIL_COMBINED_THRESHOLD", 2),
         }
     }
 }
