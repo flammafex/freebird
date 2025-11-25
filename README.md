@@ -116,6 +116,7 @@ Resources depend on your anticipated user base and Sybil resistance complexity.
 - ✅ **Key Rotation**: Zero-downtime rotation with grace periods for deprecated keys
 - ✅ **Storage Backends**: In-memory (dev) and Redis (prod) support
 - ✅ **Multi-Issuer Federation**: Signature-based tokens enable verifiers to authenticate tokens from multiple issuers (see [`FEDERATION.md`](docs/FEDERATION.md))
+- ✅ **Web Admin Dashboard**: Modern single-page UI for system management, user administration, and key rotation
 - ✅ **Admin API**: HTTP endpoints for user management, key rotation, and stats
 
 **Sybil Resistance Mechanisms:**
@@ -158,6 +159,58 @@ const isValid = await client.verifyToken(token);
 
 ---
 
+## 🖥️ Web Admin Dashboard
+
+Freebird includes a modern, single-page web interface for managing your deployment—no command-line required.
+
+### Features
+
+**📊 Dashboard Tab:**
+- View real-time system statistics
+- Monitor user counts, invitations, and redemptions
+- Track banned users and system health
+- One-click refresh
+
+**👥 User Management Tab:**
+- View all users with search and filtering
+- Inspect detailed user profiles and reputation scores
+- View invitation trees and relationships
+- Ban individual users or entire invitation trees
+
+**🎫 Invitations Tab:**
+- Create cryptographically signed invitation codes
+- Grant invitation quota to users
+- View invitation history and redemption status
+- Copy codes and signatures with one click
+
+**🔑 Key Management Tab:**
+- View active and deprecated cryptographic keys
+- Rotate keys with configurable grace periods
+- Clean up expired keys
+- Monitor key status and expiration
+
+### Access
+
+Once your Freebird issuer is running, access the dashboard at:
+
+```
+http://localhost:8081/admin
+```
+
+**Authentication:** Requires the `ADMIN_API_KEY` from your `.env` file (minimum 32 characters).
+
+### Architecture
+
+- **Zero dependencies**: Single HTML file with embedded CSS and JavaScript
+- **No build step**: Served directly from the issuer binary
+- **Minimal footprint**: ~1300 lines including all features
+- **Modern UI**: Clean, responsive design using water.css
+- **Secure**: API key stored in browser localStorage only
+
+📖 **[Complete Admin Dashboard Documentation →](admin-ui/README.md)**
+
+---
+
 ## Quick Start
 
 ### 🐳 Docker (Recommended)
@@ -178,7 +231,7 @@ docker compose up --build
 **That's it!** Freebird is now running:
 - **Issuer:** http://localhost:8081
 - **Verifier:** http://localhost:8082
-- **Admin Dashboard:** http://localhost:8081/admin (Web UI, requires `ADMIN_API_KEY`)
+- **🖥️ Web Admin Dashboard:** http://localhost:8081/admin (Full-featured UI for system management)
 - **Admin API:** http://localhost:8081/admin/* (REST API, requires `ADMIN_API_KEY`)
 
 **Verify deployment:**
