@@ -376,7 +376,8 @@
         <button class="tab active" onclick="switchTab('dashboard')">📊 Dashboard</button>
         <button class="tab" onclick="switchTab('users')">👥 Users</button>
         <button class="tab" onclick="switchTab('invitations')">🎫 Invitations</button>
-        </div>
+        <button class="tab" onclick="switchTab('keys')">🔑 Keys</button>
+    </div>
 
     <div id="dashboard-tab" class="tab-content active">
         <h2>System Statistics</h2>
@@ -468,6 +469,53 @@
         </div>
 
         <div id="grantResults"></div>
+    </div>
+
+    <!-- Keys Tab -->
+    <div id="keys-tab" class="tab-content">
+        <h2>🔑 Key Management</h2>
+        <p>Manage cryptographic keys for VOPRF token issuance.</p>
+
+        <div class="form-section">
+            <h3>📋 Active Keys</h3>
+            <div id="keysTable"></div>
+        </div>
+
+        <div class="form-section">
+            <h3>🔄 Rotate Key</h3>
+            <p class="text-small">Generate a new key with a grace period for the old key.</p>
+
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="newKid">New Key ID</label>
+                    <input
+                        type="text"
+                        id="newKid"
+                        placeholder="e.g., freebird-2025-11-25"
+                        value=""
+                    >
+                </div>
+                <div class="form-field" style="max-width: 200px;">
+                    <label for="gracePeriodSecs">Grace Period (seconds)</label>
+                    <input
+                        type="number"
+                        id="gracePeriodSecs"
+                        min="0"
+                        max="86400"
+                        value="3600"
+                    >
+                </div>
+                <button onclick="rotateKey()">Rotate Key</button>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h3>🧹 Cleanup Expired Keys</h3>
+            <p class="text-small">Remove expired keys that are past their grace period.</p>
+            <button onclick="cleanupKeys()">Cleanup Keys</button>
+        </div>
+
+        <div id="keysResults"></div>
     </div>
 
     <script>
@@ -570,6 +618,26 @@
                     })
                 });
             }
+
+            async getKeys() {
+                return this.request('/keys');
+            }
+
+            async rotateKey(newKid, gracePeriodSecs) {
+                return this.request('/keys/rotate', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        new_kid: newKid,
+                        grace_period_secs: gracePeriodSecs
+                    })
+                });
+            }
+
+            async cleanupKeys() {
+                return this.request('/keys/cleanup', {
+                    method: 'POST'
+                });
+            }
         }
 
         // ============================================================================
@@ -603,6 +671,8 @@
             // Auto-load data
             if (tabName === 'users' && state.users.length === 0) {
                 loadUsers();
+            } else if (tabName === 'keys') {
+                loadKeys();
             }
         }
 
@@ -655,9 +725,15 @@
 
                 statusEl.className = 'api-key-status success';
                 statusEl.textContent = '✓ API key saved and verified';
+
+                // Update health badge
+                updateHealthBadge();
             } catch (error) {
                 statusEl.className = 'api-key-status error';
                 statusEl.textContent = `❌ Invalid API key: ${error.message}`;
+
+                // Update health badge to show error
+                updateHealthBadge();
             }
         }
 
@@ -666,6 +742,9 @@
             state.apiKey = '';
             document.getElementById('apiKey').value = '';
             document.getElementById('apiKeyStatus').textContent = '';
+
+            // Update health badge
+            updateHealthBadge();
         }
 
         // ============================================================================
@@ -969,6 +1048,152 @@
         }
 
         // ============================================================================
+        // Keys Management Functions
+        // ============================================================================
+
+        async function loadKeys() {
+            if (!state.apiKey) {
+                showMessage('keysResults', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const keysTable = document.getElementById('keysTable');
+            keysTable.innerHTML = '<span class="spinner"></span> Loading keys...';
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const result = await api.getKeys();
+
+                if (!result.keys || result.keys.length === 0) {
+                    keysTable.innerHTML = '<p class="text-small">No keys found.</p>';
+                    return;
+                }
+
+                let html = '<table><thead><tr>';
+                html += '<th>Key ID</th>';
+                html += '<th>Status</th>';
+                html += '<th>Public Key</th>';
+                html += '<th>Expires At</th>';
+                html += '</tr></thead><tbody>';
+
+                result.keys.forEach(key => {
+                    const status = key.status === 'active'
+                        ? '<span style="color: var(--success-color)">✓ Active</span>'
+                        : '<span style="color: var(--warning-color)">⏰ Deprecated</span>';
+
+                    const expiresAt = key.expires_at
+                        ? new Date(key.expires_at * 1000).toLocaleString()
+                        : 'Never';
+
+                    const publicKeyShort = key.pubkey_b64
+                        ? key.pubkey_b64.substring(0, 32) + '...'
+                        : 'N/A';
+
+                    html += `<tr>`;
+                    html += `<td><strong>${key.kid}</strong></td>`;
+                    html += `<td>${status}</td>`;
+                    html += `<td><code>${publicKeyShort}</code></td>`;
+                    html += `<td>${expiresAt}</td>`;
+                    html += `</tr>`;
+                });
+
+                html += '</tbody></table>';
+                keysTable.innerHTML = html;
+            } catch (error) {
+                keysTable.innerHTML = '';
+                showMessage('keysResults', 'error', `❌ Failed to load keys: ${error.message}`);
+            }
+        }
+
+        async function rotateKey() {
+            if (!state.apiKey) {
+                showMessage('keysResults', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const newKid = document.getElementById('newKid').value.trim();
+            const gracePeriodSecs = parseInt(document.getElementById('gracePeriodSecs').value);
+
+            if (!newKid) {
+                showMessage('keysResults', 'error', '❌ New Key ID is required');
+                return;
+            }
+
+            if (gracePeriodSecs < 0) {
+                showMessage('keysResults', 'error', '❌ Grace period must be non-negative');
+                return;
+            }
+
+            showMessage('keysResults', 'info', `<span class="spinner"></span> Rotating to new key ${newKid}...`);
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const result = await api.rotateKey(newKid, gracePeriodSecs);
+
+                showMessage('keysResults', 'success',
+                    `✓ Key rotated successfully. New key: ${result.new_kid}`
+                );
+
+                // Clear the input
+                document.getElementById('newKid').value = '';
+
+                // Reload keys table
+                loadKeys();
+            } catch (error) {
+                showMessage('keysResults', 'error', `❌ Failed to rotate key: ${error.message}`);
+            }
+        }
+
+        async function cleanupKeys() {
+            if (!state.apiKey) {
+                showMessage('keysResults', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            showMessage('keysResults', 'info', '<span class="spinner"></span> Cleaning up expired keys...');
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const result = await api.cleanupKeys();
+
+                showMessage('keysResults', 'success',
+                    `✓ Cleanup complete. Removed ${result.removed_count} expired key(s).`
+                );
+
+                // Reload keys table
+                loadKeys();
+            } catch (error) {
+                showMessage('keysResults', 'error', `❌ Failed to cleanup keys: ${error.message}`);
+            }
+        }
+
+        // ============================================================================
+        // Health Check
+        // ============================================================================
+
+        async function updateHealthBadge() {
+            const badge = document.getElementById('systemHealthBadge');
+
+            if (!state.apiKey) {
+                badge.innerHTML = '<span class="badge" style="background: var(--warning-color)">⚠️ No API Key</span>';
+                return;
+            }
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const health = await api.getHealth();
+
+                if (health.status === 'ok') {
+                    badge.innerHTML = '<span class="badge" style="background: var(--success-color)">✓ System Healthy</span>';
+                } else {
+                    badge.innerHTML = '<span class="badge" style="background: var(--error-color)">✗ System Error</span>';
+                }
+            } catch (error) {
+                badge.innerHTML = '<span class="badge" style="background: var(--error-color)">✗ Connection Failed</span>';
+            }
+        }
+
+        // ============================================================================
         // Initialization
         // ============================================================================
 
@@ -978,9 +1203,12 @@
                 document.getElementById('apiKey').value = state.apiKey;
                 document.getElementById('apiKeyStatus').className = 'api-key-status success';
                 document.getElementById('apiKeyStatus').textContent = '✓ API key loaded from storage';
-                
+
                 // Auto-load stats
                 loadStats();
+
+                // Update health badge
+                updateHealthBadge();
             }
         });
     </script>
