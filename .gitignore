@@ -23,3 +23,7 @@ Thumbs.db
 
 # Backup files
 *.bak
+issuer_sk.bin
+key_rotation_state.json
+invitations.json
+data/
