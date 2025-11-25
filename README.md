@@ -178,7 +178,8 @@ docker compose up --build
 **That's it!** Freebird is now running:
 - **Issuer:** http://localhost:8081
 - **Verifier:** http://localhost:8082
-- **Admin API:** http://localhost:8081/api/admin (requires `ADMIN_API_KEY`)
+- **Admin Dashboard:** http://localhost:8081/admin (Web UI, requires `ADMIN_API_KEY`)
+- **Admin API:** http://localhost:8081/admin/* (REST API, requires `ADMIN_API_KEY`)
 
 **Verify deployment:**
 ```bash

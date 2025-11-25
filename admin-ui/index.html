@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🕊️ Freebird Admin</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.css">
+    <style>
+        :root {
+            --tab-active-color: #0076d1;
+            --success-color: #2ecc71;
+            --error-color: #e74c3c;
+            --warning-color: #f39c12;
+        }
+
+        body {
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 2px solid var(--tab-active-color);
+            padding-bottom: 20px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 2em;
+        }
+
+        .header p {
+            margin: 5px 0 0 0;
+            opacity: 0.7;
+            font-size: 0.9em;
+        }
+
+        /* API Key Config Section */
+        .api-key-section {
+            background: var(--background-alt);
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 25px;
+        }
+
+        .api-key-section input {
+            font-family: monospace;
+            width: 100%;
+            max-width: 500px;
+        }
+
+        .api-key-section button {
+            margin-left: 10px;
+        }
+
+        .api-key-status {
+            margin-top: 10px;
+            font-size: 0.9em;
+        }
+
+        .api-key-status.success {
+            color: var(--success-color);
+        }
+
+        .api-key-status.error {
+            color: var(--error-color);
+        }
+
+        /* Tab Navigation */
+        .tabs {
+            display: flex;
+            gap: 0;
+            margin-bottom: 25px;
+            border-bottom: 2px solid var(--border);
+        }
+
+        .tab {
+            padding: 12px 24px;
+            cursor: pointer;
+            background: transparent;
+            border: none;
+            border-bottom: 3px solid transparent;
+            transition: all 0.2s;
+            font-size: 1em;
+        }
+
+        .tab:hover {
+            background: var(--background-alt);
+        }
+
+        .tab.active {
+            border-bottom-color: var(--tab-active-color);
+            font-weight: bold;
+        }
+
+        /* Tab Content */
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .stat-card {
+            background: var(--background-alt);
+            padding: 20px;
+            border-radius: 5px;
+            border-left: 4px solid var(--tab-active-color);
+        }
+
+        .stat-card h3 {
+            margin: 0 0 10px 0;
+            font-size: 0.9em;
+            opacity: 0.8;
+            text-transform: uppercase;
+        }
+
+        .stat-card .value {
+            font-size: 2em;
+            font-weight: bold;
+            margin: 0;
+        }
+
+        /* Form Sections */
+        .form-section {
+            background: var(--background-alt);
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        .form-section h3 {
+            margin-top: 0;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+            margin-bottom: 15px;
+        }
+
+        .form-field {
+            flex: 1;
+        }
+
+        .form-field label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+
+        .form-field input {
+            width: 100%;
+        }
+
+        /* Results Section */
+        .results {
+            margin-top: 20px;
+        }
+
+        .invitation-item {
+            background: var(--background);
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            border-left: 3px solid var(--success-color);
+        }
+
+        .invitation-code {
+            font-family: monospace;
+            font-size: 0.9em;
+            background: var(--background-alt);
+            padding: 8px;
+            border-radius: 3px;
+            margin: 5px 0;
+            word-break: break-all;
+        }
+
+        .copy-btn {
+            padding: 5px 12px;
+            font-size: 0.85em;
+            cursor: pointer;
+        }
+
+        .invitation-meta {
+            font-size: 0.85em;
+            opacity: 0.7;
+            margin-top: 5px;
+        }
+
+        /* Messages */
+        .message {
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+
+        .message.success {
+            background: var(--success-color);
+            color: white;
+        }
+
+        .message.error {
+            background: var(--error-color);
+            color: white;
+        }
+
+        .message.warning {
+            background: var(--warning-color);
+            color: white;
+        }
+
+        .message.info {
+            background: var(--tab-active-color);
+            color: white;
+        }
+
+        /* Loading State */
+        .loading {
+            opacity: 0.6;
+            pointer-events: none;
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            border: 2px solid rgba(255,255,255,.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 0.6s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Utility Classes */
+        .hidden {
+            display: none !important;
+        }
+
+        .text-mono {
+            font-family: monospace;
+        }
+
+        .text-small {
+            font-size: 0.85em;
+        }
+
+        .mt-20 {
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🕊️ Freebird Admin</h1>
+        <p>Authorization without identity. Privacy without compromise.</p>
+    </div>
+
+    <!-- API Key Configuration -->
+    <div class="api-key-section">
+        <label for="apiKey"><strong>Admin API Key</strong></label>
+        <div class="form-row">
+            <div class="form-field">
+                <input
+                    type="password"
+                    id="apiKey"
+                    placeholder="Enter your admin API key (min 32 characters)"
+                    autocomplete="off"
+                >
+            </div>
+            <button onclick="saveApiKey()">Save & Test</button>
+            <button onclick="clearApiKey()">Clear</button>
+        </div>
+        <div id="apiKeyStatus" class="api-key-status"></div>
+    </div>
+
+    <!-- Tab Navigation -->
+    <div class="tabs">
+        <button class="tab active" onclick="switchTab('dashboard')">📊 Dashboard</button>
+        <button class="tab" onclick="switchTab('invitations')">🎫 Invitations</button>
+        <!-- Future tabs: Users, Keys, Settings -->
+    </div>
+
+    <!-- Dashboard Tab -->
+    <div id="dashboard-tab" class="tab-content active">
+        <h2>System Statistics</h2>
+        <button onclick="loadStats()">🔄 Refresh</button>
+
+        <div id="statsContainer" class="mt-20">
+            <p class="text-small">Click "Refresh" to load system statistics...</p>
+        </div>
+    </div>
+
+    <!-- Invitations Tab -->
+    <div id="invitations-tab" class="tab-content">
+        <div class="form-section">
+            <h3>🎫 Create Invitations</h3>
+            <p class="text-small">Generate invitation codes for a user to share with others.</p>
+
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="inviterUserId">User ID (Inviter)</label>
+                    <input
+                        type="text"
+                        id="inviterUserId"
+                        placeholder="e.g., admin, alice, bob"
+                        value="admin"
+                    >
+                </div>
+                <div class="form-field" style="max-width: 150px;">
+                    <label for="inviteCount">Count</label>
+                    <input
+                        type="number"
+                        id="inviteCount"
+                        min="1"
+                        max="100"
+                        value="1"
+                    >
+                </div>
+                <button onclick="createInvitations()">Create Invitations</button>
+            </div>
+        </div>
+
+        <div id="invitationsResults"></div>
+
+        <div class="form-section">
+            <h3>➕ Grant Invitation Quota</h3>
+            <p class="text-small">Increase a user's invitation quota (doesn't create codes).</p>
+
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="grantUserId">User ID</label>
+                    <input
+                        type="text"
+                        id="grantUserId"
+                        placeholder="e.g., alice, bob"
+                    >
+                </div>
+                <div class="form-field" style="max-width: 150px;">
+                    <label for="grantCount">Count</label>
+                    <input
+                        type="number"
+                        id="grantCount"
+                        min="1"
+                        max="1000"
+                        value="5"
+                    >
+                </div>
+                <button onclick="grantInvites()">Grant Invites</button>
+            </div>
+        </div>
+
+        <div id="grantResults"></div>
+    </div>
+
+    <script>
+        // ============================================================================
+        // Configuration & State
+        // ============================================================================
+
+        const CONFIG = {
+            issuerUrl: window.location.hostname === 'localhost'
+                ? 'http://localhost:8081'
+                : window.location.origin,
+            adminPath: '/admin'
+        };
+
+        let state = {
+            apiKey: localStorage.getItem('freebirdAdminKey') || '',
+            currentTab: 'dashboard'
+        };
+
+        // ============================================================================
+        // API Client
+        // ============================================================================
+
+        class FreebirdAdminAPI {
+            constructor(baseUrl, apiKey) {
+                this.baseUrl = baseUrl;
+                this.apiKey = apiKey;
+            }
+
+            async request(endpoint, options = {}) {
+                const url = `${this.baseUrl}${CONFIG.adminPath}${endpoint}`;
+                const headers = {
+                    'X-Admin-Key': this.apiKey,
+                    'Content-Type': 'application/json',
+                    ...options.headers
+                };
+
+                try {
+                    const response = await fetch(url, {
+                        ...options,
+                        headers
+                    });
+
+                    const data = await response.json().catch(() => null);
+
+                    if (!response.ok) {
+                        throw new Error(data?.message || `HTTP ${response.status}: ${response.statusText}`);
+                    }
+
+                    return data;
+                } catch (error) {
+                    console.error('API Error:', error);
+                    throw error;
+                }
+            }
+
+            async getHealth() {
+                return this.request('/health');
+            }
+
+            async getStats() {
+                return this.request('/stats');
+            }
+
+            async createInvitations(inviterId, count) {
+                return this.request('/invitations/create', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        inviter_id: inviterId,
+                        count: count
+                    })
+                });
+            }
+
+            async grantInvites(userId, count) {
+                return this.request('/invites/grant', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        user_id: userId,
+                        count: count
+                    })
+                });
+            }
+        }
+
+        // ============================================================================
+        // UI Functions
+        // ============================================================================
+
+        function showMessage(containerId, type, message) {
+            const container = document.getElementById(containerId);
+            container.innerHTML = `<div class="message ${type}">${message}</div>`;
+
+            if (type === 'success') {
+                setTimeout(() => {
+                    container.innerHTML = '';
+                }, 5000);
+            }
+        }
+
+        function switchTab(tabName) {
+            // Update tab buttons
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            event.target.classList.add('active');
+
+            // Update tab content
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+
+            state.currentTab = tabName;
+        }
+
+        function copyToClipboard(text, buttonElement) {
+            navigator.clipboard.writeText(text).then(() => {
+                const originalText = buttonElement.textContent;
+                buttonElement.textContent = '✓ Copied!';
+                buttonElement.style.background = 'var(--success-color)';
+
+                setTimeout(() => {
+                    buttonElement.textContent = originalText;
+                    buttonElement.style.background = '';
+                }, 2000);
+            }).catch(err => {
+                alert('Failed to copy: ' + err);
+            });
+        }
+
+        // ============================================================================
+        // API Key Management
+        // ============================================================================
+
+        async function saveApiKey() {
+            const apiKey = document.getElementById('apiKey').value.trim();
+            const statusEl = document.getElementById('apiKeyStatus');
+
+            if (!apiKey) {
+                statusEl.className = 'api-key-status error';
+                statusEl.textContent = '❌ API key cannot be empty';
+                return;
+            }
+
+            if (apiKey.length < 32) {
+                statusEl.className = 'api-key-status error';
+                statusEl.textContent = '❌ API key must be at least 32 characters';
+                return;
+            }
+
+            // Test the API key
+            statusEl.className = 'api-key-status';
+            statusEl.innerHTML = '<span class="spinner"></span> Testing API key...';
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, apiKey);
+                await api.getHealth();
+
+                // Save to localStorage
+                localStorage.setItem('freebirdAdminKey', apiKey);
+                state.apiKey = apiKey;
+
+                statusEl.className = 'api-key-status success';
+                statusEl.textContent = '✓ API key saved and verified';
+            } catch (error) {
+                statusEl.className = 'api-key-status error';
+                statusEl.textContent = `❌ Invalid API key: ${error.message}`;
+            }
+        }
+
+        function clearApiKey() {
+            localStorage.removeItem('freebirdAdminKey');
+            state.apiKey = '';
+            document.getElementById('apiKey').value = '';
+            document.getElementById('apiKeyStatus').textContent = '';
+        }
+
+        // ============================================================================
+        // Dashboard Functions
+        // ============================================================================
+
+        async function loadStats() {
+            if (!state.apiKey) {
+                showMessage('statsContainer', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const container = document.getElementById('statsContainer');
+            container.innerHTML = '<p><span class="spinner"></span> Loading statistics...</p>';
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const data = await api.getStats();
+
+                const stats = data.stats;
+                const timestamp = new Date(data.timestamp * 1000).toLocaleString();
+
+                container.innerHTML = `
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <h3>Total Users</h3>
+                            <p class="value">${stats.total_users || 0}</p>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Total Invitations</h3>
+                            <p class="value">${stats.total_invitations || 0}</p>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Redeemed</h3>
+                            <p class="value">${stats.redeemed_invitations || 0}</p>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Pending</h3>
+                            <p class="value">${stats.pending_invitations || 0}</p>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Banned Users</h3>
+                            <p class="value">${stats.banned_users || 0}</p>
+                        </div>
+                    </div>
+                    <p class="text-small" style="opacity: 0.6;">Last updated: ${timestamp}</p>
+                `;
+            } catch (error) {
+                container.innerHTML = `<div class="message error">❌ Failed to load stats: ${error.message}</div>`;
+            }
+        }
+
+        // ============================================================================
+        // Invitation Functions
+        // ============================================================================
+
+        async function createInvitations() {
+            if (!state.apiKey) {
+                showMessage('invitationsResults', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const inviterId = document.getElementById('inviterUserId').value.trim();
+            const count = parseInt(document.getElementById('inviteCount').value);
+
+            if (!inviterId) {
+                showMessage('invitationsResults', 'error', '❌ User ID is required');
+                return;
+            }
+
+            if (count < 1 || count > 100) {
+                showMessage('invitationsResults', 'error', '❌ Count must be between 1 and 100');
+                return;
+            }
+
+            showMessage('invitationsResults', 'info', `<span class="spinner"></span> Creating ${count} invitation(s) for ${inviterId}...`);
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const result = await api.createInvitations(inviterId, count);
+
+                let html = `<div class="message success">✓ Created ${result.invitations.length} invitation(s) for ${result.inviter_id}</div>`;
+                html += '<div class="results">';
+
+                result.invitations.forEach((inv, index) => {
+                    const expiresAt = new Date(inv.expires_at * 1000).toLocaleString();
+                    html += `
+                        <div class="invitation-item">
+                            <strong>Invitation ${index + 1}</strong>
+                            <div class="invitation-code">
+                                <strong>Code:</strong> ${inv.code}
+                                <button class="copy-btn" onclick="copyToClipboard('${inv.code}', this)">📋 Copy</button>
+                            </div>
+                            <div class="invitation-code">
+                                <strong>Signature:</strong> ${inv.signature}
+                                <button class="copy-btn" onclick="copyToClipboard('${inv.signature}', this)">📋 Copy</button>
+                            </div>
+                            <div class="invitation-meta">Expires: ${expiresAt}</div>
+                        </div>
+                    `;
+                });
+
+                html += '</div>';
+                document.getElementById('invitationsResults').innerHTML = html;
+            } catch (error) {
+                showMessage('invitationsResults', 'error', `❌ Failed: ${error.message}`);
+            }
+        }
+
+        async function grantInvites() {
+            if (!state.apiKey) {
+                showMessage('grantResults', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const userId = document.getElementById('grantUserId').value.trim();
+            const count = parseInt(document.getElementById('grantCount').value);
+
+            if (!userId) {
+                showMessage('grantResults', 'error', '❌ User ID is required');
+                return;
+            }
+
+            if (count < 1) {
+                showMessage('grantResults', 'error', '❌ Count must be at least 1');
+                return;
+            }
+
+            showMessage('grantResults', 'info', `<span class="spinner"></span> Granting ${count} invite(s) to ${userId}...`);
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const result = await api.grantInvites(userId, count);
+
+                showMessage('grantResults', 'success',
+                    `✓ Granted ${result.invites_granted} invite(s) to ${result.user_id}`
+                );
+            } catch (error) {
+                showMessage('grantResults', 'error', `❌ Failed: ${error.message}`);
+            }
+        }
+
+        // ============================================================================
+        // Initialization
+        // ============================================================================
+
+        window.addEventListener('DOMContentLoaded', () => {
+            // Load saved API key
+            if (state.apiKey) {
+                document.getElementById('apiKey').value = state.apiKey;
+                document.getElementById('apiKeyStatus').className = 'api-key-status success';
+                document.getElementById('apiKeyStatus').textContent = '✓ API key loaded from storage';
+            }
+        });
+    </script>
+</body>
+</html>
