@@ -21,6 +21,7 @@ use crate::sybil_resistance::invitation::{InvitationStats, InvitationSystem};
 use axum::{
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
+    response::{Html, IntoResponse},
     Json,
 };
 use base64ct::Encoding;
@@ -96,6 +97,29 @@ pub struct AddBootstrapUserResponse {
     pub ok: bool,
     pub user_id: String,
     pub invites_granted: u32,
+}
+
+/// Request to create invitations
+#[derive(Debug, Deserialize)]
+pub struct CreateInvitationsRequest {
+    pub inviter_id: String,
+    pub count: u32,
+}
+
+/// Single invitation code with signature
+#[derive(Debug, Serialize)]
+pub struct InvitationCode {
+    pub code: String,
+    pub signature: String,
+    pub expires_at: u64,
+}
+
+/// Response after creating invitations
+#[derive(Debug, Serialize)]
+pub struct CreateInvitationsResponse {
+    pub ok: bool,
+    pub inviter_id: String,
+    pub invitations: Vec<InvitationCode>,
 }
 
 /// Stats response
@@ -230,6 +254,16 @@ impl axum::response::IntoResponse for AdminError {
         )
             .into_response()
     }
+}
+
+// ============================================================================
+// UI Handler
+// ============================================================================
+
+/// Serve the admin UI
+pub async fn admin_ui_handler() -> impl IntoResponse {
+    const ADMIN_UI_HTML: &str = include_str!("../../../admin-ui/index.html");
+    Html(ADMIN_UI_HTML)
 }
 
 // ============================================================================
@@ -374,6 +408,75 @@ pub async fn add_bootstrap_user_handler(
         ok: true,
         user_id: req.user_id,
         invites_granted: req.invite_count,
+    }))
+}
+
+pub async fn create_invitations_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateInvitationsRequest>,
+) -> Result<Json<CreateInvitationsResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    if req.count == 0 {
+        return Err(AdminError::InvalidRequest(
+            "count must be greater than 0".to_string(),
+        ));
+    }
+
+    if req.count > 100 {
+        return Err(AdminError::InvalidRequest(
+            "count cannot exceed 100 per request".to_string(),
+        ));
+    }
+
+    let mut invitations = Vec::new();
+
+    for _ in 0..req.count {
+        match state.invitation_system.generate_invite(&req.inviter_id).await {
+            Ok((code, signature, expires_at)) => {
+                invitations.push(InvitationCode {
+                    code,
+                    signature: hex::encode(signature),
+                    expires_at,
+                });
+            }
+            Err(e) => {
+                let err_msg = e.to_string();
+                if err_msg.contains("not found") {
+                    return Err(AdminError::UserNotFound(req.inviter_id.clone()));
+                } else if err_msg.contains("banned") {
+                    return Err(AdminError::InvalidRequest(format!(
+                        "User {} is banned",
+                        req.inviter_id
+                    )));
+                } else if err_msg.contains("no invites remaining") {
+                    return Err(AdminError::InvalidRequest(format!(
+                        "User {} has no invites remaining",
+                        req.inviter_id
+                    )));
+                } else if err_msg.contains("cooldown") {
+                    return Err(AdminError::InvalidRequest(format!(
+                        "User {} is in cooldown period",
+                        req.inviter_id
+                    )));
+                } else {
+                    return Err(AdminError::Internal(err_msg));
+                }
+            }
+        }
+    }
+
+    info!(
+        inviter_id = %req.inviter_id,
+        count = req.count,
+        "Admin: created invitations"
+    );
+
+    Ok(Json(CreateInvitationsResponse {
+        ok: true,
+        inviter_id: req.inviter_id,
+        invitations,
     }))
 }
 
@@ -667,9 +770,11 @@ pub fn admin_router(
     });
 
     axum::Router::new()
+        .route("/", axum::routing::get(admin_ui_handler))
         .route("/health", axum::routing::get(health_handler))
         .route("/stats", axum::routing::get(get_stats_handler))
         .route("/invites/grant", axum::routing::post(grant_invites_handler))
+        .route("/invitations/create", axum::routing::post(create_invitations_handler))
         .route("/users/ban", axum::routing::post(ban_user_handler))
         .route(
             "/bootstrap/add",

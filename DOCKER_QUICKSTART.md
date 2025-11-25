@@ -115,7 +115,47 @@ curl http://localhost:8082/
 }
 ```
 
-## Using Freebird
+## Using the Admin Dashboard
+
+Freebird includes a web-based admin dashboard for managing your deployment.
+
+### Access the Dashboard
+
+Open your browser and navigate to:
+```
+http://localhost:8081/admin
+```
+
+### Initial Setup
+
+1. **Enter your Admin API Key** (from `.env` file - default: `dev-admin-key-must-be-at-least-32-characters-long`)
+2. Click **Save & Test** to verify the connection
+3. The dashboard will validate your key and save it securely in your browser
+
+### Dashboard Features
+
+**📊 Dashboard Tab:**
+- View system statistics (users, invitations, tokens)
+- Monitor invitation redemption rates
+- Check banned user counts
+
+**🎫 Invitations Tab:**
+- **Create Invitations:** Generate invitation codes with signatures that users can share
+- **Grant Invitation Quota:** Increase a user's invitation allowance (reputation rewards)
+
+### Quick Example
+
+To create invitation codes:
+1. Go to the **Invitations** tab
+2. Enter the user ID (e.g., `admin` for the bootstrap user)
+3. Set count (e.g., `5` to create 5 invitations)
+4. Click **Create Invitations**
+5. Copy the invitation codes and signatures using the 📋 buttons
+6. Share the codes with new users (via encrypted channels only!)
+
+---
+
+## Using Freebird Programmatically
 
 ### Option 1: Using the TypeScript SDK
 
@@ -164,14 +204,14 @@ See the [API Examples](#api-examples) section below.
 
 ## API Examples
 
-### 1. Issue a Token (with Invitation System)
+### 1. Create Invitations (Admin Only)
 
-First, create an invitation as the bootstrap admin user:
+Create invitation codes for a user to share:
 
 ```bash
-# Create an invitation
-curl -X POST http://localhost:8081/api/admin/invitations \
-  -H "X-Admin-API-Key: dev-admin-key-must-be-at-least-32-characters-long" \
+# Create invitations
+curl -X POST http://localhost:8081/admin/invitations/create \
+  -H "X-Admin-Key: dev-admin-key-must-be-at-least-32-characters-long" \
   -H "Content-Type: application/json" \
   -d '{"inviter_id": "admin", "count": 1}'
 ```
@@ -179,17 +219,26 @@ curl -X POST http://localhost:8081/api/admin/invitations \
 **Response:**
 ```json
 {
+  "ok": true,
+  "inviter_id": "admin",
   "invitations": [
-    "INV_eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+    {
+      "code": "Abc123XyZ456PqRsTuVw",
+      "signature": "3045022100d7f2e8c9a1b3f4e5...",
+      "expires_at": 1734567890
+    }
   ]
 }
 ```
 
-Now use the invitation code to issue a token:
+### 2. Issue a Token (with Invitation System)
+
+Use the invitation code and signature from step 1 to issue a token:
 
 ```bash
 # Get a token using the invitation
-INVITE_CODE="INV_eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+INVITE_CODE="Abc123XyZ456PqRsTuVw"
+INVITE_SIG="3045022100d7f2e8c9a1b3f4e5..."
 
 curl -X POST http://localhost:8081/token \
   -H "Content-Type: application/json" \
@@ -216,18 +265,28 @@ curl -X POST http://localhost:8082/verify \
 
 ### 3. Admin API Examples
 
+**Note:** The admin API header is `X-Admin-Key` (not `X-Admin-API-Key`).
+
 ```bash
 # View system statistics
-curl http://localhost:8081/api/admin/stats \
-  -H "X-Admin-API-Key: dev-admin-key-must-be-at-least-32-characters-long"
+curl http://localhost:8081/admin/stats \
+  -H "X-Admin-Key: dev-admin-key-must-be-at-least-32-characters-long"
+
+# Grant invitations to a user (increases quota)
+curl -X POST http://localhost:8081/admin/invites/grant \
+  -H "X-Admin-Key: dev-admin-key-must-be-at-least-32-characters-long" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "alice", "count": 10}'
 
 # Trigger manual key rotation
-curl -X POST http://localhost:8081/api/admin/rotate-key \
-  -H "X-Admin-API-Key: dev-admin-key-must-be-at-least-32-characters-long"
+curl -X POST http://localhost:8081/admin/keys/rotate \
+  -H "X-Admin-Key: dev-admin-key-must-be-at-least-32-characters-long" \
+  -H "Content-Type: application/json" \
+  -d '{"new_kid": "freebird-2024-11-26", "grace_period_secs": 3600}'
 
 # List active keys
-curl http://localhost:8081/api/admin/keys \
-  -H "X-Admin-API-Key: dev-admin-key-must-be-at-least-32-characters-long"
+curl http://localhost:8081/admin/keys \
+  -H "X-Admin-Key: dev-admin-key-must-be-at-least-32-characters-long"
 ```
 
 ## Common Operations
