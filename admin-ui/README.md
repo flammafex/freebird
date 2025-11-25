@@ -4,25 +4,40 @@ A minimal, single-page web interface for managing your Freebird deployment.
 
 ## Features
 
-### Phase 1 (Current)
+### Current Features (Phases 1-3 Complete)
 
 **📊 Dashboard Tab:**
-- View system statistics
+- View real-time system statistics
 - Monitor user counts, invitations, and redemptions
-- Check banned user statistics
-- Real-time refresh
+- Check banned user statistics and system health
+- One-click refresh
+
+**👥 User Management Tab:**
+- View all users with search and filtering
+- Inspect detailed user profiles with reputation scores
+- View invitation trees and relationships
+- Ban individual users or entire invitation trees (recursive bans)
+- Monitor user activity and invitation usage
 
 **🎫 Invitations Tab:**
-- Create invitation codes with cryptographic signatures
+- Create cryptographically signed invitation codes
 - Grant invitation quota to users
+- View invitation history with redemption status
 - Copy codes and signatures to clipboard
-- View expiration dates
+- Monitor expiration dates and usage
 
-### Future Phases
+**🔑 Key Management Tab:**
+- View active and deprecated cryptographic keys
+- Rotate keys with configurable grace periods
+- Clean up expired keys
+- Monitor key status, public keys, and expiration times
 
-- **Phase 2:** User management (view users, ban users, view invite trees)
-- **Phase 3:** Key management & system monitoring
-- **Phase 4:** Advanced features (invitation tree visualization, token testing, real-time charts)
+### Future Enhancements
+
+- **Phase 4:** Advanced visualization (interactive invitation tree graphs, real-time charts)
+- **Token Testing:** Inline token issuance and verification testing
+- **Audit Logs:** Comprehensive activity logging and search
+- **WebAuthn Management:** Register and manage FIDO2 credentials
 
 ## Access
 
@@ -44,12 +59,13 @@ http://localhost:8081/admin
 
 ## Architecture
 
-- **Single HTML file** (~700 lines) with embedded CSS and JavaScript
-- **No build step** required - served directly from the issuer
+- **Single HTML file** (~1300 lines) with embedded CSS and JavaScript
+- **No build step** required - served directly from the issuer binary
 - **No external dependencies** except water.css (CDN)
-- **Tab-based navigation** ready for Phase 2 expansion
+- **Four-tab interface** with smooth navigation and state management
 - **Modular JavaScript** with clean API client architecture
 - **LocalStorage** for API key persistence
+- **Responsive design** works on desktop and mobile browsers
 
 ## Security
 
@@ -64,8 +80,15 @@ http://localhost:8081/admin
 |----------|--------|---------|
 | `/admin/health` | GET | Verify API key and system health |
 | `/admin/stats` | GET | Fetch system statistics |
+| `/admin/users` | GET | List all users with their status |
+| `/admin/users/:id` | GET | Get detailed user information and invite tree |
+| `/admin/users/ban` | POST | Ban a user (optionally with entire invite tree) |
 | `/admin/invitations/create` | POST | Generate invitation codes |
 | `/admin/invites/grant` | POST | Grant invitation quota to users |
+| `/admin/invitations` | GET | List invitation history with status |
+| `/admin/keys` | GET | List all cryptographic keys |
+| `/admin/keys/rotate` | POST | Rotate to a new key with grace period |
+| `/admin/keys/cleanup` | POST | Remove expired keys |
 
 ## Development
 
