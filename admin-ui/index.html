@@ -353,7 +353,8 @@
             <span class="badge">Checking...</span>
         </div>
     </div>
-ccccc
+
+    <!-- API Key Configuration -->
     <div class="api-key-section">
         <label for="apiKey"><strong>Admin API Key</strong></label>
         <div class="form-row">
@@ -709,7 +710,7 @@ ccccc
                         </div>
                     </div>
                     <p class="text-small" style="opacity: 0.6;">Last updated: ${timestamp}</p>
-                `;s
+                `;
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ Failed to load stats: ${error.message}</div>`;
             }        
