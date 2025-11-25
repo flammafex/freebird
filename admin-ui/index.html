@@ -469,6 +469,15 @@
         </div>
 
         <div id="grantResults"></div>
+
+        <div class="form-section">
+            <h3>📋 Recent Invitations</h3>
+            <p class="text-small">View recently created invitation codes and their status.</p>
+            <button onclick="loadInvitationHistory()">🔄 Refresh</button>
+            <div id="invitationHistoryContainer" class="mt-20">
+                <p class="text-small">Click "Refresh" to load invitation history...</p>
+            </div>
+        </div>
     </div>
 
     <!-- Keys Tab -->
@@ -638,6 +647,10 @@
                     method: 'POST'
                 });
             }
+
+            async getInvitations(limit = 50) {
+                return this.request(`/invitations?limit=${limit}`);
+            }
         }
 
         // ============================================================================
@@ -673,6 +686,8 @@
                 loadUsers();
             } else if (tabName === 'keys') {
                 loadKeys();
+            } else if (tabName === 'invitations') {
+                loadInvitationHistory();
             }
         }
 
@@ -1044,6 +1059,61 @@
                 );
             } catch (error) {
                 showMessage('grantResults', 'error', `❌ Failed: ${error.message}`);
+            }
+        }
+
+        async function loadInvitationHistory() {
+            if (!state.apiKey) {
+                showMessage('invitationHistoryContainer', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const container = document.getElementById('invitationHistoryContainer');
+            container.innerHTML = '<p><span class="spinner"></span> Loading invitation history...</p>';
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const invitations = await api.getInvitations(50);
+
+                if (!invitations || invitations.length === 0) {
+                    container.innerHTML = '<p class="text-small">No invitations found.</p>';
+                    return;
+                }
+
+                let html = '<table><thead><tr>';
+                html += '<th>Code</th>';
+                html += '<th>Created By</th>';
+                html += '<th>Created At</th>';
+                html += '<th>Used By</th>';
+                html += '<th>Status</th>';
+                html += '<th>Expires At</th>';
+                html += '</tr></thead><tbody>';
+
+                invitations.forEach(invite => {
+                    const createdAt = new Date(invite.created_at * 1000).toLocaleString();
+                    const expiresAt = invite.expires_at
+                        ? new Date(invite.expires_at * 1000).toLocaleString()
+                        : 'Never';
+                    const usedBy = invite.invitee_id || '<span style="opacity: 0.5;">Not used</span>';
+                    const codeShort = invite.code.substring(0, 8) + '...';
+                    const status = invite.redeemed
+                        ? '<span style="color: var(--success-color)">✓ Used</span>'
+                        : '<span style="opacity: 0.5;">Pending</span>';
+
+                    html += `<tr>`;
+                    html += `<td><code>${codeShort}</code></td>`;
+                    html += `<td class="text-mono">${invite.inviter_id}</td>`;
+                    html += `<td>${createdAt}</td>`;
+                    html += `<td class="text-mono">${usedBy}</td>`;
+                    html += `<td>${status}</td>`;
+                    html += `<td>${expiresAt}</td>`;
+                    html += `</tr>`;
+                });
+
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `<div class="message error">❌ Failed to load invitation history: ${error.message}</div>`;
             }
         }
 
