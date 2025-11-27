@@ -76,6 +76,8 @@ impl Application {
                 }
             }
         });
+        
+        
 
         // 2. WebAuthn Setup
         #[cfg(feature = "human-gate-webauthn")]
@@ -366,6 +368,27 @@ impl Application {
                                 .context("Failed to initialize Multi-Party Vouching for combined mode")?;
                             mechanisms.push(sys);
                         }
+                        "proof_of_burn" => {
+							// 1. Get URL from Env (Default to localhost sidecar)
+							let sidecar_url = std::env::var("SYBIL_PROOF_OF_BURN_URL")
+								.unwrap_or_else(|_| "http://localhost:3000".to_string());
+					
+							info!("🔥 Sybil resistance: Proof of Burn");
+							info!("   └─ Ledger Sidecar: {}", sidecar_url);
+					
+							// 2. Connect to the Sidecar
+							let ledger = Arc::new(
+								crate::ledger::sidecar::SidecarLedger::new(sidecar_url)
+							);
+					
+							// 3. Create the Proof of Burn logic
+							let mint = crate::sybil_resistance::proof_of_burn::ProofOfBurn::new(
+								ledger,
+								config.issuer_id.clone()
+							);
+					
+							Some(Arc::new(mint));
+						}
                         "federated_trust" => {
                             let trust_policy = common::federation::TrustPolicy {
                                 enabled: config.sybil_config.federated_trust_enabled,

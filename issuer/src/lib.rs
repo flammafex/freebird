@@ -7,6 +7,7 @@ pub mod startup;
 pub mod sybil_resistance;
 pub mod voprf_core;
 pub mod webauthn;
+pub mod ledger;
 
 // Re-export for convenience
 pub use main_state::AppStateWithSybil;

@@ -1436,6 +1436,7 @@ dependencies = [
  "rand 0.8.5",
  "rayon",
  "redis",
+ "reqwest 0.12.24",
  "serde",
  "serde_json",
  "serial_test",
