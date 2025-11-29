@@ -2,6 +2,12 @@
 name = "freebird-verifier"
 version = "0.1.0"
 edition = "2021"
+description = "Token verification service for the Freebird privacy-preserving authentication system"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/flammafex/freebird"
+homepage = "https://github.com/flammafex/freebird"
+keywords = ["privacy", "authentication", "verifier", "tokens"]
+categories = ["authentication", "web-programming"]
 
 [dev-dependencies]
 serde_json = "1"
