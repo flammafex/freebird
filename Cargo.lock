@@ -371,19 +371,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "common"
-version = "0.1.0"
-dependencies = [
- "base64ct",
- "crypto",
- "serde",
- "serde_json",
- "time",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "const-oid"
 version = "0.9.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -486,30 +473,6 @@ name = "crunchy"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
-
-[[package]]
-name = "crypto"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "base64ct",
- "criterion",
- "cryptoki",
- "elliptic-curve",
- "generic-array",
- "hkdf",
- "hmac",
- "p256",
- "proptest",
- "rand 0.8.5",
- "rand_core 0.6.4",
- "rayon",
- "sha2",
- "subtle",
- "tokio",
- "zeroize",
-]
 
 [[package]]
 name = "crypto-bigint"
@@ -758,6 +721,124 @@ checksum = "8835f84f38484cc86f110a805655697908257fb9a7af005234060891557198e9"
 dependencies = [
  "nonempty",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "freebird-common"
+version = "0.1.0"
+dependencies = [
+ "base64ct",
+ "freebird-crypto",
+ "serde",
+ "serde_json",
+ "time",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "freebird-crypto"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64ct",
+ "criterion",
+ "cryptoki",
+ "elliptic-curve",
+ "generic-array",
+ "hkdf",
+ "hmac",
+ "p256",
+ "proptest",
+ "rand 0.8.5",
+ "rand_core 0.6.4",
+ "rayon",
+ "sha2",
+ "subtle",
+ "tokio",
+ "zeroize",
+]
+
+[[package]]
+name = "freebird-interface"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64ct",
+ "freebird-common",
+ "freebird-crypto",
+ "rand 0.8.5",
+ "reqwest 0.11.27",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "freebird-issuer"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64ct",
+ "blake3",
+ "chrono",
+ "elliptic-curve",
+ "freebird-common",
+ "freebird-crypto",
+ "hex",
+ "p256",
+ "rand 0.8.5",
+ "rayon",
+ "redis",
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "sha2",
+ "tempfile",
+ "time",
+ "tokio",
+ "tower 0.4.13",
+ "tower-http 0.5.2",
+ "tower_governor",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
+ "webauthn-rs",
+ "zeroize",
+]
+
+[[package]]
+name = "freebird-verifier"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64ct",
+ "freebird-common",
+ "freebird-crypto",
+ "hex",
+ "rayon",
+ "redis",
+ "reqwest 0.12.24",
+ "serde",
+ "serde_json",
+ "subtle",
+ "time",
+ "tokio",
+ "tower 0.4.13",
+ "tower-http 0.5.2",
+ "tower_governor",
+ "tracing",
+ "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
@@ -1361,8 +1442,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64ct",
- "common",
- "crypto",
+ "freebird-common",
+ "freebird-crypto",
+ "freebird-verifier",
  "futures",
  "rand 0.8.5",
  "reqwest 0.12.24",
@@ -1371,24 +1453,6 @@ dependencies = [
  "time",
  "tokio",
  "uuid",
- "verifier",
-]
-
-[[package]]
-name = "interface"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64ct",
- "common",
- "crypto",
- "rand 0.8.5",
- "reqwest 0.11.27",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
@@ -1416,43 +1480,6 @@ dependencies = [
  "hermit-abi",
  "libc",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "issuer"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64ct",
- "blake3",
- "chrono",
- "common",
- "crypto",
- "elliptic-curve",
- "hex",
- "p256",
- "rand 0.8.5",
- "rayon",
- "redis",
- "reqwest 0.12.24",
- "serde",
- "serde_json",
- "serial_test",
- "sha2",
- "tempfile",
- "time",
- "tokio",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "tower_governor",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
- "webauthn-rs",
- "zeroize",
 ]
 
 [[package]]
@@ -3254,33 +3281,6 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
-
-[[package]]
-name = "verifier"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64ct",
- "common",
- "crypto",
- "hex",
- "rayon",
- "redis",
- "reqwest 0.12.24",
- "serde",
- "serde_json",
- "subtle",
- "time",
- "tokio",
- "tower 0.4.13",
- "tower-http 0.5.2",
- "tower_governor",
- "tracing",
- "tracing-subscriber",
- "zeroize",
-]
 
 [[package]]
 name = "version_check"

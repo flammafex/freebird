@@ -235,7 +235,7 @@ impl Application {
                 Some(sys)
             }
             "federated_trust" => {
-                let trust_policy = common::federation::TrustPolicy {
+                let trust_policy = freebird_common::federation::TrustPolicy {
                     enabled: config.sybil_config.federated_trust_enabled,
                     max_trust_depth: config.sybil_config.federated_trust_max_depth,
                     min_trust_paths: config.sybil_config.federated_trust_min_paths,
@@ -390,7 +390,7 @@ impl Application {
 							Some(Arc::new(mint));
 						}
                         "federated_trust" => {
-                            let trust_policy = common::federation::TrustPolicy {
+                            let trust_policy = freebird_common::federation::TrustPolicy {
                                 enabled: config.sybil_config.federated_trust_enabled,
                                 max_trust_depth: config.sybil_config.federated_trust_max_depth,
                                 min_trust_paths: config.sybil_config.federated_trust_min_paths,

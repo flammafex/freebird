@@ -8,7 +8,7 @@
 //! from other trusted issuers.
 
 use anyhow::{Context, Result};
-use common::federation::{FederationMetadata, Revocation, TrustPolicy, Vouch};
+use freebird_common::federation::{FederationMetadata, Revocation, TrustPolicy, Vouch};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;

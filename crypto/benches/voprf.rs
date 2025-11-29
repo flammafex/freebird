@@ -12,7 +12,7 @@
 //! Run with: cargo bench --bench voprf
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use crypto::{Client, Server, Verifier};
+use freebird_crypto::{Client, Server, Verifier};
 
 fn bench_blind(c: &mut Criterion) {
     let mut group = c.benchmark_group("voprf/blind");

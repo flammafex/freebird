@@ -2,7 +2,7 @@ use anyhow::Result;
 use futures::future::join_all;
 use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
 use std::time::Duration;
-use verifier::store::{RedisStore, SpendStore};
+use freebird_verifier::store::{RedisStore, SpendStore};
 
 const CONCURRENCY: usize = 50;
 

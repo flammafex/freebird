@@ -6,13 +6,13 @@
 //! # Example
 //!
 //! ```rust
-//! use issuer::sybil_resistance::{ProofOfWork, SybilResistance};
-//! use common::api::SybilProof;
+//! use freebird_issuer::sybil_resistance::{ProofOfWork, SybilResistance};
+//! use freebird_common::api::SybilProof;
 //!
 //! # fn main() -> anyhow::Result<()> {
 //! let difficulty = 1; // Low difficulty for test
 //! let input = "test_input";
-//! let timestamp = issuer::sybil_resistance::current_timestamp();
+//! let timestamp = freebird_issuer::sybil_resistance::current_timestamp();
 //!
 //! // Client side: compute proof
 //! let (nonce, hash) = ProofOfWork::compute(difficulty, &input, timestamp)?;
@@ -26,7 +26,7 @@
 //! ```
 
 use super::{verify_timestamp_recent, SybilResistance};
-use common::api::SybilProof; // Use shared type
+use freebird_common::api::SybilProof; // Use shared type
 use anyhow::{anyhow, Result};
 use sha2::{Digest, Sha256};
 

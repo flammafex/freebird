@@ -9,7 +9,7 @@
 
 use anyhow::{anyhow, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use common::api::{SybilProof, VouchProof};
+use freebird_common::api::{SybilProof, VouchProof};
 use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

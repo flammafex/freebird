@@ -181,13 +181,13 @@ pub struct ForceRemoveKeyResponse {
 /// Request to add a vouch
 #[derive(Debug, Deserialize)]
 pub struct AddVouchRequest {
-    pub vouch: common::federation::Vouch,
+    pub vouch: freebird_common::federation::Vouch,
 }
 
 /// Request to add a revocation
 #[derive(Debug, Deserialize)]
 pub struct AddRevocationRequest {
-    pub revocation: common::federation::Revocation,
+    pub revocation: freebird_common::federation::Revocation,
 }
 
 /// Response for vouch operations
@@ -785,7 +785,7 @@ async fn remove_vouch_handler(
 async fn list_vouches_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
-) -> Result<Json<Vec<common::federation::Vouch>>, AdminError> {
+) -> Result<Json<Vec<freebird_common::federation::Vouch>>, AdminError> {
     verify_api_key(&headers, &state.api_key)?;
 
     let vouches = state.federation_store.get_vouches().await;
@@ -841,7 +841,7 @@ async fn remove_revocation_handler(
 async fn list_revocations_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
-) -> Result<Json<Vec<common::federation::Revocation>>, AdminError> {
+) -> Result<Json<Vec<freebird_common::federation::Revocation>>, AdminError> {
     verify_api_key(&headers, &state.api_key)?;
 
     let revocations = state.federation_store.get_revocations().await;

@@ -31,7 +31,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use common::api::SybilProof;
+use freebird_common::api::SybilProof;
 use crate::sybil_resistance::SybilResistance;
 
 // ============================================================================

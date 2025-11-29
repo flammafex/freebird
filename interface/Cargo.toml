@@ -1,13 +1,13 @@
 [package]
-name = "interface"
+name = "freebird-interface"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 anyhow = "1"
 base64ct = { version = "1.8", default-features = false }
-crypto = { version = "0.1.0", path = "../crypto", features = ["voprf-p256"] }
-common = { version = "0.1.0", path = "../common" } # <--- ADD THIS
+freebird-crypto = { version = "0.1.0", path = "../crypto", features = ["voprf-p256"] }
+freebird-common = { version = "0.1.0", path = "../common" } # <--- ADD THIS
 rand = "0.8"
 reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }

@@ -1,6 +1,6 @@
 // issuer/src/routes/metadata.rs
 use axum::{extract::State, Json};
-use common::api::{KeyDiscoveryResp, VoprfKeyInfo};
+use freebird_common::api::{KeyDiscoveryResp, VoprfKeyInfo};
 use serde::Serialize;
 use std::sync::Arc;
 use crate::multi_key_voprf::MultiKeyVoprfCore;
@@ -82,7 +82,7 @@ pub async fn keys_handler(
 /// where verifiers can traverse trust graphs to make authorization decisions.
 pub async fn federation_handler(
     State((state, _voprf)): State<SharedState>
-) -> Json<common::federation::FederationMetadata> {
+) -> Json<freebird_common::federation::FederationMetadata> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -92,7 +92,7 @@ pub async fn federation_handler(
     let vouches = state.federation_store.get_vouches().await;
     let revocations = state.federation_store.get_revocations().await;
 
-    Json(common::federation::FederationMetadata {
+    Json(freebird_common::federation::FederationMetadata {
         issuer_id: state.issuer_id.clone(),
         vouches,
         revocations,

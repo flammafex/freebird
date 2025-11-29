@@ -13,7 +13,7 @@ pub struct IssuerSecret(pub [u8; 32]);
 /// VOPRF core using pluggable crypto provider (software or HSM)
 pub struct VoprfCore {
     /// Crypto provider (software or HSM)
-    provider: Arc<dyn crypto::provider::CryptoProvider>,
+    provider: Arc<dyn freebird_crypto::provider::CryptoProvider>,
 
     /// Context (cached from provider)
     ctx: Vec<u8>,
@@ -32,7 +32,7 @@ impl VoprfCore {
     /// For HSM support, use `from_provider` instead.
     pub fn new(sk: [u8; 32], pubkey_b64: String, kid: String, ctx: &[u8]) -> Result<Self> {
         // Create software provider
-        let provider = crypto::provider::software::SoftwareCryptoProvider::new(
+        let provider = freebird_crypto::provider::software::SoftwareCryptoProvider::new(
             sk,
             kid.clone(),
             ctx.to_vec(),
@@ -49,7 +49,7 @@ impl VoprfCore {
     /// Create a new VoprfCore from a crypto provider
     ///
     /// This allows using HSM-backed providers or custom implementations.
-    pub fn from_provider(provider: Arc<dyn crypto::provider::CryptoProvider>, pubkey_b64: String) -> Result<Self> {
+    pub fn from_provider(provider: Arc<dyn freebird_crypto::provider::CryptoProvider>, pubkey_b64: String) -> Result<Self> {
         let kid = provider.key_id().to_string();
         let ctx = provider.context().to_vec();
 

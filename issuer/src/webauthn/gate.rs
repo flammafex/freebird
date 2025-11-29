@@ -4,7 +4,7 @@ use base64ct::Encoding;
 use std::sync::Arc;
 use tracing::{info, debug};
 
-use common::api::SybilProof;
+use freebird_common::api::SybilProof;
 use crate::sybil_resistance::SybilResistance; // Trait still lives in common/sybil
 use super::handlers::WebAuthnState;
 

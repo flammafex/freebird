@@ -19,7 +19,7 @@ use time::OffsetDateTime;
 use tracing::{debug, error, info, warn};
 
 use crate::multi_key_voprf::MultiKeyVoprfCore;
-use common::api::{IssueReq, IssueResp, SybilInfo};
+use freebird_common::api::{IssueReq, IssueResp, SybilInfo};
 use crate::sybil_resistance::ClientData; // Keep ClientData local to issuer/sybil if not in common
 use crate::AppStateWithSybil;
 

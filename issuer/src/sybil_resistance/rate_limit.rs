@@ -15,10 +15,10 @@
 //! # Example
 //!
 //! ```rust
-//! use issuer::sybil_resistance::{RateLimit, SybilResistance}; // FIX: Correct import path
-//! use common::api::SybilProof;
+//! use freebird_issuer::sybil_resistance::{RateLimit, SybilResistance}; // FIX: Correct import path
+//! use freebird_common::api::SybilProof;
 //! use std::time::Duration;
-//! use issuer::sybil_resistance::current_timestamp; // FIX: Import helper
+//! use freebird_issuer::sybil_resistance::current_timestamp; // FIX: Import helper
 //!
 //! # fn main() -> anyhow::Result<()> { // FIX: Wrap in main for Error handling
 //! // Allow one token per client per hour
@@ -35,7 +35,7 @@
 //! ```
 
 use super::{current_timestamp, verify_timestamp_recent, SybilResistance}; // Remove SybilProof from here if unused in module logic
-use common::api::SybilProof; // Use shared type
+use freebird_common::api::SybilProof; // Use shared type
 use anyhow::{anyhow, Result};
 use base64ct::Encoding;
 use std::collections::HashMap;

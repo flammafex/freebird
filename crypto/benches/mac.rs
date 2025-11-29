@@ -11,7 +11,7 @@
 //! Run with: cargo bench --bench mac
 
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use crypto::{compute_token_mac, derive_mac_key, derive_mac_key_v2, verify_token_mac};
+use freebird_crypto::{compute_token_mac, derive_mac_key, derive_mac_key_v2, verify_token_mac};
 
 fn bench_compute_mac(c: &mut Criterion) {
     let mut group = c.benchmark_group("mac/compute");

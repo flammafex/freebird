@@ -8,16 +8,16 @@ use axum::{
     Json, Router,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
-use common::logging;
+use freebird_common::logging;
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::{Duration, Instant}};
 use tokio::{net::TcpListener, sync::RwLock, time::sleep};
 use tracing::{debug, error, info, warn};
-use common::api::{VerifyReq, VerifyResp, BatchVerifyReq, BatchVerifyResp, VerifyResult, TokenToVerify};
+use freebird_common::api::{VerifyReq, VerifyResp, BatchVerifyReq, BatchVerifyResp, VerifyResult, TokenToVerify};
 
 // FIX: Import from the library crate instead of local mod
-use verifier::store::{SpendStore, StoreBackend};
+use freebird_verifier::store::{SpendStore, StoreBackend};
 
 #[derive(Clone)]
 struct AppState {
@@ -308,7 +308,7 @@ async fn verify(
     let received_signature: [u8; 64] = sig_bytes.try_into().expect("Signature is 64 bytes");
 
     // Verify signature using issuer's public key (federation mode!)
-    let sig_valid = crypto::verify_token_signature(
+    let sig_valid = freebird_crypto::verify_token_signature(
         &issuer.pubkey_bytes,
         token_data,
         &received_signature,
@@ -326,7 +326,7 @@ async fn verify(
 
     // 5) Verify DLEQ token and derive PRF output
     debug!("Verifying DLEQ token with context len={}", issuer.ctx.len());
-    let verifier = crypto::Verifier::new(&issuer.ctx);
+    let verifier = freebird_crypto::Verifier::new(&issuer.ctx);
 
     // Pass only the token data (without authentication) to VOPRF verifier
     let token_data_b64 = Base64UrlUnpadded::encode_string(token_data);
@@ -340,7 +340,7 @@ async fn verify(
     debug!("✅ Token cryptographically valid, PRF output derived");
 
     // 4) Replay / spend tracking
-    let null_key = crypto::nullifier_key(&req.issuer_id, &out_b64);
+    let null_key = freebird_crypto::nullifier_key(&req.issuer_id, &out_b64);
     let spend_key = format!("freebird:spent:{}:{}", req.issuer_id, null_key);
     debug!("Checking replay with key: {}", spend_key);
 
@@ -487,7 +487,7 @@ async fn batch_verify(
         };
 
         // Verify signature using issuer's public key
-        let sig_valid = crypto::verify_token_signature(
+        let sig_valid = freebird_crypto::verify_token_signature(
             &issuer_clone.pubkey_bytes,
             token_data,
             &received_signature,
@@ -504,7 +504,7 @@ async fn batch_verify(
         }
 
         // 4) Verify VOPRF token
-        let verifier = crypto::Verifier::new(&issuer_clone.ctx);
+        let verifier = freebird_crypto::Verifier::new(&issuer_clone.ctx);
         let token_data_b64 = Base64UrlUnpadded::encode_string(token_data);
         let out_b64 = match verifier.verify(&token_data_b64, &issuer_clone.pubkey_bytes) {
             Ok(o) => o,
@@ -518,7 +518,7 @@ async fn batch_verify(
 
         // 5) Check for replay - this is the only part that needs to be async
         // We'll handle this synchronously in the parallel loop by using block_on
-        let null_key = crypto::nullifier_key(&issuer_id, &out_b64);
+        let null_key = freebird_crypto::nullifier_key(&issuer_id, &out_b64);
         let spend_key = format!("freebird:spent:{}:{}", issuer_id, null_key);
 
         // Use tokio::runtime::Handle to bridge rayon and tokio
