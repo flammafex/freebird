@@ -15,8 +15,8 @@ human-gate-webauthn = [
 ]
 
 [dependencies]
-common = { path = "../common" }
-crypto = { path = "../crypto", features = ["voprf-p256"] }
+common = { version = "0.1.0", path = "../common" }
+crypto = { version = "0.1.0", path = "../crypto", features = ["voprf-p256"] }
 axum = "0.7"
 rayon = "1.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "fs"] }  # Added "fs" feature
