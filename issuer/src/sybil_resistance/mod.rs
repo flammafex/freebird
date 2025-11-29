@@ -30,7 +30,6 @@ pub mod progressive_trust;
 pub mod proof_of_diversity;
 pub mod multi_party_vouching;
 pub mod federated_trust;
-pub mod proof_of_burn;
 
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
 pub use invitation::ClientData;
