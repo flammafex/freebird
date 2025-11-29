@@ -22,7 +22,7 @@
 //! # Example
 //!
 //! ```rust,no_run
-//! # use issuer::multi_key_voprf::{MultiKeyVoprfCore, EvaluationWithKid};
+//! # use freebird_issuer::multi_key_voprf::{MultiKeyVoprfCore, EvaluationWithKid};
 //! # use anyhow::Result;
 //! # async fn example() -> Result<()> {
 //! # let sk_bytes = [0u8; 32];

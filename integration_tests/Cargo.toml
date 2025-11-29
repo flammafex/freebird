@@ -22,6 +22,6 @@ tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 
 # Project Crates
-crypto = { path = "../crypto" }
-common = { path = "../common" }
-verifier = { path = "../verifier" } # <--- Now accessible as a lib
+freebird-crypto = { path = "../crypto" }
+freebird-common = { path = "../common" }
+freebird-verifier = { path = "../verifier" } # <--- Now accessible as a lib

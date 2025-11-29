@@ -10,8 +10,8 @@
 
 use anyhow::{anyhow, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use common::api::SybilProof;
-use common::federation::{FederationMetadata, TrustPolicy, Vouch};
+use freebird_common::api::SybilProof;
+use freebird_common::federation::{FederationMetadata, TrustPolicy, Vouch};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -220,7 +220,7 @@ impl SybilResistance for FederatedTrustSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::federation::Vouch;
+    use freebird_common::federation::Vouch;
 
     async fn create_test_federation_store() -> Arc<FederationStore> {
         let store = FederationStore::new("/tmp/federated_trust_test")

@@ -5,7 +5,7 @@ pub mod issue;
 pub mod metadata;
 
 // Re-export types from common directly
-pub use common::api::{BatchIssueReq, BatchIssueResp, IssueReq, IssueResp};
+pub use freebird_common::api::{BatchIssueReq, BatchIssueResp, IssueReq, IssueResp};
 
 pub use admin::admin_router;
 pub use batch_issue::handle_batch;

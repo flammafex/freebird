@@ -1,5 +1,5 @@
 [package]
-name = "issuer"
+name = "freebird-issuer"
 version = "0.1.0"
 edition = "2021"
 license = "MIT OR Apache-2.0"
@@ -15,8 +15,8 @@ human-gate-webauthn = [
 ]
 
 [dependencies]
-common = { version = "0.1.0", path = "../common" }
-crypto = { version = "0.1.0", path = "../crypto", features = ["voprf-p256"] }
+freebird-common = { version = "0.1.0", path = "../common" }
+freebird-crypto = { version = "0.1.0", path = "../crypto", features = ["voprf-p256"] }
 axum = "0.7"
 rayon = "1.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "fs"] }  # Added "fs" feature

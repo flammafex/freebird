@@ -21,7 +21,7 @@
 //! ```
 use anyhow::{anyhow, Result};
 use std::sync::Arc;
-use common::api::SybilProof;
+use freebird_common::api::SybilProof;
 
 pub mod invitation;
 pub mod proof_of_work;

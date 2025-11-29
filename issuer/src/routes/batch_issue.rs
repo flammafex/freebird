@@ -37,7 +37,7 @@ use time::OffsetDateTime;
 use tracing::{debug, error, info, instrument, warn};
 use zeroize::Zeroizing;
 use crate::multi_key_voprf::MultiKeyVoprfCore;
-use common::api::{BatchIssueReq, BatchIssueResp, TokenResult, SybilInfo};
+use freebird_common::api::{BatchIssueReq, BatchIssueResp, TokenResult, SybilInfo};
 use crate::routes::issue::extract_client_data;
 use crate::AppStateWithSybil;
 // / Maximum batch size to prevent memory exhaustion
@@ -346,7 +346,7 @@ pub async fn handle_batch(
                 match Base64UrlUnpadded::decode_vec(&token) {
                     Ok(token_bytes) => {
                         // Compute MAC over (token || kid || exp || issuer_id)
-                        let mac = crypto::compute_token_mac(
+                        let mac = freebird_crypto::compute_token_mac(
                             &mac_key,
                             &token_bytes,
                             &kid,

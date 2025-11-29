@@ -1,4 +1,4 @@
-use crypto::{Client, Server, Verifier};
+use freebird_crypto::{Client, Server, Verifier};
 use proptest::prelude::*;
 // Fix: Import Encoding trait for Base64UrlUnpadded methods
 use base64ct::Encoding;

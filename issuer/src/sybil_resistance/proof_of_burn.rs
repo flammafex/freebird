@@ -2,9 +2,9 @@
 use std::sync::Arc;
 use super::SybilResistance;
 use crate::ledger::BurnLedger;
-use common::api::SybilProof;
+use freebird_common::api::SybilProof;
 use anyhow::{anyhow, Result};
-use crypto::nullifier_key; 
+use freebird_crypto::nullifier_key; 
 
 pub struct ProofOfBurn {
     ledger: Arc<dyn BurnLedger>,

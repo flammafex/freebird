@@ -10,7 +10,7 @@
 //! 4. This enables multi-issuer federation
 
 use base64ct::{Base64UrlUnpadded, Encoding};
-use crypto::{Client, Server, Verifier};
+use freebird_crypto::{Client, Server, Verifier};
 
 #[test]
 fn test_signature_based_token_generation() {
@@ -44,7 +44,7 @@ fn test_signature_based_token_generation() {
     let exp = 1234567890i64;
     let issuer_id = "issuer:freebird:v1";
 
-    let signature = crypto::compute_token_signature(
+    let signature = freebird_crypto::compute_token_signature(
         &issuer_sk,
         &voprf_token,
         kid,
@@ -65,7 +65,7 @@ fn test_signature_based_token_generation() {
     );
 
     // Step 7: Verifier authenticates using ONLY the public key (no secret key!)
-    let signature_valid = crypto::verify_token_signature(
+    let signature_valid = freebird_crypto::verify_token_signature(
         &issuer_pubkey,
         &voprf_token,
         &signature,
@@ -106,7 +106,7 @@ fn test_token_structure() {
     let issuer_id = "issuer:test";
 
     // Signature-based token (195 bytes)
-    let signature = crypto::compute_token_signature(&sk, &voprf_token, kid, exp, issuer_id)
+    let signature = freebird_crypto::compute_token_signature(&sk, &voprf_token, kid, exp, issuer_id)
         .expect("signature");
     let mut token = voprf_token.clone();
     token.extend_from_slice(&signature);
@@ -141,14 +141,14 @@ fn test_signature_determinism() {
     let issuer_id = "issuer:test";
 
     // Sign twice with same inputs
-    let sig1 = crypto::compute_token_signature(&sk, &token, kid, exp, issuer_id).expect("sig1");
-    let sig2 = crypto::compute_token_signature(&sk, &token, kid, exp, issuer_id).expect("sig2");
+    let sig1 = freebird_crypto::compute_token_signature(&sk, &token, kid, exp, issuer_id).expect("sig1");
+    let sig2 = freebird_crypto::compute_token_signature(&sk, &token, kid, exp, issuer_id).expect("sig2");
 
     assert_eq!(sig1, sig2, "Signatures should be deterministic (RFC 6979)");
 
     // Both should verify
-    assert!(crypto::verify_token_signature(&pubkey, &token, &sig1, kid, exp, issuer_id));
-    assert!(crypto::verify_token_signature(&pubkey, &token, &sig2, kid, exp, issuer_id));
+    assert!(freebird_crypto::verify_token_signature(&pubkey, &token, &sig1, kid, exp, issuer_id));
+    assert!(freebird_crypto::verify_token_signature(&pubkey, &token, &sig2, kid, exp, issuer_id));
 
     println!("✅ Signature determinism test passed!");
 }
@@ -173,17 +173,17 @@ fn test_signature_tampering_detection() {
     let issuer_id = "issuer:test";
 
     // Sign original token
-    let signature = crypto::compute_token_signature(&sk, &token, kid, exp, issuer_id).expect("sig");
+    let signature = freebird_crypto::compute_token_signature(&sk, &token, kid, exp, issuer_id).expect("sig");
 
     // Verify original works
-    assert!(crypto::verify_token_signature(&pubkey, &token, &signature, kid, exp, issuer_id));
+    assert!(freebird_crypto::verify_token_signature(&pubkey, &token, &signature, kid, exp, issuer_id));
 
     // Tamper with token
     token[0] ^= 0x01;
 
     // Verification should fail
     assert!(
-        !crypto::verify_token_signature(&pubkey, &token, &signature, kid, exp, issuer_id),
+        !freebird_crypto::verify_token_signature(&pubkey, &token, &signature, kid, exp, issuer_id),
         "Tampered token should fail verification"
     );
 
@@ -231,24 +231,24 @@ fn test_federation_scenario() {
     let issuer_id_a = "issuer:a:v1";
     let issuer_id_b = "issuer:b:v1";
 
-    let sig_a = crypto::compute_token_signature(&sk_a, &token_a, kid_a, exp, issuer_id_a)
+    let sig_a = freebird_crypto::compute_token_signature(&sk_a, &token_a, kid_a, exp, issuer_id_a)
         .expect("sig A");
-    let sig_b = crypto::compute_token_signature(&sk_b, &token_b, kid_b, exp, issuer_id_b)
+    let sig_b = freebird_crypto::compute_token_signature(&sk_b, &token_b, kid_b, exp, issuer_id_b)
         .expect("sig B");
 
     // Verifier has ONLY public keys (federation mode!)
     // No secret keys required!
 
     // Verify token from Issuer A
-    let valid_a = crypto::verify_token_signature(&pubkey_a, &token_a, &sig_a, kid_a, exp, issuer_id_a);
+    let valid_a = freebird_crypto::verify_token_signature(&pubkey_a, &token_a, &sig_a, kid_a, exp, issuer_id_a);
     assert!(valid_a, "Token from Issuer A should verify with public key only");
 
     // Verify token from Issuer B
-    let valid_b = crypto::verify_token_signature(&pubkey_b, &token_b, &sig_b, kid_b, exp, issuer_id_b);
+    let valid_b = freebird_crypto::verify_token_signature(&pubkey_b, &token_b, &sig_b, kid_b, exp, issuer_id_b);
     assert!(valid_b, "Token from Issuer B should verify with public key only");
 
     // Cross-verification should fail (wrong issuer's public key)
-    let invalid_cross = crypto::verify_token_signature(&pubkey_a, &token_b, &sig_b, kid_b, exp, issuer_id_b);
+    let invalid_cross = freebird_crypto::verify_token_signature(&pubkey_a, &token_b, &sig_b, kid_b, exp, issuer_id_b);
     assert!(!invalid_cross, "Token from B should not verify with A's key");
 
     println!("✅ Federation scenario test passed!");

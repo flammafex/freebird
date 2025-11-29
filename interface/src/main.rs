@@ -2,8 +2,8 @@
 // Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
 use anyhow::{anyhow, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use common::api::{IssueReq, IssueResp, VerifyReq, VerifyResp}; // <--- IMPORT SHARED TYPES
-use crypto::voprf::core::Client;
+use freebird_common::api::{IssueReq, IssueResp, VerifyReq, VerifyResp}; // <--- IMPORT SHARED TYPES
+use freebird_crypto::voprf::core::Client;
 use rand::RngCore;
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};

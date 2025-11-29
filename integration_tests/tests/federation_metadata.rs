@@ -3,7 +3,7 @@
 
 //! Test federation metadata serialization and endpoint structure
 
-use common::federation::FederationMetadata;
+use freebird_common::federation::FederationMetadata;
 
 #[test]
 fn test_federation_metadata_serialization() {
@@ -40,8 +40,8 @@ fn test_federation_metadata_serialization() {
 #[test]
 fn test_federation_metadata_with_vouches() {
     // Test FederationMetadata with actual vouches
-    use common::federation::Vouch;
-    use crypto::Server;
+    use freebird_common::federation::Vouch;
+    use freebird_crypto::Server;
 
     let ctx = b"freebird:v1";
     let sk = [0x42u8; 32];

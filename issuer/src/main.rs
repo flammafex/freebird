@@ -2,8 +2,8 @@
 // Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
 
 use anyhow::Result;
-use common::logging;
-use issuer::{config::Config, startup::Application};
+use freebird_common::logging;
+use freebird_issuer::{config::Config, startup::Application};
 
 #[tokio::main]
 async fn main() -> Result<()> {

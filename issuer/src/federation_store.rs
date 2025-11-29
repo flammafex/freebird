@@ -8,7 +8,7 @@
 //! and manual editing if needed.
 
 use anyhow::{Context, Result};
-use common::federation::{Revocation, Vouch};
+use freebird_common::federation::{Revocation, Vouch};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::fs;

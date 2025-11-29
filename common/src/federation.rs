@@ -92,7 +92,7 @@ impl Vouch {
     /// 64-byte ECDSA signature (r || s)
     pub fn sign(&self, secret_key: &[u8; 32]) -> Result<[u8; 64], String> {
         let msg = self.signing_message();
-        crypto::sign_message(secret_key, &msg)
+        freebird_crypto::sign_message(secret_key, &msg)
             .map_err(|e| format!("Failed to sign vouch: {:?}", e))
     }
 
@@ -107,7 +107,7 @@ impl Vouch {
     /// true if signature is valid, false otherwise
     pub fn verify(&self, public_key: &[u8]) -> bool {
         let msg = self.signing_message();
-        crypto::verify_message_signature(public_key, &msg, &self.signature)
+        freebird_crypto::verify_message_signature(public_key, &msg, &self.signature)
     }
 }
 
@@ -160,7 +160,7 @@ impl Revocation {
     /// 64-byte ECDSA signature (r || s)
     pub fn sign(&self, secret_key: &[u8; 32]) -> Result<[u8; 64], String> {
         let msg = self.signing_message();
-        crypto::sign_message(secret_key, &msg)
+        freebird_crypto::sign_message(secret_key, &msg)
             .map_err(|e| format!("Failed to sign revocation: {:?}", e))
     }
 
@@ -175,7 +175,7 @@ impl Revocation {
     /// true if signature is valid, false otherwise
     pub fn verify(&self, public_key: &[u8]) -> bool {
         let msg = self.signing_message();
-        crypto::verify_message_signature(public_key, &msg, &self.signature)
+        freebird_crypto::verify_message_signature(public_key, &msg, &self.signature)
     }
 }
 
@@ -437,7 +437,7 @@ mod tests {
         // Setup: Create issuer keypair
         let sk = [0x42u8; 32];
         let ctx = b"freebird:v1";
-        let server = crypto::Server::from_secret_key(sk, ctx).expect("server");
+        let server = freebird_crypto::Server::from_secret_key(sk, ctx).expect("server");
         let pk = server.public_key_sec1_compressed();
 
         // Create vouch (without signature yet)
@@ -466,10 +466,10 @@ mod tests {
         let sk_b = [0x22u8; 32];
         let ctx = b"freebird:v1";
 
-        let server_a = crypto::Server::from_secret_key(sk_a, ctx).expect("server A");
+        let server_a = freebird_crypto::Server::from_secret_key(sk_a, ctx).expect("server A");
         let pk_a = server_a.public_key_sec1_compressed();
 
-        let server_b = crypto::Server::from_secret_key(sk_b, ctx).expect("server B");
+        let server_b = freebird_crypto::Server::from_secret_key(sk_b, ctx).expect("server B");
         let pk_b = server_b.public_key_sec1_compressed();
 
         // Create and sign vouch with key A
@@ -498,7 +498,7 @@ mod tests {
         // Setup: Create issuer keypair
         let sk = [0x42u8; 32];
         let ctx = b"freebird:v1";
-        let server = crypto::Server::from_secret_key(sk, ctx).expect("server");
+        let server = freebird_crypto::Server::from_secret_key(sk, ctx).expect("server");
         let pk = server.public_key_sec1_compressed();
 
         // Create and sign vouch
@@ -530,7 +530,7 @@ mod tests {
         // Setup: Create issuer keypair
         let sk = [0x42u8; 32];
         let ctx = b"freebird:v1";
-        let server = crypto::Server::from_secret_key(sk, ctx).expect("server");
+        let server = freebird_crypto::Server::from_secret_key(sk, ctx).expect("server");
         let pk = server.public_key_sec1_compressed();
 
         // Create revocation (without signature yet)
@@ -560,10 +560,10 @@ mod tests {
         let sk_b = [0x22u8; 32];
         let ctx = b"freebird:v1";
 
-        let server_a = crypto::Server::from_secret_key(sk_a, ctx).expect("server A");
+        let server_a = freebird_crypto::Server::from_secret_key(sk_a, ctx).expect("server A");
         let pk_a = server_a.public_key_sec1_compressed();
 
-        let server_b = crypto::Server::from_secret_key(sk_b, ctx).expect("server B");
+        let server_b = freebird_crypto::Server::from_secret_key(sk_b, ctx).expect("server B");
         let pk_b = server_b.public_key_sec1_compressed();
 
         // Create and sign revocation with key A

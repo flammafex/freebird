@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
 use base64ct::{Base64UrlUnpadded, Encoding};
-use crypto::nullifier_key;
-use crypto::{Client, Server, Verifier};
+use freebird_crypto::nullifier_key;
+use freebird_crypto::{Client, Server, Verifier};
 #[test]
 fn smoke_voprf_roundtrip() {
     // Keep context consistent across client/server/verifier

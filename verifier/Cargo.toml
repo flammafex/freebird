@@ -1,5 +1,5 @@
 [package]
-name = "verifier"
+name = "freebird-verifier"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,10 +8,10 @@ serde_json = "1"
 
 [dependencies]
 # --- Shared logging helper ---
-common = { version = "0.1.0", path = "../common" }
+freebird-common = { version = "0.1.0", path = "../common" }
 
 # --- Protocol / crypto ---
-crypto = { version = "0.1.0", path = "../crypto", features = ["voprf-p256"] }
+freebird-crypto = { version = "0.1.0", path = "../crypto", features = ["voprf-p256"] }
 base64ct = { version = "1.8", default-features = false }
 
 # --- Web / async ---
