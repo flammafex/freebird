@@ -8,10 +8,10 @@ serde_json = "1"
 
 [dependencies]
 # --- Shared logging helper ---
-common = { path = "../common" }
+common = { version = "0.1.0", path = "../common" }
 
 # --- Protocol / crypto ---
-crypto = { path = "../crypto", features = ["voprf-p256"] }
+crypto = { version = "0.1.0", path = "../crypto", features = ["voprf-p256"] }
 base64ct = { version = "1.8", default-features = false }
 
 # --- Web / async ---
