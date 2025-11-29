@@ -2,6 +2,12 @@
 name = "freebird-interface"
 version = "0.1.0"
 edition = "2021"
+description = "Client interface and CLI for the Freebird privacy-preserving authentication system"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/flammafex/freebird"
+homepage = "https://github.com/flammafex/freebird"
+keywords = ["privacy", "authentication", "client", "cli"]
+categories = ["authentication", "command-line-utilities"]
 
 [dependencies]
 anyhow = "1"

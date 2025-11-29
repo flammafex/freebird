@@ -2,7 +2,12 @@
 name = "freebird-issuer"
 version = "0.1.0"
 edition = "2021"
+description = "Token issuer service for the Freebird privacy-preserving authentication system"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/flammafex/freebird"
+homepage = "https://github.com/flammafex/freebird"
+keywords = ["privacy", "authentication", "issuer", "tokens"]
+categories = ["authentication", "web-programming"]
 
 [features]
 default = []

@@ -2,7 +2,12 @@
 name = "freebird-crypto"
 version = "0.1.0"
 edition = "2021"
+description = "Cryptographic primitives for the Freebird privacy-preserving authentication system, including VOPRF implementation"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/flammafex/freebird"
+homepage = "https://github.com/flammafex/freebird"
+keywords = ["cryptography", "voprf", "privacy", "authentication"]
+categories = ["cryptography", "authentication"]
 
 [features]
 default = ["voprf-p256"]
