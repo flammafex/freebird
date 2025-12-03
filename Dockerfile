@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y \
 RUN groupadd -r freebird && useradd -r -g freebird freebird
 
 # Create directories for state persistence
-RUN mkdir -p /data/keys /data/state && \
+RUN mkdir -p /data/keys /data/state /data/federation && \
     chown -R freebird:freebird /data
 
 # Copy binary from builder
