@@ -23,7 +23,7 @@ RUN cargo build --release
 # ==============================================================================
 # Stage 2: Issuer Runtime
 # ==============================================================================
-FROM debian:bookworm-slim as freebird-issuer
+FROM debian:bookworm-slim as issuer
 
 WORKDIR /app
 
@@ -60,7 +60,7 @@ CMD ["freebird-issuer"]
 # ==============================================================================
 # Stage 3: Verifier Runtime
 # ==============================================================================
-FROM debian:bookworm-slim as freebird-verifier
+FROM debian:bookworm-slim as verifier
 
 WORKDIR /app
 
