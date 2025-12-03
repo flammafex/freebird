@@ -1,0 +1,38 @@
+name: Build and Push Docker Images
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Build and push issuer
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: issuer
+          push: true
+          tags: ghcr.io/flammafex/freebird-issuer:latest
+      
+      - name: Build and push verifier
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          target: verifier
+          push: true
+          tags: ghcr.io/flammafex/freebird-verifier:latest
