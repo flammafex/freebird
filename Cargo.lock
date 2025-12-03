@@ -725,7 +725,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-common"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "base64ct",
  "freebird-crypto",
@@ -738,7 +738,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-crypto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-interface"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64ct",
@@ -779,7 +779,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-issuer"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -816,7 +816,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-verifier"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1438,7 +1438,7 @@ dependencies = [
 
 [[package]]
 name = "integration_tests"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "base64ct",
