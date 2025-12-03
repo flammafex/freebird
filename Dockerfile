@@ -1,56 +1,59 @@
 # ==============================================================================
-# Stage 1: Builder
+# Stage 1: Base Builder (shared dependencies)
 # ==============================================================================
-FROM rust:latest as builder
+FROM rust:latest as base-builder
 
 WORKDIR /app
 
-# Install build dependencies (OpenSSL is required for reqwest)
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy the entire workspace
-# Note: For better caching in a larger project, you would copy Cargo.toml files 
-# first to cache dependencies, but for this size, copying all is efficient enough.
 COPY . .
 
-# Build the release binaries
-# We build the whole workspace to ensure all shared crates are compiled
-RUN cargo build --release
+# ==============================================================================
+# Stage 2: Issuer Builder (builds ONLY issuer)
+# ==============================================================================
+FROM base-builder as issuer-builder
+
+# Build only the issuer binary
+RUN cargo build --release -p freebird-issuer
 
 # ==============================================================================
-# Stage 2: Issuer Runtime
+# Stage 3: Verifier Builder (builds ONLY verifier)
+# ==============================================================================
+FROM base-builder as verifier-builder
+
+# Build only the verifier binary
+RUN cargo build --release -p freebird-verifier
+
+# ==============================================================================
+# Stage 4: Issuer Runtime
 # ==============================================================================
 FROM debian:bookworm-slim as issuer
 
 WORKDIR /app
 
-# Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Create a non-root user
 RUN groupadd -r freebird && useradd -r -g freebird freebird
-
-# Create directories for state persistence
 RUN mkdir -p /data/keys /data/state /data/federation && \
     chown -R freebird:freebird /data
 
-# Copy binary from builder
-COPY --from=builder /app/target/release/freebird-issuer /usr/local/bin/freebird-issuer
+# Copy from issuer-specific builder
+COPY --from=issuer-builder /app/target/release/freebird-issuer /usr/local/bin/freebird-issuer
+RUN chmod +x /usr/local/bin/freebird-issuer
 
-# Set environment defaults for container
 ENV BIND_ADDR=0.0.0.0:8081
 ENV ISSUER_SK_PATH=/data/keys/issuer_sk.bin
 ENV KEY_ROTATION_STATE_PATH=/data/keys/key_rotation_state.json
 ENV SYBIL_INVITE_PERSISTENCE_PATH=/data/state/invitations.json
 
-# Switch to non-root userwitness
 USER freebird
 VOLUME ["/data"]
 EXPOSE 8081
@@ -58,7 +61,7 @@ EXPOSE 8081
 CMD ["freebird-issuer"]
 
 # ==============================================================================
-# Stage 3: Verifier Runtime
+# Stage 5: Verifier Runtime
 # ==============================================================================
 FROM debian:bookworm-slim as verifier
 
@@ -71,8 +74,9 @@ RUN apt-get update && apt-get install -y \
 
 RUN groupadd -r freebird && useradd -r -g freebird freebird
 
-# Copy binary from builder
-COPY --from=builder /app/target/release/freebird-verifier /usr/local/bin/freebird-verifier
+# Copy from verifier-specific builder
+COPY --from=verifier-builder /app/target/release/freebird-verifier /usr/local/bin/freebird-verifier
+RUN chmod +x /usr/local/bin/freebird-verifier
 
 ENV BIND_ADDR=0.0.0.0:8082
 
