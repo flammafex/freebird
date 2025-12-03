@@ -38,11 +38,11 @@ RUN apt-get update && apt-get install -y \
 RUN groupadd -r freebird && useradd -r -g freebird freebird
 
 # Create directories for state persistence
-RUN mkdir -p /data/keys /data/state && \
+RUN mkdir -p /data/keys /data/state /data/federation && \
     chown -R freebird:freebird /data
 
 # Copy binary from builder
-COPY --from=builder /app/target/release/issuer /usr/local/bin/issuer
+COPY --from=builder /app/target/release/freebird-issuer /usr/local/bin/freebird-issuer
 
 # Set environment defaults for container
 ENV BIND_ADDR=0.0.0.0:8081
@@ -55,7 +55,7 @@ USER freebird
 VOLUME ["/data"]
 EXPOSE 8081
 
-CMD ["issuer"]
+CMD ["freebird-issuer"]
 
 # ==============================================================================
 # Stage 3: Verifier Runtime
@@ -72,11 +72,11 @@ RUN apt-get update && apt-get install -y \
 RUN groupadd -r freebird && useradd -r -g freebird freebird
 
 # Copy binary from builder
-COPY --from=builder /app/target/release/verifier /usr/local/bin/verifier
+COPY --from=builder /app/target/release/freebird-verifier /usr/local/bin/freebird-verifier
 
 ENV BIND_ADDR=0.0.0.0:8082
 
 USER freebird
 EXPOSE 8082
 
-CMD ["verifier"]
+CMD ["freebird-verifier"]
