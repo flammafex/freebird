@@ -142,6 +142,9 @@ impl InviterState {
 struct PersistedState {
     invitations: HashMap<String, Invitation>,
     inviters: HashMap<String, InviterState>,
+    /// Owner of this Freebird instance (public key of the admin user)
+    #[serde(default)]
+    owner: Option<String>,
     version: u32,
 }
 
@@ -150,6 +153,7 @@ impl Default for PersistedState {
         Self {
             invitations: HashMap::new(),
             inviters: HashMap::new(),
+            owner: None,
             version: 1,
         }
     }
@@ -693,6 +697,42 @@ impl InvitationSystem {
             total_users,
             banned_users,
         }
+    }
+
+    /// Get the owner of this Freebird instance
+    pub async fn get_owner(&self) -> Option<String> {
+        let state = self.state.read().await;
+        state.owner.clone()
+    }
+
+    /// Set the owner of this Freebird instance (only works once - first registration wins)
+    ///
+    /// Returns Ok(()) if the owner was set successfully, or Err if an owner already exists
+    pub async fn set_owner(&self, user_id: String) -> Result<()> {
+        let mut state = self.state.write().await;
+
+        if state.owner.is_some() {
+            bail!("owner already registered");
+        }
+
+        state.owner = Some(user_id.clone());
+        drop(state);
+
+        self.mark_dirty().await;
+        info!(owner = %user_id, "registered instance owner");
+
+        Ok(())
+    }
+
+    /// Get the count of unique users who have redeemed invitations
+    pub async fn get_redeemed_user_count(&self) -> usize {
+        let state = self.state.read().await;
+        state
+            .invitations
+            .values()
+            .filter_map(|i| i.invitee_id.as_ref())
+            .collect::<std::collections::HashSet<_>>()
+            .len()
     }
 
     /// Get detailed information about a user
