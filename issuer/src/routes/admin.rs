@@ -293,7 +293,7 @@ impl axum::response::IntoResponse for AdminError {
 
 /// Serve the admin UI
 pub async fn admin_ui_handler() -> impl IntoResponse {
-    const ADMIN_UI_HTML: &str = include_str!("../../../../../admin-ui/index.html");
+    const ADMIN_UI_HTML: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../admin-ui/index.html"));
     Html(ADMIN_UI_HTML)
 }
 
