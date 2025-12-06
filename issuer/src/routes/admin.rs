@@ -99,6 +99,19 @@ pub struct AddBootstrapUserResponse {
     pub invites_granted: u32,
 }
 
+/// Request to register the owner of this Freebird instance
+#[derive(Debug, Deserialize)]
+pub struct RegisterOwnerRequest {
+    pub user_id: String,
+}
+
+/// Response after registering owner
+#[derive(Debug, Serialize)]
+pub struct RegisterOwnerResponse {
+    pub success: bool,
+    pub owner: String,
+}
+
 /// Request to create invitations
 #[derive(Debug, Deserialize)]
 pub struct CreateInvitationsRequest {
@@ -127,6 +140,10 @@ pub struct CreateInvitationsResponse {
 pub struct StatsResponse {
     pub stats: InvitationStats,
     pub timestamp: u64,
+    /// Owner of this Freebird instance (if registered)
+    pub owner: Option<String>,
+    /// Count of unique users who have redeemed invitations
+    pub user_count: usize,
 }
 
 /// Health check response
@@ -334,6 +351,8 @@ pub async fn get_stats_handler(
     verify_api_key(&headers, &state.api_key)?;
 
     let stats = state.invitation_system.get_stats().await;
+    let owner = state.invitation_system.get_owner().await;
+    let user_count = state.invitation_system.get_redeemed_user_count().await;
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
@@ -341,7 +360,12 @@ pub async fn get_stats_handler(
 
     info!("Admin: retrieved system stats");
 
-    Ok(Json(StatsResponse { stats, timestamp }))
+    Ok(Json(StatsResponse {
+        stats,
+        timestamp,
+        owner,
+        user_count,
+    }))
 }
 
 pub async fn grant_invites_handler(
@@ -439,6 +463,49 @@ pub async fn add_bootstrap_user_handler(
         ok: true,
         user_id: req.user_id,
         invites_granted: req.invite_count,
+    }))
+}
+
+/// Register the owner of this Freebird instance
+///
+/// This endpoint allows registering a user as the "owner" of the Freebird instance.
+/// This is used by Clout to tie the instance to its founding user.
+///
+/// Only the first registration succeeds - subsequent calls will fail.
+pub async fn register_owner_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Json(req): Json<RegisterOwnerRequest>,
+) -> Result<Json<RegisterOwnerResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    if req.user_id.is_empty() {
+        return Err(AdminError::InvalidRequest(
+            "user_id cannot be empty".to_string(),
+        ));
+    }
+
+    state
+        .invitation_system
+        .set_owner(req.user_id.clone())
+        .await
+        .map_err(|e| {
+            let err_msg = e.to_string();
+            if err_msg.contains("already registered") {
+                AdminError::InvalidRequest("owner already registered".to_string())
+            } else {
+                AdminError::Internal(err_msg)
+            }
+        })?;
+
+    info!(
+        owner = %req.user_id,
+        "Admin: registered instance owner"
+    );
+
+    Ok(Json(RegisterOwnerResponse {
+        success: true,
+        owner: req.user_id,
     }))
 }
 
@@ -879,6 +946,10 @@ pub fn admin_router(
         .route(
             "/bootstrap/add",
             axum::routing::post(add_bootstrap_user_handler),
+        )
+        .route(
+            "/register-owner",
+            axum::routing::post(register_owner_handler),
         )
         .route("/save", axum::routing::post(save_state_handler))
         .route("/keys", axum::routing::get(list_keys_handler))

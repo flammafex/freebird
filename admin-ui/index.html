@@ -888,6 +888,15 @@
                 return this.request(`/invitations?limit=${limit}`);
             }
 
+            async registerOwner(userId) {
+                return this.request('/register-owner', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        user_id: userId
+                    })
+                });
+            }
+
             async issueToken(userId) {
                 return this.request('/tokens/issue', {
                     method: 'POST',
@@ -1062,12 +1071,33 @@
 
                 const stats = data.stats;
                 const timestamp = new Date(data.timestamp * 1000).toLocaleString();
+                const owner = data.owner;
+                const userCount = data.user_count || 0;
+
+                // Truncate owner public key for display (show first 8 and last 4 chars)
+                let ownerDisplay = 'No owner registered';
+                if (owner) {
+                    if (owner.length > 16) {
+                        ownerDisplay = owner.substring(0, 8) + '...' + owner.substring(owner.length - 4);
+                    } else {
+                        ownerDisplay = owner;
+                    }
+                }
 
                 container.innerHTML = `
+                    <div class="form-section" style="margin-bottom: 20px; border-left: 4px solid ${owner ? 'var(--success-color)' : 'var(--warning-color)'};">
+                        <h3>👤 Instance Owner</h3>
+                        <p class="text-mono" style="font-size: 1.1em;">${ownerDisplay}</p>
+                        ${owner ? `<p class="text-small" style="opacity: 0.6;">Full key: <code style="word-break: break-all;">${owner}</code></p>` : '<p class="text-small" style="opacity: 0.6;">Use POST /admin/register-owner to set the owner</p>'}
+                    </div>
                     <div class="stats-grid">
                         <div class="stat-card">
                             <h3>Total Users</h3>
                             <p class="value">${stats.total_users || 0}</p>
+                        </div>
+                        <div class="stat-card">
+                            <h3>Redeemed Users</h3>
+                            <p class="value">${userCount}</p>
                         </div>
                         <div class="stat-card">
                             <h3>Total Invitations</h3>
@@ -1090,7 +1120,7 @@
                 `;
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ Failed to load stats: ${error.message}</div>`;
-            }        
+            }
         }
 
         // ============================================================================
