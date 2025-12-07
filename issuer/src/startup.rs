@@ -7,7 +7,7 @@ use crate::{
     keys, multi_key_voprf, routes,
     sybil_resistance::{
         self, invitation::{InvitationConfig, InvitationSystem},
-        CombinedSybilResistance, CombinedOr, CombinedAnd, CombinedThreshold,
+        CombinedOr, CombinedAnd, CombinedThreshold,
         ProofOfWork, RateLimit, SybilResistance,
     },
     AppStateWithSybil,
@@ -449,7 +449,7 @@ impl Application {
 
         // Initialize router
         // Note: routes::metadata::well_known_handler must exist!
-        let mut app = Router::new()
+        let app = Router::new()
             .route("/.well-known/issuer", get(routes::metadata::well_known_handler))
             .route("/.well-known/keys", get(routes::metadata::keys_handler))
             .route("/.well-known/federation", get(routes::metadata::federation_handler))

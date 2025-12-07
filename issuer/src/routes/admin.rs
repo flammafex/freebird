@@ -17,7 +17,7 @@
 //! The API key should be configured via the `ADMIN_API_KEY` environment variable.
 
 use crate::multi_key_voprf::{KeyInfo, KeyStats, MultiKeyVoprfCore};
-use crate::sybil_resistance::invitation::{InvitationStats, InvitationSystem, InviterState};
+use crate::sybil_resistance::invitation::{InvitationStats, InvitationSystem};
 use axum::{
     extract::{Path, State, Query},
     http::{HeaderMap, StatusCode},
@@ -310,7 +310,7 @@ impl axum::response::IntoResponse for AdminError {
 
 /// Serve the admin UI
 pub async fn admin_ui_handler() -> impl IntoResponse {
-    const ADMIN_UI_HTML: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../admin-ui/index.html"));
+    const ADMIN_UI_HTML: &str = include_str!("../admin_ui/index.html");
     Html(ADMIN_UI_HTML)
 }
 
