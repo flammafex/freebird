@@ -722,11 +722,12 @@ impl InvitationSystem {
 
         // Auto-create a bootstrap user record for the owner if they don't exist
         // This allows the owner to create the initial invitation pool
+        // We set joined_at to 0 so the owner bypasses the new-user waiting period
         if !state.inviters.contains_key(&user_id) {
             let inviter_state = InviterState::new(
                 user_id.clone(),
                 self.config.invites_per_user,
-                current_timestamp(),
+                0, // Epoch time - owner bypasses waiting period
             );
             state.inviters.insert(user_id.clone(), inviter_state);
             info!(owner = %user_id, invites = self.config.invites_per_user, "created bootstrap user for owner");
