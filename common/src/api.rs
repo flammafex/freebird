@@ -176,6 +176,9 @@ pub struct VouchProof {
     pub vouchee_id: String,
     pub timestamp: i64,
     pub signature: String,
+    /// Voucher's public key (SEC1 uncompressed, base64url encoded)
+    /// Required for signature verification
+    pub voucher_pubkey_b64: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
