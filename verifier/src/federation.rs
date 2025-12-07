@@ -245,13 +245,19 @@ impl TrustGraph {
                     }
                 } else if depth < self.policy.max_trust_depth {
                     // Continue exploring if we haven't reached max depth
-                    // We need the vouched issuer's public key to verify subsequent vouches
-                    // For now, we trust the vouch if it's properly signed by the current issuer
+                    // Verify the vouch before adding to the path - the vouch contains
+                    // the claimed public key of the vouched issuer (vouch.vouched_pubkey)
+                    // which we use for verification. Later, if this issuer is the final
+                    // target, we'll verify their actual public key matches.
 
-                    // Get current issuer's public key to verify this vouch
-                    // TODO: We need to track public keys for all issuers in the path
-                    // For now, we'll skip deep verification and just check the signature
-                    // This will be improved when we add proper public key tracking
+                    // Verify intermediate vouch is valid (signature, expiration, trust level)
+                    if !self.is_vouch_valid(vouch, &vouch.vouched_pubkey, now).await {
+                        debug!(
+                            "Skipping invalid intermediate vouch from {} to {}",
+                            current_id, vouch.vouched_issuer_id
+                        );
+                        continue;
+                    }
 
                     let mut new_path = path.clone();
                     new_path.push(vouch.vouched_issuer_id.clone());

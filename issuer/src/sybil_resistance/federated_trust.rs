@@ -10,8 +10,8 @@
 
 use anyhow::{anyhow, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use freebird_common::api::SybilProof;
-use freebird_common::federation::{FederationMetadata, TrustPolicy, Vouch};
+use freebird_common::api::{KeyDiscoveryResp, SybilProof};
+use freebird_common::federation::{TrustPolicy, Vouch};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -34,20 +34,20 @@ pub struct FederatedTrustConfig {
     pub max_token_age_secs: i64,
 }
 
-/// Cached remote issuer metadata
+/// Cached remote issuer public key
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct CachedMetadata {
-    metadata: FederationMetadata,
+struct CachedIssuerKey {
+    /// SEC1 compressed public key (33 bytes)
+    pubkey: Vec<u8>,
+    /// When this was fetched (Unix timestamp)
     fetched_at: i64,
 }
 
 /// Federated Trust System
 pub struct FederatedTrustSystem {
     config: FederatedTrustConfig,
-    /// Cache of remote issuer metadata
-    #[allow(dead_code)]
-    metadata_cache: Arc<RwLock<HashMap<String, CachedMetadata>>>,
+    /// Cache of remote issuer public keys
+    pubkey_cache: Arc<RwLock<HashMap<String, CachedIssuerKey>>>,
 }
 
 impl FederatedTrustSystem {
@@ -55,7 +55,7 @@ impl FederatedTrustSystem {
     pub async fn new(config: FederatedTrustConfig) -> Result<Arc<Self>> {
         Ok(Arc::new(Self {
             config,
-            metadata_cache: Arc::new(RwLock::new(HashMap::new())),
+            pubkey_cache: Arc::new(RwLock::new(HashMap::new())),
         }))
     }
 
@@ -125,17 +125,123 @@ impl FederatedTrustSystem {
         Ok(false)
     }
 
-    /// Verify a federated token (basic structure check)
-    fn verify_token_structure(&self, token_b64: &str) -> Result<()> {
-        // Basic base64 decoding check
-        let _token_bytes = base64ct::Base64UrlUnpadded::decode_vec(token_b64)
+    /// Fetch issuer public key from their /.well-known/issuer endpoint
+    async fn fetch_issuer_pubkey(&self, issuer_id: &str) -> Result<Vec<u8>> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // Check cache first
+        {
+            let cache = self.pubkey_cache.read().await;
+            if let Some(cached) = cache.get(issuer_id) {
+                if now - cached.fetched_at < self.config.cache_ttl_secs as i64 {
+                    return Ok(cached.pubkey.clone());
+                }
+            }
+        }
+
+        // Construct the issuer's metadata URL
+        // issuer_id format is typically "issuer:hostname:version" or just a hostname
+        let url = if issuer_id.starts_with("http://") || issuer_id.starts_with("https://") {
+            format!("{}/.well-known/issuer", issuer_id)
+        } else {
+            // Extract hostname from issuer_id (e.g., "issuer:example.com:v1" -> "example.com")
+            let parts: Vec<&str> = issuer_id.split(':').collect();
+            let hostname = if parts.len() >= 2 { parts[1] } else { issuer_id };
+            format!("https://{}/.well-known/issuer", hostname)
+        };
+
+        // Fetch metadata
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
+
+        let resp_text = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| anyhow!("Failed to fetch issuer metadata from {}: {}", url, e))?
+            .text()
+            .await
+            .map_err(|e| anyhow!("Failed to read issuer metadata: {}", e))?;
+
+        let resp: KeyDiscoveryResp = serde_json::from_str(&resp_text)
+            .map_err(|e| anyhow!("Failed to parse issuer metadata: {}", e))?;
+
+        // Decode the public key
+        let pubkey = Base64UrlUnpadded::decode_vec(&resp.voprf.pubkey)
+            .map_err(|_| anyhow!("Invalid pubkey encoding in issuer metadata"))?;
+
+        // Update cache
+        {
+            let mut cache = self.pubkey_cache.write().await;
+            cache.insert(
+                issuer_id.to_string(),
+                CachedIssuerKey {
+                    pubkey: pubkey.clone(),
+                    fetched_at: now,
+                },
+            );
+        }
+
+        Ok(pubkey)
+    }
+
+    /// Cryptographically verify a federated token against the source issuer's public key
+    async fn verify_token_crypto(
+        &self,
+        token_b64: &str,
+        source_issuer_id: &str,
+    ) -> Result<()> {
+        // Decode the token
+        let token_bytes = Base64UrlUnpadded::decode_vec(token_b64)
             .map_err(|_| anyhow!("Invalid base64 token"))?;
 
-        // Token structure validation would go here
-        // For now, just check it's non-empty
-        if _token_bytes.is_empty() {
-            return Err(anyhow!("Empty token"));
+        // Check minimum token length (VOPRF token is 131 bytes)
+        if token_bytes.len() < 131 {
+            return Err(anyhow!(
+                "Token too short: {} bytes, minimum 131 for VOPRF",
+                token_bytes.len()
+            ));
         }
+
+        // Fetch the source issuer's public key
+        let pubkey = self.fetch_issuer_pubkey(source_issuer_id).await?;
+
+        // The token may be:
+        // - 131 bytes: just VOPRF (no auth, unusual)
+        // - 163 bytes: VOPRF + MAC (V1 format, we can't verify without their secret key)
+        // - 195 bytes: VOPRF + signature (V2 format, we CAN verify with public key)
+        //
+        // For VOPRF-only portion, we can verify the DLEQ proof against the public key.
+        // This proves the token was correctly evaluated by someone with the corresponding
+        // secret key.
+
+        // Extract just the VOPRF portion (first 131 bytes)
+        let voprf_token = &token_bytes[..131];
+        let voprf_b64 = Base64UrlUnpadded::encode_string(voprf_token);
+
+        // Verify the VOPRF proof against the issuer's public key
+        let ctx = b"freebird-v1";
+        let verifier = freebird_crypto::Verifier::new(ctx);
+
+        // The public key should be SEC1 compressed (33 bytes)
+        if pubkey.len() != 33 {
+            return Err(anyhow!(
+                "Invalid public key length: {} bytes, expected 33",
+                pubkey.len()
+            ));
+        }
+
+        verifier
+            .verify(&voprf_b64, &pubkey)
+            .map_err(|_| anyhow!(
+                "VOPRF token verification failed - token was not issued by {}",
+                source_issuer_id
+            ))?;
 
         Ok(())
     }
@@ -166,8 +272,13 @@ impl SybilResistance for FederatedTrustSystem {
                     return Err(anyhow!("Source token is too old"));
                 }
 
-                // Verify token structure
-                self.verify_token_structure(source_token_b64)?;
+                // Cryptographically verify the token against the source issuer's public key
+                // This fetches their public key and verifies the VOPRF DLEQ proof
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        self.verify_token_crypto(source_token_b64, source_issuer_id).await
+                    })
+                })?;
 
                 // Verify we trust the source issuer
                 let max_depth = self.config.trust_policy.max_trust_depth;
@@ -220,7 +331,6 @@ impl SybilResistance for FederatedTrustSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use freebird_common::federation::Vouch;
 
     async fn create_test_federation_store() -> Arc<FederationStore> {
         let store = FederationStore::new("/tmp/federated_trust_test")
@@ -262,28 +372,7 @@ mod tests {
         let _ = std::fs::remove_dir_all("/tmp/federated_trust_test");
     }
 
-    #[tokio::test]
-    async fn test_verify_token_structure() {
-        let store = create_test_federation_store().await;
-
-        let config = FederatedTrustConfig {
-            trust_policy: TrustPolicy::default(),
-            federation_store: store,
-            our_issuer_id: "issuer:b:v1".to_string(),
-            cache_ttl_secs: 3600,
-            max_token_age_secs: 600,
-        };
-
-        let system = FederatedTrustSystem::new(config).await.unwrap();
-
-        // Valid base64 token
-        let valid_token = base64ct::Base64UrlUnpadded::encode_string(b"some_token_data");
-        assert!(system.verify_token_structure(&valid_token).is_ok());
-
-        // Invalid base64
-        assert!(system.verify_token_structure("not!!!base64").is_err());
-
-        // Cleanup
-        let _ = std::fs::remove_dir_all("/tmp/federated_trust_test");
-    }
+    // Note: verify_token_crypto requires network access to fetch issuer pubkeys,
+    // so it cannot be unit tested without mocking. Integration tests should
+    // cover the full token verification flow.
 }

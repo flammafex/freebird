@@ -16,6 +16,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+use subtle::ConstantTimeEq;
 use tokio::fs;
 use tokio::sync::RwLock;
 
@@ -215,12 +216,13 @@ impl MultiPartyVouchingSystem {
         voucher.vouched_for.insert(vouchee_id_hash.clone());
         voucher.last_vouch_time = now;
 
-        // Create vouch proof
+        // Create vouch proof (including public key for verification)
         let proof = VouchProof {
             voucher_id: voucher_id_hash.clone(),
             vouchee_id: vouchee_id_hash.clone(),
             timestamp: now,
             signature: base64ct::Base64UrlUnpadded::encode_string(&signature.to_bytes()),
+            voucher_pubkey_b64: voucher.public_key_b64.clone(),
         };
 
         // Add to pending vouches
@@ -400,18 +402,29 @@ impl SybilResistance for MultiPartyVouchingSystem {
                     return Err(anyhow!("Insufficient vouches"));
                 }
 
-                // Verify each vouch signature by extracting public key from the signature
-                // Note: We don't need to access the vouchers HashMap here since all needed
-                // information (public keys) must be embedded in the vouches for verification
+                // Verify each vouch signature using the embedded public key
                 for vouch in vouches {
+                    // Decode and parse the signature
                     let signature_bytes = Base64UrlUnpadded::decode_vec(&vouch.signature)
                         .map_err(|_| anyhow!("Invalid signature encoding"))?;
                     let signature_array: [u8; 64] = signature_bytes
                         .as_slice()
                         .try_into()
                         .map_err(|_| anyhow!("Invalid signature length"))?;
-                    let _signature = Signature::from_bytes((&signature_array).into())
-                        .map_err(|_| anyhow!("Invalid signature"))?;
+                    let signature = Signature::from_bytes((&signature_array).into())
+                        .map_err(|_| anyhow!("Invalid signature format"))?;
+
+                    // Decode and parse the voucher's public key
+                    let pubkey_bytes = Base64UrlUnpadded::decode_vec(&vouch.voucher_pubkey_b64)
+                        .map_err(|_| anyhow!("Invalid voucher public key encoding"))?;
+                    let public_key = VerifyingKey::from_sec1_bytes(&pubkey_bytes)
+                        .map_err(|_| anyhow!("Invalid voucher public key format"))?;
+
+                    // Reconstruct the signed message and VERIFY THE SIGNATURE
+                    let message = format!("vouch:{}:{}", vouch.vouchee_id, vouch.timestamp);
+                    public_key
+                        .verify(message.as_bytes(), &signature)
+                        .map_err(|_| anyhow!("Vouch signature verification failed for voucher {}", vouch.voucher_id))?;
 
                     // Check vouch expiration
                     let vouch_age = now - vouch.timestamp;
@@ -425,9 +438,9 @@ impl SybilResistance for MultiPartyVouchingSystem {
                     }
                 }
 
-                // Verify HMAC proof
+                // Verify HMAC proof (constant-time comparison to prevent timing attacks)
                 let expected_hmac = self.compute_hmac_proof(vouchee_id_hash, vouches, *timestamp);
-                if hmac_proof != &expected_hmac {
+                if !bool::from(hmac_proof.as_bytes().ct_eq(expected_hmac.as_bytes())) {
                     return Err(anyhow!("Invalid HMAC proof"));
                 }
 

@@ -37,6 +37,7 @@ elliptic-curve = "0.13"
 sha2 = "0.10"
 blake3 = "1"
 hex = "0.4"  # For invitation signature serialization
+subtle = "2"  # For constant-time comparisons
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tower_governor = "0.5"
