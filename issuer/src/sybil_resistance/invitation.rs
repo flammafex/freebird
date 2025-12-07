@@ -886,30 +886,49 @@ impl SybilResistance for InvitationSystem {
         // Make async context available
         let rt = tokio::runtime::Handle::current();
         rt.block_on(async {
-            let (code, signature_b64) = match proof {
-                SybilProof::Invitation { code, signature } => (code, signature),
-                _ => bail!("expected Invitation proof"),
-            };
+            match proof {
+                SybilProof::Invitation { code, signature } => {
+                    // Decode signature from base64
+                    let signature = Base64UrlUnpadded::decode_vec(signature)
+                        .context("invalid signature encoding")?;
 
-            // Decode signature from base64
-            let signature = Base64UrlUnpadded::decode_vec(signature_b64)
-                .context("invalid signature encoding")?;
+                    // Verify invitation is valid
+                    let _inviter_id = self.verify_invitation(code, &signature).await?;
 
-            // Verify invitation is valid
-            let _inviter_id = self.verify_invitation(code, &signature).await?;
+                    // For now, no client data available in this context
+                    // In production, this should be enhanced to extract IP/fingerprint
+                    // from the HTTP request context
+                    let _invitee_id = self.redeem_invitation(code, None).await?;
 
-            // For now, no client data available in this context
-            // In production, this should be enhanced to extract IP/fingerprint
-            // from the HTTP request context
-            let _invitee_id = self.redeem_invitation(code, None).await?;
+                    debug!(code = %code, "invitation verified and redeemed");
+                    Ok(())
+                }
+                SybilProof::RegisteredUser { user_id } => {
+                    // Verify user exists in the users table
+                    // This is for users who have already been registered (e.g., instance owner)
+                    let state = self.state.read().await;
 
-            debug!(code = %code, "invitation verified and redeemed");
-            Ok(())
+                    if !state.inviters.contains_key(user_id) {
+                        bail!("user not found: {}", user_id);
+                    }
+
+                    // Check user is not banned
+                    if let Some(inviter) = state.inviters.get(user_id) {
+                        if inviter.banned {
+                            bail!("user is banned");
+                        }
+                    }
+
+                    debug!(user_id = %user_id, "registered user verified");
+                    Ok(())
+                }
+                _ => bail!("expected Invitation or RegisteredUser proof"),
+            }
         })
     }
 
     fn supports(&self, proof: &SybilProof) -> bool {
-        matches!(proof, SybilProof::Invitation { .. })
+        matches!(proof, SybilProof::Invitation { .. } | SybilProof::RegisteredUser { .. })
     }
 
     fn cost(&self) -> u64 {
