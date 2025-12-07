@@ -1422,7 +1422,7 @@
                         : '<span style="opacity: 0.5;">Pending</span>';
 
                     html += `<tr>`;
-                    html += `<td><code>${codeShort}</code></td>`;
+                    html += `<td><code title="${invite.code}">${codeShort}</code> <button class="copy-btn" onclick="copyToClipboard('${invite.code}', this)">📋</button></td>`;
                     html += `<td class="text-mono">${invite.inviter_id}</td>`;
                     html += `<td>${createdAt}</td>`;
                     html += `<td class="text-mono">${usedBy}</td>`;
