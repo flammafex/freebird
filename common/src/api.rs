@@ -194,6 +194,11 @@ pub enum SybilProof {
         code: String,
         signature: String,
     },
+    /// Registered user proof - for users already in the system (e.g., instance owner)
+    /// This bypasses invitation requirement for users who exist in the users table
+    RegisteredUser {
+        user_id: String,
+    },
     // Note: WebAuthn fields are strings/integers, so they verify
     // fine even if the backend doesn't have the webauthn crate enabled.
     WebAuthn {
