@@ -1,6 +1,6 @@
 [package]
 name = "integration_tests"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 publish = false
 
@@ -24,4 +24,5 @@ futures = "0.3"
 # Project Crates
 freebird-crypto = { path = "../crypto" }
 freebird-common = { path = "../common" }
+
 freebird-verifier = { path = "../verifier" } # <--- Now accessible as a lib
