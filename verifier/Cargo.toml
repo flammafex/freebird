@@ -1,6 +1,6 @@
 [package]
 name = "freebird-verifier"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Token verification service for the Freebird privacy-preserving authentication system"
 license = "MIT OR Apache-2.0"
@@ -14,10 +14,10 @@ serde_json = "1"
 
 [dependencies]
 # --- Shared logging helper ---
-freebird-common = { version = "0.1.1", path = "../common" }
+freebird-common = { version = "0.1.2", path = "../common" }
 
 # --- Protocol / crypto ---
-freebird-crypto = { version = "0.1.1", path = "../crypto", features = ["voprf-p256"] }
+freebird-crypto = { version = "0.1.2", path = "../crypto", features = ["voprf-p256"] }
 base64ct = { version = "1.8", default-features = false }
 
 # --- Web / async ---
