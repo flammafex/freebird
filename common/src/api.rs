@@ -233,11 +233,6 @@ pub enum SybilProof {
         token_exp: i64,            // Expiration timestamp of source token
         trust_path: Vec<String>,   // Trust path from source to us (optional)
     },
-    ProofOfBurn {
-        input_token: String,       // The token being spent
-        input_issuer_id: String,   // Who issued the token
-        nullifier_proof: String,   // Proof it hasn't been spent yet
-    },
     /// Multiple proofs for AND/threshold combination modes
     Multi {
         proofs: Vec<SybilProof>,
