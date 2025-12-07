@@ -707,6 +707,9 @@ impl InvitationSystem {
 
     /// Set the owner of this Freebird instance (only works once - first registration wins)
     ///
+    /// This also creates a bootstrap user record for the owner if they don't already exist,
+    /// allowing them to create the initial invitation pool.
+    ///
     /// Returns Ok(()) if the owner was set successfully, or Err if an owner already exists
     pub async fn set_owner(&self, user_id: String) -> Result<()> {
         let mut state = self.state.write().await;
@@ -716,6 +719,19 @@ impl InvitationSystem {
         }
 
         state.owner = Some(user_id.clone());
+
+        // Auto-create a bootstrap user record for the owner if they don't exist
+        // This allows the owner to create the initial invitation pool
+        if !state.inviters.contains_key(&user_id) {
+            let inviter_state = InviterState::new(
+                user_id.clone(),
+                self.config.invites_per_user,
+                current_timestamp(),
+            );
+            state.inviters.insert(user_id.clone(), inviter_state);
+            info!(owner = %user_id, invites = self.config.invites_per_user, "created bootstrap user for owner");
+        }
+
         drop(state);
 
         self.mark_dirty().await;
