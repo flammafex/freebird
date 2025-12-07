@@ -37,6 +37,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -385,7 +386,8 @@ impl SybilResistance for ProofOfDiversitySystem {
                 hasher.update(&diversity_score.to_le_bytes());
                 let expected_hmac = base64ct::Base64UrlUnpadded::encode_string(hasher.finalize().as_bytes());
 
-                if hmac_proof != &expected_hmac {
+                // Constant-time comparison to prevent timing attacks
+                if !bool::from(hmac_proof.as_bytes().ct_eq(expected_hmac.as_bytes())) {
                     debug!("Diversity proof verification failed: HMAC mismatch");
                     return Err(anyhow!("Invalid proof of diversity"));
                 }

@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -382,9 +383,9 @@ impl SybilResistance for ProgressiveTrustSystem {
                     current_level: 0, // Will be recalculated
                 };
 
-                // Verify HMAC
+                // Verify HMAC (constant-time comparison to prevent timing attacks)
                 let expected_hmac = self.compute_hmac_proof(&record);
-                if hmac_proof != &expected_hmac {
+                if !bool::from(hmac_proof.as_bytes().ct_eq(expected_hmac.as_bytes())) {
                     debug!("Progressive trust proof verification failed: HMAC mismatch");
                     return Err(anyhow!("Invalid progressive trust proof"));
                 }
