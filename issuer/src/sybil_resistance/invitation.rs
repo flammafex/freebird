@@ -410,7 +410,7 @@ impl InvitationSystem {
     }
 
     /// Check if a user can send invites right now
-    async fn can_invite(&self, user_id: &str) -> Result<()> {
+    async fn can_invite(&self, user_id: &str, skip_rate_limits: bool) -> Result<()> {
         let state = self.state.read().await;
 
         let inviter = state
@@ -424,6 +424,11 @@ impl InvitationSystem {
 
         if inviter.invites_remaining == 0 {
             bail!("no invites remaining");
+        }
+
+        // Skip rate limit checks for admin API calls
+        if skip_rate_limits {
+            return Ok(());
         }
 
         let now = current_timestamp();
@@ -451,8 +456,21 @@ impl InvitationSystem {
 
     /// Generate a new invitation code
     pub async fn generate_invite(&self, inviter_id: &str) -> Result<(String, Vec<u8>, u64)> {
+        self.generate_invite_internal(inviter_id, false).await
+    }
+
+    /// Generate a new invitation code (admin mode - bypasses rate limits)
+    ///
+    /// This should only be called from admin API endpoints that are already
+    /// protected by the admin API key.
+    pub async fn generate_invite_admin(&self, inviter_id: &str) -> Result<(String, Vec<u8>, u64)> {
+        self.generate_invite_internal(inviter_id, true).await
+    }
+
+    /// Internal implementation for generating invitations
+    async fn generate_invite_internal(&self, inviter_id: &str, skip_rate_limits: bool) -> Result<(String, Vec<u8>, u64)> {
         // Check if user can invite
-        self.can_invite(inviter_id).await?;
+        self.can_invite(inviter_id, skip_rate_limits).await?;
 
         let code = Self::generate_code();
         let signature = self.sign_code(&code);

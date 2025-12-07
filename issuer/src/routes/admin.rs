@@ -531,7 +531,8 @@ pub async fn create_invitations_handler(
     let mut invitations = Vec::new();
 
     for _ in 0..req.count {
-        match state.invitation_system.generate_invite(&req.inviter_id).await {
+        // Use admin version to bypass rate limits (cooldown, waiting period)
+        match state.invitation_system.generate_invite_admin(&req.inviter_id).await {
             Ok((code, signature, expires_at)) => {
                 invitations.push(InvitationCode {
                     code,
