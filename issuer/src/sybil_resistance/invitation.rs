@@ -883,47 +883,50 @@ pub struct InvitationStats {
 
 impl SybilResistance for InvitationSystem {
     fn verify(&self, proof: &SybilProof) -> Result<()> {
-        // Make async context available
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(async {
-            match proof {
-                SybilProof::Invitation { code, signature } => {
-                    // Decode signature from base64
-                    let signature = Base64UrlUnpadded::decode_vec(signature)
-                        .context("invalid signature encoding")?;
+        // Use block_in_place to allow blocking from within an async context
+        // This is safe because we're in a multi-threaded runtime
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                match proof {
+                    SybilProof::Invitation { code, signature } => {
+                        // Decode signature from base64
+                        let signature = Base64UrlUnpadded::decode_vec(signature)
+                            .context("invalid signature encoding")?;
 
-                    // Verify invitation is valid
-                    let _inviter_id = self.verify_invitation(code, &signature).await?;
+                        // Verify invitation is valid
+                        let _inviter_id = self.verify_invitation(code, &signature).await?;
 
-                    // For now, no client data available in this context
-                    // In production, this should be enhanced to extract IP/fingerprint
-                    // from the HTTP request context
-                    let _invitee_id = self.redeem_invitation(code, None).await?;
+                        // For now, no client data available in this context
+                        // In production, this should be enhanced to extract IP/fingerprint
+                        // from the HTTP request context
+                        let _invitee_id = self.redeem_invitation(code, None).await?;
 
-                    debug!(code = %code, "invitation verified and redeemed");
-                    Ok(())
-                }
-                SybilProof::RegisteredUser { user_id } => {
-                    // Verify user exists in the users table
-                    // This is for users who have already been registered (e.g., instance owner)
-                    let state = self.state.read().await;
-
-                    if !state.inviters.contains_key(user_id) {
-                        bail!("user not found: {}", user_id);
+                        debug!(code = %code, "invitation verified and redeemed");
+                        Ok(())
                     }
+                    SybilProof::RegisteredUser { user_id } => {
+                        // Verify user exists in the users table
+                        // This is for users who have already been registered (e.g., instance owner)
+                        let state = self.state.read().await;
 
-                    // Check user is not banned
-                    if let Some(inviter) = state.inviters.get(user_id) {
-                        if inviter.banned {
-                            bail!("user is banned");
+                        if !state.inviters.contains_key(user_id) {
+                            bail!("user not found: {}", user_id);
                         }
-                    }
 
-                    debug!(user_id = %user_id, "registered user verified");
-                    Ok(())
+                        // Check user is not banned
+                        if let Some(inviter) = state.inviters.get(user_id) {
+                            if inviter.banned {
+                                bail!("user is banned");
+                            }
+                        }
+
+                        debug!(user_id = %user_id, "registered user verified");
+                        Ok(())
+                    }
+                    _ => bail!("expected Invitation or RegisteredUser proof"),
                 }
-                _ => bail!("expected Invitation or RegisteredUser proof"),
-            }
+            })
         })
     }
 
