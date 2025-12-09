@@ -111,11 +111,10 @@ impl Application {
         };
 
         // 3. Federation Store (needed before Sybil setup for Federated Trust)
-        let federation_data_dir = std::path::PathBuf::from("/data/federation");
-        let federation_store = crate::federation_store::FederationStore::new(&federation_data_dir)
+        let federation_store = crate::federation_store::FederationStore::new(&config.federation_data_path)
             .await
             .context("Failed to initialize federation store")?;
-        info!("✅ Federation store initialized at {:?}", federation_data_dir);
+        info!("✅ Federation store initialized at {:?}", config.federation_data_path);
 
         // 4. Sybil Resistance Setup
         let mut invitation_system: Option<Arc<InvitationSystem>> = None;

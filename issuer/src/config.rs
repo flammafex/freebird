@@ -19,6 +19,7 @@ pub struct Config {
     pub admin_api_key: Option<String>,
     pub epoch_duration_sec: u64,
     pub epoch_retention: u32,
+    pub federation_data_path: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -131,6 +132,11 @@ impl Config {
         let epoch_duration_sec = env_u64("EPOCH_DURATION_SEC", 86400); // Default: 1 day
         let epoch_retention = env_u32("EPOCH_RETENTION", 2); // Default: accept 2 previous epochs
 
+        // Federation data path (default: /data/federation for Docker, override for bare metal)
+        let federation_data_path = env::var("FEDERATION_DATA_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| PathBuf::from("/data/federation"));
+
         Ok(Self {
             issuer_id,
             bind_addr,
@@ -143,6 +149,7 @@ impl Config {
             admin_api_key,
             epoch_duration_sec,
             epoch_retention,
+            federation_data_path,
         })
     }
 }
