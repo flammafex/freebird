@@ -828,13 +828,18 @@ impl InvitationSystem {
             .ok_or_else(|| anyhow!("user not found"))
     }
 
-    /// List all users (for admin dashboard)
+    /// List all users (for admin dashboard) with pagination support
     ///
-    /// Returns a vector of (user_id, invites_remaining, banned)
-    pub async fn list_users(&self) -> Vec<(String, u32, bool)> {
+    /// # Arguments
+    /// * `limit` - Maximum number of users to return
+    /// * `offset` - Number of users to skip (for pagination)
+    ///
+    /// # Returns
+    /// A vector of (user_id, invites_remaining, banned) sorted by join date (newest first)
+    pub async fn list_users(&self, limit: usize, offset: usize) -> Vec<(String, u32, bool)> {
         let state = self.state.read().await;
 
-        state
+        let mut users: Vec<_> = state
             .inviters
             .values()
             .map(|inviter| {
@@ -842,9 +847,29 @@ impl InvitationSystem {
                     inviter.user_id.clone(),
                     inviter.invites_remaining,
                     inviter.banned,
+                    inviter.joined_at,
                 )
             })
+            .collect();
+
+        // Sort by joined_at descending (newest first)
+        users.sort_by(|a, b| b.3.cmp(&a.3));
+
+        // Apply pagination and remove join timestamp from result
+        users
+            .into_iter()
+            .skip(offset)
+            .take(limit)
+            .map(|(user_id, invites, banned, _)| (user_id, invites, banned))
             .collect()
+    }
+
+    /// Get the total count of users
+    ///
+    /// Useful for pagination to show "Page X of Y"
+    pub async fn count_users(&self) -> usize {
+        let state = self.state.read().await;
+        state.inviters.len()
     }
 
     /// Count how many users would be affected by a ban tree

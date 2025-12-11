@@ -274,6 +274,32 @@ pub struct ListInvitationsResponse {
     pub has_more: bool,
 }
 
+/// Parameters for listing users with pagination
+#[derive(Debug, Deserialize)]
+pub struct ListUsersParams {
+    /// Maximum number of users to return (default: 50, max: 100)
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    /// Number of users to skip for pagination (default: 0)
+    #[serde(default)]
+    pub offset: usize,
+}
+
+/// Paginated response for listing users
+#[derive(Debug, Serialize)]
+pub struct ListUsersResponse {
+    /// The users for the current page
+    pub users: Vec<UserSummary>,
+    /// Total number of users in the system
+    pub total: usize,
+    /// Current offset (number of items skipped)
+    pub offset: usize,
+    /// Number of items returned in this response
+    pub limit: usize,
+    /// Whether there are more items after this page
+    pub has_more: bool,
+}
+
 /// Parameters for listing audit logs
 #[derive(Debug, Deserialize)]
 pub struct ListAuditParams {
@@ -693,11 +719,20 @@ pub async fn save_state_handler(
 pub async fn list_users_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
-) -> Result<Json<Vec<UserSummary>>, AdminError> {
+    Query(params): Query<ListUsersParams>,
+) -> Result<Json<ListUsersResponse>, AdminError> {
     verify_api_key(&headers, &state.api_key)?;
 
-    let users = state.invitation_system.list_users().await;
-    let summaries = users
+    // Clamp limit to reasonable bounds (1-100)
+    let limit = params.limit.clamp(1, 100);
+    let offset = params.offset;
+
+    // Get total count for pagination info
+    let total = state.invitation_system.count_users().await;
+
+    // Get paginated users
+    let users = state.invitation_system.list_users(limit, offset).await;
+    let summaries: Vec<UserSummary> = users
         .into_iter()
         .map(|(user_id, invites_remaining, banned)| UserSummary {
             user_id,
@@ -705,9 +740,23 @@ pub async fn list_users_handler(
             banned,
         })
         .collect();
+    let returned_count = summaries.len();
 
-    info!("Admin: listed users");
-    Ok(Json(summaries))
+    // Calculate if there are more items
+    let has_more = offset + returned_count < total;
+
+    info!(
+        "Admin: listed users (offset={}, limit={}, returned={}, total={})",
+        offset, limit, returned_count, total
+    );
+
+    Ok(Json(ListUsersResponse {
+        users: summaries,
+        total,
+        offset,
+        limit,
+        has_more,
+    }))
 }
 
 pub async fn get_user_details_handler(

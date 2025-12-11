@@ -856,6 +856,13 @@
                 invitations: [],
                 redemptions: []
             },
+            // Users pagination state
+            usersPagination: {
+                currentPage: 1,
+                pageSize: 20,
+                total: 0,
+                hasMore: false
+            },
             // Invitation pagination state
             invitationsPagination: {
                 currentPage: 1,
@@ -917,8 +924,8 @@
                 return this.request('/stats');
             }
 
-            async getUsers() {
-                return this.request('/users');
+            async getUsers(limit = 50, offset = 0) {
+                return this.request(`/users?limit=${limit}&offset=${offset}`);
             }
 
             async getUserDetails(userId) {
@@ -1253,10 +1260,15 @@
         // User Management Functions
         // ============================================================================
 
-        async function loadUsers() {
+        async function loadUsers(page = null) {
             if (!state.apiKey) {
                 showMessage('usersContainer', 'warning', '⚠️ Please configure your API key first');
                 return;
+            }
+
+            // Update current page if specified
+            if (page !== null) {
+                state.usersPagination.currentPage = page;
             }
 
             const container = document.getElementById('usersContainer');
@@ -1264,23 +1276,42 @@
 
             try {
                 const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
-                const users = await api.getUsers();
-                state.users = users; // Cache for filtering
-                renderUsersTable(users);
+                const { pageSize, currentPage } = state.usersPagination;
+                const offset = (currentPage - 1) * pageSize;
+
+                const response = await api.getUsers(pageSize, offset);
+
+                // Update pagination state
+                state.usersPagination.total = response.total;
+                state.usersPagination.hasMore = response.has_more;
+
+                state.users = response.users; // Cache for filtering
+                renderUsersTable(response.users, response.total);
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ Failed to load users: ${error.message}</div>`;
             }
         }
 
-        function renderUsersTable(users) {
+        function renderUsersTable(users, total = null) {
             const container = document.getElementById('usersContainer');
-            
+
             if (users.length === 0) {
                 container.innerHTML = '<p>No users found.</p>';
                 return;
             }
 
-            let html = `
+            const { currentPage, pageSize } = state.usersPagination;
+            const totalCount = total !== null ? total : state.usersPagination.total;
+            const totalPages = Math.ceil(totalCount / pageSize);
+
+            let html = '';
+
+            // Pagination controls (top)
+            if (totalCount > 0) {
+                html += renderUsersPaginationControls(currentPage, totalPages, totalCount);
+            }
+
+            html += `
                 <table>
                     <thead>
                         <tr>
@@ -1296,7 +1327,7 @@
             users.forEach(user => {
                 const statusClass = user.banned ? 'status-banned' : 'status-active';
                 const statusText = user.banned ? 'BANNED' : 'Active';
-                
+
                 html += `
                     <tr>
                         <td class="text-mono">${user.user_id}</td>
@@ -1311,15 +1342,89 @@
             });
 
             html += '</tbody></table>';
+
+            // Pagination controls (bottom)
+            if (totalCount > 0) {
+                html += renderUsersPaginationControls(currentPage, totalPages, totalCount);
+            }
+
             container.innerHTML = html;
+        }
+
+        function renderUsersPaginationControls(currentPage, totalPages, total) {
+            const { pageSize } = state.usersPagination;
+            const startItem = (currentPage - 1) * pageSize + 1;
+            const endItem = Math.min(currentPage * pageSize, total);
+
+            let html = '<div style="display: flex; justify-content: space-between; align-items: center; margin: 15px 0; padding: 10px; background: var(--background-alt); border-radius: 5px;">';
+
+            // Left: Page info
+            html += `<div class="text-small">Showing ${startItem}-${endItem} of ${total} users</div>`;
+
+            // Center: Page numbers
+            html += '<div style="display: flex; gap: 5px; align-items: center;">';
+
+            // Previous button
+            html += `<button class="action-btn" ${currentPage <= 1 ? 'disabled' : ''} onclick="loadUsers(${currentPage - 1})">← Prev</button>`;
+
+            // Page numbers (show up to 5 pages centered on current)
+            const startPage = Math.max(1, currentPage - 2);
+            const endPage = Math.min(totalPages, startPage + 4);
+
+            if (startPage > 1) {
+                html += `<button class="action-btn" onclick="loadUsers(1)">1</button>`;
+                if (startPage > 2) {
+                    html += '<span style="padding: 0 5px;">...</span>';
+                }
+            }
+
+            for (let p = startPage; p <= endPage; p++) {
+                const isActive = p === currentPage;
+                html += `<button class="action-btn" style="${isActive ? 'background: var(--tab-active-color); color: white;' : ''}" onclick="loadUsers(${p})">${p}</button>`;
+            }
+
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    html += '<span style="padding: 0 5px;">...</span>';
+                }
+                html += `<button class="action-btn" onclick="loadUsers(${totalPages})">${totalPages}</button>`;
+            }
+
+            // Next button
+            html += `<button class="action-btn" ${currentPage >= totalPages ? 'disabled' : ''} onclick="loadUsers(${currentPage + 1})">Next →</button>`;
+
+            html += '</div>';
+
+            // Right: Page size selector
+            html += `<div class="text-small">
+                <label>Per page:
+                    <select onchange="changeUsersPageSize(this.value)" style="padding: 4px; font-size: 0.9em;">
+                        <option value="10" ${pageSize === 10 ? 'selected' : ''}>10</option>
+                        <option value="20" ${pageSize === 20 ? 'selected' : ''}>20</option>
+                        <option value="50" ${pageSize === 50 ? 'selected' : ''}>50</option>
+                        <option value="100" ${pageSize === 100 ? 'selected' : ''}>100</option>
+                    </select>
+                </label>
+            </div>`;
+
+            html += '</div>';
+            return html;
+        }
+
+        function changeUsersPageSize(newSize) {
+            state.usersPagination.pageSize = parseInt(newSize);
+            state.usersPagination.currentPage = 1; // Reset to first page
+            loadUsers();
         }
 
         function filterUsers() {
             const query = document.getElementById('userSearch').value.toLowerCase();
-            const filtered = state.users.filter(user => 
+            const filtered = state.users.filter(user =>
                 user.user_id.toLowerCase().includes(query)
             );
-            renderUsersTable(filtered);
+            // Note: This filters the current page only; for full filtering,
+            // consider server-side filtering in the future
+            renderUsersTable(filtered, filtered.length);
         }
 
         async function showUserDetails(userId) {
