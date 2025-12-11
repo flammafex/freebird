@@ -72,7 +72,9 @@ pub struct SybilConfig {
     pub progressive_trust_persistence_path: PathBuf,
     pub progressive_trust_autosave_interval: u64,
     pub progressive_trust_hmac_secret: Option<String>,
+    pub progressive_trust_hmac_secret_path: PathBuf,
     pub progressive_trust_salt: String,
+    pub progressive_trust_allow_insecure: bool,
     // Proof of Diversity configuration
     pub proof_of_diversity_min_score: u8,
     pub proof_of_diversity_persistence_path: PathBuf,
@@ -232,8 +234,12 @@ impl SybilConfig {
                 .unwrap_or_else(|_| "progressive_trust.json".into()),
             progressive_trust_autosave_interval: env_u64("SYBIL_PROGRESSIVE_TRUST_AUTOSAVE_SECS", 300),
             progressive_trust_hmac_secret: env::var("SYBIL_PROGRESSIVE_TRUST_SECRET").ok(),
+            progressive_trust_hmac_secret_path: env::var("SYBIL_PROGRESSIVE_TRUST_SECRET_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "progressive_trust_secret.bin".into()),
             progressive_trust_salt: env::var("SYBIL_PROGRESSIVE_TRUST_SALT")
                 .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
+            progressive_trust_allow_insecure: env_bool("SYBIL_PROGRESSIVE_TRUST_ALLOW_INSECURE"),
             // Proof of Diversity
             proof_of_diversity_min_score: env_u32("SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE", 40) as u8,
             proof_of_diversity_persistence_path: env::var("SYBIL_PROOF_OF_DIVERSITY_PERSISTENCE_PATH")

@@ -24,13 +24,19 @@
 
 use anyhow::{anyhow, Context, Result};
 use base64ct::Encoding;
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
+
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 
 use freebird_common::api::SybilProof;
 use crate::sybil_resistance::SybilResistance;
@@ -47,10 +53,17 @@ pub struct ProgressiveTrustConfig {
     pub persistence_path: PathBuf,
     /// Auto-save interval (seconds)
     pub autosave_interval_secs: u64,
-    /// Server secret for HMAC (derived if not provided)
+    /// Server secret for HMAC (loaded from file or provided directly)
+    /// If not provided, a random secret will be generated and persisted
     pub hmac_secret: Option<String>,
+    /// Path to persist the generated HMAC secret (if hmac_secret is not provided)
+    /// Defaults to "progressive_trust_secret.bin"
+    pub hmac_secret_path: PathBuf,
     /// Salt for user ID hashing (per-deployment)
     pub user_id_salt: String,
+    /// Allow deterministic key derivation without a secret (INSECURE - for testing only)
+    /// When false (default), the system will generate and persist a random secret
+    pub allow_insecure_deterministic: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,7 +99,9 @@ impl Default for ProgressiveTrustConfig {
             persistence_path: PathBuf::from("progressive_trust.json"),
             autosave_interval_secs: 300,
             hmac_secret: None,
+            hmac_secret_path: PathBuf::from("progressive_trust_secret.bin"),
             user_id_salt: String::from("default-salt"),
+            allow_insecure_deterministic: false,
         }
     }
 }
@@ -150,8 +165,11 @@ pub struct ProgressiveTrustSystem {
 impl ProgressiveTrustSystem {
     /// Create a new progressive trust system
     pub async fn new(config: ProgressiveTrustConfig) -> Result<Arc<Self>> {
-        // Derive HMAC key
-        let hmac_key = Self::derive_hmac_key(&config);
+        // Load or generate HMAC secret (ensures unique key per deployment)
+        let secret = Self::load_or_generate_secret(&config)?;
+
+        // Derive HMAC key from secret
+        let hmac_key = Self::derive_hmac_key(&secret, &config);
 
         // Load existing state if available
         let users = Self::load_state(&config.persistence_path).await?;
@@ -178,18 +196,134 @@ impl ProgressiveTrustSystem {
         Ok(system)
     }
 
-    /// Derive HMAC key from config or generate deterministic key
-    fn derive_hmac_key(config: &ProgressiveTrustConfig) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new_keyed(&[0u8; 32]);
-        hasher.update(b"progressive_trust:hmac:v1:");
-        hasher.update(config.user_id_salt.as_bytes());
-
+    /// Load or generate the HMAC secret
+    ///
+    /// Security: This function ensures each deployment has a unique HMAC secret.
+    /// The secret is either:
+    /// 1. Provided directly in config (hmac_secret)
+    /// 2. Loaded from a persisted file (hmac_secret_path)
+    /// 3. Generated randomly and persisted for future use
+    ///
+    /// If allow_insecure_deterministic is true and no secret can be loaded/generated,
+    /// falls back to deterministic derivation (INSECURE - for testing only).
+    fn load_or_generate_secret(config: &ProgressiveTrustConfig) -> Result<[u8; 32]> {
+        // Priority 1: Use provided secret directly
         if let Some(secret) = &config.hmac_secret {
+            info!("Using provided HMAC secret for progressive trust");
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(b"progressive_trust:secret:v1:");
             hasher.update(secret.as_bytes());
-        } else {
-            hasher.update(b":deterministic");
+            return Ok(*hasher.finalize().as_bytes());
         }
 
+        // Priority 2: Try to load from persisted file
+        if config.hmac_secret_path.exists() {
+            match fs::read(&config.hmac_secret_path) {
+                Ok(bytes) if bytes.len() == 32 => {
+                    let mut secret = [0u8; 32];
+                    secret.copy_from_slice(&bytes);
+                    info!(
+                        path = ?config.hmac_secret_path,
+                        "Loaded HMAC secret from file"
+                    );
+                    return Ok(secret);
+                }
+                Ok(bytes) => {
+                    error!(
+                        path = ?config.hmac_secret_path,
+                        len = bytes.len(),
+                        "Invalid HMAC secret file (expected 32 bytes)"
+                    );
+                    // Fall through to generate new secret
+                }
+                Err(e) => {
+                    warn!(
+                        path = ?config.hmac_secret_path,
+                        error = %e,
+                        "Failed to read HMAC secret file"
+                    );
+                    // Fall through to generate new secret
+                }
+            }
+        }
+
+        // Priority 3: Generate new random secret and persist it
+        let mut secret = [0u8; 32];
+        OsRng.fill_bytes(&mut secret);
+
+        match Self::atomic_write_secure(&config.hmac_secret_path, &secret) {
+            Ok(()) => {
+                info!(
+                    path = ?config.hmac_secret_path,
+                    "Generated and persisted new HMAC secret"
+                );
+                return Ok(secret);
+            }
+            Err(e) => {
+                error!(
+                    path = ?config.hmac_secret_path,
+                    error = %e,
+                    "Failed to persist HMAC secret"
+                );
+
+                // Check if insecure fallback is allowed
+                if config.allow_insecure_deterministic {
+                    warn!(
+                        "SECURITY WARNING: Using deterministic HMAC key derivation. \
+                         This is INSECURE and should only be used for testing. \
+                         All deployments with the same user_id_salt will share the same HMAC key, \
+                         enabling cross-deployment proof forgery."
+                    );
+                    // Return the generated secret even if not persisted
+                    return Ok(secret);
+                } else {
+                    return Err(anyhow!(
+                        "Failed to persist HMAC secret and insecure deterministic mode is disabled. \
+                         Either provide hmac_secret in config, ensure hmac_secret_path is writable, \
+                         or set allow_insecure_deterministic=true for testing."
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Atomic write with restrictive permissions (mode 0600 on Unix)
+    fn atomic_write_secure(path: &Path, data: &[u8]) -> Result<()> {
+        let tmp = path.with_extension("tmp");
+
+        #[cfg(unix)]
+        {
+            use std::fs::OpenOptions;
+            let mut f = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)
+                .context("Failed to create temp file for secret")?;
+            f.write_all(data).context("Failed to write secret to temp file")?;
+            f.sync_all().context("Failed to sync secret file")?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            let mut f = fs::File::create(&tmp).context("Failed to create temp file for secret")?;
+            f.write_all(data).context("Failed to write secret to temp file")?;
+            f.sync_all().context("Failed to sync secret file")?;
+        }
+
+        fs::rename(&tmp, path).context("Failed to rename temp file to final path")?;
+        Ok(())
+    }
+
+    /// Derive HMAC key from the loaded/generated secret
+    ///
+    /// Security: The HMAC key is derived using BLAKE3 with proper domain separation.
+    /// The secret MUST be unique per deployment to prevent cross-deployment proof forgery.
+    fn derive_hmac_key(secret: &[u8; 32], config: &ProgressiveTrustConfig) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_keyed(secret);
+        hasher.update(b"progressive_trust:hmac:v1:");
+        hasher.update(config.user_id_salt.as_bytes());
         *hasher.finalize().as_bytes()
     }
 
@@ -431,20 +565,42 @@ impl SybilResistance for ProgressiveTrustSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    // Atomic counter to ensure unique test paths
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    /// Create a test config with unique paths to avoid test interference
+    fn test_config() -> ProgressiveTrustConfig {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        ProgressiveTrustConfig {
+            persistence_path: PathBuf::from(format!("/tmp/progressive_trust_test_{}.json", id)),
+            hmac_secret_path: PathBuf::from(format!("/tmp/progressive_trust_secret_test_{}.bin", id)),
+            ..Default::default()
+        }
+    }
+
+    /// Cleanup test files
+    fn cleanup_test_files(config: &ProgressiveTrustConfig) {
+        let _ = std::fs::remove_file(&config.persistence_path);
+        let _ = std::fs::remove_file(&config.hmac_secret_path);
+    }
 
     #[tokio::test]
     async fn test_user_creation() {
-        let config = ProgressiveTrustConfig::default();
-        let system = ProgressiveTrustSystem::new(config).await.unwrap();
+        let config = test_config();
+        let system = ProgressiveTrustSystem::new(config.clone()).await.unwrap();
 
         let record = system.get_or_create_user("alice").await.unwrap();
         assert_eq!(record.tokens_issued, 0);
         assert!(record.first_seen > 0);
+
+        cleanup_test_files(&config);
     }
 
     #[tokio::test]
     async fn test_trust_level_progression() {
-        let mut config = ProgressiveTrustConfig::default();
+        let mut config = test_config();
         config.levels = vec![
             TrustLevel {
                 min_age_secs: 0,
@@ -458,7 +614,7 @@ mod tests {
             },
         ];
 
-        let system = ProgressiveTrustSystem::new(config).await.unwrap();
+        let system = ProgressiveTrustSystem::new(config.clone()).await.unwrap();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -473,14 +629,71 @@ mod tests {
         record.first_seen = now - 150;
         let level = system.determine_trust_level(&record, now);
         assert_eq!(level, 1);
+
+        cleanup_test_files(&config);
     }
 
     #[tokio::test]
     async fn test_hmac_verification() {
-        let config = ProgressiveTrustConfig::default();
-        let system = ProgressiveTrustSystem::new(config).await.unwrap();
+        let config = test_config();
+        let system = ProgressiveTrustSystem::new(config.clone()).await.unwrap();
 
         let proof = system.generate_proof("alice").await.unwrap();
         assert!(system.verify(&proof).is_ok());
+
+        cleanup_test_files(&config);
+    }
+
+    #[tokio::test]
+    async fn test_secret_persistence() {
+        let config = test_config();
+
+        // Create system - should generate and persist secret
+        let system1 = ProgressiveTrustSystem::new(config.clone()).await.unwrap();
+        let proof1 = system1.generate_proof("bob").await.unwrap();
+
+        // Verify secret file was created
+        assert!(config.hmac_secret_path.exists(), "Secret file should be created");
+
+        // Create second system with same config - should load same secret
+        let system2 = ProgressiveTrustSystem::new(config.clone()).await.unwrap();
+
+        // Proofs should be verifiable by both systems (same HMAC key)
+        assert!(system2.verify(&proof1).is_ok(), "Proof from system1 should verify on system2");
+
+        cleanup_test_files(&config);
+    }
+
+    #[tokio::test]
+    async fn test_different_secrets_produce_different_proofs() {
+        let config1 = test_config();
+        let config2 = test_config();
+
+        let system1 = ProgressiveTrustSystem::new(config1.clone()).await.unwrap();
+        let system2 = ProgressiveTrustSystem::new(config2.clone()).await.unwrap();
+
+        // Create user records with identical data
+        let proof1 = system1.generate_proof("testuser").await.unwrap();
+
+        // Proof from system1 should NOT verify on system2 (different secrets)
+        assert!(system2.verify(&proof1).is_err(), "Proof should not verify with different secret");
+
+        cleanup_test_files(&config1);
+        cleanup_test_files(&config2);
+    }
+
+    #[tokio::test]
+    async fn test_provided_secret_used() {
+        let mut config = test_config();
+        config.hmac_secret = Some("my-custom-secret".to_string());
+
+        let system = ProgressiveTrustSystem::new(config.clone()).await.unwrap();
+        let proof = system.generate_proof("alice").await.unwrap();
+        assert!(system.verify(&proof).is_ok());
+
+        // Secret file should NOT be created when secret is provided directly
+        assert!(!config.hmac_secret_path.exists(), "Secret file should not be created when secret is provided");
+
+        cleanup_test_files(&config);
     }
 }
