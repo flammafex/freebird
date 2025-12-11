@@ -373,17 +373,6 @@
             background: var(--background);
         }
 
-        /* Token Testing */
-        .token-result {
-            background: var(--background-alt);
-            padding: 15px;
-            border-radius: 5px;
-            margin-top: 15px;
-            font-family: monospace;
-            font-size: 0.9em;
-            word-break: break-all;
-        }
-
         /* Audit Logs */
         .log-entry {
             background: var(--background-alt);
@@ -463,8 +452,8 @@
         <button class="tab" onclick="switchTab('users')">👥 Users</button>
         <button class="tab" onclick="switchTab('invitations')">🎫 Invitations</button>
         <button class="tab" onclick="switchTab('keys')">🔑 Keys</button>
-        <button class="tab" onclick="switchTab('tokens')">🎟️ Tokens</button>
         <button class="tab" onclick="switchTab('audit')">📝 Audit</button>
+        <button class="tab" onclick="switchTab('federation')">🌐 Federation</button>
         <button class="tab" onclick="switchTab('webauthn')">🔐 WebAuthn</button>
     </div>
 
@@ -489,12 +478,14 @@
 
     <div id="users-tab" class="tab-content">
         <h2>User Management</h2>
-        
+
         <div class="form-row">
             <div class="form-field">
                 <input type="text" id="userSearch" placeholder="Search users..." onkeyup="filterUsers()">
             </div>
             <button onclick="loadUsers()">🔄 Refresh List</button>
+            <button onclick="exportUsers('json')" style="margin-left: 10px;">📥 Export JSON</button>
+            <button onclick="exportUsers('csv')" style="margin-left: 5px;">📥 Export CSV</button>
         </div>
 
         <div id="usersContainer">
@@ -572,7 +563,38 @@
         <div class="form-section">
             <h3>📋 Recent Invitations</h3>
             <p class="text-small">View recently created invitation codes and their status.</p>
-            <button onclick="loadInvitationHistory()">🔄 Refresh</button>
+
+            <!-- Filter controls -->
+            <div class="form-row" style="margin-bottom: 15px; flex-wrap: wrap;">
+                <div class="form-field" style="max-width: 150px;">
+                    <label for="invitationStatusFilter">Status</label>
+                    <select id="invitationStatusFilter" onchange="applyInvitationFilters()">
+                        <option value="all">All</option>
+                        <option value="pending">Pending</option>
+                        <option value="redeemed">Redeemed</option>
+                    </select>
+                </div>
+                <div class="form-field" style="max-width: 200px;">
+                    <label for="invitationInviterFilter">Inviter ID</label>
+                    <input type="text" id="invitationInviterFilter" placeholder="Filter by inviter..." onchange="applyInvitationFilters()">
+                </div>
+                <div class="form-field" style="max-width: 180px;">
+                    <label for="invitationDateFrom">From Date</label>
+                    <input type="date" id="invitationDateFrom" onchange="applyInvitationFilters()">
+                </div>
+                <div class="form-field" style="max-width: 180px;">
+                    <label for="invitationDateTo">To Date</label>
+                    <input type="date" id="invitationDateTo" onchange="applyInvitationFilters()">
+                </div>
+                <button onclick="clearInvitationFilters()" style="align-self: flex-end;">Clear Filters</button>
+            </div>
+
+            <div style="margin-bottom: 15px;">
+                <button onclick="loadInvitationHistory()">🔄 Refresh</button>
+                <button onclick="exportInvitations('json')" style="margin-left: 10px;">📥 Export JSON</button>
+                <button onclick="exportInvitations('csv')" style="margin-left: 5px;">📥 Export CSV</button>
+            </div>
+
             <div id="invitationHistoryContainer" class="mt-20">
                 <p class="text-small">Click "Refresh" to load invitation history...</p>
             </div>
@@ -626,61 +648,6 @@
         <div id="keysResults"></div>
     </div>
 
-    <!-- Tokens Tab -->
-    <div id="tokens-tab" class="tab-content">
-        <h2>🎟️ Token Testing</h2>
-        <p>Test VOPRF token issuance and verification.</p>
-
-        <div class="form-section">
-            <h3>🎫 Issue Test Token</h3>
-            <p class="text-small">Issue a test token for a user ID.</p>
-
-            <div class="form-row">
-                <div class="form-field">
-                    <label for="tokenUserId">User ID</label>
-                    <input
-                        type="text"
-                        id="tokenUserId"
-                        placeholder="e.g., test-user"
-                        value="test-user"
-                    >
-                </div>
-                <button onclick="issueTestToken()">Issue Token</button>
-            </div>
-
-            <div id="tokenIssueResult"></div>
-        </div>
-
-        <div class="form-section">
-            <h3>✅ Verify Token</h3>
-            <p class="text-small">Verify a token signature.</p>
-
-            <div class="form-row">
-                <div class="form-field">
-                    <label for="verifyToken">Token</label>
-                    <input
-                        type="text"
-                        id="verifyToken"
-                        placeholder="Paste token here"
-                    >
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-field">
-                    <label for="verifySignature">Signature</label>
-                    <input
-                        type="text"
-                        id="verifySignature"
-                        placeholder="Paste signature here"
-                    >
-                </div>
-            </div>
-            <button onclick="verifyTestToken()">Verify Token</button>
-
-            <div id="tokenVerifyResult"></div>
-        </div>
-    </div>
-
     <!-- Audit Logs Tab -->
     <div id="audit-tab" class="tab-content">
         <h2>📝 Audit Logs</h2>
@@ -700,6 +667,8 @@
                 </select>
             </div>
             <button onclick="loadAuditLogs()">🔄 Refresh</button>
+            <button onclick="exportAudit('json')" style="margin-left: 10px;">📥 Export JSON</button>
+            <button onclick="exportAudit('csv')" style="margin-left: 5px;">📥 Export CSV</button>
         </div>
 
         <div id="auditLogsContainer" class="mt-20">
@@ -707,45 +676,94 @@
         </div>
     </div>
 
+    <!-- Federation Tab -->
+    <div id="federation-tab" class="tab-content">
+        <h2>🌐 Federation Management</h2>
+        <p>Manage trust relationships with other Freebird issuers through vouches and revocations.</p>
+
+        <!-- Vouches Section -->
+        <div class="form-section">
+            <h3>✅ Trusted Issuers (Vouches)</h3>
+            <p class="text-small">Vouches allow you to express trust in other Freebird issuers, enabling federated verification.</p>
+
+            <div class="form-row">
+                <button onclick="loadVouches()">🔄 Refresh Vouches</button>
+            </div>
+
+            <div id="vouchesContainer" class="mt-20">
+                <p class="text-small">Click "Refresh Vouches" to load trusted issuers...</p>
+            </div>
+
+            <h4 style="margin-top: 30px;">➕ Add New Vouch</h4>
+            <p class="text-small">Create a cryptographic vouch for another issuer.</p>
+
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="vouchIssuerId">Issuer ID to Vouch</label>
+                    <input type="text" id="vouchIssuerId" placeholder="e.g., issuer:example:v1">
+                </div>
+                <div class="form-field">
+                    <label for="vouchPubkey">Issuer Public Key (Base64URL)</label>
+                    <input type="text" id="vouchPubkey" placeholder="SEC1 compressed public key">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="vouchTrustLevel">Trust Level (0-100)</label>
+                    <input type="number" id="vouchTrustLevel" value="80" min="0" max="100">
+                </div>
+                <div class="form-field">
+                    <label for="vouchExpiresDays">Expires In (days)</label>
+                    <input type="number" id="vouchExpiresDays" value="365" min="1">
+                </div>
+                <button onclick="addVouch()">Add Vouch</button>
+            </div>
+            <div id="vouchResult"></div>
+        </div>
+
+        <!-- Revocations Section -->
+        <div class="form-section">
+            <h3>🚫 Revoked Issuers</h3>
+            <p class="text-small">Revocations explicitly mark issuers as untrusted, overriding any vouches.</p>
+
+            <div class="form-row">
+                <button onclick="loadRevocations()">🔄 Refresh Revocations</button>
+            </div>
+
+            <div id="revocationsContainer" class="mt-20">
+                <p class="text-small">Click "Refresh Revocations" to load revoked issuers...</p>
+            </div>
+
+            <h4 style="margin-top: 30px;">➕ Add New Revocation</h4>
+            <p class="text-small">Revoke trust from an issuer (e.g., if compromised or misbehaving).</p>
+
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="revokeIssuerId">Issuer ID to Revoke</label>
+                    <input type="text" id="revokeIssuerId" placeholder="e.g., issuer:bad:v1">
+                </div>
+                <div class="form-field">
+                    <label for="revokeReason">Reason (optional)</label>
+                    <input type="text" id="revokeReason" placeholder="e.g., compromised, spam">
+                </div>
+                <button onclick="addRevocation()">Add Revocation</button>
+            </div>
+            <div id="revocationResult"></div>
+        </div>
+    </div>
+
     <!-- WebAuthn Tab -->
     <div id="webauthn-tab" class="tab-content">
         <h2>🔐 WebAuthn Management</h2>
-        <p>Register and manage FIDO2 credentials for passwordless authentication.</p>
-
-        <div class="form-section">
-            <h3>➕ Register New Credential</h3>
-            <p class="text-small">Register a new WebAuthn credential (FIDO2 security key or biometric).</p>
-
-            <div class="form-row">
-                <div class="form-field">
-                    <label for="webauthnUserId">User ID</label>
-                    <input
-                        type="text"
-                        id="webauthnUserId"
-                        placeholder="e.g., alice"
-                    >
-                </div>
-                <div class="form-field">
-                    <label for="webauthnDisplayName">Display Name</label>
-                    <input
-                        type="text"
-                        id="webauthnDisplayName"
-                        placeholder="e.g., Alice's Security Key"
-                    >
-                </div>
-                <button onclick="registerWebAuthn()">Register Credential</button>
-            </div>
-
-            <div id="webauthnRegisterResult"></div>
-        </div>
+        <p>View and manage FIDO2 credentials for passwordless authentication.</p>
 
         <div class="form-section">
             <h3>🔑 Registered Credentials</h3>
-            <p class="text-small">View and manage registered WebAuthn credentials.</p>
+            <p class="text-small">View and manage registered WebAuthn credentials. Users register credentials through the normal authentication flow.</p>
 
             <div class="form-row">
                 <div class="form-field">
-                    <input type="text" id="credentialSearch" placeholder="Search by User ID...">
+                    <input type="text" id="credentialSearch" placeholder="Search by User ID hash..." onkeyup="filterWebAuthnCredentials()">
                 </div>
                 <button onclick="loadWebAuthnCredentials()">🔄 Refresh</button>
             </div>
@@ -778,7 +796,36 @@
                 users: [],
                 invitations: [],
                 redemptions: []
-            }
+            },
+            // Users pagination state
+            usersPagination: {
+                currentPage: 1,
+                pageSize: 20,
+                total: 0,
+                hasMore: false
+            },
+            // Invitation pagination and filter state
+            invitationsPagination: {
+                currentPage: 1,
+                pageSize: 20,
+                total: 0,
+                hasMore: false
+            },
+            invitationFilters: {
+                status: 'all',
+                inviter_id: '',
+                date_from: '',
+                date_to: ''
+            },
+            // Audit log pagination state
+            auditPagination: {
+                currentPage: 1,
+                pageSize: 50,
+                total: 0,
+                hasMore: false
+            },
+            // WebAuthn credentials cache
+            webauthnCredentials: []
         };
 
         // ============================================================================
@@ -826,8 +873,8 @@
                 return this.request('/stats');
             }
 
-            async getUsers() {
-                return this.request('/users');
+            async getUsers(limit = 50, offset = 0) {
+                return this.request(`/users?limit=${limit}&offset=${offset}`);
             }
 
             async getUserDetails(userId) {
@@ -884,8 +931,34 @@
                 });
             }
 
-            async getInvitations(limit = 50) {
-                return this.request(`/invitations?limit=${limit}`);
+            async getInvitations(limit = 50, offset = 0, filters = {}) {
+                let url = `/invitations?limit=${limit}&offset=${offset}`;
+                if (filters.status && filters.status !== 'all') {
+                    url += `&status=${filters.status}`;
+                }
+                if (filters.inviter_id) {
+                    url += `&inviter_id=${encodeURIComponent(filters.inviter_id)}`;
+                }
+                if (filters.date_from) {
+                    url += `&date_from=${filters.date_from}`;
+                }
+                if (filters.date_to) {
+                    url += `&date_to=${filters.date_to}`;
+                }
+                return this.request(url);
+            }
+
+            // Export methods
+            async exportInvitations(format = 'json') {
+                return this.request(`/export/invitations?format=${format}`);
+            }
+
+            async exportUsers(format = 'json') {
+                return this.request(`/export/users?format=${format}`);
+            }
+
+            async exportAudit(format = 'json') {
+                return this.request(`/export/audit?format=${format}`);
             }
 
             async registerOwner(userId) {
@@ -897,51 +970,57 @@
                 });
             }
 
-            async issueToken(userId) {
-                return this.request('/tokens/issue', {
+            async getAuditLogs(limit = 100, offset = 0) {
+                return this.request(`/audit?limit=${limit}&offset=${offset}`);
+            }
+
+            // Federation API methods
+            async getVouches() {
+                return this.request('/federation/vouches');
+            }
+
+            async addVouch(vouch) {
+                return this.request('/federation/vouches', {
                     method: 'POST',
-                    body: JSON.stringify({
-                        user_id: userId
-                    })
+                    body: JSON.stringify({ vouch })
                 });
             }
 
-            async verifyToken(token, signature) {
-                return this.request('/tokens/verify', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        token: token,
-                        signature: signature
-                    })
+            async removeVouch(issuerId) {
+                return this.request(`/federation/vouches/${encodeURIComponent(issuerId)}`, {
+                    method: 'DELETE'
                 });
             }
 
-            async getAuditLogs(limit = 100) {
-                return this.request(`/audit?limit=${limit}`);
+            async getRevocations() {
+                return this.request('/federation/revocations');
             }
 
-            async registerWebAuthnCredential(userId, displayName) {
-                return this.request('/webauthn/register', {
+            async addRevocation(revocation) {
+                return this.request('/federation/revocations', {
                     method: 'POST',
-                    body: JSON.stringify({
-                        user_id: userId,
-                        display_name: displayName
-                    })
+                    body: JSON.stringify({ revocation })
                 });
             }
 
-            async getWebAuthnCredentials(userId = null) {
-                const endpoint = userId ? `/webauthn/credentials?user_id=${userId}` : '/webauthn/credentials';
-                return this.request(endpoint);
+            async removeRevocation(issuerId) {
+                return this.request(`/federation/revocations/${encodeURIComponent(issuerId)}`, {
+                    method: 'DELETE'
+                });
             }
 
-            async removeWebAuthnCredential(credentialId) {
-                return this.request('/webauthn/credentials/remove', {
-                    method: 'POST',
-                    body: JSON.stringify({
-                        credential_id: credentialId
-                    })
+            async getWebAuthnCredentials() {
+                return this.request('/webauthn/credentials');
+            }
+
+            async deleteWebAuthnCredential(credentialId) {
+                return this.request(`/webauthn/credentials/${encodeURIComponent(credentialId)}`, {
+                    method: 'DELETE'
                 });
+            }
+
+            async getWebAuthnStats() {
+                return this.request('/webauthn/stats');
             }
         }
 
@@ -1127,10 +1206,15 @@
         // User Management Functions
         // ============================================================================
 
-        async function loadUsers() {
+        async function loadUsers(page = null) {
             if (!state.apiKey) {
                 showMessage('usersContainer', 'warning', '⚠️ Please configure your API key first');
                 return;
+            }
+
+            // Update current page if specified
+            if (page !== null) {
+                state.usersPagination.currentPage = page;
             }
 
             const container = document.getElementById('usersContainer');
@@ -1138,23 +1222,42 @@
 
             try {
                 const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
-                const users = await api.getUsers();
-                state.users = users; // Cache for filtering
-                renderUsersTable(users);
+                const { pageSize, currentPage } = state.usersPagination;
+                const offset = (currentPage - 1) * pageSize;
+
+                const response = await api.getUsers(pageSize, offset);
+
+                // Update pagination state
+                state.usersPagination.total = response.total;
+                state.usersPagination.hasMore = response.has_more;
+
+                state.users = response.users; // Cache for filtering
+                renderUsersTable(response.users, response.total);
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ Failed to load users: ${error.message}</div>`;
             }
         }
 
-        function renderUsersTable(users) {
+        function renderUsersTable(users, total = null) {
             const container = document.getElementById('usersContainer');
-            
+
             if (users.length === 0) {
                 container.innerHTML = '<p>No users found.</p>';
                 return;
             }
 
-            let html = `
+            const { currentPage, pageSize } = state.usersPagination;
+            const totalCount = total !== null ? total : state.usersPagination.total;
+            const totalPages = Math.ceil(totalCount / pageSize);
+
+            let html = '';
+
+            // Pagination controls (top)
+            if (totalCount > 0) {
+                html += renderUsersPaginationControls(currentPage, totalPages, totalCount);
+            }
+
+            html += `
                 <table>
                     <thead>
                         <tr>
@@ -1170,7 +1273,7 @@
             users.forEach(user => {
                 const statusClass = user.banned ? 'status-banned' : 'status-active';
                 const statusText = user.banned ? 'BANNED' : 'Active';
-                
+
                 html += `
                     <tr>
                         <td class="text-mono">${user.user_id}</td>
@@ -1185,15 +1288,89 @@
             });
 
             html += '</tbody></table>';
+
+            // Pagination controls (bottom)
+            if (totalCount > 0) {
+                html += renderUsersPaginationControls(currentPage, totalPages, totalCount);
+            }
+
             container.innerHTML = html;
+        }
+
+        function renderUsersPaginationControls(currentPage, totalPages, total) {
+            const { pageSize } = state.usersPagination;
+            const startItem = (currentPage - 1) * pageSize + 1;
+            const endItem = Math.min(currentPage * pageSize, total);
+
+            let html = '<div style="display: flex; justify-content: space-between; align-items: center; margin: 15px 0; padding: 10px; background: var(--background-alt); border-radius: 5px;">';
+
+            // Left: Page info
+            html += `<div class="text-small">Showing ${startItem}-${endItem} of ${total} users</div>`;
+
+            // Center: Page numbers
+            html += '<div style="display: flex; gap: 5px; align-items: center;">';
+
+            // Previous button
+            html += `<button class="action-btn" ${currentPage <= 1 ? 'disabled' : ''} onclick="loadUsers(${currentPage - 1})">← Prev</button>`;
+
+            // Page numbers (show up to 5 pages centered on current)
+            const startPage = Math.max(1, currentPage - 2);
+            const endPage = Math.min(totalPages, startPage + 4);
+
+            if (startPage > 1) {
+                html += `<button class="action-btn" onclick="loadUsers(1)">1</button>`;
+                if (startPage > 2) {
+                    html += '<span style="padding: 0 5px;">...</span>';
+                }
+            }
+
+            for (let p = startPage; p <= endPage; p++) {
+                const isActive = p === currentPage;
+                html += `<button class="action-btn" style="${isActive ? 'background: var(--tab-active-color); color: white;' : ''}" onclick="loadUsers(${p})">${p}</button>`;
+            }
+
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    html += '<span style="padding: 0 5px;">...</span>';
+                }
+                html += `<button class="action-btn" onclick="loadUsers(${totalPages})">${totalPages}</button>`;
+            }
+
+            // Next button
+            html += `<button class="action-btn" ${currentPage >= totalPages ? 'disabled' : ''} onclick="loadUsers(${currentPage + 1})">Next →</button>`;
+
+            html += '</div>';
+
+            // Right: Page size selector
+            html += `<div class="text-small">
+                <label>Per page:
+                    <select onchange="changeUsersPageSize(this.value)" style="padding: 4px; font-size: 0.9em;">
+                        <option value="10" ${pageSize === 10 ? 'selected' : ''}>10</option>
+                        <option value="20" ${pageSize === 20 ? 'selected' : ''}>20</option>
+                        <option value="50" ${pageSize === 50 ? 'selected' : ''}>50</option>
+                        <option value="100" ${pageSize === 100 ? 'selected' : ''}>100</option>
+                    </select>
+                </label>
+            </div>`;
+
+            html += '</div>';
+            return html;
+        }
+
+        function changeUsersPageSize(newSize) {
+            state.usersPagination.pageSize = parseInt(newSize);
+            state.usersPagination.currentPage = 1; // Reset to first page
+            loadUsers();
         }
 
         function filterUsers() {
             const query = document.getElementById('userSearch').value.toLowerCase();
-            const filtered = state.users.filter(user => 
+            const filtered = state.users.filter(user =>
                 user.user_id.toLowerCase().includes(query)
             );
-            renderUsersTable(filtered);
+            // Note: This filters the current page only; for full filtering,
+            // consider server-side filtering in the future
+            renderUsersTable(filtered, filtered.length);
         }
 
         async function showUserDetails(userId) {
@@ -1383,10 +1560,15 @@
             }
         }
 
-        async function loadInvitationHistory() {
+        async function loadInvitationHistory(page = null) {
             if (!state.apiKey) {
                 showMessage('invitationHistoryContainer', 'warning', '⚠️ Please configure your API key first');
                 return;
+            }
+
+            // Update current page if specified
+            if (page !== null) {
+                state.invitationsPagination.currentPage = page;
             }
 
             const container = document.getElementById('invitationHistoryContainer');
@@ -1394,14 +1576,47 @@
 
             try {
                 const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
-                const invitations = await api.getInvitations(50);
+                const { pageSize, currentPage } = state.invitationsPagination;
+                const offset = (currentPage - 1) * pageSize;
+
+                // Build filters from state
+                const filters = {};
+                if (state.invitationFilters.status !== 'all') {
+                    filters.status = state.invitationFilters.status;
+                }
+                if (state.invitationFilters.inviter_id) {
+                    filters.inviter_id = state.invitationFilters.inviter_id;
+                }
+                if (state.invitationFilters.date_from) {
+                    // Convert date string to Unix timestamp
+                    filters.date_from = Math.floor(new Date(state.invitationFilters.date_from).getTime() / 1000);
+                }
+                if (state.invitationFilters.date_to) {
+                    // Convert date string to Unix timestamp (end of day)
+                    filters.date_to = Math.floor(new Date(state.invitationFilters.date_to + 'T23:59:59').getTime() / 1000);
+                }
+
+                const response = await api.getInvitations(pageSize, offset, filters);
+
+                // Update pagination state
+                state.invitationsPagination.total = response.total;
+                state.invitationsPagination.hasMore = response.has_more;
+
+                const invitations = response.invitations;
+                const totalPages = Math.ceil(response.total / pageSize);
 
                 if (!invitations || invitations.length === 0) {
                     container.innerHTML = '<p class="text-small">No invitations found.</p>';
                     return;
                 }
 
-                let html = '<table><thead><tr>';
+                let html = '';
+
+                // Pagination controls (top)
+                html += renderInvitationPaginationControls(currentPage, totalPages, response.total);
+
+                // Table
+                html += '<table><thead><tr>';
                 html += '<th>Code</th>';
                 html += '<th>Created By</th>';
                 html += '<th>Created At</th>';
@@ -1432,10 +1647,175 @@
                 });
 
                 html += '</tbody></table>';
+
+                // Pagination controls (bottom)
+                html += renderInvitationPaginationControls(currentPage, totalPages, response.total);
+
                 container.innerHTML = html;
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ Failed to load invitation history: ${error.message}</div>`;
             }
+        }
+
+        function renderInvitationPaginationControls(currentPage, totalPages, total) {
+            const { pageSize } = state.invitationsPagination;
+            const startItem = (currentPage - 1) * pageSize + 1;
+            const endItem = Math.min(currentPage * pageSize, total);
+
+            let html = '<div style="display: flex; justify-content: space-between; align-items: center; margin: 15px 0; padding: 10px; background: var(--background-alt); border-radius: 5px;">';
+
+            // Left: Page info
+            html += `<div class="text-small">Showing ${startItem}-${endItem} of ${total} invitations</div>`;
+
+            // Center: Page numbers
+            html += '<div style="display: flex; gap: 5px; align-items: center;">';
+
+            // Previous button
+            html += `<button class="action-btn" ${currentPage <= 1 ? 'disabled' : ''} onclick="loadInvitationHistory(${currentPage - 1})">← Prev</button>`;
+
+            // Page numbers (show up to 5 pages centered on current)
+            const startPage = Math.max(1, currentPage - 2);
+            const endPage = Math.min(totalPages, startPage + 4);
+
+            if (startPage > 1) {
+                html += `<button class="action-btn" onclick="loadInvitationHistory(1)">1</button>`;
+                if (startPage > 2) {
+                    html += '<span style="padding: 0 5px;">...</span>';
+                }
+            }
+
+            for (let p = startPage; p <= endPage; p++) {
+                const isActive = p === currentPage;
+                html += `<button class="action-btn" style="${isActive ? 'background: var(--tab-active-color); color: white;' : ''}" onclick="loadInvitationHistory(${p})">${p}</button>`;
+            }
+
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    html += '<span style="padding: 0 5px;">...</span>';
+                }
+                html += `<button class="action-btn" onclick="loadInvitationHistory(${totalPages})">${totalPages}</button>`;
+            }
+
+            // Next button
+            html += `<button class="action-btn" ${currentPage >= totalPages ? 'disabled' : ''} onclick="loadInvitationHistory(${currentPage + 1})">Next →</button>`;
+
+            html += '</div>';
+
+            // Right: Page size selector
+            html += `<div class="text-small">
+                <label>Per page:
+                    <select onchange="changeInvitationsPageSize(this.value)" style="padding: 4px; font-size: 0.9em;">
+                        <option value="10" ${pageSize === 10 ? 'selected' : ''}>10</option>
+                        <option value="20" ${pageSize === 20 ? 'selected' : ''}>20</option>
+                        <option value="50" ${pageSize === 50 ? 'selected' : ''}>50</option>
+                        <option value="100" ${pageSize === 100 ? 'selected' : ''}>100</option>
+                    </select>
+                </label>
+            </div>`;
+
+            html += '</div>';
+            return html;
+        }
+
+        function changeInvitationsPageSize(newSize) {
+            state.invitationsPagination.pageSize = parseInt(newSize);
+            state.invitationsPagination.currentPage = 1; // Reset to first page
+            loadInvitationHistory();
+        }
+
+        // Invitation filter functions
+        function applyInvitationFilters() {
+            state.invitationFilters.status = document.getElementById('invitationStatusFilter').value;
+            state.invitationFilters.inviter_id = document.getElementById('invitationInviterFilter').value.trim();
+            state.invitationFilters.date_from = document.getElementById('invitationDateFrom').value;
+            state.invitationFilters.date_to = document.getElementById('invitationDateTo').value;
+            state.invitationsPagination.currentPage = 1; // Reset to first page
+            loadInvitationHistory();
+        }
+
+        function clearInvitationFilters() {
+            document.getElementById('invitationStatusFilter').value = 'all';
+            document.getElementById('invitationInviterFilter').value = '';
+            document.getElementById('invitationDateFrom').value = '';
+            document.getElementById('invitationDateTo').value = '';
+            state.invitationFilters = {
+                status: 'all',
+                inviter_id: '',
+                date_from: '',
+                date_to: ''
+            };
+            state.invitationsPagination.currentPage = 1;
+            loadInvitationHistory();
+        }
+
+        // Export functions
+        async function exportInvitations(format) {
+            if (!state.apiKey) {
+                alert('Please configure your API key first');
+                return;
+            }
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const data = await api.exportInvitations(format);
+
+                if (format === 'csv') {
+                    downloadFile(data, 'invitations.csv', 'text/csv');
+                } else {
+                    downloadFile(JSON.stringify(data, null, 2), 'invitations.json', 'application/json');
+                }
+            } catch (error) {
+                alert('Export failed: ' + error.message);
+            }
+        }
+
+        async function exportUsers(format) {
+            if (!state.apiKey) {
+                alert('Please configure your API key first');
+                return;
+            }
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const data = await api.exportUsers(format);
+
+                if (format === 'csv') {
+                    downloadFile(data, 'users.csv', 'text/csv');
+                } else {
+                    downloadFile(JSON.stringify(data, null, 2), 'users.json', 'application/json');
+                }
+            } catch (error) {
+                alert('Export failed: ' + error.message);
+            }
+        }
+
+        async function exportAudit(format) {
+            if (!state.apiKey) {
+                alert('Please configure your API key first');
+                return;
+            }
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const data = await api.exportAudit(format);
+
+                if (format === 'csv') {
+                    downloadFile(data, 'audit_log.csv', 'text/csv');
+                } else {
+                    downloadFile(JSON.stringify(data, null, 2), 'audit_log.json', 'application/json');
+                }
+            } catch (error) {
+                alert('Export failed: ' + error.message);
+            }
+        }
+
+        function downloadFile(content, filename, mimeType) {
+            const blob = new Blob([content], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
 
         // ============================================================================
@@ -1787,97 +2167,18 @@
         }
 
         // ============================================================================
-        // Token Testing Functions
-        // ============================================================================
-
-        async function issueTestToken() {
-            if (!state.apiKey) {
-                showMessage('tokenIssueResult', 'warning', '⚠️ Please configure your API key first');
-                return;
-            }
-
-            const userId = document.getElementById('tokenUserId').value.trim();
-            if (!userId) {
-                showMessage('tokenIssueResult', 'error', '❌ User ID is required');
-                return;
-            }
-
-            showMessage('tokenIssueResult', 'info', '<span class="spinner"></span> Issuing token...');
-
-            try {
-                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
-                const result = await api.issueToken(userId);
-
-                let html = `<div class="message success">✓ Token issued successfully</div>`;
-                html += `<div class="token-result">`;
-                html += `<strong>User ID:</strong> ${result.user_id}<br>`;
-                html += `<strong>Token:</strong> ${result.token}<br>`;
-                html += `<strong>Signature:</strong> ${result.signature}<br>`;
-                html += `<strong>Expires:</strong> ${new Date(result.expires_at * 1000).toLocaleString()}<br>`;
-                html += `<button class="copy-btn" onclick="copyToClipboard('${result.token}', this)">📋 Copy Token</button> `;
-                html += `<button class="copy-btn" onclick="copyToClipboard('${result.signature}', this)">📋 Copy Signature</button>`;
-                html += `</div>`;
-
-                document.getElementById('tokenIssueResult').innerHTML = html;
-
-                // Auto-fill verify form
-                document.getElementById('verifyToken').value = result.token;
-                document.getElementById('verifySignature').value = result.signature;
-            } catch (error) {
-                showMessage('tokenIssueResult', 'error', `❌ Failed: ${error.message}`);
-            }
-        }
-
-        async function verifyTestToken() {
-            if (!state.apiKey) {
-                showMessage('tokenVerifyResult', 'warning', '⚠️ Please configure your API key first');
-                return;
-            }
-
-            const token = document.getElementById('verifyToken').value.trim();
-            const signature = document.getElementById('verifySignature').value.trim();
-
-            if (!token || !signature) {
-                showMessage('tokenVerifyResult', 'error', '❌ Both token and signature are required');
-                return;
-            }
-
-            showMessage('tokenVerifyResult', 'info', '<span class="spinner"></span> Verifying token...');
-
-            try {
-                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
-                const result = await api.verifyToken(token, signature);
-
-                let html = `<div class="message ${result.valid ? 'success' : 'error'}">`;
-                html += result.valid ? '✓ Token is VALID' : '✗ Token is INVALID';
-                html += `</div>`;
-
-                if (result.valid) {
-                    html += `<div class="token-result">`;
-                    html += `<strong>Status:</strong> Valid<br>`;
-                    html += `<strong>User ID:</strong> ${result.user_id || 'N/A'}<br>`;
-                    html += `<strong>Key ID:</strong> ${result.kid || 'N/A'}`;
-                    html += `</div>`;
-                } else {
-                    html += `<div class="token-result">`;
-                    html += `<strong>Reason:</strong> ${result.reason || 'Invalid signature'}`;
-                    html += `</div>`;
-                }
-
-                document.getElementById('tokenVerifyResult').innerHTML = html;
-            } catch (error) {
-                showMessage('tokenVerifyResult', 'error', `❌ Failed: ${error.message}`);
-            }
-        }
-
-        // ============================================================================
         // Audit Logs Functions
         // ============================================================================
 
-        async function loadAuditLogs() {
+        async function loadAuditLogs(page = null) {
             if (!state.apiKey) {
                 showMessage('auditLogsContainer', 'warning', '⚠️ Please configure your API key first');
                 return;
+            }
+
+            // Update current page if specified
+            if (page !== null) {
+                state.auditPagination.currentPage = page;
             }
 
             const container = document.getElementById('auditLogsContainer');
@@ -1885,16 +2186,23 @@
 
             try {
                 const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
-                const logs = await api.getAuditLogs(100);
+                const { pageSize, currentPage } = state.auditPagination;
+                const offset = (currentPage - 1) * pageSize;
 
-                state.auditLogs = logs;
-                renderAuditLogs(logs);
+                const response = await api.getAuditLogs(pageSize, offset);
+
+                // Update pagination state
+                state.auditPagination.total = response.total;
+                state.auditPagination.hasMore = response.has_more;
+
+                state.auditLogs = response.entries;
+                renderAuditLogs(response.entries, response.total);
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ Failed to load audit logs: ${error.message}</div>`;
             }
         }
 
-        function renderAuditLogs(logs) {
+        function renderAuditLogs(logs, total = null) {
             const container = document.getElementById('auditLogsContainer');
 
             if (!logs || logs.length === 0) {
@@ -1902,7 +2210,17 @@
                 return;
             }
 
+            const { currentPage, pageSize } = state.auditPagination;
+            const totalPages = total ? Math.ceil(total / pageSize) : 1;
+
             let html = '';
+
+            // Pagination controls (top)
+            if (total !== null) {
+                html += renderAuditPaginationControls(currentPage, totalPages, total);
+            }
+
+            // Log entries
             logs.forEach(log => {
                 const timestamp = new Date(log.timestamp * 1000).toLocaleString();
                 const levelClass = log.level || 'info';
@@ -1919,7 +2237,78 @@
                 html += `</div>`;
             });
 
+            // Pagination controls (bottom)
+            if (total !== null) {
+                html += renderAuditPaginationControls(currentPage, totalPages, total);
+            }
+
             container.innerHTML = html;
+        }
+
+        function renderAuditPaginationControls(currentPage, totalPages, total) {
+            const { pageSize } = state.auditPagination;
+            const startItem = (currentPage - 1) * pageSize + 1;
+            const endItem = Math.min(currentPage * pageSize, total);
+
+            let html = '<div style="display: flex; justify-content: space-between; align-items: center; margin: 15px 0; padding: 10px; background: var(--background-alt); border-radius: 5px;">';
+
+            // Left: Page info
+            html += `<div class="text-small">Showing ${startItem}-${endItem} of ${total} entries</div>`;
+
+            // Center: Page numbers
+            html += '<div style="display: flex; gap: 5px; align-items: center;">';
+
+            // Previous button
+            html += `<button class="action-btn" ${currentPage <= 1 ? 'disabled' : ''} onclick="loadAuditLogs(${currentPage - 1})">← Prev</button>`;
+
+            // Page numbers (show up to 5 pages centered on current)
+            const startPage = Math.max(1, currentPage - 2);
+            const endPage = Math.min(totalPages, startPage + 4);
+
+            if (startPage > 1) {
+                html += `<button class="action-btn" onclick="loadAuditLogs(1)">1</button>`;
+                if (startPage > 2) {
+                    html += '<span style="padding: 0 5px;">...</span>';
+                }
+            }
+
+            for (let p = startPage; p <= endPage; p++) {
+                const isActive = p === currentPage;
+                html += `<button class="action-btn" style="${isActive ? 'background: var(--tab-active-color); color: white;' : ''}" onclick="loadAuditLogs(${p})">${p}</button>`;
+            }
+
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    html += '<span style="padding: 0 5px;">...</span>';
+                }
+                html += `<button class="action-btn" onclick="loadAuditLogs(${totalPages})">${totalPages}</button>`;
+            }
+
+            // Next button
+            html += `<button class="action-btn" ${currentPage >= totalPages ? 'disabled' : ''} onclick="loadAuditLogs(${currentPage + 1})">Next →</button>`;
+
+            html += '</div>';
+
+            // Right: Page size selector
+            html += `<div class="text-small">
+                <label>Per page:
+                    <select onchange="changeAuditPageSize(this.value)" style="padding: 4px; font-size: 0.9em;">
+                        <option value="25" ${pageSize === 25 ? 'selected' : ''}>25</option>
+                        <option value="50" ${pageSize === 50 ? 'selected' : ''}>50</option>
+                        <option value="100" ${pageSize === 100 ? 'selected' : ''}>100</option>
+                        <option value="200" ${pageSize === 200 ? 'selected' : ''}>200</option>
+                    </select>
+                </label>
+            </div>`;
+
+            html += '</div>';
+            return html;
+        }
+
+        function changeAuditPageSize(newSize) {
+            state.auditPagination.pageSize = parseInt(newSize);
+            state.auditPagination.currentPage = 1; // Reset to first page
+            loadAuditLogs();
         }
 
         function filterAuditLogs() {
@@ -1944,43 +2333,235 @@
         }
 
         // ============================================================================
-        // WebAuthn Functions
+        // Federation Functions
         // ============================================================================
 
-        async function registerWebAuthn() {
+        async function loadVouches() {
             if (!state.apiKey) {
-                showMessage('webauthnRegisterResult', 'warning', '⚠️ Please configure your API key first');
+                showMessage('vouchesContainer', 'warning', '⚠️ Please configure your API key first');
                 return;
             }
 
-            const userId = document.getElementById('webauthnUserId').value.trim();
-            const displayName = document.getElementById('webauthnDisplayName').value.trim();
-
-            if (!userId || !displayName) {
-                showMessage('webauthnRegisterResult', 'error', '❌ User ID and Display Name are required');
-                return;
-            }
-
-            showMessage('webauthnRegisterResult', 'info', '<span class="spinner"></span> Registering credential...');
+            const container = document.getElementById('vouchesContainer');
+            container.innerHTML = '<p><span class="spinner"></span> Loading vouches...</p>';
 
             try {
                 const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
-                const result = await api.registerWebAuthnCredential(userId, displayName);
+                const vouches = await api.getVouches();
 
-                showMessage('webauthnRegisterResult', 'success',
-                    `✓ Credential registered successfully for ${userId}`
-                );
+                if (!vouches || vouches.length === 0) {
+                    container.innerHTML = '<p class="text-small">No vouches found. Add trusted issuers using the form below.</p>';
+                    return;
+                }
 
-                // Clear form
-                document.getElementById('webauthnUserId').value = '';
-                document.getElementById('webauthnDisplayName').value = '';
+                let html = '<table><thead><tr>';
+                html += '<th>Vouched Issuer</th>';
+                html += '<th>Trust Level</th>';
+                html += '<th>Created</th>';
+                html += '<th>Expires</th>';
+                html += '<th>Actions</th>';
+                html += '</tr></thead><tbody>';
 
-                // Refresh credentials list
-                loadWebAuthnCredentials();
+                vouches.forEach(vouch => {
+                    const createdAt = new Date(vouch.created_at * 1000).toLocaleString();
+                    const expiresAt = new Date(vouch.expires_at * 1000).toLocaleString();
+                    const isExpired = vouch.expires_at * 1000 < Date.now();
+                    const trustLevel = vouch.trust_level !== null ? vouch.trust_level : 'N/A';
+
+                    html += `<tr ${isExpired ? 'style="opacity: 0.5;"' : ''}>`;
+                    html += `<td class="text-mono">${vouch.vouched_issuer_id}</td>`;
+                    html += `<td>${trustLevel}${trustLevel !== 'N/A' ? '%' : ''}</td>`;
+                    html += `<td>${createdAt}</td>`;
+                    html += `<td>${expiresAt}${isExpired ? ' <span style="color: var(--error-color);">(expired)</span>' : ''}</td>`;
+                    html += `<td><button class="action-btn danger" onclick="removeVouch('${vouch.vouched_issuer_id}')">Remove</button></td>`;
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                container.innerHTML = html;
             } catch (error) {
-                showMessage('webauthnRegisterResult', 'error', `❌ Failed: ${error.message}`);
+                container.innerHTML = `<div class="message error">❌ Failed to load vouches: ${error.message}</div>`;
             }
         }
+
+        async function addVouch() {
+            if (!state.apiKey) {
+                showMessage('vouchResult', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const issuerId = document.getElementById('vouchIssuerId').value.trim();
+            const pubkey = document.getElementById('vouchPubkey').value.trim();
+            const trustLevel = parseInt(document.getElementById('vouchTrustLevel').value) || 80;
+            const expiresDays = parseInt(document.getElementById('vouchExpiresDays').value) || 365;
+
+            if (!issuerId) {
+                showMessage('vouchResult', 'error', '❌ Issuer ID is required');
+                return;
+            }
+
+            if (!pubkey) {
+                showMessage('vouchResult', 'error', '❌ Public key is required');
+                return;
+            }
+
+            showMessage('vouchResult', 'info', '<span class="spinner"></span> Adding vouch...');
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const now = Math.floor(Date.now() / 1000);
+                const expiresAt = now + (expiresDays * 24 * 60 * 60);
+
+                // Create vouch object
+                // Note: signature will need to be generated server-side
+                const vouch = {
+                    voucher_issuer_id: 'self', // Will be filled by server
+                    vouched_issuer_id: issuerId,
+                    vouched_pubkey: pubkey,
+                    expires_at: expiresAt,
+                    created_at: now,
+                    trust_level: trustLevel,
+                    signature: '' // Will be signed by server
+                };
+
+                const result = await api.addVouch(vouch);
+
+                showMessage('vouchResult', 'success', `✓ ${result.message}`);
+
+                // Clear form
+                document.getElementById('vouchIssuerId').value = '';
+                document.getElementById('vouchPubkey').value = '';
+
+                // Refresh list
+                loadVouches();
+            } catch (error) {
+                showMessage('vouchResult', 'error', `❌ Failed: ${error.message}`);
+            }
+        }
+
+        async function removeVouch(issuerId) {
+            if (!confirm(`Remove vouch for ${issuerId}?`)) {
+                return;
+            }
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const result = await api.removeVouch(issuerId);
+
+                showMessage('vouchResult', 'success', `✓ ${result.message}`);
+                loadVouches();
+            } catch (error) {
+                showMessage('vouchResult', 'error', `❌ Failed: ${error.message}`);
+            }
+        }
+
+        async function loadRevocations() {
+            if (!state.apiKey) {
+                showMessage('revocationsContainer', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const container = document.getElementById('revocationsContainer');
+            container.innerHTML = '<p><span class="spinner"></span> Loading revocations...</p>';
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const revocations = await api.getRevocations();
+
+                if (!revocations || revocations.length === 0) {
+                    container.innerHTML = '<p class="text-small">No revocations found.</p>';
+                    return;
+                }
+
+                let html = '<table><thead><tr>';
+                html += '<th>Revoked Issuer</th>';
+                html += '<th>Revoked At</th>';
+                html += '<th>Reason</th>';
+                html += '<th>Actions</th>';
+                html += '</tr></thead><tbody>';
+
+                revocations.forEach(rev => {
+                    const revokedAt = new Date(rev.revoked_at * 1000).toLocaleString();
+                    const reason = rev.reason || '<span style="opacity: 0.5;">Not specified</span>';
+
+                    html += '<tr>';
+                    html += `<td class="text-mono">${rev.revoked_issuer_id}</td>`;
+                    html += `<td>${revokedAt}</td>`;
+                    html += `<td>${reason}</td>`;
+                    html += `<td><button class="action-btn" onclick="removeRevocation('${rev.revoked_issuer_id}')">Remove</button></td>`;
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `<div class="message error">❌ Failed to load revocations: ${error.message}</div>`;
+            }
+        }
+
+        async function addRevocation() {
+            if (!state.apiKey) {
+                showMessage('revocationResult', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const issuerId = document.getElementById('revokeIssuerId').value.trim();
+            const reason = document.getElementById('revokeReason').value.trim();
+
+            if (!issuerId) {
+                showMessage('revocationResult', 'error', '❌ Issuer ID is required');
+                return;
+            }
+
+            showMessage('revocationResult', 'info', '<span class="spinner"></span> Adding revocation...');
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const now = Math.floor(Date.now() / 1000);
+
+                // Create revocation object
+                const revocation = {
+                    revoker_issuer_id: 'self', // Will be filled by server
+                    revoked_issuer_id: issuerId,
+                    revoked_at: now,
+                    reason: reason || null,
+                    signature: '' // Will be signed by server
+                };
+
+                const result = await api.addRevocation(revocation);
+
+                showMessage('revocationResult', 'success', `✓ ${result.message}`);
+
+                // Clear form
+                document.getElementById('revokeIssuerId').value = '';
+                document.getElementById('revokeReason').value = '';
+
+                // Refresh list
+                loadRevocations();
+            } catch (error) {
+                showMessage('revocationResult', 'error', `❌ Failed: ${error.message}`);
+            }
+        }
+
+        async function removeRevocation(issuerId) {
+            if (!confirm(`Remove revocation for ${issuerId}?`)) {
+                return;
+            }
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const result = await api.removeRevocation(issuerId);
+
+                showMessage('revocationResult', 'success', `✓ ${result.message}`);
+                loadRevocations();
+            } catch (error) {
+                showMessage('revocationResult', 'error', `❌ Failed: ${error.message}`);
+            }
+        }
+
+        // ============================================================================
+        // WebAuthn Functions
+        // ============================================================================
 
         async function loadWebAuthnCredentials() {
             if (!state.apiKey) {
@@ -1993,60 +2574,82 @@
 
             try {
                 const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
-                const search = document.getElementById('credentialSearch').value.trim();
-                const credentials = await api.getWebAuthnCredentials(search || null);
+                const response = await api.getWebAuthnCredentials();
 
-                if (!credentials || credentials.length === 0) {
-                    container.innerHTML = '<p class="text-small">No credentials found.</p>';
+                state.webauthnCredentials = response.credentials || [];
+
+                if (state.webauthnCredentials.length === 0) {
+                    container.innerHTML = '<p class="text-small">No WebAuthn credentials found. WebAuthn may not be enabled, or no users have registered credentials yet.</p>';
                     return;
                 }
 
-                let html = '';
-                credentials.forEach(cred => {
-                    const createdAt = new Date(cred.created_at * 1000).toLocaleString();
-                    const lastUsed = cred.last_used_at
-                        ? new Date(cred.last_used_at * 1000).toLocaleString()
-                        : 'Never';
-
-                    html += `<div class="credential-card">`;
-                    html += `<strong>${cred.display_name}</strong>`;
-                    html += `<div class="detail-row">`;
-                    html += `<span>User ID:</span>`;
-                    html += `<span class="text-mono">${cred.user_id}</span>`;
-                    html += `</div>`;
-                    html += `<div class="detail-row">`;
-                    html += `<span>Credential ID:</span>`;
-                    html += `<span class="credential-id">${cred.credential_id}</span>`;
-                    html += `</div>`;
-                    html += `<div class="detail-row">`;
-                    html += `<span>Created:</span>`;
-                    html += `<span>${createdAt}</span>`;
-                    html += `</div>`;
-                    html += `<div class="detail-row">`;
-                    html += `<span>Last Used:</span>`;
-                    html += `<span>${lastUsed}</span>`;
-                    html += `</div>`;
-                    html += `<button class="action-btn" style="background: var(--error-color); color: white; margin-top: 10px;" onclick="removeWebAuthnCredential('${cred.credential_id}')">Remove</button>`;
-                    html += `</div>`;
-                });
-
-                container.innerHTML = html;
+                renderWebAuthnCredentials(state.webauthnCredentials);
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ Failed to load credentials: ${error.message}</div>`;
             }
         }
 
-        async function removeWebAuthnCredential(credentialId) {
-            if (!confirm('Are you sure you want to remove this credential?')) return;
+        function filterWebAuthnCredentials() {
+            const query = document.getElementById('credentialSearch').value.toLowerCase();
+            const filtered = state.webauthnCredentials.filter(cred =>
+                cred.user_id_hash.toLowerCase().includes(query) ||
+                cred.credential_id.toLowerCase().includes(query)
+            );
+            renderWebAuthnCredentials(filtered);
+        }
+
+        function renderWebAuthnCredentials(credentials) {
+            const container = document.getElementById('webauthnCredentialsContainer');
+
+            if (!credentials || credentials.length === 0) {
+                container.innerHTML = '<p class="text-small">No matching credentials found.</p>';
+                return;
+            }
+
+            let html = '<table><thead><tr>';
+            html += '<th>Credential ID</th>';
+            html += '<th>User ID Hash</th>';
+            html += '<th>Registered</th>';
+            html += '<th>Last Used</th>';
+            html += '<th>Actions</th>';
+            html += '</tr></thead><tbody>';
+
+            credentials.forEach(cred => {
+                const registeredAt = new Date(cred.registered_at * 1000).toLocaleString();
+                const lastUsed = cred.last_used_at
+                    ? new Date(cred.last_used_at * 1000).toLocaleString()
+                    : '<span style="opacity: 0.5;">Never</span>';
+
+                // Truncate credential ID for display
+                const shortCredId = cred.credential_id.length > 20
+                    ? cred.credential_id.substring(0, 20) + '...'
+                    : cred.credential_id;
+
+                html += '<tr>';
+                html += `<td class="text-mono" title="${cred.credential_id}">${shortCredId}</td>`;
+                html += `<td class="text-mono">${cred.user_id_hash.substring(0, 16)}...</td>`;
+                html += `<td>${registeredAt}</td>`;
+                html += `<td>${lastUsed}</td>`;
+                html += `<td><button class="action-btn" style="background: var(--error-color); color: white;" onclick="deleteWebAuthnCredential('${cred.credential_id}')">Delete</button></td>`;
+                html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            html += `<p class="text-small" style="margin-top: 10px;">Total: ${credentials.length} credential(s)</p>`;
+            container.innerHTML = html;
+        }
+
+        async function deleteWebAuthnCredential(credentialId) {
+            if (!confirm('Are you sure you want to delete this credential? This cannot be undone.')) return;
 
             try {
                 const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
-                await api.removeWebAuthnCredential(credentialId);
+                const result = await api.deleteWebAuthnCredential(credentialId);
 
-                alert('✓ Credential removed successfully');
+                alert('✓ ' + result.message);
                 loadWebAuthnCredentials();
             } catch (error) {
-                alert(`❌ Failed to remove credential: ${error.message}`);
+                alert(`❌ Failed to delete credential: ${error.message}`);
             }
         }
 

@@ -3,6 +3,7 @@
 // Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
 
 use crate::{
+    audit::{AuditConfig, AuditLog},
     config::Config,
     keys, multi_key_voprf, routes,
     sybil_resistance::{
@@ -115,6 +116,19 @@ impl Application {
             .await
             .context("Failed to initialize federation store")?;
         info!("✅ Federation store initialized at {:?}", config.federation_data_path);
+
+        // 3.5 Audit Log Setup
+        let audit_config = AuditConfig {
+            persistence_path: std::path::PathBuf::from("audit_log.json"),
+            max_entries: 10000,
+            autosave_interval_secs: 60,
+        };
+        let audit_log = Arc::new(
+            AuditLog::load_or_create(audit_config)
+                .await
+                .context("Failed to initialize audit log")?
+        );
+        info!("✅ Audit log initialized");
 
         // 4. Sybil Resistance Setup
         let mut invitation_system: Option<Arc<InvitationSystem>> = None;
@@ -474,7 +488,13 @@ impl Application {
         if let Some(key) = config.admin_api_key {
             if key.len() >= 32 {
                 if let Some(inv_sys) = invitation_system {
-                    let admin = routes::admin_router(inv_sys, voprf.clone(), federation_store.clone(), key);
+                    let admin = routes::admin_router(
+                        inv_sys,
+                        voprf.clone(),
+                        federation_store.clone(),
+                        audit_log.clone(),
+                        key,
+                    );
                     app = app.nest("/admin", admin);
                 }
             }

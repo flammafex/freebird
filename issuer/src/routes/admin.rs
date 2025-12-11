@@ -16,8 +16,9 @@
 //! All endpoints require authentication via API key in the `X-Admin-Key` header.
 //! The API key should be configured via the `ADMIN_API_KEY` environment variable.
 
+use crate::audit::{AuditEntry, AuditLog};
 use crate::multi_key_voprf::{KeyInfo, KeyStats, MultiKeyVoprfCore};
-use crate::sybil_resistance::invitation::{InvitationStats, InvitationSystem};
+use crate::sybil_resistance::invitation::{InvitationFilter, InvitationStats, InvitationSystem};
 use axum::{
     extract::{Path, State, Query},
     http::{HeaderMap, StatusCode},
@@ -44,8 +45,13 @@ pub struct AdminState {
     pub multi_key_voprf: Arc<MultiKeyVoprfCore>,
     /// Reference to the federation store
     pub federation_store: crate::federation_store::FederationStore,
+    /// Reference to the audit log
+    pub audit_log: Arc<AuditLog>,
     /// Admin API key for authentication
     pub api_key: String,
+    /// Optional WebAuthn credential store (only if webauthn feature enabled)
+    #[cfg(feature = "human-gate-webauthn")]
+    pub webauthn_store: Option<crate::webauthn::CredentialStore>,
 }
 
 // ============================================================================
@@ -243,14 +249,97 @@ pub struct UserDetailsResponse {
     pub invitees: Vec<String>,
 }
 
-/// Parameters for listing invitations
+/// Parameters for listing invitations with pagination and filtering
 #[derive(Debug, Deserialize)]
 pub struct ListInvitationsParams {
+    /// Maximum number of invitations to return (default: 50, max: 100)
     #[serde(default = "default_limit")]
     pub limit: usize,
+    /// Number of invitations to skip for pagination (default: 0)
+    #[serde(default)]
+    pub offset: usize,
+    /// Filter by status: "pending", "redeemed", or "all" (default: all)
+    pub status: Option<String>,
+    /// Filter by inviter user ID (exact match)
+    pub inviter_id: Option<String>,
+    /// Filter by minimum creation date (Unix timestamp)
+    pub date_from: Option<u64>,
+    /// Filter by maximum creation date (Unix timestamp)
+    pub date_to: Option<u64>,
 }
 
 fn default_limit() -> usize { 50 }
+
+/// Paginated response for listing invitations
+#[derive(Debug, Serialize)]
+pub struct ListInvitationsResponse {
+    /// The invitations for the current page
+    pub invitations: Vec<crate::sybil_resistance::invitation::Invitation>,
+    /// Total number of invitations in the system
+    pub total: usize,
+    /// Current offset (number of items skipped)
+    pub offset: usize,
+    /// Number of items returned in this response
+    pub limit: usize,
+    /// Whether there are more items after this page
+    pub has_more: bool,
+}
+
+/// Parameters for listing users with pagination
+#[derive(Debug, Deserialize)]
+pub struct ListUsersParams {
+    /// Maximum number of users to return (default: 50, max: 100)
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+    /// Number of users to skip for pagination (default: 0)
+    #[serde(default)]
+    pub offset: usize,
+}
+
+/// Paginated response for listing users
+#[derive(Debug, Serialize)]
+pub struct ListUsersResponse {
+    /// The users for the current page
+    pub users: Vec<UserSummary>,
+    /// Total number of users in the system
+    pub total: usize,
+    /// Current offset (number of items skipped)
+    pub offset: usize,
+    /// Number of items returned in this response
+    pub limit: usize,
+    /// Whether there are more items after this page
+    pub has_more: bool,
+}
+
+/// Parameters for listing audit logs
+#[derive(Debug, Deserialize)]
+pub struct ListAuditParams {
+    /// Maximum number of entries to return (default: 100, max: 500)
+    #[serde(default = "default_audit_limit")]
+    pub limit: usize,
+    /// Number of entries to skip for pagination (default: 0)
+    #[serde(default)]
+    pub offset: usize,
+    /// Filter by log level (optional)
+    pub level: Option<String>,
+}
+
+fn default_audit_limit() -> usize { 100 }
+
+/// Paginated response for listing audit logs
+#[derive(Debug, Serialize)]
+pub struct ListAuditResponse {
+    /// The audit entries for the current page
+    pub entries: Vec<crate::audit::AuditEntry>,
+    /// Total number of entries in the audit log
+    pub total: usize,
+    /// Current offset (number of entries skipped)
+    pub offset: usize,
+    /// Number of entries returned in this response
+    pub limit: usize,
+    /// Whether there are more entries after this page
+    pub has_more: bool,
+}
 
 // ============================================================================
 // Error Types
@@ -402,6 +491,13 @@ pub async fn grant_invites_handler(
         "Admin: granted invites"
     );
 
+    // Audit log
+    state.audit_log.log(
+        AuditEntry::success("invites_granted")
+            .with_user(&req.user_id)
+            .with_details(format!("Granted {} invite(s)", req.count))
+    ).await;
+
     Ok(Json(GrantInvitesResponse {
         ok: true,
         user_id: req.user_id,
@@ -434,6 +530,17 @@ pub async fn ban_user_handler(
         "Admin: banned user"
     );
 
+    // Audit log
+    state.audit_log.log(
+        AuditEntry::warning("user_banned")
+            .with_user(&req.user_id)
+            .with_details(format!(
+                "Banned {} user(s){}",
+                banned_count,
+                if req.ban_tree { " (tree ban)" } else { "" }
+            ))
+    ).await;
+
     Ok(Json(BanUserResponse {
         ok: true,
         user_id: req.user_id,
@@ -458,6 +565,13 @@ pub async fn add_bootstrap_user_handler(
         invite_count = req.invite_count,
         "Admin: added bootstrap user"
     );
+
+    // Audit log
+    state.audit_log.log(
+        AuditEntry::success("bootstrap_user_added")
+            .with_user(&req.user_id)
+            .with_details(format!("Granted {} invites", req.invite_count))
+    ).await;
 
     Ok(Json(AddBootstrapUserResponse {
         ok: true,
@@ -502,6 +616,13 @@ pub async fn register_owner_handler(
         owner = %req.user_id,
         "Admin: registered instance owner"
     );
+
+    // Audit log
+    state.audit_log.log(
+        AuditEntry::success("owner_registered")
+            .with_user(&req.user_id)
+            .with_details("Instance owner registered")
+    ).await;
 
     Ok(Json(RegisterOwnerResponse {
         success: true,
@@ -572,6 +693,13 @@ pub async fn create_invitations_handler(
         "Admin: created invitations"
     );
 
+    // Audit log
+    state.audit_log.log(
+        AuditEntry::success("invitations_created")
+            .with_user(&req.inviter_id)
+            .with_details(format!("Created {} invitation(s)", req.count))
+    ).await;
+
     Ok(Json(CreateInvitationsResponse {
         ok: true,
         inviter_id: req.inviter_id,
@@ -602,11 +730,20 @@ pub async fn save_state_handler(
 pub async fn list_users_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
-) -> Result<Json<Vec<UserSummary>>, AdminError> {
+    Query(params): Query<ListUsersParams>,
+) -> Result<Json<ListUsersResponse>, AdminError> {
     verify_api_key(&headers, &state.api_key)?;
 
-    let users = state.invitation_system.list_users().await;
-    let summaries = users
+    // Clamp limit to reasonable bounds (1-100)
+    let limit = params.limit.clamp(1, 100);
+    let offset = params.offset;
+
+    // Get total count for pagination info
+    let total = state.invitation_system.count_users().await;
+
+    // Get paginated users
+    let users = state.invitation_system.list_users(limit, offset).await;
+    let summaries: Vec<UserSummary> = users
         .into_iter()
         .map(|(user_id, invites_remaining, banned)| UserSummary {
             user_id,
@@ -614,9 +751,23 @@ pub async fn list_users_handler(
             banned,
         })
         .collect();
+    let returned_count = summaries.len();
 
-    info!("Admin: listed users");
-    Ok(Json(summaries))
+    // Calculate if there are more items
+    let has_more = offset + returned_count < total;
+
+    info!(
+        "Admin: listed users (offset={}, limit={}, returned={}, total={})",
+        offset, limit, returned_count, total
+    );
+
+    Ok(Json(ListUsersResponse {
+        users: summaries,
+        total,
+        offset,
+        limit,
+        has_more,
+    }))
 }
 
 pub async fn get_user_details_handler(
@@ -656,13 +807,97 @@ pub async fn list_invitations_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     Query(params): Query<ListInvitationsParams>,
-) -> Result<Json<Vec<crate::sybil_resistance::invitation::Invitation>>, AdminError> {
+) -> Result<Json<ListInvitationsResponse>, AdminError> {
     verify_api_key(&headers, &state.api_key)?;
 
-    let invites = state.invitation_system.list_invitations(params.limit).await;
-    info!("Admin: listed recent invitations (count={})", invites.len());
+    // Clamp limit to reasonable bounds (1-100)
+    let limit = params.limit.clamp(1, 100);
+    let offset = params.offset;
 
-    Ok(Json(invites))
+    // Build filter from params
+    let filter = if params.status.is_some() || params.inviter_id.is_some()
+        || params.date_from.is_some() || params.date_to.is_some()
+    {
+        let redeemed = match params.status.as_deref() {
+            Some("redeemed") => Some(true),
+            Some("pending") => Some(false),
+            _ => None, // "all" or no filter
+        };
+        Some(InvitationFilter {
+            redeemed,
+            inviter_id: params.inviter_id.clone(),
+            date_from: params.date_from,
+            date_to: params.date_to,
+        })
+    } else {
+        None
+    };
+
+    // Get total count for pagination info (with filter)
+    let total = state.invitation_system.count_invitations_filtered(filter.clone()).await;
+
+    // Get paginated invitations with filter
+    let invitations = state.invitation_system.list_invitations_filtered(limit, offset, filter).await;
+    let returned_count = invitations.len();
+
+    // Calculate if there are more items
+    let has_more = offset + returned_count < total;
+
+    info!(
+        "Admin: listed invitations (offset={}, limit={}, returned={}, total={})",
+        offset, limit, returned_count, total
+    );
+
+    Ok(Json(ListInvitationsResponse {
+        invitations,
+        total,
+        offset,
+        limit,
+        has_more,
+    }))
+}
+
+// ============================================================================
+// Audit Log Handlers
+// ============================================================================
+
+pub async fn list_audit_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Query(params): Query<ListAuditParams>,
+) -> Result<Json<ListAuditResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    // Clamp limit to reasonable bounds (1-500)
+    let limit = params.limit.clamp(1, 500);
+    let offset = params.offset;
+
+    // Get total count for pagination info
+    let total = state.audit_log.count().await;
+
+    // Get entries (optionally filtered by level)
+    let entries = if let Some(ref level) = params.level {
+        state.audit_log.get_entries_by_level(level, limit, offset).await
+    } else {
+        state.audit_log.get_entries(limit, offset).await
+    };
+    let returned_count = entries.len();
+
+    // Calculate if there are more items
+    let has_more = offset + returned_count < total;
+
+    info!(
+        "Admin: listed audit entries (offset={}, limit={}, returned={}, total={})",
+        offset, limit, returned_count, total
+    );
+
+    Ok(Json(ListAuditResponse {
+        entries,
+        total,
+        offset,
+        limit,
+        has_more,
+    }))
 }
 
 // ============================================================================
@@ -722,6 +957,15 @@ pub async fn rotate_key_handler(
 
     info!(old_kid = %old_kid, new_kid = %req.new_kid, "Admin: rotated key");
 
+    // Audit log
+    state.audit_log.log(
+        AuditEntry::info("key_rotated")
+            .with_details(format!(
+                "Rotated from {} to {}, grace period {} seconds",
+                old_kid, req.new_kid, grace_period
+            ))
+    ).await;
+
     Ok(Json(RotateKeyResponse {
         ok: true,
         old_kid,
@@ -730,6 +974,7 @@ pub async fn rotate_key_handler(
         expires_at,
     }))
 }
+
 pub async fn cleanup_keys_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -918,28 +1163,396 @@ async fn list_revocations_handler(
 }
 
 // ============================================================================
+// Export Handlers
+// ============================================================================
+
+/// Export format query parameter
+#[derive(Debug, Deserialize)]
+pub struct ExportParams {
+    /// Export format: "json" (default) or "csv"
+    #[serde(default = "default_format")]
+    pub format: String,
+}
+
+fn default_format() -> String { "json".to_string() }
+
+/// User export record for CSV/JSON
+#[derive(Debug, Serialize)]
+pub struct UserExport {
+    pub user_id: String,
+    pub invites_remaining: u32,
+    pub banned: bool,
+    pub joined_at: u64,
+    pub reputation: f64,
+}
+
+/// Invitation export record for CSV/JSON
+#[derive(Debug, Serialize)]
+pub struct InvitationExport {
+    pub code: String,
+    pub inviter_id: String,
+    pub invitee_id: Option<String>,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub redeemed: bool,
+}
+
+/// Audit log export record for CSV/JSON
+#[derive(Debug, Serialize)]
+pub struct AuditExport {
+    pub timestamp: u64,
+    pub level: String,
+    pub action: String,
+    pub user_id: Option<String>,
+    pub details: Option<String>,
+    pub admin_id: Option<String>,
+}
+
+/// Export invitations as JSON or CSV
+pub async fn export_invitations_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Query(params): Query<ExportParams>,
+) -> Result<impl IntoResponse, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let invitations = state.invitation_system.get_all_invitations().await;
+    let exports: Vec<InvitationExport> = invitations.iter().map(|inv| {
+        InvitationExport {
+            code: inv.code().to_string(),
+            inviter_id: inv.inviter_id().to_string(),
+            invitee_id: inv.invitee_id().map(|s| s.to_string()),
+            created_at: inv.created_at(),
+            expires_at: inv.expires_at(),
+            redeemed: inv.redeemed(),
+        }
+    }).collect();
+
+    info!("Admin: exported {} invitations as {}", exports.len(), params.format);
+
+    if params.format == "csv" {
+        let mut csv = String::from("code,inviter_id,invitee_id,created_at,expires_at,redeemed\n");
+        for inv in &exports {
+            csv.push_str(&format!(
+                "{},{},{},{},{},{}\n",
+                inv.code,
+                inv.inviter_id,
+                inv.invitee_id.as_deref().unwrap_or(""),
+                inv.created_at,
+                inv.expires_at,
+                inv.redeemed
+            ));
+        }
+        Ok((
+            [(axum::http::header::CONTENT_TYPE, "text/csv"),
+             (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"invitations.csv\"")],
+            csv
+        ).into_response())
+    } else {
+        Ok(Json(exports).into_response())
+    }
+}
+
+/// Export users as JSON or CSV
+pub async fn export_users_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Query(params): Query<ExportParams>,
+) -> Result<impl IntoResponse, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let users = state.invitation_system.get_all_users().await;
+    let exports: Vec<UserExport> = users.into_iter().map(|(user_id, invites_remaining, banned, joined_at, reputation)| {
+        UserExport {
+            user_id,
+            invites_remaining,
+            banned,
+            joined_at,
+            reputation,
+        }
+    }).collect();
+
+    info!("Admin: exported {} users as {}", exports.len(), params.format);
+
+    if params.format == "csv" {
+        let mut csv = String::from("user_id,invites_remaining,banned,joined_at,reputation\n");
+        for user in &exports {
+            csv.push_str(&format!(
+                "{},{},{},{},{:.2}\n",
+                user.user_id,
+                user.invites_remaining,
+                user.banned,
+                user.joined_at,
+                user.reputation
+            ));
+        }
+        Ok((
+            [(axum::http::header::CONTENT_TYPE, "text/csv"),
+             (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"users.csv\"")],
+            csv
+        ).into_response())
+    } else {
+        Ok(Json(exports).into_response())
+    }
+}
+
+/// Export audit logs as JSON or CSV
+pub async fn export_audit_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Query(params): Query<ExportParams>,
+) -> Result<impl IntoResponse, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    // Get all audit entries (no pagination for export)
+    let entries = state.audit_log.get_entries(100000, 0).await;
+    let exports: Vec<AuditExport> = entries.into_iter().map(|entry| {
+        AuditExport {
+            timestamp: entry.timestamp,
+            level: entry.level,
+            action: entry.action,
+            user_id: entry.user_id,
+            details: entry.details,
+            admin_id: entry.admin_id,
+        }
+    }).collect();
+
+    info!("Admin: exported {} audit entries as {}", exports.len(), params.format);
+
+    if params.format == "csv" {
+        let mut csv = String::from("timestamp,level,action,user_id,details,admin_id\n");
+        for entry in &exports {
+            // Escape commas and quotes in text fields
+            let details = entry.details.as_deref().unwrap_or("").replace("\"", "\"\"");
+            csv.push_str(&format!(
+                "{},{},{},{},\"{}\",{}\n",
+                entry.timestamp,
+                entry.level,
+                entry.action,
+                entry.user_id.as_deref().unwrap_or(""),
+                details,
+                entry.admin_id.as_deref().unwrap_or("")
+            ));
+        }
+        Ok((
+            [(axum::http::header::CONTENT_TYPE, "text/csv"),
+             (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"audit_log.csv\"")],
+            csv
+        ).into_response())
+    } else {
+        Ok(Json(exports).into_response())
+    }
+}
+
+// ============================================================================
+// WebAuthn Admin Handlers
+// ============================================================================
+
+/// WebAuthn credential summary for admin listing
+#[derive(Debug, Serialize)]
+pub struct WebAuthnCredentialSummary {
+    /// Credential ID (base64url encoded)
+    pub credential_id: String,
+    /// User ID hash (hashed for privacy)
+    pub user_id_hash: String,
+    /// Registration timestamp (Unix seconds)
+    pub registered_at: i64,
+    /// Last used timestamp (Unix seconds, if ever used)
+    pub last_used_at: Option<i64>,
+}
+
+/// Response for listing WebAuthn credentials
+#[derive(Debug, Serialize)]
+pub struct ListWebAuthnCredentialsResponse {
+    /// List of credentials
+    pub credentials: Vec<WebAuthnCredentialSummary>,
+    /// Total count
+    pub total: usize,
+}
+
+/// Response for deleting a WebAuthn credential
+#[derive(Debug, Serialize)]
+pub struct DeleteWebAuthnCredentialResponse {
+    pub ok: bool,
+    pub message: String,
+}
+
+/// List all WebAuthn credentials (admin only)
+#[cfg(feature = "human-gate-webauthn")]
+pub async fn list_webauthn_credentials_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<ListWebAuthnCredentialsResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let store = state.webauthn_store.as_ref().ok_or_else(|| {
+        AdminError::Internal("WebAuthn not configured".to_string())
+    })?;
+
+    let credentials = store.list_all().await.map_err(|e| {
+        AdminError::Internal(format!("Failed to list credentials: {}", e))
+    })?;
+
+    let summaries: Vec<WebAuthnCredentialSummary> = credentials.iter().map(|cred| {
+        WebAuthnCredentialSummary {
+            credential_id: base64ct::Base64UrlUnpadded::encode_string(&cred.cred_id),
+            user_id_hash: cred.user_id_hash.clone(),
+            registered_at: cred.registered_at,
+            last_used_at: cred.last_used_at,
+        }
+    }).collect();
+
+    let total = summaries.len();
+
+    info!("Admin: listed {} WebAuthn credentials", total);
+
+    Ok(Json(ListWebAuthnCredentialsResponse {
+        credentials: summaries,
+        total,
+    }))
+}
+
+/// Delete a WebAuthn credential by ID (admin only)
+#[cfg(feature = "human-gate-webauthn")]
+pub async fn delete_webauthn_credential_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(cred_id_b64): Path<String>,
+) -> Result<Json<DeleteWebAuthnCredentialResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let store = state.webauthn_store.as_ref().ok_or_else(|| {
+        AdminError::Internal("WebAuthn not configured".to_string())
+    })?;
+
+    // Decode the credential ID from base64url
+    let cred_id = base64ct::Base64UrlUnpadded::decode_vec(&cred_id_b64).map_err(|e| {
+        AdminError::Internal(format!("Invalid credential ID format: {}", e))
+    })?;
+
+    let deleted = store.delete(&cred_id).await.map_err(|e| {
+        AdminError::Internal(format!("Failed to delete credential: {}", e))
+    })?;
+
+    if deleted {
+        info!("Admin: deleted WebAuthn credential {}", cred_id_b64);
+        Ok(Json(DeleteWebAuthnCredentialResponse {
+            ok: true,
+            message: format!("Credential {} deleted successfully", cred_id_b64),
+        }))
+    } else {
+        Err(AdminError::UserNotFound(format!("Credential {} not found", cred_id_b64)))
+    }
+}
+
+/// Get WebAuthn stats (admin only)
+#[cfg(feature = "human-gate-webauthn")]
+pub async fn webauthn_stats_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let store = state.webauthn_store.as_ref().ok_or_else(|| {
+        AdminError::Internal("WebAuthn not configured".to_string())
+    })?;
+
+    let count = store.count_credentials().await.map_err(|e| {
+        AdminError::Internal(format!("Failed to count credentials: {}", e))
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "total_credentials": count,
+        "enabled": true
+    })))
+}
+
+// Fallback handlers when WebAuthn is not enabled
+#[cfg(not(feature = "human-gate-webauthn"))]
+pub async fn list_webauthn_credentials_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<ListWebAuthnCredentialsResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+    Ok(Json(ListWebAuthnCredentialsResponse {
+        credentials: vec![],
+        total: 0,
+    }))
+}
+
+#[cfg(not(feature = "human-gate-webauthn"))]
+pub async fn delete_webauthn_credential_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(_cred_id_b64): Path<String>,
+) -> Result<Json<DeleteWebAuthnCredentialResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+    Err(AdminError::Internal("WebAuthn feature not enabled".to_string()))
+}
+
+#[cfg(not(feature = "human-gate-webauthn"))]
+pub async fn webauthn_stats_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+    Ok(Json(serde_json::json!({
+        "total_credentials": 0,
+        "enabled": false
+    })))
+}
+
+// ============================================================================
 // Router Configuration
 // ============================================================================
 
+#[cfg(feature = "human-gate-webauthn")]
 pub fn admin_router(
     invitation_system: Arc<InvitationSystem>,
     multi_key_voprf: Arc<MultiKeyVoprfCore>,
     federation_store: crate::federation_store::FederationStore,
+    audit_log: Arc<AuditLog>,
+    api_key: String,
+    webauthn_store: Option<crate::webauthn::CredentialStore>,
+) -> axum::Router {
+    let state = Arc::new(AdminState {
+        invitation_system,
+        multi_key_voprf,
+        federation_store,
+        audit_log,
+        api_key,
+        webauthn_store,
+    });
+
+    build_admin_router(state)
+}
+
+#[cfg(not(feature = "human-gate-webauthn"))]
+pub fn admin_router(
+    invitation_system: Arc<InvitationSystem>,
+    multi_key_voprf: Arc<MultiKeyVoprfCore>,
+    federation_store: crate::federation_store::FederationStore,
+    audit_log: Arc<AuditLog>,
     api_key: String,
 ) -> axum::Router {
     let state = Arc::new(AdminState {
         invitation_system,
         multi_key_voprf,
         federation_store,
+        audit_log,
         api_key,
     });
 
+    build_admin_router(state)
+}
+
+fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
     axum::Router::new()
         .route("/", axum::routing::get(admin_ui_handler))
         .route("/health", axum::routing::get(health_handler))
         .route("/stats", axum::routing::get(get_stats_handler))
-        .route("/users", axum::routing::get(list_users_handler)) // <-- New
-        .route("/users/:user_id", axum::routing::get(get_user_details_handler)) // <-- New
+        .route("/users", axum::routing::get(list_users_handler))
+        .route("/users/:user_id", axum::routing::get(get_user_details_handler))
         .route("/invites/grant", axum::routing::post(grant_invites_handler))
         .route("/invitations", axum::routing::get(list_invitations_handler))
         .route("/invitations/create", axum::routing::post(create_invitations_handler))
@@ -960,6 +1573,12 @@ pub fn admin_router(
             "/keys/:kid",
             axum::routing::delete(force_remove_key_handler),
         )
+        // Audit log route
+        .route("/audit", axum::routing::get(list_audit_handler))
+        // Export routes
+        .route("/export/invitations", axum::routing::get(export_invitations_handler))
+        .route("/export/users", axum::routing::get(export_users_handler))
+        .route("/export/audit", axum::routing::get(export_audit_handler))
         // Federation management routes
         .route("/federation/vouches", axum::routing::get(list_vouches_handler))
         .route("/federation/vouches", axum::routing::post(add_vouch_handler))
@@ -967,5 +1586,9 @@ pub fn admin_router(
         .route("/federation/revocations", axum::routing::get(list_revocations_handler))
         .route("/federation/revocations", axum::routing::post(add_revocation_handler))
         .route("/federation/revocations/:issuer_id", axum::routing::delete(remove_revocation_handler))
+        // WebAuthn admin routes
+        .route("/webauthn/credentials", axum::routing::get(list_webauthn_credentials_handler))
+        .route("/webauthn/credentials/:cred_id", axum::routing::delete(delete_webauthn_credential_handler))
+        .route("/webauthn/stats", axum::routing::get(webauthn_stats_handler))
         .with_state(state)
 }
