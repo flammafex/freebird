@@ -465,6 +465,7 @@
         <button class="tab" onclick="switchTab('keys')">🔑 Keys</button>
         <button class="tab" onclick="switchTab('tokens')">🎟️ Tokens</button>
         <button class="tab" onclick="switchTab('audit')">📝 Audit</button>
+        <button class="tab" onclick="switchTab('federation')">🌐 Federation</button>
         <button class="tab" onclick="switchTab('webauthn')">🔐 WebAuthn</button>
     </div>
 
@@ -707,6 +708,82 @@
         </div>
     </div>
 
+    <!-- Federation Tab -->
+    <div id="federation-tab" class="tab-content">
+        <h2>🌐 Federation Management</h2>
+        <p>Manage trust relationships with other Freebird issuers through vouches and revocations.</p>
+
+        <!-- Vouches Section -->
+        <div class="form-section">
+            <h3>✅ Trusted Issuers (Vouches)</h3>
+            <p class="text-small">Vouches allow you to express trust in other Freebird issuers, enabling federated verification.</p>
+
+            <div class="form-row">
+                <button onclick="loadVouches()">🔄 Refresh Vouches</button>
+            </div>
+
+            <div id="vouchesContainer" class="mt-20">
+                <p class="text-small">Click "Refresh Vouches" to load trusted issuers...</p>
+            </div>
+
+            <h4 style="margin-top: 30px;">➕ Add New Vouch</h4>
+            <p class="text-small">Create a cryptographic vouch for another issuer.</p>
+
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="vouchIssuerId">Issuer ID to Vouch</label>
+                    <input type="text" id="vouchIssuerId" placeholder="e.g., issuer:example:v1">
+                </div>
+                <div class="form-field">
+                    <label for="vouchPubkey">Issuer Public Key (Base64URL)</label>
+                    <input type="text" id="vouchPubkey" placeholder="SEC1 compressed public key">
+                </div>
+            </div>
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="vouchTrustLevel">Trust Level (0-100)</label>
+                    <input type="number" id="vouchTrustLevel" value="80" min="0" max="100">
+                </div>
+                <div class="form-field">
+                    <label for="vouchExpiresDays">Expires In (days)</label>
+                    <input type="number" id="vouchExpiresDays" value="365" min="1">
+                </div>
+                <button onclick="addVouch()">Add Vouch</button>
+            </div>
+            <div id="vouchResult"></div>
+        </div>
+
+        <!-- Revocations Section -->
+        <div class="form-section">
+            <h3>🚫 Revoked Issuers</h3>
+            <p class="text-small">Revocations explicitly mark issuers as untrusted, overriding any vouches.</p>
+
+            <div class="form-row">
+                <button onclick="loadRevocations()">🔄 Refresh Revocations</button>
+            </div>
+
+            <div id="revocationsContainer" class="mt-20">
+                <p class="text-small">Click "Refresh Revocations" to load revoked issuers...</p>
+            </div>
+
+            <h4 style="margin-top: 30px;">➕ Add New Revocation</h4>
+            <p class="text-small">Revoke trust from an issuer (e.g., if compromised or misbehaving).</p>
+
+            <div class="form-row">
+                <div class="form-field">
+                    <label for="revokeIssuerId">Issuer ID to Revoke</label>
+                    <input type="text" id="revokeIssuerId" placeholder="e.g., issuer:bad:v1">
+                </div>
+                <div class="form-field">
+                    <label for="revokeReason">Reason (optional)</label>
+                    <input type="text" id="revokeReason" placeholder="e.g., compromised, spam">
+                </div>
+                <button onclick="addRevocation()">Add Revocation</button>
+            </div>
+            <div id="revocationResult"></div>
+        </div>
+    </div>
+
     <!-- WebAuthn Tab -->
     <div id="webauthn-tab" class="tab-content">
         <h2>🔐 WebAuthn Management</h2>
@@ -932,6 +1009,41 @@
 
             async getAuditLogs(limit = 100, offset = 0) {
                 return this.request(`/audit?limit=${limit}&offset=${offset}`);
+            }
+
+            // Federation API methods
+            async getVouches() {
+                return this.request('/federation/vouches');
+            }
+
+            async addVouch(vouch) {
+                return this.request('/federation/vouches', {
+                    method: 'POST',
+                    body: JSON.stringify({ vouch })
+                });
+            }
+
+            async removeVouch(issuerId) {
+                return this.request(`/federation/vouches/${encodeURIComponent(issuerId)}`, {
+                    method: 'DELETE'
+                });
+            }
+
+            async getRevocations() {
+                return this.request('/federation/revocations');
+            }
+
+            async addRevocation(revocation) {
+                return this.request('/federation/revocations', {
+                    method: 'POST',
+                    body: JSON.stringify({ revocation })
+                });
+            }
+
+            async removeRevocation(issuerId) {
+                return this.request(`/federation/revocations/${encodeURIComponent(issuerId)}`, {
+                    method: 'DELETE'
+                });
             }
 
             async registerWebAuthnCredential(userId, displayName) {
@@ -2139,6 +2251,233 @@
             }
 
             renderAuditLogs(filtered);
+        }
+
+        // ============================================================================
+        // Federation Functions
+        // ============================================================================
+
+        async function loadVouches() {
+            if (!state.apiKey) {
+                showMessage('vouchesContainer', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const container = document.getElementById('vouchesContainer');
+            container.innerHTML = '<p><span class="spinner"></span> Loading vouches...</p>';
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const vouches = await api.getVouches();
+
+                if (!vouches || vouches.length === 0) {
+                    container.innerHTML = '<p class="text-small">No vouches found. Add trusted issuers using the form below.</p>';
+                    return;
+                }
+
+                let html = '<table><thead><tr>';
+                html += '<th>Vouched Issuer</th>';
+                html += '<th>Trust Level</th>';
+                html += '<th>Created</th>';
+                html += '<th>Expires</th>';
+                html += '<th>Actions</th>';
+                html += '</tr></thead><tbody>';
+
+                vouches.forEach(vouch => {
+                    const createdAt = new Date(vouch.created_at * 1000).toLocaleString();
+                    const expiresAt = new Date(vouch.expires_at * 1000).toLocaleString();
+                    const isExpired = vouch.expires_at * 1000 < Date.now();
+                    const trustLevel = vouch.trust_level !== null ? vouch.trust_level : 'N/A';
+
+                    html += `<tr ${isExpired ? 'style="opacity: 0.5;"' : ''}>`;
+                    html += `<td class="text-mono">${vouch.vouched_issuer_id}</td>`;
+                    html += `<td>${trustLevel}${trustLevel !== 'N/A' ? '%' : ''}</td>`;
+                    html += `<td>${createdAt}</td>`;
+                    html += `<td>${expiresAt}${isExpired ? ' <span style="color: var(--error-color);">(expired)</span>' : ''}</td>`;
+                    html += `<td><button class="action-btn danger" onclick="removeVouch('${vouch.vouched_issuer_id}')">Remove</button></td>`;
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `<div class="message error">❌ Failed to load vouches: ${error.message}</div>`;
+            }
+        }
+
+        async function addVouch() {
+            if (!state.apiKey) {
+                showMessage('vouchResult', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const issuerId = document.getElementById('vouchIssuerId').value.trim();
+            const pubkey = document.getElementById('vouchPubkey').value.trim();
+            const trustLevel = parseInt(document.getElementById('vouchTrustLevel').value) || 80;
+            const expiresDays = parseInt(document.getElementById('vouchExpiresDays').value) || 365;
+
+            if (!issuerId) {
+                showMessage('vouchResult', 'error', '❌ Issuer ID is required');
+                return;
+            }
+
+            if (!pubkey) {
+                showMessage('vouchResult', 'error', '❌ Public key is required');
+                return;
+            }
+
+            showMessage('vouchResult', 'info', '<span class="spinner"></span> Adding vouch...');
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const now = Math.floor(Date.now() / 1000);
+                const expiresAt = now + (expiresDays * 24 * 60 * 60);
+
+                // Create vouch object
+                // Note: signature will need to be generated server-side
+                const vouch = {
+                    voucher_issuer_id: 'self', // Will be filled by server
+                    vouched_issuer_id: issuerId,
+                    vouched_pubkey: pubkey,
+                    expires_at: expiresAt,
+                    created_at: now,
+                    trust_level: trustLevel,
+                    signature: '' // Will be signed by server
+                };
+
+                const result = await api.addVouch(vouch);
+
+                showMessage('vouchResult', 'success', `✓ ${result.message}`);
+
+                // Clear form
+                document.getElementById('vouchIssuerId').value = '';
+                document.getElementById('vouchPubkey').value = '';
+
+                // Refresh list
+                loadVouches();
+            } catch (error) {
+                showMessage('vouchResult', 'error', `❌ Failed: ${error.message}`);
+            }
+        }
+
+        async function removeVouch(issuerId) {
+            if (!confirm(`Remove vouch for ${issuerId}?`)) {
+                return;
+            }
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const result = await api.removeVouch(issuerId);
+
+                showMessage('vouchResult', 'success', `✓ ${result.message}`);
+                loadVouches();
+            } catch (error) {
+                showMessage('vouchResult', 'error', `❌ Failed: ${error.message}`);
+            }
+        }
+
+        async function loadRevocations() {
+            if (!state.apiKey) {
+                showMessage('revocationsContainer', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const container = document.getElementById('revocationsContainer');
+            container.innerHTML = '<p><span class="spinner"></span> Loading revocations...</p>';
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const revocations = await api.getRevocations();
+
+                if (!revocations || revocations.length === 0) {
+                    container.innerHTML = '<p class="text-small">No revocations found.</p>';
+                    return;
+                }
+
+                let html = '<table><thead><tr>';
+                html += '<th>Revoked Issuer</th>';
+                html += '<th>Revoked At</th>';
+                html += '<th>Reason</th>';
+                html += '<th>Actions</th>';
+                html += '</tr></thead><tbody>';
+
+                revocations.forEach(rev => {
+                    const revokedAt = new Date(rev.revoked_at * 1000).toLocaleString();
+                    const reason = rev.reason || '<span style="opacity: 0.5;">Not specified</span>';
+
+                    html += '<tr>';
+                    html += `<td class="text-mono">${rev.revoked_issuer_id}</td>`;
+                    html += `<td>${revokedAt}</td>`;
+                    html += `<td>${reason}</td>`;
+                    html += `<td><button class="action-btn" onclick="removeRevocation('${rev.revoked_issuer_id}')">Remove</button></td>`;
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `<div class="message error">❌ Failed to load revocations: ${error.message}</div>`;
+            }
+        }
+
+        async function addRevocation() {
+            if (!state.apiKey) {
+                showMessage('revocationResult', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const issuerId = document.getElementById('revokeIssuerId').value.trim();
+            const reason = document.getElementById('revokeReason').value.trim();
+
+            if (!issuerId) {
+                showMessage('revocationResult', 'error', '❌ Issuer ID is required');
+                return;
+            }
+
+            showMessage('revocationResult', 'info', '<span class="spinner"></span> Adding revocation...');
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const now = Math.floor(Date.now() / 1000);
+
+                // Create revocation object
+                const revocation = {
+                    revoker_issuer_id: 'self', // Will be filled by server
+                    revoked_issuer_id: issuerId,
+                    revoked_at: now,
+                    reason: reason || null,
+                    signature: '' // Will be signed by server
+                };
+
+                const result = await api.addRevocation(revocation);
+
+                showMessage('revocationResult', 'success', `✓ ${result.message}`);
+
+                // Clear form
+                document.getElementById('revokeIssuerId').value = '';
+                document.getElementById('revokeReason').value = '';
+
+                // Refresh list
+                loadRevocations();
+            } catch (error) {
+                showMessage('revocationResult', 'error', `❌ Failed: ${error.message}`);
+            }
+        }
+
+        async function removeRevocation(issuerId) {
+            if (!confirm(`Remove revocation for ${issuerId}?`)) {
+                return;
+            }
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const result = await api.removeRevocation(issuerId);
+
+                showMessage('revocationResult', 'success', `✓ ${result.message}`);
+                loadRevocations();
+            } catch (error) {
+                showMessage('revocationResult', 'error', `❌ Failed: ${error.message}`);
+            }
         }
 
         // ============================================================================
