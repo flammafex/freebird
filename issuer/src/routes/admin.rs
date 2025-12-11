@@ -243,14 +243,33 @@ pub struct UserDetailsResponse {
     pub invitees: Vec<String>,
 }
 
-/// Parameters for listing invitations
+/// Parameters for listing invitations with pagination
 #[derive(Debug, Deserialize)]
 pub struct ListInvitationsParams {
+    /// Maximum number of invitations to return (default: 50, max: 100)
     #[serde(default = "default_limit")]
     pub limit: usize,
+    /// Number of invitations to skip for pagination (default: 0)
+    #[serde(default)]
+    pub offset: usize,
 }
 
 fn default_limit() -> usize { 50 }
+
+/// Paginated response for listing invitations
+#[derive(Debug, Serialize)]
+pub struct ListInvitationsResponse {
+    /// The invitations for the current page
+    pub invitations: Vec<crate::sybil_resistance::invitation::Invitation>,
+    /// Total number of invitations in the system
+    pub total: usize,
+    /// Current offset (number of items skipped)
+    pub offset: usize,
+    /// Number of items returned in this response
+    pub limit: usize,
+    /// Whether there are more items after this page
+    pub has_more: bool,
+}
 
 // ============================================================================
 // Error Types
@@ -656,13 +675,35 @@ pub async fn list_invitations_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     Query(params): Query<ListInvitationsParams>,
-) -> Result<Json<Vec<crate::sybil_resistance::invitation::Invitation>>, AdminError> {
+) -> Result<Json<ListInvitationsResponse>, AdminError> {
     verify_api_key(&headers, &state.api_key)?;
 
-    let invites = state.invitation_system.list_invitations(params.limit).await;
-    info!("Admin: listed recent invitations (count={})", invites.len());
+    // Clamp limit to reasonable bounds (1-100)
+    let limit = params.limit.clamp(1, 100);
+    let offset = params.offset;
 
-    Ok(Json(invites))
+    // Get total count for pagination info
+    let total = state.invitation_system.count_invitations().await;
+
+    // Get paginated invitations
+    let invitations = state.invitation_system.list_invitations(limit, offset).await;
+    let returned_count = invitations.len();
+
+    // Calculate if there are more items
+    let has_more = offset + returned_count < total;
+
+    info!(
+        "Admin: listed invitations (offset={}, limit={}, returned={}, total={})",
+        offset, limit, returned_count, total
+    );
+
+    Ok(Json(ListInvitationsResponse {
+        invitations,
+        total,
+        offset,
+        limit,
+        has_more,
+    }))
 }
 
 // ============================================================================

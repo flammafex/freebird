@@ -287,19 +287,31 @@ impl InvitationSystem {
         Ok(system)
     }
     
-    pub async fn list_invitations(&self, limit: usize) -> Vec<Invitation> {
+    /// List invitations with pagination support
+    ///
+    /// # Arguments
+    /// * `limit` - Maximum number of invitations to return
+    /// * `offset` - Number of invitations to skip (for pagination)
+    ///
+    /// # Returns
+    /// A vector of invitations sorted by creation time (newest first)
+    pub async fn list_invitations(&self, limit: usize, offset: usize) -> Vec<Invitation> {
         let state = self.state.read().await;
         let mut invites: Vec<Invitation> = state.invitations.values().cloned().collect();
-        
+
         // Sort by creation time descending
         invites.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        
-        // Truncate to limit
-        if invites.len() > limit {
-            invites.truncate(limit);
-        }
-        
-        invites
+
+        // Apply offset and limit
+        invites.into_iter().skip(offset).take(limit).collect()
+    }
+
+    /// Get the total count of invitations
+    ///
+    /// Useful for pagination to show "Page X of Y"
+    pub async fn count_invitations(&self) -> usize {
+        let state = self.state.read().await;
+        state.invitations.len()
     }
 
     /// Start background autosave task
