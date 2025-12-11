@@ -14,7 +14,7 @@ use super::{current_timestamp, SybilProof, SybilResistance};
 use anyhow::{anyhow, bail, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use p256::ecdsa::{signature::Signer, signature::Verifier, Signature, SigningKey, VerifyingKey};
-use rand::Rng;
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -372,8 +372,8 @@ impl InvitationSystem {
 
     /// Generate a random invitation code
     fn generate_code() -> String {
-        let mut rng = rand::thread_rng();
-        let bytes: [u8; 16] = rng.gen();
+        let mut bytes = [0u8; 16];
+        OsRng.fill_bytes(&mut bytes);
         Base64UrlUnpadded::encode_string(&bytes)
     }
 
@@ -569,7 +569,6 @@ impl InvitationSystem {
 
         // Generate invitee ID with strong entropy
         let invitee_id = {
-            use rand::RngCore;
             use sha2::{Digest, Sha256};
 
             let mut hasher = Sha256::new();
@@ -593,7 +592,7 @@ impl InvitationSystem {
 
             // Cryptographic random nonce (guarantees uniqueness)
             let mut nonce = [0u8; 16];
-            rand::thread_rng().fill_bytes(&mut nonce);
+            OsRng.fill_bytes(&mut nonce);
             hasher.update(nonce);
 
             let hash = hasher.finalize();
