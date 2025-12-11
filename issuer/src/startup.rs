@@ -188,7 +188,9 @@ impl Application {
                     persistence_path: config.sybil_config.progressive_trust_persistence_path.clone(),
                     autosave_interval_secs: config.sybil_config.progressive_trust_autosave_interval,
                     hmac_secret: config.sybil_config.progressive_trust_hmac_secret.clone(),
+                    hmac_secret_path: config.sybil_config.progressive_trust_hmac_secret_path.clone(),
                     user_id_salt: config.sybil_config.progressive_trust_salt.clone(),
+                    allow_insecure_deterministic: config.sybil_config.progressive_trust_allow_insecure,
                 };
 
                 let sys = sybil_resistance::ProgressiveTrustSystem::new(pt_config)
@@ -328,7 +330,9 @@ impl Application {
                                 persistence_path: config.sybil_config.progressive_trust_persistence_path.clone(),
                                 autosave_interval_secs: config.sybil_config.progressive_trust_autosave_interval,
                                 hmac_secret: config.sybil_config.progressive_trust_hmac_secret.clone(),
+                                hmac_secret_path: config.sybil_config.progressive_trust_hmac_secret_path.clone(),
                                 user_id_salt: config.sybil_config.progressive_trust_salt.clone(),
+                                allow_insecure_deterministic: config.sybil_config.progressive_trust_allow_insecure,
                             };
 
                             let sys = sybil_resistance::ProgressiveTrustSystem::new(pt_config)
