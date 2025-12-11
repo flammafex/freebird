@@ -49,6 +49,9 @@ pub struct AdminState {
     pub audit_log: Arc<AuditLog>,
     /// Admin API key for authentication
     pub api_key: String,
+    /// Optional WebAuthn credential store (only if webauthn feature enabled)
+    #[cfg(feature = "human-gate-webauthn")]
+    pub webauthn_store: Option<crate::webauthn::CredentialStore>,
 }
 
 // ============================================================================
@@ -1342,9 +1345,189 @@ pub async fn export_audit_handler(
 }
 
 // ============================================================================
+// WebAuthn Admin Handlers
+// ============================================================================
+
+/// WebAuthn credential summary for admin listing
+#[derive(Debug, Serialize)]
+pub struct WebAuthnCredentialSummary {
+    /// Credential ID (base64url encoded)
+    pub credential_id: String,
+    /// User ID hash (hashed for privacy)
+    pub user_id_hash: String,
+    /// Registration timestamp (Unix seconds)
+    pub registered_at: i64,
+    /// Last used timestamp (Unix seconds, if ever used)
+    pub last_used_at: Option<i64>,
+}
+
+/// Response for listing WebAuthn credentials
+#[derive(Debug, Serialize)]
+pub struct ListWebAuthnCredentialsResponse {
+    /// List of credentials
+    pub credentials: Vec<WebAuthnCredentialSummary>,
+    /// Total count
+    pub total: usize,
+}
+
+/// Response for deleting a WebAuthn credential
+#[derive(Debug, Serialize)]
+pub struct DeleteWebAuthnCredentialResponse {
+    pub ok: bool,
+    pub message: String,
+}
+
+/// List all WebAuthn credentials (admin only)
+#[cfg(feature = "human-gate-webauthn")]
+pub async fn list_webauthn_credentials_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<ListWebAuthnCredentialsResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let store = state.webauthn_store.as_ref().ok_or_else(|| {
+        AdminError::Internal("WebAuthn not configured".to_string())
+    })?;
+
+    let credentials = store.list_all().await.map_err(|e| {
+        AdminError::Internal(format!("Failed to list credentials: {}", e))
+    })?;
+
+    let summaries: Vec<WebAuthnCredentialSummary> = credentials.iter().map(|cred| {
+        WebAuthnCredentialSummary {
+            credential_id: base64ct::Base64UrlUnpadded::encode_string(&cred.cred_id),
+            user_id_hash: cred.user_id_hash.clone(),
+            registered_at: cred.registered_at,
+            last_used_at: cred.last_used_at,
+        }
+    }).collect();
+
+    let total = summaries.len();
+
+    info!("Admin: listed {} WebAuthn credentials", total);
+
+    Ok(Json(ListWebAuthnCredentialsResponse {
+        credentials: summaries,
+        total,
+    }))
+}
+
+/// Delete a WebAuthn credential by ID (admin only)
+#[cfg(feature = "human-gate-webauthn")]
+pub async fn delete_webauthn_credential_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(cred_id_b64): Path<String>,
+) -> Result<Json<DeleteWebAuthnCredentialResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let store = state.webauthn_store.as_ref().ok_or_else(|| {
+        AdminError::Internal("WebAuthn not configured".to_string())
+    })?;
+
+    // Decode the credential ID from base64url
+    let cred_id = base64ct::Base64UrlUnpadded::decode_vec(&cred_id_b64).map_err(|e| {
+        AdminError::Internal(format!("Invalid credential ID format: {}", e))
+    })?;
+
+    let deleted = store.delete(&cred_id).await.map_err(|e| {
+        AdminError::Internal(format!("Failed to delete credential: {}", e))
+    })?;
+
+    if deleted {
+        info!("Admin: deleted WebAuthn credential {}", cred_id_b64);
+        Ok(Json(DeleteWebAuthnCredentialResponse {
+            ok: true,
+            message: format!("Credential {} deleted successfully", cred_id_b64),
+        }))
+    } else {
+        Err(AdminError::UserNotFound(format!("Credential {} not found", cred_id_b64)))
+    }
+}
+
+/// Get WebAuthn stats (admin only)
+#[cfg(feature = "human-gate-webauthn")]
+pub async fn webauthn_stats_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let store = state.webauthn_store.as_ref().ok_or_else(|| {
+        AdminError::Internal("WebAuthn not configured".to_string())
+    })?;
+
+    let count = store.count_credentials().await.map_err(|e| {
+        AdminError::Internal(format!("Failed to count credentials: {}", e))
+    })?;
+
+    Ok(Json(serde_json::json!({
+        "total_credentials": count,
+        "enabled": true
+    })))
+}
+
+// Fallback handlers when WebAuthn is not enabled
+#[cfg(not(feature = "human-gate-webauthn"))]
+pub async fn list_webauthn_credentials_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<ListWebAuthnCredentialsResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+    Ok(Json(ListWebAuthnCredentialsResponse {
+        credentials: vec![],
+        total: 0,
+    }))
+}
+
+#[cfg(not(feature = "human-gate-webauthn"))]
+pub async fn delete_webauthn_credential_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(_cred_id_b64): Path<String>,
+) -> Result<Json<DeleteWebAuthnCredentialResponse>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+    Err(AdminError::Internal("WebAuthn feature not enabled".to_string()))
+}
+
+#[cfg(not(feature = "human-gate-webauthn"))]
+pub async fn webauthn_stats_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+    Ok(Json(serde_json::json!({
+        "total_credentials": 0,
+        "enabled": false
+    })))
+}
+
+// ============================================================================
 // Router Configuration
 // ============================================================================
 
+#[cfg(feature = "human-gate-webauthn")]
+pub fn admin_router(
+    invitation_system: Arc<InvitationSystem>,
+    multi_key_voprf: Arc<MultiKeyVoprfCore>,
+    federation_store: crate::federation_store::FederationStore,
+    audit_log: Arc<AuditLog>,
+    api_key: String,
+    webauthn_store: Option<crate::webauthn::CredentialStore>,
+) -> axum::Router {
+    let state = Arc::new(AdminState {
+        invitation_system,
+        multi_key_voprf,
+        federation_store,
+        audit_log,
+        api_key,
+        webauthn_store,
+    });
+
+    build_admin_router(state)
+}
+
+#[cfg(not(feature = "human-gate-webauthn"))]
 pub fn admin_router(
     invitation_system: Arc<InvitationSystem>,
     multi_key_voprf: Arc<MultiKeyVoprfCore>,
@@ -1360,6 +1543,10 @@ pub fn admin_router(
         api_key,
     });
 
+    build_admin_router(state)
+}
+
+fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
     axum::Router::new()
         .route("/", axum::routing::get(admin_ui_handler))
         .route("/health", axum::routing::get(health_handler))
@@ -1399,5 +1586,9 @@ pub fn admin_router(
         .route("/federation/revocations", axum::routing::get(list_revocations_handler))
         .route("/federation/revocations", axum::routing::post(add_revocation_handler))
         .route("/federation/revocations/:issuer_id", axum::routing::delete(remove_revocation_handler))
+        // WebAuthn admin routes
+        .route("/webauthn/credentials", axum::routing::get(list_webauthn_credentials_handler))
+        .route("/webauthn/credentials/:cred_id", axum::routing::delete(delete_webauthn_credential_handler))
+        .route("/webauthn/stats", axum::routing::get(webauthn_stats_handler))
         .with_state(state)
 }
