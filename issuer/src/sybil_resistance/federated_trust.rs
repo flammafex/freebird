@@ -266,10 +266,13 @@ impl SybilResistance for FederatedTrustSystem {
                     return Err(anyhow!("Source token has expired"));
                 }
 
-                // Verify token isn't too old (anti-replay)
-                let token_age = now - (token_exp - self.config.max_token_age_secs);
-                if token_age > self.config.max_token_age_secs {
-                    return Err(anyhow!("Source token is too old"));
+                // Verify token expiration is within acceptable bounds (anti-replay)
+                // This prevents accepting tokens with excessively long lifetimes
+                // from federated issuers, limiting the replay window.
+                // Combined with the expiration check above, this ensures:
+                // now < token_exp <= now + max_token_age_secs
+                if *token_exp > now + self.config.max_token_age_secs {
+                    return Err(anyhow!("Source token expiration is too far in the future"));
                 }
 
                 // Cryptographically verify the token against the source issuer's public key
