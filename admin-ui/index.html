@@ -785,6 +785,13 @@
                 pageSize: 20,
                 total: 0,
                 hasMore: false
+            },
+            // Audit log pagination state
+            auditPagination: {
+                currentPage: 1,
+                pageSize: 50,
+                total: 0,
+                hasMore: false
             }
         };
 
@@ -923,8 +930,8 @@
                 });
             }
 
-            async getAuditLogs(limit = 100) {
-                return this.request(`/audit?limit=${limit}`);
+            async getAuditLogs(limit = 100, offset = 0) {
+                return this.request(`/audit?limit=${limit}&offset=${offset}`);
             }
 
             async registerWebAuthnCredential(userId, displayName) {
@@ -1972,10 +1979,15 @@
         // Audit Logs Functions
         // ============================================================================
 
-        async function loadAuditLogs() {
+        async function loadAuditLogs(page = null) {
             if (!state.apiKey) {
                 showMessage('auditLogsContainer', 'warning', '⚠️ Please configure your API key first');
                 return;
+            }
+
+            // Update current page if specified
+            if (page !== null) {
+                state.auditPagination.currentPage = page;
             }
 
             const container = document.getElementById('auditLogsContainer');
@@ -1983,16 +1995,23 @@
 
             try {
                 const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
-                const logs = await api.getAuditLogs(100);
+                const { pageSize, currentPage } = state.auditPagination;
+                const offset = (currentPage - 1) * pageSize;
 
-                state.auditLogs = logs;
-                renderAuditLogs(logs);
+                const response = await api.getAuditLogs(pageSize, offset);
+
+                // Update pagination state
+                state.auditPagination.total = response.total;
+                state.auditPagination.hasMore = response.has_more;
+
+                state.auditLogs = response.entries;
+                renderAuditLogs(response.entries, response.total);
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ Failed to load audit logs: ${error.message}</div>`;
             }
         }
 
-        function renderAuditLogs(logs) {
+        function renderAuditLogs(logs, total = null) {
             const container = document.getElementById('auditLogsContainer');
 
             if (!logs || logs.length === 0) {
@@ -2000,7 +2019,17 @@
                 return;
             }
 
+            const { currentPage, pageSize } = state.auditPagination;
+            const totalPages = total ? Math.ceil(total / pageSize) : 1;
+
             let html = '';
+
+            // Pagination controls (top)
+            if (total !== null) {
+                html += renderAuditPaginationControls(currentPage, totalPages, total);
+            }
+
+            // Log entries
             logs.forEach(log => {
                 const timestamp = new Date(log.timestamp * 1000).toLocaleString();
                 const levelClass = log.level || 'info';
@@ -2017,7 +2046,78 @@
                 html += `</div>`;
             });
 
+            // Pagination controls (bottom)
+            if (total !== null) {
+                html += renderAuditPaginationControls(currentPage, totalPages, total);
+            }
+
             container.innerHTML = html;
+        }
+
+        function renderAuditPaginationControls(currentPage, totalPages, total) {
+            const { pageSize } = state.auditPagination;
+            const startItem = (currentPage - 1) * pageSize + 1;
+            const endItem = Math.min(currentPage * pageSize, total);
+
+            let html = '<div style="display: flex; justify-content: space-between; align-items: center; margin: 15px 0; padding: 10px; background: var(--background-alt); border-radius: 5px;">';
+
+            // Left: Page info
+            html += `<div class="text-small">Showing ${startItem}-${endItem} of ${total} entries</div>`;
+
+            // Center: Page numbers
+            html += '<div style="display: flex; gap: 5px; align-items: center;">';
+
+            // Previous button
+            html += `<button class="action-btn" ${currentPage <= 1 ? 'disabled' : ''} onclick="loadAuditLogs(${currentPage - 1})">← Prev</button>`;
+
+            // Page numbers (show up to 5 pages centered on current)
+            const startPage = Math.max(1, currentPage - 2);
+            const endPage = Math.min(totalPages, startPage + 4);
+
+            if (startPage > 1) {
+                html += `<button class="action-btn" onclick="loadAuditLogs(1)">1</button>`;
+                if (startPage > 2) {
+                    html += '<span style="padding: 0 5px;">...</span>';
+                }
+            }
+
+            for (let p = startPage; p <= endPage; p++) {
+                const isActive = p === currentPage;
+                html += `<button class="action-btn" style="${isActive ? 'background: var(--tab-active-color); color: white;' : ''}" onclick="loadAuditLogs(${p})">${p}</button>`;
+            }
+
+            if (endPage < totalPages) {
+                if (endPage < totalPages - 1) {
+                    html += '<span style="padding: 0 5px;">...</span>';
+                }
+                html += `<button class="action-btn" onclick="loadAuditLogs(${totalPages})">${totalPages}</button>`;
+            }
+
+            // Next button
+            html += `<button class="action-btn" ${currentPage >= totalPages ? 'disabled' : ''} onclick="loadAuditLogs(${currentPage + 1})">Next →</button>`;
+
+            html += '</div>';
+
+            // Right: Page size selector
+            html += `<div class="text-small">
+                <label>Per page:
+                    <select onchange="changeAuditPageSize(this.value)" style="padding: 4px; font-size: 0.9em;">
+                        <option value="25" ${pageSize === 25 ? 'selected' : ''}>25</option>
+                        <option value="50" ${pageSize === 50 ? 'selected' : ''}>50</option>
+                        <option value="100" ${pageSize === 100 ? 'selected' : ''}>100</option>
+                        <option value="200" ${pageSize === 200 ? 'selected' : ''}>200</option>
+                    </select>
+                </label>
+            </div>`;
+
+            html += '</div>';
+            return html;
+        }
+
+        function changeAuditPageSize(newSize) {
+            state.auditPagination.pageSize = parseInt(newSize);
+            state.auditPagination.currentPage = 1; // Reset to first page
+            loadAuditLogs();
         }
 
         function filterAuditLogs() {
