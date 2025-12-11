@@ -490,12 +490,14 @@
 
     <div id="users-tab" class="tab-content">
         <h2>User Management</h2>
-        
+
         <div class="form-row">
             <div class="form-field">
                 <input type="text" id="userSearch" placeholder="Search users..." onkeyup="filterUsers()">
             </div>
             <button onclick="loadUsers()">🔄 Refresh List</button>
+            <button onclick="exportUsers('json')" style="margin-left: 10px;">📥 Export JSON</button>
+            <button onclick="exportUsers('csv')" style="margin-left: 5px;">📥 Export CSV</button>
         </div>
 
         <div id="usersContainer">
@@ -573,7 +575,38 @@
         <div class="form-section">
             <h3>📋 Recent Invitations</h3>
             <p class="text-small">View recently created invitation codes and their status.</p>
-            <button onclick="loadInvitationHistory()">🔄 Refresh</button>
+
+            <!-- Filter controls -->
+            <div class="form-row" style="margin-bottom: 15px; flex-wrap: wrap;">
+                <div class="form-field" style="max-width: 150px;">
+                    <label for="invitationStatusFilter">Status</label>
+                    <select id="invitationStatusFilter" onchange="applyInvitationFilters()">
+                        <option value="all">All</option>
+                        <option value="pending">Pending</option>
+                        <option value="redeemed">Redeemed</option>
+                    </select>
+                </div>
+                <div class="form-field" style="max-width: 200px;">
+                    <label for="invitationInviterFilter">Inviter ID</label>
+                    <input type="text" id="invitationInviterFilter" placeholder="Filter by inviter..." onchange="applyInvitationFilters()">
+                </div>
+                <div class="form-field" style="max-width: 180px;">
+                    <label for="invitationDateFrom">From Date</label>
+                    <input type="date" id="invitationDateFrom" onchange="applyInvitationFilters()">
+                </div>
+                <div class="form-field" style="max-width: 180px;">
+                    <label for="invitationDateTo">To Date</label>
+                    <input type="date" id="invitationDateTo" onchange="applyInvitationFilters()">
+                </div>
+                <button onclick="clearInvitationFilters()" style="align-self: flex-end;">Clear Filters</button>
+            </div>
+
+            <div style="margin-bottom: 15px;">
+                <button onclick="loadInvitationHistory()">🔄 Refresh</button>
+                <button onclick="exportInvitations('json')" style="margin-left: 10px;">📥 Export JSON</button>
+                <button onclick="exportInvitations('csv')" style="margin-left: 5px;">📥 Export CSV</button>
+            </div>
+
             <div id="invitationHistoryContainer" class="mt-20">
                 <p class="text-small">Click "Refresh" to load invitation history...</p>
             </div>
@@ -701,6 +734,8 @@
                 </select>
             </div>
             <button onclick="loadAuditLogs()">🔄 Refresh</button>
+            <button onclick="exportAudit('json')" style="margin-left: 10px;">📥 Export JSON</button>
+            <button onclick="exportAudit('csv')" style="margin-left: 5px;">📥 Export CSV</button>
         </div>
 
         <div id="auditLogsContainer" class="mt-20">
@@ -863,12 +898,18 @@
                 total: 0,
                 hasMore: false
             },
-            // Invitation pagination state
+            // Invitation pagination and filter state
             invitationsPagination: {
                 currentPage: 1,
                 pageSize: 20,
                 total: 0,
                 hasMore: false
+            },
+            invitationFilters: {
+                status: 'all',
+                inviter_id: '',
+                date_from: '',
+                date_to: ''
             },
             // Audit log pagination state
             auditPagination: {
@@ -982,8 +1023,34 @@
                 });
             }
 
-            async getInvitations(limit = 50, offset = 0) {
-                return this.request(`/invitations?limit=${limit}&offset=${offset}`);
+            async getInvitations(limit = 50, offset = 0, filters = {}) {
+                let url = `/invitations?limit=${limit}&offset=${offset}`;
+                if (filters.status && filters.status !== 'all') {
+                    url += `&status=${filters.status}`;
+                }
+                if (filters.inviter_id) {
+                    url += `&inviter_id=${encodeURIComponent(filters.inviter_id)}`;
+                }
+                if (filters.date_from) {
+                    url += `&date_from=${filters.date_from}`;
+                }
+                if (filters.date_to) {
+                    url += `&date_to=${filters.date_to}`;
+                }
+                return this.request(url);
+            }
+
+            // Export methods
+            async exportInvitations(format = 'json') {
+                return this.request(`/export/invitations?format=${format}`);
+            }
+
+            async exportUsers(format = 'json') {
+                return this.request(`/export/users?format=${format}`);
+            }
+
+            async exportAudit(format = 'json') {
+                return this.request(`/export/audit?format=${format}`);
             }
 
             async registerOwner(userId) {
@@ -1633,7 +1700,24 @@
                 const { pageSize, currentPage } = state.invitationsPagination;
                 const offset = (currentPage - 1) * pageSize;
 
-                const response = await api.getInvitations(pageSize, offset);
+                // Build filters from state
+                const filters = {};
+                if (state.invitationFilters.status !== 'all') {
+                    filters.status = state.invitationFilters.status;
+                }
+                if (state.invitationFilters.inviter_id) {
+                    filters.inviter_id = state.invitationFilters.inviter_id;
+                }
+                if (state.invitationFilters.date_from) {
+                    // Convert date string to Unix timestamp
+                    filters.date_from = Math.floor(new Date(state.invitationFilters.date_from).getTime() / 1000);
+                }
+                if (state.invitationFilters.date_to) {
+                    // Convert date string to Unix timestamp (end of day)
+                    filters.date_to = Math.floor(new Date(state.invitationFilters.date_to + 'T23:59:59').getTime() / 1000);
+                }
+
+                const response = await api.getInvitations(pageSize, offset, filters);
 
                 // Update pagination state
                 state.invitationsPagination.total = response.total;
@@ -1758,6 +1842,101 @@
             state.invitationsPagination.pageSize = parseInt(newSize);
             state.invitationsPagination.currentPage = 1; // Reset to first page
             loadInvitationHistory();
+        }
+
+        // Invitation filter functions
+        function applyInvitationFilters() {
+            state.invitationFilters.status = document.getElementById('invitationStatusFilter').value;
+            state.invitationFilters.inviter_id = document.getElementById('invitationInviterFilter').value.trim();
+            state.invitationFilters.date_from = document.getElementById('invitationDateFrom').value;
+            state.invitationFilters.date_to = document.getElementById('invitationDateTo').value;
+            state.invitationsPagination.currentPage = 1; // Reset to first page
+            loadInvitationHistory();
+        }
+
+        function clearInvitationFilters() {
+            document.getElementById('invitationStatusFilter').value = 'all';
+            document.getElementById('invitationInviterFilter').value = '';
+            document.getElementById('invitationDateFrom').value = '';
+            document.getElementById('invitationDateTo').value = '';
+            state.invitationFilters = {
+                status: 'all',
+                inviter_id: '',
+                date_from: '',
+                date_to: ''
+            };
+            state.invitationsPagination.currentPage = 1;
+            loadInvitationHistory();
+        }
+
+        // Export functions
+        async function exportInvitations(format) {
+            if (!state.apiKey) {
+                alert('Please configure your API key first');
+                return;
+            }
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const data = await api.exportInvitations(format);
+
+                if (format === 'csv') {
+                    downloadFile(data, 'invitations.csv', 'text/csv');
+                } else {
+                    downloadFile(JSON.stringify(data, null, 2), 'invitations.json', 'application/json');
+                }
+            } catch (error) {
+                alert('Export failed: ' + error.message);
+            }
+        }
+
+        async function exportUsers(format) {
+            if (!state.apiKey) {
+                alert('Please configure your API key first');
+                return;
+            }
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const data = await api.exportUsers(format);
+
+                if (format === 'csv') {
+                    downloadFile(data, 'users.csv', 'text/csv');
+                } else {
+                    downloadFile(JSON.stringify(data, null, 2), 'users.json', 'application/json');
+                }
+            } catch (error) {
+                alert('Export failed: ' + error.message);
+            }
+        }
+
+        async function exportAudit(format) {
+            if (!state.apiKey) {
+                alert('Please configure your API key first');
+                return;
+            }
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const data = await api.exportAudit(format);
+
+                if (format === 'csv') {
+                    downloadFile(data, 'audit_log.csv', 'text/csv');
+                } else {
+                    downloadFile(JSON.stringify(data, null, 2), 'audit_log.json', 'application/json');
+                }
+            } catch (error) {
+                alert('Export failed: ' + error.message);
+            }
+        }
+
+        function downloadFile(content, filename, mimeType) {
+            const blob = new Blob([content], { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
         }
 
         // ============================================================================

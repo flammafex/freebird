@@ -82,6 +82,38 @@ pub struct Invitation {
     redeemed: bool,
 }
 
+impl Invitation {
+    /// Get the invitation code
+    pub fn code(&self) -> &str {
+        &self.code
+    }
+
+    /// Get the inviter user ID
+    pub fn inviter_id(&self) -> &str {
+        &self.inviter_id
+    }
+
+    /// Get the invitee user ID (if redeemed)
+    pub fn invitee_id(&self) -> Option<&str> {
+        self.invitee_id.as_deref()
+    }
+
+    /// Get the creation timestamp
+    pub fn created_at(&self) -> u64 {
+        self.created_at
+    }
+
+    /// Get the expiration timestamp
+    pub fn expires_at(&self) -> u64 {
+        self.expires_at
+    }
+
+    /// Check if the invitation has been redeemed
+    pub fn redeemed(&self) -> bool {
+        self.redeemed
+    }
+}
+
 mod hex_serde {
     use serde::{Deserialize, Deserializer, Serializer};
 
@@ -232,6 +264,19 @@ pub struct InvitationSystem {
     dirty: Arc<RwLock<bool>>,
 }
 
+/// Filter criteria for listing invitations
+#[derive(Debug, Clone, Default)]
+pub struct InvitationFilter {
+    /// Filter by status: Some(true) = redeemed only, Some(false) = pending only, None = all
+    pub redeemed: Option<bool>,
+    /// Filter by inviter user ID
+    pub inviter_id: Option<String>,
+    /// Filter by minimum creation date (Unix timestamp)
+    pub date_from: Option<u64>,
+    /// Filter by maximum creation date (Unix timestamp)
+    pub date_to: Option<u64>,
+}
+
 impl InvitationSystem {
     /// Create a new invitation system
     pub fn new(issuer_key: SigningKey, config: InvitationConfig) -> Self {
@@ -286,7 +331,7 @@ impl InvitationSystem {
 
         Ok(system)
     }
-    
+
     /// List invitations with pagination support
     ///
     /// # Arguments
@@ -296,8 +341,56 @@ impl InvitationSystem {
     /// # Returns
     /// A vector of invitations sorted by creation time (newest first)
     pub async fn list_invitations(&self, limit: usize, offset: usize) -> Vec<Invitation> {
+        self.list_invitations_filtered(limit, offset, None).await
+    }
+
+    /// List invitations with pagination and filtering support
+    ///
+    /// # Arguments
+    /// * `limit` - Maximum number of invitations to return
+    /// * `offset` - Number of invitations to skip (for pagination)
+    /// * `filter` - Optional filter criteria
+    ///
+    /// # Returns
+    /// A vector of invitations sorted by creation time (newest first)
+    pub async fn list_invitations_filtered(
+        &self,
+        limit: usize,
+        offset: usize,
+        filter: Option<InvitationFilter>,
+    ) -> Vec<Invitation> {
         let state = self.state.read().await;
         let mut invites: Vec<Invitation> = state.invitations.values().cloned().collect();
+
+        // Apply filters if provided
+        if let Some(ref f) = filter {
+            invites.retain(|invite| {
+                // Filter by redeemed status
+                if let Some(redeemed) = f.redeemed {
+                    if invite.redeemed != redeemed {
+                        return false;
+                    }
+                }
+                // Filter by inviter ID
+                if let Some(ref inviter_id) = f.inviter_id {
+                    if &invite.inviter_id != inviter_id {
+                        return false;
+                    }
+                }
+                // Filter by date range
+                if let Some(date_from) = f.date_from {
+                    if invite.created_at < date_from {
+                        return false;
+                    }
+                }
+                if let Some(date_to) = f.date_to {
+                    if invite.created_at > date_to {
+                        return false;
+                    }
+                }
+                true
+            });
+        }
 
         // Sort by creation time descending
         invites.sort_by(|a, b| b.created_at.cmp(&a.created_at));
@@ -306,12 +399,76 @@ impl InvitationSystem {
         invites.into_iter().skip(offset).take(limit).collect()
     }
 
-    /// Get the total count of invitations
+    /// Get the total count of invitations (optionally filtered)
     ///
     /// Useful for pagination to show "Page X of Y"
     pub async fn count_invitations(&self) -> usize {
+        self.count_invitations_filtered(None).await
+    }
+
+    /// Get the count of invitations matching a filter
+    pub async fn count_invitations_filtered(&self, filter: Option<InvitationFilter>) -> usize {
         let state = self.state.read().await;
-        state.invitations.len()
+
+        if filter.is_none() {
+            return state.invitations.len();
+        }
+
+        let f = filter.unwrap();
+        state.invitations.values().filter(|invite| {
+            // Filter by redeemed status
+            if let Some(redeemed) = f.redeemed {
+                if invite.redeemed != redeemed {
+                    return false;
+                }
+            }
+            // Filter by inviter ID
+            if let Some(ref inviter_id) = f.inviter_id {
+                if &invite.inviter_id != inviter_id {
+                    return false;
+                }
+            }
+            // Filter by date range
+            if let Some(date_from) = f.date_from {
+                if invite.created_at < date_from {
+                    return false;
+                }
+            }
+            if let Some(date_to) = f.date_to {
+                if invite.created_at > date_to {
+                    return false;
+                }
+            }
+            true
+        }).count()
+    }
+
+    /// Get all invitations (for export - no pagination)
+    pub async fn get_all_invitations(&self) -> Vec<Invitation> {
+        let state = self.state.read().await;
+        let mut invites: Vec<Invitation> = state.invitations.values().cloned().collect();
+        invites.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        invites
+    }
+
+    /// Get all users (for export - no pagination)
+    pub async fn get_all_users(&self) -> Vec<(String, u32, bool, u64, f64)> {
+        let state = self.state.read().await;
+        let mut users: Vec<_> = state
+            .inviters
+            .values()
+            .map(|inviter| {
+                (
+                    inviter.user_id.clone(),
+                    inviter.invites_remaining,
+                    inviter.banned,
+                    inviter.joined_at,
+                    inviter.reputation,
+                )
+            })
+            .collect();
+        users.sort_by(|a, b| b.3.cmp(&a.3)); // Sort by joined_at descending
+        users
     }
 
     /// Start background autosave task

@@ -18,7 +18,7 @@
 
 use crate::audit::{AuditEntry, AuditLog};
 use crate::multi_key_voprf::{KeyInfo, KeyStats, MultiKeyVoprfCore};
-use crate::sybil_resistance::invitation::{InvitationStats, InvitationSystem};
+use crate::sybil_resistance::invitation::{InvitationFilter, InvitationStats, InvitationSystem};
 use axum::{
     extract::{Path, State, Query},
     http::{HeaderMap, StatusCode},
@@ -246,7 +246,7 @@ pub struct UserDetailsResponse {
     pub invitees: Vec<String>,
 }
 
-/// Parameters for listing invitations with pagination
+/// Parameters for listing invitations with pagination and filtering
 #[derive(Debug, Deserialize)]
 pub struct ListInvitationsParams {
     /// Maximum number of invitations to return (default: 50, max: 100)
@@ -255,6 +255,14 @@ pub struct ListInvitationsParams {
     /// Number of invitations to skip for pagination (default: 0)
     #[serde(default)]
     pub offset: usize,
+    /// Filter by status: "pending", "redeemed", or "all" (default: all)
+    pub status: Option<String>,
+    /// Filter by inviter user ID (exact match)
+    pub inviter_id: Option<String>,
+    /// Filter by minimum creation date (Unix timestamp)
+    pub date_from: Option<u64>,
+    /// Filter by maximum creation date (Unix timestamp)
+    pub date_to: Option<u64>,
 }
 
 fn default_limit() -> usize { 50 }
@@ -803,11 +811,30 @@ pub async fn list_invitations_handler(
     let limit = params.limit.clamp(1, 100);
     let offset = params.offset;
 
-    // Get total count for pagination info
-    let total = state.invitation_system.count_invitations().await;
+    // Build filter from params
+    let filter = if params.status.is_some() || params.inviter_id.is_some()
+        || params.date_from.is_some() || params.date_to.is_some()
+    {
+        let redeemed = match params.status.as_deref() {
+            Some("redeemed") => Some(true),
+            Some("pending") => Some(false),
+            _ => None, // "all" or no filter
+        };
+        Some(InvitationFilter {
+            redeemed,
+            inviter_id: params.inviter_id.clone(),
+            date_from: params.date_from,
+            date_to: params.date_to,
+        })
+    } else {
+        None
+    };
 
-    // Get paginated invitations
-    let invitations = state.invitation_system.list_invitations(limit, offset).await;
+    // Get total count for pagination info (with filter)
+    let total = state.invitation_system.count_invitations_filtered(filter.clone()).await;
+
+    // Get paginated invitations with filter
+    let invitations = state.invitation_system.list_invitations_filtered(limit, offset, filter).await;
     let returned_count = invitations.len();
 
     // Calculate if there are more items
@@ -1133,6 +1160,188 @@ async fn list_revocations_handler(
 }
 
 // ============================================================================
+// Export Handlers
+// ============================================================================
+
+/// Export format query parameter
+#[derive(Debug, Deserialize)]
+pub struct ExportParams {
+    /// Export format: "json" (default) or "csv"
+    #[serde(default = "default_format")]
+    pub format: String,
+}
+
+fn default_format() -> String { "json".to_string() }
+
+/// User export record for CSV/JSON
+#[derive(Debug, Serialize)]
+pub struct UserExport {
+    pub user_id: String,
+    pub invites_remaining: u32,
+    pub banned: bool,
+    pub joined_at: u64,
+    pub reputation: f64,
+}
+
+/// Invitation export record for CSV/JSON
+#[derive(Debug, Serialize)]
+pub struct InvitationExport {
+    pub code: String,
+    pub inviter_id: String,
+    pub invitee_id: Option<String>,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub redeemed: bool,
+}
+
+/// Audit log export record for CSV/JSON
+#[derive(Debug, Serialize)]
+pub struct AuditExport {
+    pub timestamp: u64,
+    pub level: String,
+    pub action: String,
+    pub user_id: Option<String>,
+    pub details: Option<String>,
+    pub admin_id: Option<String>,
+}
+
+/// Export invitations as JSON or CSV
+pub async fn export_invitations_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Query(params): Query<ExportParams>,
+) -> Result<impl IntoResponse, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let invitations = state.invitation_system.get_all_invitations().await;
+    let exports: Vec<InvitationExport> = invitations.iter().map(|inv| {
+        InvitationExport {
+            code: inv.code().to_string(),
+            inviter_id: inv.inviter_id().to_string(),
+            invitee_id: inv.invitee_id().map(|s| s.to_string()),
+            created_at: inv.created_at(),
+            expires_at: inv.expires_at(),
+            redeemed: inv.redeemed(),
+        }
+    }).collect();
+
+    info!("Admin: exported {} invitations as {}", exports.len(), params.format);
+
+    if params.format == "csv" {
+        let mut csv = String::from("code,inviter_id,invitee_id,created_at,expires_at,redeemed\n");
+        for inv in &exports {
+            csv.push_str(&format!(
+                "{},{},{},{},{},{}\n",
+                inv.code,
+                inv.inviter_id,
+                inv.invitee_id.as_deref().unwrap_or(""),
+                inv.created_at,
+                inv.expires_at,
+                inv.redeemed
+            ));
+        }
+        Ok((
+            [(axum::http::header::CONTENT_TYPE, "text/csv"),
+             (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"invitations.csv\"")],
+            csv
+        ).into_response())
+    } else {
+        Ok(Json(exports).into_response())
+    }
+}
+
+/// Export users as JSON or CSV
+pub async fn export_users_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Query(params): Query<ExportParams>,
+) -> Result<impl IntoResponse, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    let users = state.invitation_system.get_all_users().await;
+    let exports: Vec<UserExport> = users.into_iter().map(|(user_id, invites_remaining, banned, joined_at, reputation)| {
+        UserExport {
+            user_id,
+            invites_remaining,
+            banned,
+            joined_at,
+            reputation,
+        }
+    }).collect();
+
+    info!("Admin: exported {} users as {}", exports.len(), params.format);
+
+    if params.format == "csv" {
+        let mut csv = String::from("user_id,invites_remaining,banned,joined_at,reputation\n");
+        for user in &exports {
+            csv.push_str(&format!(
+                "{},{},{},{},{:.2}\n",
+                user.user_id,
+                user.invites_remaining,
+                user.banned,
+                user.joined_at,
+                user.reputation
+            ));
+        }
+        Ok((
+            [(axum::http::header::CONTENT_TYPE, "text/csv"),
+             (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"users.csv\"")],
+            csv
+        ).into_response())
+    } else {
+        Ok(Json(exports).into_response())
+    }
+}
+
+/// Export audit logs as JSON or CSV
+pub async fn export_audit_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Query(params): Query<ExportParams>,
+) -> Result<impl IntoResponse, AdminError> {
+    verify_api_key(&headers, &state.api_key)?;
+
+    // Get all audit entries (no pagination for export)
+    let entries = state.audit_log.get_entries(100000, 0).await;
+    let exports: Vec<AuditExport> = entries.into_iter().map(|entry| {
+        AuditExport {
+            timestamp: entry.timestamp,
+            level: entry.level,
+            action: entry.action,
+            user_id: entry.user_id,
+            details: entry.details,
+            admin_id: entry.admin_id,
+        }
+    }).collect();
+
+    info!("Admin: exported {} audit entries as {}", exports.len(), params.format);
+
+    if params.format == "csv" {
+        let mut csv = String::from("timestamp,level,action,user_id,details,admin_id\n");
+        for entry in &exports {
+            // Escape commas and quotes in text fields
+            let details = entry.details.as_deref().unwrap_or("").replace("\"", "\"\"");
+            csv.push_str(&format!(
+                "{},{},{},{},\"{}\",{}\n",
+                entry.timestamp,
+                entry.level,
+                entry.action,
+                entry.user_id.as_deref().unwrap_or(""),
+                details,
+                entry.admin_id.as_deref().unwrap_or("")
+            ));
+        }
+        Ok((
+            [(axum::http::header::CONTENT_TYPE, "text/csv"),
+             (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"audit_log.csv\"")],
+            csv
+        ).into_response())
+    } else {
+        Ok(Json(exports).into_response())
+    }
+}
+
+// ============================================================================
 // Router Configuration
 // ============================================================================
 
@@ -1179,6 +1388,10 @@ pub fn admin_router(
         )
         // Audit log route
         .route("/audit", axum::routing::get(list_audit_handler))
+        // Export routes
+        .route("/export/invitations", axum::routing::get(export_invitations_handler))
+        .route("/export/users", axum::routing::get(export_users_handler))
+        .route("/export/audit", axum::routing::get(export_audit_handler))
         // Federation management routes
         .route("/federation/vouches", axum::routing::get(list_vouches_handler))
         .route("/federation/vouches", axum::routing::post(add_vouch_handler))
