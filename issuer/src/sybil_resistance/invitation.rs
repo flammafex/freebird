@@ -1264,4 +1264,46 @@ mod tests {
         let unique_ids: std::collections::HashSet<_> = ids.iter().collect();
         assert_eq!(unique_ids.len(), 5, "All invitee IDs should be unique");
     }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_sybil_resistance_verify_redeems_invitation() {
+        // This test verifies that calling SybilResistance::verify() properly
+        // marks the invitation as redeemed (the full production code path)
+        // Note: requires multi_thread runtime because SybilResistance::verify uses block_in_place
+        let system = setup().await;
+        system.add_bootstrap_user("admin".into(), 10).await;
+
+        // Generate an invitation
+        let (code, sig, _) = system.generate_invite("admin").await.unwrap();
+
+        // Create a SybilProof::Invitation from the code and signature
+        let signature_b64 = Base64UrlUnpadded::encode_string(&sig);
+        let proof = SybilProof::Invitation {
+            code: code.clone(),
+            signature: signature_b64,
+        };
+
+        // Verify that the invitation is NOT redeemed before calling verify
+        let details_before = system.get_invitation_details(&code).await.unwrap();
+        assert!(!details_before.redeemed(), "invitation should not be redeemed yet");
+
+        // Call SybilResistance::verify - this is what /v1/oprf/issue handler uses
+        let result = system.verify(&proof);
+        assert!(result.is_ok(), "first verify should succeed");
+
+        // Verify that the invitation IS redeemed after calling verify
+        let details_after = system.get_invitation_details(&code).await.unwrap();
+        assert!(details_after.redeemed(), "invitation should be redeemed after verify");
+        assert!(details_after.invitee_id().is_some(), "invitee_id should be set");
+
+        // Calling verify again with the same invitation should fail
+        let result2 = system.verify(&proof);
+        assert!(result2.is_err(), "second verify should fail - invitation already used");
+        let err_msg = result2.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("already used") || err_msg.contains("already redeemed"),
+            "error should indicate invitation was already used, got: {}",
+            err_msg
+        );
+    }
 }
