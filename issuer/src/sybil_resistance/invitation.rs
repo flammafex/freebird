@@ -682,6 +682,8 @@ impl InvitationSystem {
 
     /// Verify an invitation is valid (doesn't redeem it)
     async fn verify_invitation(&self, code: &str, signature: &[u8]) -> Result<String> {
+        debug!(code = %code, "verifying invitation");
+
         // Verify signature
         self.verify_signature(code, signature)?;
 
@@ -695,14 +697,17 @@ impl InvitationSystem {
 
         // Check expiry
         if now > invitation.expires_at {
+            warn!(code = %code, "invitation expired");
             bail!("invitation expired");
         }
 
         // Check if already redeemed
         if invitation.redeemed {
+            warn!(code = %code, "invitation already used - rejecting");
             bail!("invitation already used");
         }
 
+        debug!(code = %code, inviter = %invitation.inviter_id, "invitation valid");
         Ok(invitation.inviter_id.clone())
     }
 
@@ -1087,6 +1092,8 @@ impl SybilResistance for InvitationSystem {
                         let signature = Base64UrlUnpadded::decode_vec(signature)
                             .context("invalid signature encoding")?;
 
+                        debug!(code = %code, "processing invitation proof");
+
                         // Verify invitation is valid
                         let _inviter_id = self.verify_invitation(code, &signature).await?;
 
@@ -1101,6 +1108,8 @@ impl SybilResistance for InvitationSystem {
                             // Log error but don't fail the request - state is still in memory
                             // and will be persisted by the autosave task
                             error!("Failed to persist invitation redemption: {:?}", e);
+                        } else {
+                            info!(code = %code, "invitation redeemed and persisted to disk");
                         }
 
                         debug!(code = %code, "invitation verified and redeemed");
