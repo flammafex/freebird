@@ -8,6 +8,8 @@ pub mod store;
 pub mod handlers;
 #[cfg(feature = "human-gate-webauthn")]
 pub mod gate;
+#[cfg(feature = "human-gate-webauthn")]
+pub mod rate_limit;
 
 // Re-exports for cleaner access
 #[cfg(feature = "human-gate-webauthn")]
@@ -18,3 +20,5 @@ pub use store::{CredentialStore, RedisCredStore, InMemoryCredStore};
 pub use handlers::{WebAuthnState, router};
 #[cfg(feature = "human-gate-webauthn")]
 pub use gate::WebAuthnGate;
+#[cfg(feature = "human-gate-webauthn")]
+pub use rate_limit::{WebAuthnRateLimiter, RateLimitError};
