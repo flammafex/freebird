@@ -19,6 +19,35 @@ use tokio::sync::RwLock;
 use crate::federation_store::FederationStore;
 use super::SybilResistance;
 
+/// Validate that the returned issuer_id matches the expected domain
+///
+/// This prevents a malicious server from claiming to be a different issuer.
+/// The issuer_id can be:
+/// - Simple hostname (e.g., "issuer.example.com")
+/// - Prefixed format (e.g., "issuer:example.com:v1")
+fn validate_issuer_domain(expected_domain: &str, returned_issuer_id: &str) -> bool {
+    // Case 1: Exact match
+    if expected_domain == returned_issuer_id {
+        return true;
+    }
+
+    // Case 2: Extract hostname from prefixed issuer_id format
+    // Format: "prefix:hostname:suffix" or "prefix:hostname"
+    let returned_hostname = if returned_issuer_id.contains(':') {
+        let parts: Vec<&str> = returned_issuer_id.split(':').collect();
+        if parts.len() >= 2 {
+            parts[1]
+        } else {
+            returned_issuer_id
+        }
+    } else {
+        returned_issuer_id
+    };
+
+    // Compare expected domain with extracted hostname
+    expected_domain == returned_hostname
+}
+
 /// Configuration for Federated Trust system
 #[derive(Clone)]
 pub struct FederatedTrustConfig {
@@ -171,6 +200,16 @@ impl FederatedTrustSystem {
         let resp: KeyDiscoveryResp = serde_json::from_str(&resp_text)
             .map_err(|e| anyhow!("Failed to parse issuer metadata: {}", e))?;
 
+        // Validate that the returned issuer_id matches the expected domain
+        // This prevents a malicious server from claiming to be a different issuer
+        if !validate_issuer_domain(issuer_id, &resp.issuer_id) {
+            return Err(anyhow!(
+                "Issuer metadata issuer_id mismatch: requested '{}', got '{}'",
+                issuer_id,
+                resp.issuer_id
+            ));
+        }
+
         // Decode the public key
         let pubkey = Base64UrlUnpadded::decode_vec(&resp.voprf.pubkey)
             .map_err(|_| anyhow!("Invalid pubkey encoding in issuer metadata"))?;
@@ -254,6 +293,7 @@ impl SybilResistance for FederatedTrustSystem {
                 source_issuer_id,
                 source_token_b64,
                 token_exp,
+                token_issued_at,
                 trust_path,
             } => {
                 let now = std::time::SystemTime::now()
@@ -266,13 +306,39 @@ impl SybilResistance for FederatedTrustSystem {
                     return Err(anyhow!("Source token has expired"));
                 }
 
-                // Verify token expiration is within acceptable bounds (anti-replay)
-                // This prevents accepting tokens with excessively long lifetimes
-                // from federated issuers, limiting the replay window.
-                // Combined with the expiration check above, this ensures:
-                // now < token_exp <= now + max_token_age_secs
-                if *token_exp > now + self.config.max_token_age_secs {
-                    return Err(anyhow!("Source token expiration is too far in the future"));
+                // Verify token age (anti-replay protection)
+                // Priority 1: Use explicit issued_at timestamp if provided
+                // Priority 2: Fall back to checking remaining validity
+                if let Some(issued_at) = token_issued_at {
+                    // Validate issued_at is sane (not in the future)
+                    if *issued_at > now {
+                        return Err(anyhow!("Token issued_at is in the future"));
+                    }
+
+                    // Validate issued_at is before expiration
+                    if *issued_at >= *token_exp {
+                        return Err(anyhow!("Token issued_at must be before expiration"));
+                    }
+
+                    // Check actual token age
+                    let token_age = now - *issued_at;
+                    if token_age > self.config.max_token_age_secs {
+                        return Err(anyhow!(
+                            "Token is too old: {} seconds (max: {})",
+                            token_age,
+                            self.config.max_token_age_secs
+                        ));
+                    }
+                } else {
+                    // Backward compatibility: if no issued_at, check remaining validity
+                    // This is less secure but maintains compatibility with old clients.
+                    // We limit the remaining validity window to prevent accepting tokens
+                    // with excessively long lifetimes from federated issuers.
+                    if *token_exp > now + self.config.max_token_age_secs {
+                        return Err(anyhow!(
+                            "Source token expiration is too far in the future (provide token_issued_at for better validation)"
+                        ));
+                    }
                 }
 
                 // Cryptographically verify the token against the source issuer's public key

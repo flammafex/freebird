@@ -234,6 +234,7 @@ pub enum SybilProof {
         source_issuer_id: String,  // ID of the issuer that issued the source token
         source_token_b64: String,  // Base64url-encoded token from source issuer
         token_exp: i64,            // Expiration timestamp of source token
+        token_issued_at: Option<i64>, // When the source token was issued (for age validation)
         trust_path: Vec<String>,   // Trust path from source to us (optional)
     },
     /// Multiple proofs for AND/threshold combination modes

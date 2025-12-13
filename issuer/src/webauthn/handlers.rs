@@ -149,12 +149,11 @@ pub async fn start_registration(
             cred_count = existing_creds.len(),
             "User already has registered credentials"
         );
+        // Generic error message to prevent username enumeration
+        // Don't reveal whether the user exists or how many credentials they have
         return Err((
             StatusCode::CONFLICT,
-            format!(
-                "User already has {} credential(s) registered",
-                existing_creds.len()
-            ),
+            "Registration not available for this username".to_string(),
         ));
     }
 
@@ -323,6 +322,10 @@ pub async fn start_authentication(
 ) -> Result<Json<StartAuthenticationResponse>, (StatusCode, String)> {
     debug!(username = %req.username, "Starting WebAuthn authentication");
 
+    // Add consistent minimum response time to prevent timing-based enumeration
+    let start_time = std::time::Instant::now();
+    const MIN_RESPONSE_TIME_MS: u64 = 100;
+
     let user_id_hash = {
         use blake3::Hasher;
         let mut hasher = Hasher::new();
@@ -337,11 +340,22 @@ pub async fn start_authentication(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    // Anti-enumeration: Return generic error for non-existent users
+    // Use consistent timing to prevent timing-based enumeration attacks
     if stored_creds.is_empty() {
-        warn!(username = %req.username, "No credentials found for user");
+        debug!(username = %req.username, "No credentials found for user (returning generic error)");
+
+        // Ensure consistent response time
+        let elapsed = start_time.elapsed().as_millis() as u64;
+        if elapsed < MIN_RESPONSE_TIME_MS {
+            tokio::time::sleep(std::time::Duration::from_millis(MIN_RESPONSE_TIME_MS - elapsed)).await;
+        }
+
+        // Return generic error that doesn't reveal user existence
+        // Same error message as other auth failures
         return Err((
-            StatusCode::NOT_FOUND,
-            "User has no registered credentials".to_string(),
+            StatusCode::BAD_REQUEST,
+            "Authentication failed".to_string(),
         ));
     }
 
@@ -355,7 +369,7 @@ pub async fn start_authentication(
             warn!(error = %e, "Failed to start authentication");
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Authentication start failed: {}", e),
+                "Authentication failed".to_string(),
             )
         })?;
 
@@ -372,6 +386,12 @@ pub async fn start_authentication(
             },
         );
         sessions.retain(|_, session| !session.is_expired());
+    }
+
+    // Ensure consistent response time for successful lookups too
+    let elapsed = start_time.elapsed().as_millis() as u64;
+    if elapsed < MIN_RESPONSE_TIME_MS {
+        tokio::time::sleep(std::time::Duration::from_millis(MIN_RESPONSE_TIME_MS - elapsed)).await;
     }
 
     info!(
