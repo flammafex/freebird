@@ -1,13 +1,14 @@
 // issuer/src/webauthn/handlers.rs
 use axum::{
-    extract::{Json, State},
-    http::StatusCode,
+    extract::{ConnectInfo, Json, State},
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
     Router,
 };
 use base64ct::Encoding;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -15,22 +16,41 @@ use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
 use super::ctx::WebAuthnCtx;
+use super::rate_limit::WebAuthnRateLimiter;
 use super::store::CredentialStore;
 
 // --- Proof Generation Utilities ---
 
-/// Derive a proof verification key from the RP ID
-/// This must match the derivation in gate.rs for verification to work
+/// Derive a proof verification key from the RP ID and server secret
+///
+/// Security: This function derives a key for HMAC-based proof verification.
+/// - When WEBAUTHN_PROOF_SECRET is set, uses it as entropy (RECOMMENDED)
+/// - Without secret, falls back to deterministic derivation (INSECURE for production)
+///
+/// NOTE: This derivation MUST match gate.rs for proof verification to work.
 fn derive_proof_key(rp_id: &str) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new_keyed(&[0u8; 32]);
+    // Check for configured secret
+    let (secret_bytes, has_secret) = if let Ok(secret) = std::env::var("WEBAUTHN_PROOF_SECRET") {
+        // Derive initial key from secret
+        let mut key_hasher = blake3::Hasher::new();
+        key_hasher.update(b"webauthn:secret:key:v1:");
+        key_hasher.update(secret.as_bytes());
+        (*key_hasher.finalize().as_bytes(), true)
+    } else {
+        // Derive a deterministic but unique-per-deployment key from RP ID
+        // This is NOT secure but provides some isolation between deployments
+        let mut key_hasher = blake3::Hasher::new();
+        key_hasher.update(b"webauthn:deterministic:key:v1:");
+        key_hasher.update(rp_id.as_bytes());
+        key_hasher.update(b":insecure-fallback");
+        (*key_hasher.finalize().as_bytes(), false)
+    };
+
+    // Now use the derived key for the final proof key derivation
+    let mut hasher = blake3::Hasher::new_keyed(&secret_bytes);
     hasher.update(b"webauthn:proof:key:v1:");
     hasher.update(rp_id.as_bytes());
-
-    // Use system entropy if available, otherwise use RP ID as deterministic seed
-    if let Ok(secret) = std::env::var("WEBAUTHN_PROOF_SECRET") {
-        hasher.update(secret.as_bytes());
-    } else {
-        // Fallback: derive from RP ID (deterministic but unique per deployment)
+    if !has_secret {
         hasher.update(b":deterministic");
     }
 
@@ -49,6 +69,40 @@ fn compute_auth_proof(rp_id: &str, username: &str, timestamp: i64) -> String {
     base64ct::Base64UrlUnpadded::encode_string(hasher.finalize().as_bytes())
 }
 
+// --- Constants ---
+
+/// Maximum number of active sessions allowed (memory protection)
+const MAX_SESSIONS: usize = 10000;
+
+// --- IP Extraction ---
+
+/// Extract client IP from request, handling proxies
+fn extract_client_ip(
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: &HeaderMap,
+    behind_proxy: bool,
+) -> Option<IpAddr> {
+    if behind_proxy {
+        // Try X-Forwarded-For first (may contain comma-separated list)
+        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            // Take the first (leftmost) IP, which is the original client
+            if let Some(first_ip) = xff.split(',').next() {
+                if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
+                    return Some(ip);
+                }
+            }
+        }
+        // Fallback to X-Real-IP
+        if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+            if let Ok(ip) = real_ip.trim().parse::<IpAddr>() {
+                return Some(ip);
+            }
+        }
+    }
+    // Use direct connection IP
+    connect_info.map(|ci| ci.0.ip())
+}
+
 // --- State ---
 
 #[derive(Clone)]
@@ -56,6 +110,43 @@ pub struct WebAuthnState {
     pub webauthn: Arc<WebAuthnCtx>,
     pub cred_store: CredentialStore,
     pub sessions: Arc<RwLock<HashMap<String, SessionData>>>,
+    /// Rate limiter for registration/authentication attempts
+    pub rate_limiter: WebAuthnRateLimiter,
+    /// Whether running behind a proxy (use X-Forwarded-For)
+    pub behind_proxy: bool,
+}
+
+impl WebAuthnState {
+    /// Create a new WebAuthnState with rate limiting
+    pub fn new(
+        webauthn: Arc<WebAuthnCtx>,
+        cred_store: CredentialStore,
+        behind_proxy: bool,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            webauthn,
+            cred_store,
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            rate_limiter: WebAuthnRateLimiter::new(),
+            behind_proxy,
+        })
+    }
+
+    /// Cleanup expired sessions and update rate limiter
+    pub async fn cleanup_expired_sessions(&self) {
+        let mut sessions = self.sessions.write().await;
+        let before_count = sessions.len();
+
+        sessions.retain(|_, session| !session.is_expired());
+
+        let removed = before_count - sessions.len();
+        if removed > 0 {
+            debug!("Cleaned up {} expired WebAuthn sessions", removed);
+        }
+
+        // Also cleanup rate limiter state
+        self.rate_limiter.cleanup_expired().await;
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -64,15 +155,24 @@ pub enum SessionData {
         state: PasskeyRegistration,
         username: String,
         created_at: i64,
+        client_ip: IpAddr,
     },
     Authentication {
         state: PasskeyAuthentication,
         username: String,
         created_at: i64,
+        client_ip: IpAddr,
     },
 }
 
 impl SessionData {
+    pub fn client_ip(&self) -> IpAddr {
+        match self {
+            SessionData::Registration { client_ip, .. } => *client_ip,
+            SessionData::Authentication { client_ip, .. } => *client_ip,
+        }
+    }
+
     pub fn is_expired(&self) -> bool {
         let now = chrono::Utc::now().timestamp();
         let created_at = match self {
@@ -125,9 +225,36 @@ pub struct StartRegistrationResponse {
 
 pub async fn start_registration(
     State(state): State<Arc<WebAuthnState>>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
     Json(req): Json<StartRegistrationRequest>,
 ) -> Result<Json<StartRegistrationResponse>, (StatusCode, String)> {
     debug!(username = %req.username, "Starting WebAuthn registration");
+
+    // Extract client IP for rate limiting
+    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy)
+        .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+
+    // Check rate limit before processing
+    if let Err(e) = state.rate_limiter.check_registration_allowed(client_ip).await {
+        warn!(ip = %client_ip, error = %e, "Registration rate limited");
+        return Err((e.status_code(), e.to_string()));
+    }
+
+    // Record the registration attempt
+    state.rate_limiter.record_registration_attempt(client_ip).await;
+
+    // Check total session count for memory protection
+    {
+        let sessions = state.sessions.read().await;
+        if sessions.len() >= MAX_SESSIONS {
+            warn!("Maximum session limit reached, rejecting registration");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Service temporarily unavailable".to_string(),
+            ));
+        }
+    }
 
     let user_id_hash = {
         use blake3::Hasher;
@@ -198,10 +325,14 @@ pub async fn start_registration(
                 state: reg_state,
                 username: req.username.clone(),
                 created_at: chrono::Utc::now().timestamp(),
+                client_ip,
             },
         );
         sessions.retain(|_, session| !session.is_expired());
     }
+
+    // Track session creation in rate limiter
+    state.rate_limiter.record_session_created(client_ip).await;
 
     info!(
         username = %req.username,
@@ -235,13 +366,15 @@ pub async fn finish_registration(
 ) -> Result<Json<FinishRegistrationResponse>, (StatusCode, String)> {
     debug!(session_id = %req.session_id, "Finishing WebAuthn registration");
 
-    let (reg_state, username) = {
+    let (reg_state, username, client_ip) = {
         let mut sessions = state.sessions.write().await;
         match sessions.remove(&req.session_id) {
             Some(SessionData::Registration {
-                state, username, ..
-            }) => (state, username),
-            Some(_) => {
+                state, username, client_ip, ..
+            }) => (state, username, client_ip),
+            Some(session) => {
+                // Wrong session type - still record session ended
+                state.rate_limiter.record_session_ended(session.client_ip()).await;
                 return Err((StatusCode::BAD_REQUEST, "Invalid session type".to_string()));
             }
             None => {
@@ -252,6 +385,9 @@ pub async fn finish_registration(
             }
         }
     };
+
+    // Record session ended regardless of outcome
+    state.rate_limiter.record_session_ended(client_ip).await;
 
     let passkey = state
         .webauthn
@@ -318,6 +454,8 @@ pub struct StartAuthenticationResponse {
 
 pub async fn start_authentication(
     State(state): State<Arc<WebAuthnState>>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
     Json(req): Json<StartAuthenticationRequest>,
 ) -> Result<Json<StartAuthenticationResponse>, (StatusCode, String)> {
     debug!(username = %req.username, "Starting WebAuthn authentication");
@@ -325,6 +463,40 @@ pub async fn start_authentication(
     // Add consistent minimum response time to prevent timing-based enumeration
     let start_time = std::time::Instant::now();
     const MIN_RESPONSE_TIME_MS: u64 = 100;
+
+    // Extract client IP for rate limiting
+    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy)
+        .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+
+    // Check rate limit before processing
+    if let Err(e) = state.rate_limiter.check_auth_allowed(client_ip).await {
+        warn!(ip = %client_ip, error = %e, "Authentication rate limited");
+        // Ensure consistent timing even for rate limited requests
+        let elapsed = start_time.elapsed().as_millis() as u64;
+        if elapsed < MIN_RESPONSE_TIME_MS {
+            tokio::time::sleep(std::time::Duration::from_millis(MIN_RESPONSE_TIME_MS - elapsed)).await;
+        }
+        return Err((e.status_code(), e.to_string()));
+    }
+
+    // Record the authentication attempt
+    state.rate_limiter.record_auth_attempt(client_ip).await;
+
+    // Check total session count for memory protection
+    {
+        let sessions = state.sessions.read().await;
+        if sessions.len() >= MAX_SESSIONS {
+            warn!("Maximum session limit reached, rejecting authentication");
+            let elapsed = start_time.elapsed().as_millis() as u64;
+            if elapsed < MIN_RESPONSE_TIME_MS {
+                tokio::time::sleep(std::time::Duration::from_millis(MIN_RESPONSE_TIME_MS - elapsed)).await;
+            }
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Service temporarily unavailable".to_string(),
+            ));
+        }
+    }
 
     let user_id_hash = {
         use blake3::Hasher;
@@ -383,10 +555,14 @@ pub async fn start_authentication(
                 state: auth_state,
                 username: req.username.clone(),
                 created_at: chrono::Utc::now().timestamp(),
+                client_ip,
             },
         );
         sessions.retain(|_, session| !session.is_expired());
     }
+
+    // Track session creation in rate limiter
+    state.rate_limiter.record_session_created(client_ip).await;
 
     // Ensure consistent response time for successful lookups too
     let elapsed = start_time.elapsed().as_millis() as u64;
@@ -427,13 +603,15 @@ pub async fn finish_authentication(
 ) -> Result<Json<FinishAuthenticationResponse>, (StatusCode, String)> {
     debug!(session_id = %req.session_id, "Finishing WebAuthn authentication");
 
-    let (auth_state, username) = {
+    let (auth_state, username, client_ip) = {
         let mut sessions = state.sessions.write().await;
         match sessions.remove(&req.session_id) {
             Some(SessionData::Authentication {
-                state, username, ..
-            }) => (state, username),
-            Some(_) => {
+                state, username, client_ip, ..
+            }) => (state, username, client_ip),
+            Some(session) => {
+                // Wrong session type - still record session ended
+                state.rate_limiter.record_session_ended(session.client_ip()).await;
                 return Err((StatusCode::BAD_REQUEST, "Invalid session type".to_string()));
             }
             None => {
@@ -444,6 +622,9 @@ pub async fn finish_authentication(
             }
         }
     };
+
+    // Record session ended regardless of outcome
+    state.rate_limiter.record_session_ended(client_ip).await;
 
     let auth_result = state
         .webauthn
@@ -508,13 +689,15 @@ pub async fn finish_registration_with_attestation(
 ) -> Result<Json<FinishRegistrationResponse>, (StatusCode, String)> {
     debug!(session_id = %req.session_id, "Finishing WebAuthn registration with policy check");
 
-    let (reg_state, username) = {
+    let (reg_state, username, client_ip) = {
         let mut sessions = state.sessions.write().await;
         match sessions.remove(&req.session_id) {
             Some(SessionData::Registration {
-                state, username, ..
-            }) => (state, username),
-            Some(_) => {
+                state, username, client_ip, ..
+            }) => (state, username, client_ip),
+            Some(session) => {
+                // Wrong session type - still record session ended
+                state.rate_limiter.record_session_ended(session.client_ip()).await;
                 return Err((StatusCode::BAD_REQUEST, "Invalid session type".to_string()));
             }
             None => {
@@ -525,6 +708,9 @@ pub async fn finish_registration_with_attestation(
             }
         }
     };
+
+    // Record session ended regardless of outcome
+    state.rate_limiter.record_session_ended(client_ip).await;
 
     // Complete registration
     let passkey = state

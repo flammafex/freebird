@@ -24,8 +24,6 @@ use rand::rngs::OsRng;
 use std::{sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
-#[cfg(feature = "human-gate-webauthn")]
-use tokio::sync::RwLock; // Only needed if webauthn is enabled
 use tracing::{info, warn};
 
 pub struct Application {
@@ -102,11 +100,7 @@ impl Application {
                  webauthn::CredentialStore::InMemory(webauthn::InMemoryCredStore::new())
              };
 
-             Some(Arc::new(webauthn::WebAuthnState {
-                 webauthn: ctx,
-                 cred_store: store,
-                 sessions: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-             }))
+             Some(webauthn::WebAuthnState::new(ctx, store, config.behind_proxy))
         } else {
             None
         };
