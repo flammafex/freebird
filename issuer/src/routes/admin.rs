@@ -814,7 +814,7 @@ pub async fn create_invitations_handler(
             Ok((code, signature, expires_at)) => {
                 invitations.push(InvitationCode {
                     code,
-                    signature: hex::encode(signature),
+                    signature: base64ct::Base64UrlUnpadded::encode_string(&signature),
                     expires_at,
                 });
             }
