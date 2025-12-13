@@ -488,12 +488,24 @@ impl Application {
         if let Some(key) = config.admin_api_key {
             if key.len() >= 32 {
                 if let Some(inv_sys) = invitation_system {
+                    #[cfg(feature = "human-gate-webauthn")]
                     let admin = routes::admin_router(
                         inv_sys,
                         voprf.clone(),
                         federation_store.clone(),
                         audit_log.clone(),
                         key,
+                        config.behind_proxy,
+                        webauthn_state.as_ref().map(|ws| ws.cred_store.clone()),
+                    );
+                    #[cfg(not(feature = "human-gate-webauthn"))]
+                    let admin = routes::admin_router(
+                        inv_sys,
+                        voprf.clone(),
+                        federation_store.clone(),
+                        audit_log.clone(),
+                        key,
+                        config.behind_proxy,
                     );
                     app = app.nest("/admin", admin);
                 }

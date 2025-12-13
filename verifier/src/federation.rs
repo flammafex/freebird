@@ -19,6 +19,15 @@ use tracing::{debug, info, warn};
 /// Maximum clock skew tolerance for vouch validity checks (5 minutes)
 const MAX_CLOCK_SKEW_SECS: i64 = 300;
 
+/// Maximum number of vouches to process per issuer (DoS protection)
+const MAX_VOUCHES_PER_ISSUER: usize = 50;
+
+/// Maximum total HTTP requests during a single trust graph traversal (DoS protection)
+const MAX_REQUESTS_PER_TRAVERSAL: usize = 100;
+
+/// Maximum issuers to visit during BFS traversal (DoS protection)
+const MAX_ISSUERS_VISITED: usize = 200;
+
 /// Issuer metadata from /.well-known/issuer endpoint
 #[derive(Debug, Clone, Deserialize)]
 struct IssuerMetadata {
@@ -173,6 +182,11 @@ impl TrustGraph {
     ///
     /// Uses BFS to explore the trust graph up to max_trust_depth.
     /// Returns a list of trust paths (each path is a list of issuer IDs).
+    ///
+    /// # DoS Protection
+    /// - Limits vouches processed per issuer (MAX_VOUCHES_PER_ISSUER)
+    /// - Limits total issuers visited (MAX_ISSUERS_VISITED)
+    /// - Limits total HTTP requests (MAX_REQUESTS_PER_TRAVERSAL)
     async fn find_trust_paths(
         &self,
         target_issuer_id: &str,
@@ -180,6 +194,9 @@ impl TrustGraph {
     ) -> Result<Vec<Vec<String>>> {
         let now = current_timestamp();
         let mut paths = Vec::new();
+
+        // DoS protection: track total requests made during this traversal
+        let mut request_count: usize = 0;
 
         // BFS queue: (current_issuer_id, path_so_far, depth)
         let mut queue: VecDeque<(String, Vec<String>, u32)> = VecDeque::new();
@@ -193,13 +210,32 @@ impl TrustGraph {
         let mut visited = HashSet::new();
 
         while let Some((current_id, path, depth)) = queue.pop_front() {
+            // DoS protection: limit total issuers visited
+            if visited.len() >= MAX_ISSUERS_VISITED {
+                warn!(
+                    "Trust graph traversal hit issuer limit ({}), stopping",
+                    MAX_ISSUERS_VISITED
+                );
+                break;
+            }
+
             // Skip if we've already visited this issuer
             if visited.contains(&current_id) {
                 continue;
             }
             visited.insert(current_id.clone());
 
+            // DoS protection: check request limit before fetching
+            if request_count >= MAX_REQUESTS_PER_TRAVERSAL {
+                warn!(
+                    "Trust graph traversal hit request limit ({}), stopping",
+                    MAX_REQUESTS_PER_TRAVERSAL
+                );
+                break;
+            }
+
             // Fetch metadata for current issuer
+            request_count += 1;
             let metadata = match self.fetch_metadata(&current_id).await {
                 Ok(m) => m,
                 Err(e) => {
@@ -211,8 +247,21 @@ impl TrustGraph {
                 }
             };
 
+            // DoS protection: limit vouches processed per issuer
+            let vouches_to_process = if metadata.vouches.len() > MAX_VOUCHES_PER_ISSUER {
+                warn!(
+                    "Issuer {} has {} vouches, limiting to {}",
+                    current_id,
+                    metadata.vouches.len(),
+                    MAX_VOUCHES_PER_ISSUER
+                );
+                &metadata.vouches[..MAX_VOUCHES_PER_ISSUER]
+            } else {
+                &metadata.vouches[..]
+            };
+
             // Check each vouch from this issuer
-            for vouch in &metadata.vouches {
+            for vouch in vouches_to_process {
                 // Skip if vouched issuer is blocked
                 if self
                     .policy
@@ -223,7 +272,11 @@ impl TrustGraph {
                 }
 
                 // Skip if vouched issuer has been revoked
-                if self.is_revoked(&vouch.vouched_issuer_id, &metadata.revocations, now).await {
+                // Note: is_revoked may make HTTP requests for signature verification
+                if request_count >= MAX_REQUESTS_PER_TRAVERSAL {
+                    break;
+                }
+                if self.is_revoked_with_limit(&vouch.vouched_issuer_id, &metadata.revocations, now, &mut request_count).await {
                     debug!(
                         "Issuer {} has been revoked by {}, skipping",
                         vouch.vouched_issuer_id, current_id
@@ -234,7 +287,11 @@ impl TrustGraph {
                 // Check if this vouch points to our target
                 if vouch.vouched_issuer_id == target_issuer_id {
                     // Verify the vouch is valid
-                    if self.is_vouch_valid(vouch, target_pubkey, now).await {
+                    // Note: is_vouch_valid may make HTTP requests for signature verification
+                    if request_count >= MAX_REQUESTS_PER_TRAVERSAL {
+                        break;
+                    }
+                    if self.is_vouch_valid_with_limit(vouch, target_pubkey, now, &mut request_count).await {
                         let mut final_path = path.clone();
                         final_path.push(target_issuer_id.to_string());
                         paths.push(final_path);
@@ -251,7 +308,10 @@ impl TrustGraph {
                     // target, we'll verify their actual public key matches.
 
                     // Verify intermediate vouch is valid (signature, expiration, trust level)
-                    if !self.is_vouch_valid(vouch, &vouch.vouched_pubkey, now).await {
+                    if request_count >= MAX_REQUESTS_PER_TRAVERSAL {
+                        break;
+                    }
+                    if !self.is_vouch_valid_with_limit(vouch, &vouch.vouched_pubkey, now, &mut request_count).await {
                         debug!(
                             "Skipping invalid intermediate vouch from {} to {}",
                             current_id, vouch.vouched_issuer_id
@@ -269,6 +329,13 @@ impl TrustGraph {
                 }
             }
         }
+
+        debug!(
+            "Trust graph traversal complete: {} paths found, {} issuers visited, {} requests made",
+            paths.len(),
+            visited.len(),
+            request_count
+        );
 
         Ok(paths)
     }
@@ -459,6 +526,129 @@ impl TrustGraph {
         for revocation in revocations {
             if revocation.revoked_issuer_id == issuer_id {
                 // Fetch the revoker's public key to verify the signature
+                let revoker_pubkey = match self.fetch_pubkey(&revocation.revoker_issuer_id).await {
+                    Ok(pk) => pk,
+                    Err(e) => {
+                        warn!(
+                            "Failed to fetch pubkey for revoker {}: {}",
+                            revocation.revoker_issuer_id, e
+                        );
+                        continue; // Try next revocation
+                    }
+                };
+
+                // Verify the revocation signature using the REVOKER's public key
+                if !revocation.verify(&revoker_pubkey) {
+                    warn!(
+                        "Revocation signature verification failed for {} revoking {}",
+                        revocation.revoker_issuer_id, revocation.revoked_issuer_id
+                    );
+                    continue; // Try next revocation
+                }
+
+                debug!(
+                    "Issuer {} has been revoked by {} (reason: {:?}, verified signature)",
+                    issuer_id, revocation.revoker_issuer_id, revocation.reason
+                );
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if a vouch is valid with request counting (DoS protection)
+    async fn is_vouch_valid_with_limit(
+        &self,
+        vouch: &Vouch,
+        vouched_pubkey: &[u8],
+        now: i64,
+        request_count: &mut usize,
+    ) -> bool {
+        // Check expiration and creation time
+        if !vouch.is_valid_at(now, MAX_CLOCK_SKEW_SECS) {
+            debug!(
+                "Vouch from {} for {} is expired or invalid time",
+                vouch.voucher_issuer_id, vouch.vouched_issuer_id
+            );
+            return false;
+        }
+
+        // Check trust level
+        if let Some(level) = vouch.trust_level {
+            if level < self.policy.min_trust_level {
+                debug!(
+                    "Vouch from {} for {} has insufficient trust level ({} < {})",
+                    vouch.voucher_issuer_id,
+                    vouch.vouched_issuer_id,
+                    level,
+                    self.policy.min_trust_level
+                );
+                return false;
+            }
+        }
+
+        // Verify the vouch signature using the vouched issuer's public key
+        if vouch.vouched_pubkey != vouched_pubkey {
+            debug!(
+                "Vouch public key mismatch for {}",
+                vouch.vouched_issuer_id
+            );
+            return false;
+        }
+
+        // Check request limit before fetching
+        if *request_count >= MAX_REQUESTS_PER_TRAVERSAL {
+            warn!("Request limit reached during vouch validation");
+            return false;
+        }
+
+        // Fetch the voucher's public key to verify the signature
+        *request_count += 1;
+        let voucher_pubkey = match self.fetch_pubkey(&vouch.voucher_issuer_id).await {
+            Ok(pk) => pk,
+            Err(e) => {
+                warn!(
+                    "Failed to fetch pubkey for voucher {}: {}",
+                    vouch.voucher_issuer_id, e
+                );
+                return false;
+            }
+        };
+
+        // Verify the vouch signature using the VOUCHER's public key
+        if !vouch.verify(&voucher_pubkey) {
+            warn!(
+                "Vouch signature verification failed for {} vouching for {}",
+                vouch.voucher_issuer_id, vouch.vouched_issuer_id
+            );
+            return false;
+        }
+
+        debug!(
+            "Vouch from {} for {} is valid (verified signature)",
+            vouch.voucher_issuer_id, vouch.vouched_issuer_id
+        );
+        true
+    }
+
+    /// Check if an issuer has been revoked with request counting (DoS protection)
+    async fn is_revoked_with_limit(
+        &self,
+        issuer_id: &str,
+        revocations: &[Revocation],
+        _now: i64,
+        request_count: &mut usize,
+    ) -> bool {
+        for revocation in revocations {
+            if revocation.revoked_issuer_id == issuer_id {
+                // Check request limit before fetching
+                if *request_count >= MAX_REQUESTS_PER_TRAVERSAL {
+                    warn!("Request limit reached during revocation check");
+                    return false; // Fail safe: don't process more revocations
+                }
+
+                // Fetch the revoker's public key to verify the signature
+                *request_count += 1;
                 let revoker_pubkey = match self.fetch_pubkey(&revocation.revoker_issuer_id).await {
                     Ok(pk) => pk,
                     Err(e) => {
