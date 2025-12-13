@@ -28,10 +28,38 @@ const MAX_REQUESTS_PER_TRAVERSAL: usize = 100;
 /// Maximum issuers to visit during BFS traversal (DoS protection)
 const MAX_ISSUERS_VISITED: usize = 200;
 
+/// Validate that the returned issuer_id matches the expected domain
+///
+/// This prevents a malicious server from claiming to be a different issuer.
+/// The issuer_id can be:
+/// - Simple hostname (e.g., "issuer.example.com")
+/// - Prefixed format (e.g., "issuer:example.com:v1")
+fn validate_issuer_domain(expected_domain: &str, returned_issuer_id: &str) -> bool {
+    // Case 1: Exact match
+    if expected_domain == returned_issuer_id {
+        return true;
+    }
+
+    // Case 2: Extract hostname from prefixed issuer_id format
+    // Format: "prefix:hostname:suffix" or "prefix:hostname"
+    let returned_hostname = if returned_issuer_id.contains(':') {
+        let parts: Vec<&str> = returned_issuer_id.split(':').collect();
+        if parts.len() >= 2 {
+            parts[1]
+        } else {
+            returned_issuer_id
+        }
+    } else {
+        returned_issuer_id
+    };
+
+    // Compare expected domain with extracted hostname
+    expected_domain == returned_hostname
+}
+
 /// Issuer metadata from /.well-known/issuer endpoint
 #[derive(Debug, Clone, Deserialize)]
 struct IssuerMetadata {
-    #[allow(dead_code)]
     issuer_id: String,
     voprf: VoprfInfo,
 }
@@ -376,6 +404,16 @@ impl TrustGraph {
             .await
             .context("Failed to parse federation metadata")?;
 
+        // Validate that the returned issuer_id matches the domain we requested
+        // This prevents a malicious server from claiming to be a different issuer
+        if !validate_issuer_domain(issuer_id, &metadata.issuer_id) {
+            return Err(anyhow::anyhow!(
+                "Federation metadata issuer_id mismatch: requested '{}', got '{}'",
+                issuer_id,
+                metadata.issuer_id
+            ));
+        }
+
         // Update cache
         {
             let mut cache = self.cache.write().await;
@@ -427,6 +465,16 @@ impl TrustGraph {
             .json()
             .await
             .context("Failed to parse issuer metadata")?;
+
+        // Validate that the returned issuer_id matches the domain we requested
+        // This prevents a malicious server from claiming to be a different issuer
+        if !validate_issuer_domain(issuer_id, &issuer_metadata.issuer_id) {
+            return Err(anyhow::anyhow!(
+                "Issuer metadata issuer_id mismatch: requested '{}', got '{}'",
+                issuer_id,
+                issuer_metadata.issuer_id
+            ));
+        }
 
         // Decode base64 public key
         use base64ct::{Base64UrlUnpadded, Encoding};
