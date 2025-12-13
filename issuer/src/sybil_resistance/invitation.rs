@@ -1095,6 +1095,14 @@ impl SybilResistance for InvitationSystem {
                         // from the HTTP request context
                         let _invitee_id = self.redeem_invitation(code, None).await?;
 
+                        // Persist the redemption immediately to prevent replay attacks
+                        // if the server restarts before the autosave runs
+                        if let Err(e) = self.save().await {
+                            // Log error but don't fail the request - state is still in memory
+                            // and will be persisted by the autosave task
+                            error!("Failed to persist invitation redemption: {:?}", e);
+                        }
+
                         debug!(code = %code, "invitation verified and redeemed");
                         Ok(())
                     }
@@ -1305,5 +1313,84 @@ mod tests {
             "error should indicate invitation was already used, got: {}",
             err_msg
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_sybil_resistance_verify_persists_redemption() {
+        // This test verifies that invitation redemption is persisted to disk
+        // immediately after verification, surviving app restarts
+        let path = PathBuf::from("/tmp/test_verify_persistence.json");
+        let _ = std::fs::remove_file(&path); // Clean up
+
+        let key = SigningKey::random(&mut OsRng);
+        let config = InvitationConfig {
+            invites_per_user: 5,
+            invite_cooldown_secs: 0,
+            invite_expires_secs: 3600,
+            new_user_can_invite_after_secs: 0,
+            persistence_path: path.clone(),
+            autosave_interval_secs: 0, // Disable autosave
+        };
+
+        let code: String;
+        let signature_b64: String;
+
+        // Phase 1: Create invitation and redeem it
+        {
+            let system = InvitationSystem::load_or_create(key.clone(), config.clone())
+                .await
+                .unwrap();
+            system.add_bootstrap_user("admin".into(), 10).await;
+
+            // Generate and redeem invitation
+            let (c, sig, _) = system.generate_invite("admin").await.unwrap();
+            code = c;
+            signature_b64 = Base64UrlUnpadded::encode_string(&sig);
+
+            let proof = SybilProof::Invitation {
+                code: code.clone(),
+                signature: signature_b64.clone(),
+            };
+
+            // This should redeem AND persist
+            let result = system.verify(&proof);
+            assert!(result.is_ok(), "verify should succeed");
+
+            // Verify it's redeemed in memory
+            let details = system.get_invitation_details(&code).await.unwrap();
+            assert!(details.redeemed(), "invitation should be redeemed");
+        }
+        // System is dropped here - simulates app restart
+
+        // Phase 2: Load from disk and verify redemption persisted
+        {
+            let system = InvitationSystem::load_or_create(key, config)
+                .await
+                .unwrap();
+
+            // Verify the invitation is STILL redeemed after "restart"
+            let details = system.get_invitation_details(&code).await.unwrap();
+            assert!(
+                details.redeemed(),
+                "invitation should still be redeemed after reload from disk"
+            );
+            assert!(
+                details.invitee_id().is_some(),
+                "invitee_id should still be set after reload"
+            );
+
+            // Trying to redeem again should fail
+            let proof = SybilProof::Invitation {
+                code: code.clone(),
+                signature: signature_b64,
+            };
+            let result = system.verify(&proof);
+            assert!(
+                result.is_err(),
+                "should not be able to reuse invitation after reload"
+            );
+        }
+
+        let _ = std::fs::remove_file(&path);
     }
 }
