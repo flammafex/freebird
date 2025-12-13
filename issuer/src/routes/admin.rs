@@ -18,6 +18,7 @@
 
 use crate::audit::{AuditEntry, AuditLog};
 use crate::multi_key_voprf::{KeyInfo, KeyStats, MultiKeyVoprfCore};
+use crate::routes::admin_rate_limit::AdminRateLimiter;
 use crate::sybil_resistance::invitation::{InvitationFilter, InvitationStats, InvitationSystem};
 use axum::{
     extract::{Path, State, Query},
@@ -30,7 +31,9 @@ use p256::ecdsa::SigningKey;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::net::IpAddr;
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 use tracing::{info, warn};
 // ============================================================================
 // State & Configuration
@@ -49,6 +52,10 @@ pub struct AdminState {
     pub audit_log: Arc<AuditLog>,
     /// Admin API key for authentication
     pub api_key: String,
+    /// Rate limiter for authentication attempts
+    pub rate_limiter: AdminRateLimiter,
+    /// Whether running behind a proxy (use X-Forwarded-For)
+    pub behind_proxy: bool,
     /// Optional WebAuthn credential store (only if webauthn feature enabled)
     #[cfg(feature = "human-gate-webauthn")]
     pub webauthn_store: Option<crate::webauthn::CredentialStore>,
@@ -349,6 +356,7 @@ pub struct ListAuditResponse {
 #[derive(Debug)]
 pub enum AdminError {
     Unauthorized,
+    RateLimited(u64), // seconds until unblock
     UserNotFound(String),
     InvalidRequest(String),
     Internal(String),
@@ -358,6 +366,7 @@ impl AdminError {
     fn status_code(&self) -> StatusCode {
         match self {
             AdminError::Unauthorized => StatusCode::UNAUTHORIZED,
+            AdminError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             AdminError::UserNotFound(_) => StatusCode::NOT_FOUND,
             AdminError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             AdminError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -367,6 +376,7 @@ impl AdminError {
     fn message(&self) -> String {
         match self {
             AdminError::Unauthorized => "unauthorized".to_string(),
+            AdminError::RateLimited(secs) => format!("too many failed attempts, try again in {} seconds", secs),
             AdminError::UserNotFound(id) => format!("user not found: {}", id),
             AdminError::InvalidRequest(msg) => format!("invalid request: {}", msg),
             AdminError::Internal(_) => "internal server error".to_string(),
@@ -394,6 +404,73 @@ impl axum::response::IntoResponse for AdminError {
 }
 
 // ============================================================================
+// Input Validation
+// ============================================================================
+
+/// Maximum allowed length for user IDs
+const MAX_USER_ID_LENGTH: usize = 256;
+
+/// Maximum allowed length for key IDs (kid)
+const MAX_KID_LENGTH: usize = 128;
+
+/// Validate a user ID input
+///
+/// Returns an error if the user ID is empty, too long, or contains invalid characters.
+/// Valid characters: alphanumeric, hyphens, underscores, colons, periods, and @
+fn validate_user_id(user_id: &str) -> Result<(), AdminError> {
+    if user_id.is_empty() {
+        return Err(AdminError::InvalidRequest("user_id cannot be empty".to_string()));
+    }
+
+    if user_id.len() > MAX_USER_ID_LENGTH {
+        return Err(AdminError::InvalidRequest(format!(
+            "user_id exceeds maximum length of {} characters",
+            MAX_USER_ID_LENGTH
+        )));
+    }
+
+    // Check for valid characters (alphanumeric, hyphens, underscores, colons, periods, @)
+    // This allows common formats like emails, DIDs, and UUIDs
+    if !user_id.chars().all(|c| c.is_alphanumeric() || "-_:.@".contains(c)) {
+        return Err(AdminError::InvalidRequest(
+            "user_id contains invalid characters (allowed: alphanumeric, - _ : . @)".to_string()
+        ));
+    }
+
+    // Reject control characters and null bytes
+    if user_id.chars().any(|c| c.is_control()) {
+        return Err(AdminError::InvalidRequest(
+            "user_id cannot contain control characters".to_string()
+        ));
+    }
+
+    Ok(())
+}
+
+/// Validate a key ID (kid) input
+fn validate_kid(kid: &str) -> Result<(), AdminError> {
+    if kid.is_empty() {
+        return Err(AdminError::InvalidRequest("kid cannot be empty".to_string()));
+    }
+
+    if kid.len() > MAX_KID_LENGTH {
+        return Err(AdminError::InvalidRequest(format!(
+            "kid exceeds maximum length of {} characters",
+            MAX_KID_LENGTH
+        )));
+    }
+
+    // Similar character restrictions as user_id
+    if !kid.chars().all(|c| c.is_alphanumeric() || "-_:.".contains(c)) {
+        return Err(AdminError::InvalidRequest(
+            "kid contains invalid characters (allowed: alphanumeric, - _ : .)".to_string()
+        ));
+    }
+
+    Ok(())
+}
+
+// ============================================================================
 // UI Handler
 // ============================================================================
 
@@ -407,37 +484,103 @@ pub async fn admin_ui_handler() -> impl IntoResponse {
 // Authentication
 // ============================================================================
 
-fn verify_api_key(headers: &HeaderMap, expected_key: &str) -> Result<(), AdminError> {
+/// Extract client IP from headers or connection info
+fn extract_client_ip(headers: &HeaderMap, behind_proxy: bool) -> Option<IpAddr> {
+    if behind_proxy {
+        // Try X-Forwarded-For first (may contain comma-separated list)
+        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+            // Take the first (leftmost) IP, which is the original client
+            if let Some(first_ip) = xff.split(',').next() {
+                if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
+                    return Some(ip);
+                }
+            }
+        }
+        // Fallback to X-Real-IP
+        if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+            if let Ok(ip) = real_ip.trim().parse::<IpAddr>() {
+                return Some(ip);
+            }
+        }
+    }
+    None
+}
+
+/// Verify API key using constant-time comparison with rate limiting
+async fn verify_api_key_with_rate_limit(
+    headers: &HeaderMap,
+    state: &AdminState,
+    client_ip: Option<IpAddr>,
+) -> Result<(), AdminError> {
+    // Use a fallback IP for rate limiting if we can't determine the real one
+    let ip = client_ip.unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+
+    // Check if IP is currently rate-limited
+    if let Err(seconds_remaining) = state.rate_limiter.check_allowed(ip).await {
+        return Err(AdminError::RateLimited(seconds_remaining));
+    }
+
     let provided_key = headers
         .get("x-admin-key")
         .and_then(|v| v.to_str().ok())
-        .ok_or(AdminError::Unauthorized)?;
+        .ok_or_else(|| {
+            // No key provided - still counts as a failed attempt
+            AdminError::Unauthorized
+        })?;
 
-    if provided_key != expected_key {
-        warn!("Invalid admin API key provided");
+    // Use constant-time comparison to prevent timing attacks
+    let expected_bytes = state.api_key.as_bytes();
+    let provided_bytes = provided_key.as_bytes();
+
+    // Pad to same length for constant-time comparison
+    // (ConstantTimeEq requires same length)
+    let is_valid = if expected_bytes.len() == provided_bytes.len() {
+        expected_bytes.ct_eq(provided_bytes).into()
+    } else {
+        // Different lengths - still do a comparison to maintain constant time
+        // but result will always be false
+        let dummy = vec![0u8; expected_bytes.len()];
+        let _ = expected_bytes.ct_eq(&dummy);
+        false
+    };
+
+    if !is_valid {
+        // Record failed attempt
+        state.rate_limiter.record_failure(ip).await;
+        warn!("Invalid admin API key provided from IP: {}", ip);
         return Err(AdminError::Unauthorized);
     }
 
+    // Clear any previous failures on successful auth
+    state.rate_limiter.record_success(ip).await;
     Ok(())
 }
+
 
 // ============================================================================
 // Invitation System Handlers
 // ============================================================================
 
-pub async fn health_handler() -> Json<HealthResponse> {
-    Json(HealthResponse {
+pub async fn health_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<HealthResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
+    Ok(Json(HealthResponse {
         status: "ok".to_string(),
         uptime_seconds: 0,
         invitation_system_status: "operational".to_string(),
-    })
+    }))
 }
 
 pub async fn get_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
 ) -> Result<Json<StatsResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let stats = state.invitation_system.get_stats().await;
     let owner = state.invitation_system.get_owner().await;
@@ -462,7 +605,11 @@ pub async fn grant_invites_handler(
     headers: HeaderMap,
     Json(req): Json<GrantInvitesRequest>,
 ) -> Result<Json<GrantInvitesResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
+    // Validate inputs
+    validate_user_id(&req.user_id)?;
 
     if req.count == 0 {
         return Err(AdminError::InvalidRequest(
@@ -511,7 +658,11 @@ pub async fn ban_user_handler(
     headers: HeaderMap,
     Json(req): Json<BanUserRequest>,
 ) -> Result<Json<BanUserResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
+    // Validate inputs
+    validate_user_id(&req.user_id)?;
 
     let stats_before = state.invitation_system.get_stats().await;
 
@@ -553,7 +704,11 @@ pub async fn add_bootstrap_user_handler(
     headers: HeaderMap,
     Json(req): Json<AddBootstrapUserRequest>,
 ) -> Result<Json<AddBootstrapUserResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
+    // Validate inputs
+    validate_user_id(&req.user_id)?;
 
     state
         .invitation_system
@@ -591,13 +746,11 @@ pub async fn register_owner_handler(
     headers: HeaderMap,
     Json(req): Json<RegisterOwnerRequest>,
 ) -> Result<Json<RegisterOwnerResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
-    if req.user_id.is_empty() {
-        return Err(AdminError::InvalidRequest(
-            "user_id cannot be empty".to_string(),
-        ));
-    }
+    // Validate inputs
+    validate_user_id(&req.user_id)?;
 
     state
         .invitation_system
@@ -635,7 +788,11 @@ pub async fn create_invitations_handler(
     headers: HeaderMap,
     Json(req): Json<CreateInvitationsRequest>,
 ) -> Result<Json<CreateInvitationsResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
+    // Validate inputs
+    validate_user_id(&req.inviter_id)?;
 
     if req.count == 0 {
         return Err(AdminError::InvalidRequest(
@@ -711,7 +868,8 @@ pub async fn save_state_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     state
         .invitation_system
@@ -732,7 +890,8 @@ pub async fn list_users_handler(
     headers: HeaderMap,
     Query(params): Query<ListUsersParams>,
 ) -> Result<Json<ListUsersResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Clamp limit to reasonable bounds (1-100)
     let limit = params.limit.clamp(1, 100);
@@ -775,7 +934,11 @@ pub async fn get_user_details_handler(
     headers: HeaderMap,
     Path(user_id): Path<String>,
 ) -> Result<Json<UserDetailsResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
+    // Validate path parameter
+    validate_user_id(&user_id)?;
 
     let (details, invitees) = state
         .invitation_system
@@ -808,7 +971,8 @@ pub async fn list_invitations_handler(
     headers: HeaderMap,
     Query(params): Query<ListInvitationsParams>,
 ) -> Result<Json<ListInvitationsResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Clamp limit to reasonable bounds (1-100)
     let limit = params.limit.clamp(1, 100);
@@ -866,7 +1030,8 @@ pub async fn list_audit_handler(
     headers: HeaderMap,
     Query(params): Query<ListAuditParams>,
 ) -> Result<Json<ListAuditResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Clamp limit to reasonable bounds (1-500)
     let limit = params.limit.clamp(1, 500);
@@ -908,7 +1073,8 @@ pub async fn list_keys_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
 ) -> Result<Json<ListKeysResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let keys = state.multi_key_voprf.list_keys().await;
     let stats = state.multi_key_voprf.key_stats().await;
@@ -923,11 +1089,8 @@ pub async fn rotate_key_handler(
     State(state): State<Arc<AdminState>>,
     Json(req): Json<RotateKeyRequest>,
 ) -> Result<Json<RotateKeyResponse>, AdminError> {
-    if req.new_kid.is_empty() {
-        return Err(AdminError::InvalidRequest(
-            "new_kid cannot be empty".to_string(),
-        ));
-    }
+    // Validate inputs
+    validate_kid(&req.new_kid)?;
 
     let old_kid = state.multi_key_voprf.active_kid().await;
 
@@ -979,7 +1142,8 @@ pub async fn cleanup_keys_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
 ) -> Result<Json<CleanupKeysResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let keys_before = state.multi_key_voprf.list_keys().await;
 
@@ -1015,7 +1179,11 @@ pub async fn force_remove_key_handler(
     headers: HeaderMap,
     Path(kid): Path<String>,
 ) -> Result<Json<ForceRemoveKeyResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
+    // Validate path parameter
+    validate_kid(&kid)?;
 
     let active_kid = state.multi_key_voprf.active_kid().await;
     if kid == active_kid {
@@ -1056,7 +1224,8 @@ async fn add_vouch_handler(
     headers: HeaderMap,
     Json(req): Json<AddVouchRequest>,
 ) -> Result<Json<VouchResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     state
         .federation_store
@@ -1078,7 +1247,8 @@ async fn remove_vouch_handler(
     headers: HeaderMap,
     Path(issuer_id): Path<String>,
 ) -> Result<Json<VouchResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     state
         .federation_store
@@ -1099,7 +1269,8 @@ async fn list_vouches_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<freebird_common::federation::Vouch>>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let vouches = state.federation_store.get_vouches().await;
 
@@ -1112,7 +1283,8 @@ async fn add_revocation_handler(
     headers: HeaderMap,
     Json(req): Json<AddRevocationRequest>,
 ) -> Result<Json<RevocationResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     state
         .federation_store
@@ -1134,7 +1306,8 @@ async fn remove_revocation_handler(
     headers: HeaderMap,
     Path(issuer_id): Path<String>,
 ) -> Result<Json<RevocationResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     state
         .federation_store
@@ -1155,7 +1328,8 @@ async fn list_revocations_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<freebird_common::federation::Revocation>>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let revocations = state.federation_store.get_revocations().await;
 
@@ -1214,7 +1388,8 @@ pub async fn export_invitations_handler(
     headers: HeaderMap,
     Query(params): Query<ExportParams>,
 ) -> Result<impl IntoResponse, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let invitations = state.invitation_system.get_all_invitations().await;
     let exports: Vec<InvitationExport> = invitations.iter().map(|inv| {
@@ -1259,7 +1434,8 @@ pub async fn export_users_handler(
     headers: HeaderMap,
     Query(params): Query<ExportParams>,
 ) -> Result<impl IntoResponse, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let users = state.invitation_system.get_all_users().await;
     let exports: Vec<UserExport> = users.into_iter().map(|(user_id, invites_remaining, banned, joined_at, reputation)| {
@@ -1302,7 +1478,8 @@ pub async fn export_audit_handler(
     headers: HeaderMap,
     Query(params): Query<ExportParams>,
 ) -> Result<impl IntoResponse, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Get all audit entries (no pagination for export)
     let entries = state.audit_log.get_entries(100000, 0).await;
@@ -1383,7 +1560,8 @@ pub async fn list_webauthn_credentials_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
 ) -> Result<Json<ListWebAuthnCredentialsResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let store = state.webauthn_store.as_ref().ok_or_else(|| {
         AdminError::Internal("WebAuthn not configured".to_string())
@@ -1419,7 +1597,8 @@ pub async fn delete_webauthn_credential_handler(
     headers: HeaderMap,
     Path(cred_id_b64): Path<String>,
 ) -> Result<Json<DeleteWebAuthnCredentialResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let store = state.webauthn_store.as_ref().ok_or_else(|| {
         AdminError::Internal("WebAuthn not configured".to_string())
@@ -1451,7 +1630,8 @@ pub async fn webauthn_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let store = state.webauthn_store.as_ref().ok_or_else(|| {
         AdminError::Internal("WebAuthn not configured".to_string())
@@ -1473,7 +1653,8 @@ pub async fn list_webauthn_credentials_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
 ) -> Result<Json<ListWebAuthnCredentialsResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     Ok(Json(ListWebAuthnCredentialsResponse {
         credentials: vec![],
         total: 0,
@@ -1486,7 +1667,8 @@ pub async fn delete_webauthn_credential_handler(
     headers: HeaderMap,
     Path(_cred_id_b64): Path<String>,
 ) -> Result<Json<DeleteWebAuthnCredentialResponse>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     Err(AdminError::Internal("WebAuthn feature not enabled".to_string()))
 }
 
@@ -1495,7 +1677,8 @@ pub async fn webauthn_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AdminError> {
-    verify_api_key(&headers, &state.api_key)?;
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     Ok(Json(serde_json::json!({
         "total_credentials": 0,
         "enabled": false
@@ -1513,6 +1696,7 @@ pub fn admin_router(
     federation_store: crate::federation_store::FederationStore,
     audit_log: Arc<AuditLog>,
     api_key: String,
+    behind_proxy: bool,
     webauthn_store: Option<crate::webauthn::CredentialStore>,
 ) -> axum::Router {
     let state = Arc::new(AdminState {
@@ -1521,6 +1705,8 @@ pub fn admin_router(
         federation_store,
         audit_log,
         api_key,
+        rate_limiter: AdminRateLimiter::new(),
+        behind_proxy,
         webauthn_store,
     });
 
@@ -1534,6 +1720,7 @@ pub fn admin_router(
     federation_store: crate::federation_store::FederationStore,
     audit_log: Arc<AuditLog>,
     api_key: String,
+    behind_proxy: bool,
 ) -> axum::Router {
     let state = Arc::new(AdminState {
         invitation_system,
@@ -1541,6 +1728,8 @@ pub fn admin_router(
         federation_store,
         audit_log,
         api_key,
+        rate_limiter: AdminRateLimiter::new(),
+        behind_proxy,
     });
 
     build_admin_router(state)

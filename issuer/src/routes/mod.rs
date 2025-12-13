@@ -1,5 +1,6 @@
 // issuer/src/routes/mod.rs
 pub mod admin;
+pub mod admin_rate_limit;
 pub mod batch_issue;
 pub mod issue;
 pub mod metadata;
