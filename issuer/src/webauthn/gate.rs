@@ -2,7 +2,7 @@
 use anyhow::{anyhow, Context, Result};
 use base64ct::Encoding;
 use std::sync::Arc;
-use tracing::{info, debug};
+use tracing::{info, debug, warn};
 
 use freebird_common::api::SybilProof;
 use crate::sybil_resistance::SybilResistance; // Trait still lives in common/sybil
@@ -25,18 +25,49 @@ impl WebAuthnGate {
         Self { max_proof_age, proof_key }
     }
 
-    /// Derive a proof verification key from the RP ID
-    /// This ensures proofs are server-specific and unforgeable
+    /// Derive a proof verification key from the RP ID and server secret
+    ///
+    /// Security: This function derives a key for HMAC-based proof verification.
+    /// - When WEBAUTHN_PROOF_SECRET is set, uses it as entropy (RECOMMENDED)
+    /// - Without secret, falls back to deterministic derivation (INSECURE for production)
+    ///
+    /// The derived key ensures proofs are:
+    /// - Server-specific (bound to RP ID)
+    /// - Unforgeable (requires server secret)
     fn derive_proof_key(rp_id: &str) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new_keyed(&[0u8; 32]);
+        // Check for configured secret
+        let (secret_bytes, has_secret) = if let Ok(secret) = std::env::var("WEBAUTHN_PROOF_SECRET") {
+            if secret.len() < 32 {
+                warn!(
+                    "⚠️  WEBAUTHN_PROOF_SECRET is set but too short ({} chars). \
+                     Recommend at least 32 characters for security.",
+                    secret.len()
+                );
+            }
+            // Derive initial key from secret
+            let mut key_hasher = blake3::Hasher::new();
+            key_hasher.update(b"webauthn:secret:key:v1:");
+            key_hasher.update(secret.as_bytes());
+            (*key_hasher.finalize().as_bytes(), true)
+        } else {
+            warn!(
+                "⚠️  WEBAUTHN_PROOF_SECRET not set. Using deterministic key derivation. \
+                 This is INSECURE for production! Set WEBAUTHN_PROOF_SECRET to a secure random value."
+            );
+            // Derive a deterministic but unique-per-deployment key from RP ID
+            // This is NOT secure but provides some isolation between deployments
+            let mut key_hasher = blake3::Hasher::new();
+            key_hasher.update(b"webauthn:deterministic:key:v1:");
+            key_hasher.update(rp_id.as_bytes());
+            key_hasher.update(b":insecure-fallback");
+            (*key_hasher.finalize().as_bytes(), false)
+        };
+
+        // Now use the derived key for the final proof key derivation
+        let mut hasher = blake3::Hasher::new_keyed(&secret_bytes);
         hasher.update(b"webauthn:proof:key:v1:");
         hasher.update(rp_id.as_bytes());
-
-        // Use system entropy if available, otherwise use RP ID as deterministic seed
-        if let Ok(secret) = std::env::var("WEBAUTHN_PROOF_SECRET") {
-            hasher.update(secret.as_bytes());
-        } else {
-            // Fallback: derive from RP ID (deterministic but unique per deployment)
+        if !has_secret {
             hasher.update(b":deterministic");
         }
 

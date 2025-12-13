@@ -21,18 +21,36 @@ use super::store::CredentialStore;
 
 // --- Proof Generation Utilities ---
 
-/// Derive a proof verification key from the RP ID
-/// This must match the derivation in gate.rs for verification to work
+/// Derive a proof verification key from the RP ID and server secret
+///
+/// Security: This function derives a key for HMAC-based proof verification.
+/// - When WEBAUTHN_PROOF_SECRET is set, uses it as entropy (RECOMMENDED)
+/// - Without secret, falls back to deterministic derivation (INSECURE for production)
+///
+/// NOTE: This derivation MUST match gate.rs for proof verification to work.
 fn derive_proof_key(rp_id: &str) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new_keyed(&[0u8; 32]);
+    // Check for configured secret
+    let (secret_bytes, has_secret) = if let Ok(secret) = std::env::var("WEBAUTHN_PROOF_SECRET") {
+        // Derive initial key from secret
+        let mut key_hasher = blake3::Hasher::new();
+        key_hasher.update(b"webauthn:secret:key:v1:");
+        key_hasher.update(secret.as_bytes());
+        (*key_hasher.finalize().as_bytes(), true)
+    } else {
+        // Derive a deterministic but unique-per-deployment key from RP ID
+        // This is NOT secure but provides some isolation between deployments
+        let mut key_hasher = blake3::Hasher::new();
+        key_hasher.update(b"webauthn:deterministic:key:v1:");
+        key_hasher.update(rp_id.as_bytes());
+        key_hasher.update(b":insecure-fallback");
+        (*key_hasher.finalize().as_bytes(), false)
+    };
+
+    // Now use the derived key for the final proof key derivation
+    let mut hasher = blake3::Hasher::new_keyed(&secret_bytes);
     hasher.update(b"webauthn:proof:key:v1:");
     hasher.update(rp_id.as_bytes());
-
-    // Use system entropy if available, otherwise use RP ID as deterministic seed
-    if let Ok(secret) = std::env::var("WEBAUTHN_PROOF_SECRET") {
-        hasher.update(secret.as_bytes());
-    } else {
-        // Fallback: derive from RP ID (deterministic but unique per deployment)
+    if !has_secret {
         hasher.update(b":deterministic");
     }
 
