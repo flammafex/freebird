@@ -105,8 +105,17 @@ async fn main() -> anyhow::Result<()> {
     let store = backend.build().await;
 
     // ---------- Issuer metadata refresh ----------
-    let issuer_url = std::env::var("ISSUER_URL")
-        .unwrap_or_else(|_| "http://127.0.0.1:8081/.well-known/issuer".into());
+    // Support multiple issuer URLs (comma-separated) with backward compatibility
+    let issuer_urls: Vec<String> = std::env::var("ISSUER_URLS")
+        .or_else(|_| std::env::var("ISSUER_URL")) // backward compat
+        .unwrap_or_else(|_| "http://127.0.0.1:8081/.well-known/issuer".into())
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    info!("📡 Configured {} issuer URL(s): {:?}", issuer_urls.len(), issuer_urls);
+
     let refresh_interval_min: u64 = std::env::var("REFRESH_INTERVAL_MIN")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -120,21 +129,29 @@ async fn main() -> anyhow::Result<()> {
         epoch_retention,
     });
 
-    // Background refresh loop
+    // Background refresh loop for all issuer URLs
     let refresh_state = Arc::clone(&state);
     tokio::spawn(async move {
-        let mut failures = 0u32;
+        // Track failures per-URL for independent backoff
+        let mut failures: HashMap<String, u32> = HashMap::new();
         loop {
-            match refresh_issuer_metadata(&refresh_state, &issuer_url).await {
-                Ok(_) => failures = 0,
-                Err(e) => {
-                    failures += 1;
-                    warn!(?e, failures, "issuer refresh failed");
+            for url in &issuer_urls {
+                match refresh_issuer_metadata(&refresh_state, url).await {
+                    Ok(_) => {
+                        failures.insert(url.clone(), 0);
+                    }
+                    Err(e) => {
+                        let count = failures.entry(url.clone()).or_insert(0);
+                        *count += 1;
+                        warn!(?e, %url, failures = *count, "issuer refresh failed");
+                    }
                 }
             }
+            // Use max failure count across all URLs for backoff calculation
+            let max_failures = failures.values().copied().max().unwrap_or(0);
             let delay = refresh_interval_min
                 .saturating_mul(60)
-                .saturating_mul(u64::from((failures + 1).min(5)));
+                .saturating_mul(u64::from((max_failures + 1).min(5)));
 
             sleep(Duration::from_secs(delay)).await;
         }
