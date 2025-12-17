@@ -292,6 +292,23 @@ pub struct ListInvitationsResponse {
     pub has_more: bool,
 }
 
+/// Response for getting a single invitation by code
+#[derive(Debug, Serialize)]
+pub struct GetInvitationResponse {
+    /// The invitation code
+    pub code: String,
+    /// User ID who created this invite
+    pub inviter_id: String,
+    /// User ID who redeemed it (null if not yet redeemed)
+    pub invitee_id: Option<String>,
+    /// When the invitation was created (Unix timestamp)
+    pub created_at: u64,
+    /// When the invitation expires (Unix timestamp)
+    pub expires_at: u64,
+    /// Whether this invitation has been redeemed
+    pub redeemed: bool,
+}
+
 /// Parameters for listing users with pagination
 #[derive(Debug, Deserialize)]
 pub struct ListUsersParams {
@@ -358,6 +375,7 @@ pub enum AdminError {
     Unauthorized,
     RateLimited(u64), // seconds until unblock
     UserNotFound(String),
+    InvitationNotFound,
     InvalidRequest(String),
     Internal(String),
 }
@@ -368,6 +386,7 @@ impl AdminError {
             AdminError::Unauthorized => StatusCode::UNAUTHORIZED,
             AdminError::RateLimited(_) => StatusCode::TOO_MANY_REQUESTS,
             AdminError::UserNotFound(_) => StatusCode::NOT_FOUND,
+            AdminError::InvitationNotFound => StatusCode::NOT_FOUND,
             AdminError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             AdminError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -378,6 +397,7 @@ impl AdminError {
             AdminError::Unauthorized => "unauthorized".to_string(),
             AdminError::RateLimited(secs) => format!("too many failed attempts, try again in {} seconds", secs),
             AdminError::UserNotFound(id) => format!("user not found: {}", id),
+            AdminError::InvitationNotFound => "invitation not found".to_string(),
             AdminError::InvalidRequest(msg) => format!("invalid request: {}", msg),
             AdminError::Internal(_) => "internal server error".to_string(),
         }
@@ -1018,6 +1038,43 @@ pub async fn list_invitations_handler(
         offset,
         limit,
         has_more,
+    }))
+}
+
+/// Get a single invitation by its code
+///
+/// This endpoint allows looking up an invitation's details by its code,
+/// which is useful for finding the invitee_id associated with a redeemed invitation.
+pub async fn get_invitation_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    Path(code): Path<String>,
+) -> Result<Json<GetInvitationResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
+    let invitation = state
+        .invitation_system
+        .get_invitation_details(&code)
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                AdminError::InvitationNotFound
+            } else {
+                AdminError::Internal(msg)
+            }
+        })?;
+
+    info!(code = %code, "Admin: retrieved invitation details");
+
+    Ok(Json(GetInvitationResponse {
+        code: invitation.code().to_string(),
+        inviter_id: invitation.inviter_id().to_string(),
+        invitee_id: invitation.invitee_id().map(|s| s.to_string()),
+        created_at: invitation.created_at(),
+        expires_at: invitation.expires_at(),
+        redeemed: invitation.redeemed(),
     }))
 }
 
@@ -1745,6 +1802,7 @@ fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
         .route("/invites/grant", axum::routing::post(grant_invites_handler))
         .route("/invitations", axum::routing::get(list_invitations_handler))
         .route("/invitations/create", axum::routing::post(create_invitations_handler))
+        .route("/invitations/:code", axum::routing::get(get_invitation_handler))
         .route("/users/ban", axum::routing::post(ban_user_handler))
         .route(
             "/bootstrap/add",
