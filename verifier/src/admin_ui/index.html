@@ -418,11 +418,41 @@
             border-radius: 3px;
             word-break: break-all;
         }
+
+        /* Service type badge */
+        .service-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            margin-left: 10px;
+        }
+
+        .service-badge.issuer {
+            background: #dbeafe;
+            color: #1d4ed8;
+        }
+
+        .service-badge.verifier {
+            background: #d1fae5;
+            color: #059669;
+        }
+
+        /* Hidden tabs */
+        .tab.hidden {
+            display: none;
+        }
+
+        .tab-content.service-hidden {
+            display: none !important;
+        }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>🕊️ Freebird Admin</h1>
+        <h1>🕊️ Freebird Admin<span id="serviceBadge"></span></h1>
         <p>Authorization without identity. Privacy without compromise.</p>
         <div id="systemHealthBadge" style="margin-top: 10px;">
             <span class="badge">Checking...</span>
@@ -449,12 +479,16 @@
 
     <div class="tabs">
         <button class="tab active" onclick="switchTab('dashboard')">📊 Dashboard</button>
-        <button class="tab" onclick="switchTab('users')">👥 Users</button>
-        <button class="tab" onclick="switchTab('invitations')">🎫 Invitations</button>
-        <button class="tab" onclick="switchTab('keys')">🔑 Keys</button>
-        <button class="tab" onclick="switchTab('audit')">📝 Audit</button>
-        <button class="tab" onclick="switchTab('federation')">🌐 Federation</button>
-        <button class="tab" onclick="switchTab('webauthn')">🔐 WebAuthn</button>
+        <!-- Issuer-only tabs -->
+        <button class="tab issuer-only" onclick="switchTab('users')">👥 Users</button>
+        <button class="tab issuer-only" onclick="switchTab('invitations')">🎫 Invitations</button>
+        <button class="tab issuer-only" onclick="switchTab('keys')">🔑 Keys</button>
+        <button class="tab issuer-only" onclick="switchTab('audit')">📝 Audit</button>
+        <button class="tab issuer-only" onclick="switchTab('federation')">🌐 Federation</button>
+        <button class="tab issuer-only" onclick="switchTab('webauthn')">🔐 WebAuthn</button>
+        <!-- Verifier-only tabs -->
+        <button class="tab verifier-only hidden" onclick="switchTab('trusted-issuers')">🏛️ Issuers</button>
+        <button class="tab verifier-only hidden" onclick="switchTab('cache')">💾 Cache</button>
     </div>
 
     <div id="dashboard-tab" class="tab-content active">
@@ -774,6 +808,56 @@
         </div>
     </div>
 
+    <!-- Verifier: Trusted Issuers Tab -->
+    <div id="trusted-issuers-tab" class="tab-content verifier-only">
+        <h2>🏛️ Trusted Issuers</h2>
+        <p>View and manage trusted token issuers for verification.</p>
+
+        <div class="form-section">
+            <h3>📋 Loaded Issuers</h3>
+            <p class="text-small">Issuers whose tokens this verifier will accept.</p>
+
+            <div class="form-row">
+                <button onclick="loadTrustedIssuers()">🔄 Refresh</button>
+            </div>
+
+            <div id="trustedIssuersContainer" class="mt-20">
+                <p class="text-small">Click "Refresh" to load issuers...</p>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h3>⚙️ Configuration</h3>
+            <p class="text-small">Issuer refresh and trust settings.</p>
+            <div id="issuerConfigContainer">
+                <p class="text-small">Loading configuration...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Verifier: Cache Tab -->
+    <div id="cache-tab" class="tab-content verifier-only">
+        <h2>💾 Replay Cache</h2>
+        <p>Monitor and manage the token replay detection cache.</p>
+
+        <div class="form-section">
+            <h3>📊 Cache Statistics</h3>
+            <div id="cacheStatsContainer">
+                <p class="text-small">Loading cache stats...</p>
+            </div>
+            <div style="margin-top: 15px;">
+                <button onclick="loadCacheStats()">🔄 Refresh Stats</button>
+            </div>
+        </div>
+
+        <div class="form-section">
+            <h3>🗑️ Clear Cache</h3>
+            <p class="text-small" style="color: var(--warning-color);">⚠️ Warning: Clearing the cache allows previously-used tokens to be replayed. Only use in development.</p>
+            <button onclick="clearCache()" style="background: var(--error-color);">Clear Replay Cache</button>
+            <div id="cacheClearResult"></div>
+        </div>
+    </div>
+
     <script>
         // ============================================================================
         // Configuration & State
@@ -788,6 +872,7 @@
 
         let state = {
             apiKey: localStorage.getItem('freebirdAdminKey') || '',
+            serviceType: null, // 'issuer' or 'verifier' - detected from /health response
             currentTab: 'dashboard',
             users: [],
             auditLogs: [],
@@ -1022,6 +1107,38 @@
             async getWebAuthnStats() {
                 return this.request('/webauthn/stats');
             }
+
+            // ============================================================
+            // Verifier-specific API methods
+            // ============================================================
+
+            async getVerifierConfig() {
+                return this.request('/config');
+            }
+
+            async getTrustedIssuers() {
+                return this.request('/issuers');
+            }
+
+            async getIssuerDetails(issuerId) {
+                return this.request(`/issuers/${encodeURIComponent(issuerId)}`);
+            }
+
+            async refreshIssuer(issuerId) {
+                return this.request(`/issuers/${encodeURIComponent(issuerId)}/refresh`, {
+                    method: 'POST'
+                });
+            }
+
+            async getCacheStats() {
+                return this.request('/cache/stats');
+            }
+
+            async clearCache() {
+                return this.request('/cache/clear', {
+                    method: 'POST'
+                });
+            }
         }
 
         // ============================================================================
@@ -1059,6 +1176,10 @@
                 loadKeys();
             } else if (tabName === 'invitations') {
                 loadInvitationHistory();
+            } else if (tabName === 'trusted-issuers') {
+                loadTrustedIssuers();
+            } else if (tabName === 'cache') {
+                loadCacheStats();
             }
         }
 
@@ -1103,14 +1224,18 @@
 
             try {
                 const api = new FreebirdAdminAPI(CONFIG.issuerUrl, apiKey);
-                await api.getHealth();
+                const health = await api.getHealth();
 
                 // Save to localStorage
                 localStorage.setItem('freebirdAdminKey', apiKey);
                 state.apiKey = apiKey;
 
+                // Detect service type from health response
+                state.serviceType = health.service || 'issuer'; // Default to issuer for backward compat
+                updateUIForServiceType();
+
                 statusEl.className = 'api-key-status success';
-                statusEl.textContent = '✓ API key saved and verified';
+                statusEl.textContent = `✓ API key saved and verified (${state.serviceType})`;
 
                 // Update health badge
                 updateHealthBadge();
@@ -1120,6 +1245,40 @@
 
                 // Update health badge to show error
                 updateHealthBadge();
+            }
+        }
+
+        // Update the UI based on the detected service type
+        function updateUIForServiceType() {
+            const serviceBadge = document.getElementById('serviceBadge');
+
+            // Update service badge in header
+            if (state.serviceType === 'verifier') {
+                serviceBadge.innerHTML = '<span class="service-badge verifier">Verifier</span>';
+            } else {
+                serviceBadge.innerHTML = '<span class="service-badge issuer">Issuer</span>';
+            }
+
+            // Toggle tab visibility based on service type
+            document.querySelectorAll('.tab.issuer-only').forEach(tab => {
+                tab.classList.toggle('hidden', state.serviceType === 'verifier');
+            });
+            document.querySelectorAll('.tab.verifier-only').forEach(tab => {
+                tab.classList.toggle('hidden', state.serviceType !== 'verifier');
+            });
+
+            // Toggle tab content visibility
+            document.querySelectorAll('.tab-content.issuer-only').forEach(content => {
+                content.classList.toggle('service-hidden', state.serviceType === 'verifier');
+            });
+            document.querySelectorAll('.tab-content.verifier-only').forEach(content => {
+                content.classList.toggle('service-hidden', state.serviceType !== 'verifier');
+            });
+
+            // If current tab is hidden, switch to dashboard
+            const currentTabButton = document.querySelector(`.tab[onclick*="'${state.currentTab}'"]`);
+            if (currentTabButton && currentTabButton.classList.contains('hidden')) {
+                switchTab('dashboard');
             }
         }
 
@@ -1148,55 +1307,85 @@
                 const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
                 const data = await api.getStats();
 
-                const stats = data.stats;
-                const timestamp = new Date(data.timestamp * 1000).toLocaleString();
-                const owner = data.owner;
-                const userCount = data.user_count || 0;
+                // Check if this is verifier stats (has current_epoch) or issuer stats (has stats.total_users)
+                if (state.serviceType === 'verifier' || data.current_epoch !== undefined) {
+                    // Verifier stats
+                    const timestamp = new Date(data.timestamp * 1000).toLocaleString();
+                    const [minEpoch, maxEpoch] = data.valid_epoch_range || [0, 0];
 
-                // Truncate owner public key for display (show first 8 and last 4 chars)
-                let ownerDisplay = 'No owner registered';
-                if (owner) {
-                    if (owner.length > 16) {
-                        ownerDisplay = owner.substring(0, 8) + '...' + owner.substring(owner.length - 4);
-                    } else {
-                        ownerDisplay = owner;
+                    container.innerHTML = `
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <h3>Current Epoch</h3>
+                                <p class="value">${data.current_epoch || 0}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Valid Epoch Range</h3>
+                                <p class="value" style="font-size: 1.2em;">${minEpoch} - ${maxEpoch}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Issuers Loaded</h3>
+                                <p class="value">${data.issuers_loaded || 0}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Store Backend</h3>
+                                <p class="value" style="font-size: 1.2em;">${data.store_backend || 'unknown'}</p>
+                            </div>
+                        </div>
+                        <p class="text-small" style="opacity: 0.6;">Last updated: ${timestamp}</p>
+                    `;
+                } else {
+                    // Issuer stats
+                    const stats = data.stats;
+                    const timestamp = new Date(data.timestamp * 1000).toLocaleString();
+                    const owner = data.owner;
+                    const userCount = data.user_count || 0;
+
+                    // Truncate owner public key for display (show first 8 and last 4 chars)
+                    let ownerDisplay = 'No owner registered';
+                    if (owner) {
+                        if (owner.length > 16) {
+                            ownerDisplay = owner.substring(0, 8) + '...' + owner.substring(owner.length - 4);
+                        } else {
+                            ownerDisplay = owner;
+                        }
                     }
-                }
 
-                container.innerHTML = `
-                    <div class="form-section" style="margin-bottom: 20px; border-left: 4px solid ${owner ? 'var(--success-color)' : 'var(--warning-color)'};">
-                        <h3>👤 Instance Owner</h3>
-                        <p class="text-mono" style="font-size: 1.1em;">${ownerDisplay}</p>
-                        ${owner ? `<p class="text-small" style="opacity: 0.6;">Full key: <code style="word-break: break-all;">${owner}</code></p>` : '<p class="text-small" style="opacity: 0.6;">Use POST /admin/register-owner to set the owner</p>'}
-                    </div>
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <h3>Total Users</h3>
-                            <p class="value">${stats.total_users || 0}</p>
+                    container.innerHTML = `
+                        <div class="form-section" style="margin-bottom: 20px; border-left: 4px solid ${owner ? 'var(--success-color)' : 'var(--warning-color)'};">
+                            <h3>👤 Instance Owner</h3>
+                            <p class="text-mono" style="font-size: 1.1em;">${ownerDisplay}</p>
+                            ${owner ? `<p class="text-small" style="opacity: 0.6;">Full key: <code style="word-break: break-all;">${owner}</code></p>` : '<p class="text-small" style="opacity: 0.6;">Use POST /admin/register-owner to set the owner</p>'}
                         </div>
-                        <div class="stat-card">
-                            <h3>Redeemed Users</h3>
-                            <p class="value">${userCount}</p>
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <h3>Total Users</h3>
+                                <p class="value">${stats.total_users || 0}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Redeemed Users</h3>
+                                <p class="value">${userCount}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Total Invitations</h3>
+                                <p class="value">${stats.total_invitations || 0}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Redeemed</h3>
+                                <p class="value">${stats.redeemed_invitations || 0}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Pending</h3>
+                                <p class="value">${stats.pending_invitations || 0}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Banned Users</h3>
+                                <p class="value">${stats.banned_users || 0}</p>
+                            </div>
                         </div>
-                        <div class="stat-card">
-                            <h3>Total Invitations</h3>
-                            <p class="value">${stats.total_invitations || 0}</p>
-                        </div>
-                        <div class="stat-card">
-                            <h3>Redeemed</h3>
-                            <p class="value">${stats.redeemed_invitations || 0}</p>
-                        </div>
-                        <div class="stat-card">
-                            <h3>Pending</h3>
-                            <p class="value">${stats.pending_invitations || 0}</p>
-                        </div>
-                        <div class="stat-card">
-                            <h3>Banned Users</h3>
-                            <p class="value">${stats.banned_users || 0}</p>
-                        </div>
-                    </div>
-                    <p class="text-small" style="opacity: 0.6;">Last updated: ${timestamp}</p>
-                `;
+                        <p class="text-small" style="opacity: 0.6;">Last updated: ${timestamp}</p>
+                    `;
+                }
             } catch (error) {
                 container.innerHTML = `<div class="message error">❌ Failed to load stats: ${error.message}</div>`;
             }
@@ -2654,6 +2843,170 @@
         }
 
         // ============================================================================
+        // Verifier: Trusted Issuers Functions
+        // ============================================================================
+
+        async function loadTrustedIssuers() {
+            if (!state.apiKey) {
+                showMessage('trustedIssuersContainer', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const container = document.getElementById('trustedIssuersContainer');
+            container.innerHTML = '<p><span class="spinner"></span> Loading trusted issuers...</p>';
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const response = await api.getTrustedIssuers();
+
+                if (!response.issuers || response.issuers.length === 0) {
+                    container.innerHTML = '<p class="text-small">No trusted issuers loaded. Check your ISSUER_URLS configuration.</p>';
+                    return;
+                }
+
+                let html = '<table><thead><tr>';
+                html += '<th>Issuer ID</th>';
+                html += '<th>Key ID</th>';
+                html += '<th>Public Key Preview</th>';
+                html += '<th>Token Expiry</th>';
+                html += '<th>Age</th>';
+                html += '<th>Actions</th>';
+                html += '</tr></thead><tbody>';
+
+                response.issuers.forEach(issuer => {
+                    const ageDisplay = issuer.age_secs !== null
+                        ? formatDuration(issuer.age_secs)
+                        : '<span style="opacity: 0.5;">Unknown</span>';
+
+                    html += '<tr>';
+                    html += `<td class="text-mono">${issuer.issuer_id}</td>`;
+                    html += `<td class="text-mono">${issuer.kid}</td>`;
+                    html += `<td class="text-mono">${issuer.pubkey_preview}...</td>`;
+                    html += `<td>${formatDuration(issuer.exp_sec)}</td>`;
+                    html += `<td>${ageDisplay}</td>`;
+                    html += `<td><button class="action-btn" onclick="refreshIssuer('${issuer.issuer_id}')">🔄 Refresh</button></td>`;
+                    html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                html += `<p class="text-small" style="margin-top: 10px;">Total: ${response.total} issuer(s)</p>`;
+                container.innerHTML = html;
+
+                // Also load config
+                loadIssuerConfig();
+            } catch (error) {
+                container.innerHTML = `<div class="message error">❌ Failed to load issuers: ${error.message}</div>`;
+            }
+        }
+
+        async function loadIssuerConfig() {
+            const container = document.getElementById('issuerConfigContainer');
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const config = await api.getVerifierConfig();
+
+                let html = '<div class="stats-grid">';
+                html += `<div class="stat-card"><h3>Clock Skew</h3><p class="value" style="font-size: 1.2em;">±${config.max_clock_skew_secs}s</p></div>`;
+                html += `<div class="stat-card"><h3>Epoch Duration</h3><p class="value" style="font-size: 1.2em;">${formatDuration(config.epoch_duration_sec)}</p></div>`;
+                html += `<div class="stat-card"><h3>Epoch Retention</h3><p class="value">${config.epoch_retention}</p></div>`;
+                html += `<div class="stat-card"><h3>Refresh Interval</h3><p class="value" style="font-size: 1.2em;">${config.refresh_interval_min} min</p></div>`;
+                html += '</div>';
+
+                if (config.issuer_urls && config.issuer_urls.length > 0) {
+                    html += '<h4>Configured Issuer URLs</h4>';
+                    html += '<ul style="font-family: monospace; font-size: 0.9em;">';
+                    config.issuer_urls.forEach(url => {
+                        html += `<li>${url}</li>`;
+                    });
+                    html += '</ul>';
+                }
+
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `<div class="message error">❌ Failed to load config: ${error.message}</div>`;
+            }
+        }
+
+        async function refreshIssuer(issuerId) {
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const result = await api.refreshIssuer(issuerId);
+                alert(`✓ ${result.message}`);
+            } catch (error) {
+                alert(`❌ Failed to refresh issuer: ${error.message}`);
+            }
+        }
+
+        function formatDuration(seconds) {
+            if (seconds < 60) {
+                return `${seconds}s`;
+            } else if (seconds < 3600) {
+                const mins = Math.floor(seconds / 60);
+                return `${mins}m`;
+            } else if (seconds < 86400) {
+                const hours = Math.floor(seconds / 3600);
+                return `${hours}h`;
+            } else {
+                const days = Math.floor(seconds / 86400);
+                return `${days}d`;
+            }
+        }
+
+        // ============================================================================
+        // Verifier: Cache Functions
+        // ============================================================================
+
+        async function loadCacheStats() {
+            if (!state.apiKey) {
+                showMessage('cacheStatsContainer', 'warning', '⚠️ Please configure your API key first');
+                return;
+            }
+
+            const container = document.getElementById('cacheStatsContainer');
+            container.innerHTML = '<p><span class="spinner"></span> Loading cache stats...</p>';
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const stats = await api.getCacheStats();
+
+                let html = '<div class="stats-grid">';
+                html += `<div class="stat-card"><h3>Store Backend</h3><p class="value" style="font-size: 1.2em;">${stats.store_backend}</p></div>`;
+                html += `<div class="stat-card"><h3>Status</h3><p class="value" style="font-size: 1.2em; color: var(--success-color);">${stats.status}</p></div>`;
+                html += '</div>';
+
+                container.innerHTML = html;
+            } catch (error) {
+                container.innerHTML = `<div class="message error">❌ Failed to load cache stats: ${error.message}</div>`;
+            }
+        }
+
+        async function clearCache() {
+            if (!confirm('⚠️ WARNING: Clearing the cache will allow previously-used tokens to be replayed. Only use in development. Continue?')) {
+                return;
+            }
+
+            const resultContainer = document.getElementById('cacheClearResult');
+            resultContainer.innerHTML = '<p><span class="spinner"></span> Clearing cache...</p>';
+
+            try {
+                const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                const result = await api.clearCache();
+
+                if (result.ok) {
+                    resultContainer.innerHTML = `<div class="message success">✓ ${result.message}</div>`;
+                } else {
+                    resultContainer.innerHTML = `<div class="message warning">⚠️ ${result.message}</div>`;
+                }
+
+                // Refresh stats
+                loadCacheStats();
+            } catch (error) {
+                resultContainer.innerHTML = `<div class="message error">❌ Failed to clear cache: ${error.message}</div>`;
+            }
+        }
+
+        // ============================================================================
         // Health Check
         // ============================================================================
 
@@ -2683,12 +3036,26 @@
         // Initialization
         // ============================================================================
 
-        window.addEventListener('DOMContentLoaded', () => {
+        window.addEventListener('DOMContentLoaded', async () => {
             // Load saved API key
             if (state.apiKey) {
                 document.getElementById('apiKey').value = state.apiKey;
                 document.getElementById('apiKeyStatus').className = 'api-key-status success';
                 document.getElementById('apiKeyStatus').textContent = '✓ API key loaded from storage';
+
+                // Detect service type from health endpoint
+                try {
+                    const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+                    const health = await api.getHealth();
+                    state.serviceType = health.service || 'issuer';
+                    updateUIForServiceType();
+                    document.getElementById('apiKeyStatus').textContent = `✓ API key loaded (${state.serviceType})`;
+                } catch (error) {
+                    console.error('Failed to detect service type:', error);
+                    // Default to issuer if detection fails
+                    state.serviceType = 'issuer';
+                    updateUIForServiceType();
+                }
 
                 // Auto-load stats
                 loadStats();
@@ -2697,8 +3064,10 @@
                 updateHealthBadge();
             }
 
-            // Initialize chart
-            drawActivityChart();
+            // Initialize chart (only for issuer)
+            if (state.serviceType !== 'verifier') {
+                drawActivityChart();
+            }
         });
     </script>
 </body>
