@@ -162,6 +162,8 @@ pub struct StatsResponse {
 /// Health check response
 #[derive(Debug, Serialize)]
 pub struct HealthResponse {
+    /// Service type identifier for UI detection ("issuer" or "verifier")
+    pub service: String,
     pub status: String,
     pub uptime_seconds: u64,
     pub invitation_system_status: String,
@@ -589,6 +591,7 @@ pub async fn health_handler(
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     Ok(Json(HealthResponse {
+        service: "issuer".to_string(),
         status: "ok".to_string(),
         uptime_seconds: 0,
         invitation_system_status: "operational".to_string(),
