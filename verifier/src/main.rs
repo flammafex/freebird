@@ -16,8 +16,10 @@ use tokio::{net::TcpListener, sync::RwLock, time::sleep};
 use tracing::{debug, error, info, warn};
 use freebird_common::api::{VerifyReq, VerifyResp, BatchVerifyReq, BatchVerifyResp, VerifyResult, TokenToVerify};
 
-// FIX: Import from the library crate instead of local mod
+// Import from the library crate
 use freebird_verifier::store::{SpendStore, StoreBackend};
+use freebird_verifier::routes::admin::{self, AdminState, VerifierConfig, IssuerInfo};
+use freebird_verifier::routes::admin_rate_limit::AdminRateLimiter;
 
 #[derive(Clone)]
 struct AppState {
@@ -62,13 +64,7 @@ struct VoprfInfo {
     exp_sec: u64,
 }
 
-#[derive(Clone, Debug)]
-struct IssuerInfo {
-    pubkey_bytes: Vec<u8>,
-    kid: String,
-    ctx: Vec<u8>,
-    exp_sec: u64,
-}
+// IssuerInfo is imported from freebird_verifier::routes::admin
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -97,10 +93,10 @@ async fn main() -> anyhow::Result<()> {
     info!("🔐 Epoch configuration: duration={}s, retention={}", epoch_duration_sec, epoch_retention);
 
     // ---------- Backend selection ----------
-    let backend = if let Ok(url) = std::env::var("REDIS_URL") {
-        StoreBackend::Redis(url)
+    let (backend, store_backend_name) = if let Ok(url) = std::env::var("REDIS_URL") {
+        (StoreBackend::Redis(url), "redis".to_string())
     } else {
-        StoreBackend::InMemory
+        (StoreBackend::InMemory, "memory".to_string())
     };
     let store = backend.build().await;
 
@@ -121,9 +117,22 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
 
+    // ---------- Admin API Configuration ----------
+    let admin_api_key = std::env::var("ADMIN_API_KEY").ok();
+    let behind_proxy = std::env::var("BEHIND_PROXY")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+
+    // Server start time for uptime tracking
+    let start_time = Instant::now();
+
+    // Store issuer URLs for admin config
+    let issuer_urls_for_admin = issuer_urls.clone();
+
+    let issuers = Arc::new(RwLock::new(HashMap::new()));
     let state = Arc::new(AppState {
-        issuers: Arc::new(RwLock::new(HashMap::new())),
-        store,
+        issuers: Arc::clone(&issuers),
+        store: Arc::clone(&store),
         max_clock_skew_secs,
         epoch_duration_sec,
         epoch_retention,
@@ -158,10 +167,40 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // ---------- Router ----------
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/v1/verify", post(verify_with_logging))
         .route("/v1/verify/batch", post(batch_verify))
         .with_state(state);
+
+    // ---------- Admin Router (optional) ----------
+    if let Some(api_key) = admin_api_key {
+        if api_key.len() >= 32 {
+            let admin_state = Arc::new(AdminState {
+                issuers: Arc::clone(&issuers),
+                store: Arc::clone(&store),
+                api_key,
+                rate_limiter: AdminRateLimiter::new(),
+                behind_proxy,
+                start_time,
+                config: VerifierConfig {
+                    max_clock_skew_secs,
+                    epoch_duration_sec,
+                    epoch_retention,
+                    refresh_interval_min,
+                    store_backend: store_backend_name,
+                    issuer_urls: issuer_urls_for_admin,
+                },
+            });
+
+            let admin_router = admin::admin_router(admin_state);
+            app = app.nest("/admin", admin_router);
+            info!("🔐 Admin API enabled at /admin");
+        } else {
+            warn!("ADMIN_API_KEY is too short (minimum 32 characters), admin API disabled");
+        }
+    } else {
+        info!("Admin API disabled (no ADMIN_API_KEY set)");
+    }
 
     // ---------- Serve ----------
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8082".into());
@@ -196,6 +235,7 @@ async fn refresh_issuer_metadata(state: &Arc<AppState>, issuer_url: &str) -> any
         kid: wk.voprf.kid,
         ctx: b"freebird:v1".to_vec(),
         exp_sec: wk.voprf.exp_sec,
+        last_refreshed: Some(Instant::now()),
     };
 
     let mut issuers = state.issuers.write().await;
