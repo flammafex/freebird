@@ -1,149 +1,242 @@
-# Freebird Admin Dashboard
+# Freebird Unified Admin Dashboard
 
-A minimal, single-page web interface for managing your Freebird deployment.
+A single-page web interface for managing both Freebird **issuer** and **verifier** services. The UI automatically detects which service it's connected to and shows the appropriate tabs and functionality.
 
 ## Features
 
-### Current Features (Phases 1-4 Complete)
+### Unified Service Detection
 
-**📊 Dashboard Tab:**
-- View real-time system statistics
-- Monitor user counts, invitations, and redemptions
-- Check banned user statistics and system health
-- One-click refresh
-- **NEW:** Real-time activity charts with interactive visualization
-- **NEW:** Track user growth, invitations, and redemptions over time
+The admin UI automatically detects whether it's running on an issuer or verifier by calling `/admin/health` and checking the `service` field in the response. Tabs and features are shown/hidden accordingly.
 
-**👥 User Management Tab:**
-- View all users with search and filtering
-- Inspect detailed user profiles with reputation scores
-- View invitation trees and relationships
-- **NEW:** Interactive invitation tree visualization with Canvas graphics
-- Ban individual users or entire invitation trees (recursive bans)
-- Monitor user activity and invitation usage
+### Issuer Features
 
-**🎫 Invitations Tab:**
+**Dashboard Tab:**
+- Real-time system statistics (users, invitations, redemptions)
+- Interactive activity charts with Canvas visualization
+- Monitor banned users and system health
+
+**User Management Tab:**
+- Search and filter users
+- View detailed user profiles with reputation scores
+- Interactive invitation tree visualization
+- Ban users individually or recursively (entire invite tree)
+
+**Invitations Tab:**
 - Create cryptographically signed invitation codes
 - Grant invitation quota to users
-- View invitation history with redemption status
-- Copy codes and signatures to clipboard
-- Monitor expiration dates and usage
+- Track redemption status and expiration
 
-**🔑 Key Management Tab:**
+**Key Management Tab:**
 - View active and deprecated cryptographic keys
 - Rotate keys with configurable grace periods
 - Clean up expired keys
-- Monitor key status, public keys, and expiration times
 
-**🎟️ Token Testing Tab (NEW):**
-- Issue test VOPRF tokens for any user ID
-- Verify token signatures inline
-- Copy tokens and signatures to clipboard
-- Auto-fill verification form after issuance
-- View token expiration and validation details
+**Audit Logs Tab:**
+- Comprehensive system activity logs
+- Filter by level (info, warning, error, success)
+- Search logs by keyword
 
-**📝 Audit Logs Tab (NEW):**
-- View comprehensive system activity logs
-- Search and filter logs by keyword
-- Filter by log level (info, warning, error, success)
-- Track user actions and system events
-- Real-time log refresh
+**Federation Tab:**
+- Manage federation relationships with other issuers
+- View trusted peers and cross-issuer policies
 
-**🔐 WebAuthn Management Tab (NEW):**
-- Register new FIDO2 credentials and security keys
-- View all registered WebAuthn credentials
-- Search credentials by user ID
-- Monitor credential usage and creation dates
-- Remove credentials with one click
-- Support for biometric authentication and hardware keys
+**WebAuthn Tab:**
+- Register FIDO2 credentials and security keys
+- Manage biometric authentication
+- Remove credentials
+
+### Verifier Features
+
+**Dashboard Tab:**
+- Verification statistics and epoch information
+- Uptime and store backend status
+- Trusted issuer count
+
+**Trusted Issuers Tab:**
+- View all configured trusted issuers
+- Inspect issuer details (public key, context, expiration)
+- Trigger issuer metadata refresh
+
+**Cache Tab:**
+- Replay cache statistics
+- Cache backend status
+- Cache management operations
 
 ## Access
 
-Once your Freebird issuer is running:
-
+**Issuer Admin:**
 ```
 http://localhost:8081/admin
 ```
 
+**Verifier Admin:**
+```
+http://localhost:8082/admin
+```
+
 ## Setup
 
-1. **Enter your Admin API Key** from your `.env` file
-   - Default: `dev-admin-key-must-be-at-least-32-characters-long`
-   - Production: Use a secure 32+ character key
+1. **Set your Admin API Key** in the environment:
+   ```bash
+   export ADMIN_API_KEY="your-secure-key-at-least-32-characters"
+   ```
 
-2. **Click "Save & Test"** to verify the connection
+2. **Enter the API key** in the dashboard's key field
 
-3. **Start managing!**
+3. **Click "Save & Test"** to verify the connection
+
+4. The UI will detect the service type and show appropriate tabs
 
 ## Architecture
 
-- **Single HTML file** (~2100 lines) with embedded CSS and JavaScript
-- **No build step** required - served directly from the issuer binary
-- **No external dependencies** except water.css (CDN)
-- **Seven-tab interface** with smooth navigation and state management
-- **Modular JavaScript** with clean API client architecture
-- **Canvas-based visualizations** for charts and tree graphs
-- **LocalStorage** for API key persistence
-- **Responsive design** works on desktop and mobile browsers
+### Unified Codebase
 
-## Security
+The admin UI is a single HTML file that serves both services:
 
-- API key stored in browser's localStorage only
-- All API requests use the `X-Admin-Key` header
-- No sensitive data transmitted except via API calls
-- Always use HTTPS in production
+```
+admin-ui/
+└── index.html          # Source file (~3500 lines)
 
-## API Endpoints Used
+issuer/
+├── build.rs            # Syncs index.html at compile time
+└── src/admin_ui/
+    └── index.html      # Synced copy (embedded in binary)
 
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/admin/health` | GET | Verify API key and system health |
-| `/admin/stats` | GET | Fetch system statistics |
-| `/admin/users` | GET | List all users with their status |
-| `/admin/users/:id` | GET | Get detailed user information and invite tree |
-| `/admin/users/ban` | POST | Ban a user (optionally with entire invite tree) |
-| `/admin/invitations/create` | POST | Generate invitation codes |
-| `/admin/invites/grant` | POST | Grant invitation quota to users |
-| `/admin/invitations` | GET | List invitation history with status |
-| `/admin/keys` | GET | List all cryptographic keys |
-| `/admin/keys/rotate` | POST | Rotate to a new key with grace period |
-| `/admin/keys/cleanup` | POST | Remove expired keys |
-| `/admin/tokens/issue` | POST | Issue a test VOPRF token for a user |
-| `/admin/tokens/verify` | POST | Verify a token signature |
-| `/admin/audit` | GET | Retrieve audit logs with filtering |
-| `/admin/webauthn/register` | POST | Register a new WebAuthn credential |
-| `/admin/webauthn/credentials` | GET | List all WebAuthn credentials |
-| `/admin/webauthn/credentials/remove` | POST | Remove a WebAuthn credential |
+verifier/
+├── build.rs            # Syncs index.html at compile time
+└── src/admin_ui/
+    └── index.html      # Synced copy (embedded in binary)
+```
 
-## Development
+### Build Integration
 
-The HTML is embedded in the Rust binary at compile time using `include_str!()`:
+Each service's `build.rs` copies the shared admin UI to its local directory:
 
 ```rust
-// issuer/src/routes/admin.rs
+// build.rs
+fn main() {
+    let src = Path::new("../admin-ui/index.html");
+    let dst = Path::new("src/admin_ui/index.html");
+    fs::copy(src, dst).ok();
+    println!("cargo:rerun-if-changed=../admin-ui/index.html");
+}
+```
+
+The HTML is then embedded at compile time:
+
+```rust
+// routes/admin.rs
 pub async fn admin_ui_handler() -> impl IntoResponse {
-    const ADMIN_UI_HTML: &str = include_str!("../../../admin-ui/index.html");
+    const ADMIN_UI_HTML: &str = include_str!("../admin_ui/index.html");
     Html(ADMIN_UI_HTML)
 }
 ```
 
-To modify the dashboard:
+### Technology Stack
+
+- **Single HTML file** with embedded CSS and JavaScript
+- **No build step** - served directly from binary
+- **No external dependencies** except water.css (CDN)
+- **Vanilla JavaScript** with async/await
+- **Canvas-based visualizations** for charts and trees
+- **LocalStorage** for API key persistence
+- **CSS custom properties** for theming
+
+### Responsive Design
+
+- Desktop-first with tablet and mobile breakpoints
+- Collapsible navigation on small screens
+- Touch-optimized controls
+- Print-friendly styles
+- Dark mode support via `prefers-color-scheme`
+- Reduced motion support via `prefers-reduced-motion`
+
+## Security
+
+- API key stored in browser localStorage only
+- All requests authenticated via `X-Admin-Key` header
+- Rate limiting on authentication failures
+- Constant-time key comparison to prevent timing attacks
+- Always use HTTPS in production
+
+## API Endpoints
+
+### Shared (Both Services)
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/admin/` | GET | Serve admin UI |
+| `/admin/health` | GET | Health check with service type |
+| `/admin/stats` | GET | System statistics |
+| `/admin/config` | GET | Configuration values |
+
+### Issuer-Only
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/admin/users` | GET | List all users |
+| `/admin/users/:id` | GET | User details and invite tree |
+| `/admin/users/ban` | POST | Ban user (optionally recursive) |
+| `/admin/invitations/create` | POST | Create invitation codes |
+| `/admin/invites/grant` | POST | Grant invitation quota |
+| `/admin/invitations` | GET | List invitations |
+| `/admin/invitations/:code` | GET | Get invitation details |
+| `/admin/keys` | GET | List cryptographic keys |
+| `/admin/keys/rotate` | POST | Rotate keys |
+| `/admin/keys/cleanup` | POST | Remove expired keys |
+| `/admin/audit` | GET | Retrieve audit logs |
+| `/admin/webauthn/register` | POST | Register credential |
+| `/admin/webauthn/credentials` | GET | List credentials |
+| `/admin/webauthn/credentials/remove` | POST | Remove credential |
+
+### Verifier-Only
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/admin/issuers` | GET | List trusted issuers |
+| `/admin/issuers/:id` | GET | Issuer details |
+| `/admin/issuers/:id/refresh` | POST | Refresh issuer metadata |
+| `/admin/cache/stats` | GET | Cache statistics |
+| `/admin/cache/clear` | POST | Clear replay cache |
+
+## Development
+
+### Making Changes
+
 1. Edit `admin-ui/index.html`
-2. Rebuild the issuer: `cargo build --release --bin issuer`
-3. Restart the issuer
+2. Rebuild either service:
+   ```bash
+   cargo build -p freebird-issuer
+   # or
+   cargo build -p freebird-verifier
+   ```
+3. The build.rs script will sync the changes
+4. Restart the service
+
+### Code Style
+
+The code is formatted with Prettier and validated with html-validate:
+
+```bash
+# Format
+prettier --write admin-ui/index.html
+
+# Validate
+npx html-validate admin-ui/index.html
+```
+
+### Adding New Tabs
+
+1. Add tab button in the `.tabs` div with appropriate class:
+   - `issuer-only` for issuer-specific tabs
+   - `verifier-only hidden` for verifier-specific tabs
+2. Add corresponding `tab-content` div
+3. Add load function and API method
+4. Update `detectServiceType()` if needed
 
 ## Browser Compatibility
 
-- Modern browsers (Chrome, Firefox, Safari, Edge)
-- Requires JavaScript enabled
-- Uses Fetch API and async/await
-- CSS Grid and Flexbox
-
-## Contributing
-
-When adding new features:
-- Keep the single-file architecture
-- Use vanilla JavaScript (no frameworks)
-- Follow the existing tab-based structure
-- Update the `CONFIG` object for new settings
-- Add corresponding API methods to `FreebirdAdminAPI` class
+- Chrome, Firefox, Safari, Edge (modern versions)
+- JavaScript required
+- Uses Fetch API, async/await, CSS Grid, Flexbox
+- Canvas for charts and visualizations
