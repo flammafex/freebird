@@ -2,16 +2,24 @@
 
 ## Overview
 
-Freebird now supports **WebAuthn/FIDO2** as a Sybil resistance mechanism. This provides "proof of humanity" through hardware-backed authentication without computational cost or energy consumption.
+Freebird supports **WebAuthn/FIDO2** as a Sybil resistance mechanism. This provides "proof of humanity" through hardware-backed authentication without computational cost or energy consumption.
 
 ## Features
 
-✅ **Hardware-Backed Security**: Credentials protected by TPM, Secure Enclave, or security keys  
-✅ **Phishing Resistant**: Origin-bound credentials prevent phishing attacks  
-✅ **Zero Computational Cost**: No proof-of-work needed, instant verification  
-✅ **User-Friendly**: Biometric unlock (Touch ID, Windows Hello, Face ID)  
-✅ **Redis-Backed Storage**: Production-ready persistent credential storage  
-✅ **Multi-Device Support**: Users can register multiple authenticators  
+### Core Features
+- **Hardware-Backed Security**: Credentials protected by TPM, Secure Enclave, or security keys
+- **Phishing Resistant**: Origin-bound credentials prevent phishing attacks
+- **Zero Computational Cost**: No proof-of-work needed, instant verification
+- **User-Friendly**: Biometric unlock (Touch ID, Windows Hello, Face ID)
+- **Redis-Backed Storage**: Production-ready persistent credential storage
+- **Multi-Device Support**: Users can register multiple authenticators
+
+### Extended Features (New)
+- **Attestation Policy Enforcement**: Verify authenticator models via AAGUID allowlists
+- **Discoverable Credentials**: True passwordless/usernameless authentication (resident keys)
+- **Multi-Device Credential Management**: Track backup eligibility, sync status, device types
+- **Credential Revocation**: Admin endpoints to list and revoke credentials
+- **Audit Logging**: Comprehensive registration and authentication audit trail
 
 ---
 
@@ -30,45 +38,44 @@ Freebird now supports **WebAuthn/FIDO2** as a Sybil resistance mechanism. This p
 │                                 │
 │  ┌─────────────────────────┐  │
 │  │ WebAuthn Routes         │  │
-│  │ - POST /webauthn/       │  │
-│  │        register/start   │  │
-│  │ - POST /webauthn/       │  │
-│  │        register/finish  │  │
-│  │ - POST /webauthn/       │  │
-│  │        authenticate/    │  │
-│  │        start            │  │
-│  │ - POST /webauthn/       │  │
-│  │        authenticate/    │  │
-│  │        finish           │  │
+│  │ Standard:               │  │
+│  │ - /register/start       │  │
+│  │ - /register/finish      │  │
+│  │ - /authenticate/start   │  │
+│  │ - /authenticate/finish  │  │
+│  │                         │  │
+│  │ Discoverable:           │  │
+│  │ - /register/resident/*  │  │
+│  │ - /authenticate/        │  │
+│  │     discoverable/*      │  │
+│  │                         │  │
+│  │ Admin:                  │  │
+│  │ - /credentials/:user    │  │
+│  │ - /admin/credentials    │  │
 │  └─────────────────────────┘  │
 │            │                    │
 │            ▼                    │
 │  ┌─────────────────────────┐  │
-│  │ WebAuthn Sybil Gate     │  │
-│  │ (verifies auth proofs)  │  │
+│  │ Attestation Policy      │  │
+│  │ (AAGUID validation)     │  │
 │  └─────────────────────────┘  │
 │            │                    │
 │            ▼                    │
 │  ┌─────────────────────────┐  │
 │  │ Redis Credential Store  │  │
+│  │ (with device metadata)  │  │
 │  └─────────────────────────┘  │
-└─────────────┬───────────────────┘
-              │ 2. Token Issuance
-              │    with WebAuthn proof
-              ▼
-       ┌─────────────┐
-       │ VOPRF Token │
-       └─────────────┘
+└─────────────────────────────────┘
 ```
 
 ---
 
 ## Configuration
 
-### Environment Variables
+### Core Environment Variables
 
 ```bash
-# WebAuthn Configuration
+# WebAuthn Configuration (Required)
 export WEBAUTHN_RP_ID=localhost                    # Relying Party ID (domain)
 export WEBAUTHN_RP_NAME="Freebird"                 # Display name
 export WEBAUTHN_RP_ORIGIN=http://localhost:8081    # Origin URL
@@ -82,274 +89,254 @@ export SYBIL_RESISTANCE=webauthn                   # Enable WebAuthn gate
 export WEBAUTHN_MAX_PROOF_AGE=300                  # 5 minutes
 
 # Security: Proof Secret (RECOMMENDED for production)
-export WEBAUTHN_PROOF_SECRET="your-random-secret-here"  # Makes proofs unforgeable
-# If not set, a deterministic key is derived from RP_ID (less secure)
-
-# Optional: Combine with other mechanisms
-export SYBIL_RESISTANCE=combined
-export SYBIL_COMBINED_MECHANISMS=webauthn,rate_limit
+export WEBAUTHN_PROOF_SECRET="your-random-secret-here"
 ```
 
-### Production Example
+### Attestation Policy Configuration (New)
 
 ```bash
-# Issuer with WebAuthn + Rate Limiting
-export WEBAUTHN_RP_ID=issuer.example.com
-export WEBAUTHN_RP_NAME="Example Corp Freebird"
-export WEBAUTHN_RP_ORIGIN=https://issuer.example.com
-export WEBAUTHN_REDIS_URL=redis://redis.internal:6379
-export WEBAUTHN_PROOF_SECRET="$(openssl rand -base64 32)"  # Generate random secret
-export SYBIL_RESISTANCE=combined
-export SYBIL_COMBINED_MECHANISMS=webauthn,rate_limit
-export SYBIL_RATE_LIMIT_SECS=3600
+# Attestation Policy Level
+# Options: none, indirect, direct, enterprise
+export WEBAUTHN_ATTESTATION_POLICY=direct
+
+# Enable attestation enforcement
+export WEBAUTHN_REQUIRE_ATTESTATION=true
+
+# AAGUID Allowlist (comma-separated)
+# Only allow specific authenticators (e.g., YubiKeys, Apple Secure Enclave)
+export WEBAUTHN_ALLOWED_AAGUIDS=fa2b99dc-9e39-4257-8f92-4a30d23c4118,c5ef55ff-ad9a-4b9f-b580-adebafe026d0
+
+# Enable audit logging for compliance
+export WEBAUTHN_AUDIT_LOGGING=true
 ```
+
+### Credential Management Configuration (New)
+
+```bash
+# Maximum credentials per user (prevent device farming)
+export WEBAUTHN_MAX_CREDENTIALS_PER_USER=10
+
+# Enable credential revocation endpoint
+export WEBAUTHN_ALLOW_CREDENTIAL_REVOCATION=true
+
+# Force resident key registration (discoverable credentials)
+export WEBAUTHN_REQUIRE_RESIDENT_KEY=false
+```
+
+### Well-Known AAGUIDs
+
+| Authenticator | AAGUID |
+|---------------|--------|
+| YubiKey 5 Series | `fa2b99dc-9e39-4257-8f92-4a30d23c4118` |
+| YubiKey 5Ci | `c5ef55ff-ad9a-4b9f-b580-adebafe026d0` |
+| YubiKey Bio | `d8522d9f-575b-4866-88a9-ba99fa02f35b` |
+| Google Titan | `42b4fb4a-2866-43b2-9bf7-6c6669c2e5d3` |
+| Apple Secure Enclave | `00000000-0000-0000-0000-000000000000` |
+| SoloKeys Solo 2 | `8876631b-d4a0-427f-5773-0ec71c9e0279` |
+| Feitian ePass | `833b721a-ff5f-4d00-bb2e-bdda3ec01e29` |
 
 ---
 
-## Usage
+## API Endpoints
 
-### 1. Registration Flow
+### Standard Registration
 
-**Step 1: Start Registration**
+**POST /webauthn/register/start**
+```json
+{
+  "username": "alice",
+  "display_name": "Alice Smith"
+}
+```
 
-```bash
-curl -X POST https://issuer.example.com/webauthn/register/start \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "alice",
-    "display_name": "Alice Smith"
-  }'
+**POST /webauthn/register/finish**
+```json
+{
+  "session_id": "uuid-from-start",
+  "credential": { /* PublicKeyCredential */ }
+}
+```
+
+### Resident Key Registration (New)
+
+Enables true passwordless authentication with credentials stored on the authenticator.
+
+**POST /webauthn/register/resident/start**
+```json
+{
+  "username": "alice",
+  "display_name": "Alice Smith",
+  "credential_name": "MacBook Pro Touch ID"
+}
 ```
 
 **Response:**
 ```json
 {
-  "options": {
-    "publicKey": {
-      "challenge": "base64url-encoded-challenge",
-      "rp": { "name": "Freebird", "id": "issuer.example.com" },
-      "user": {
-        "id": "base64url-user-id",
-        "name": "alice",
-        "displayName": "Alice Smith"
-      },
-      "pubKeyCredParams": [
-        { "type": "public-key", "alg": -7 },   // ES256
-        { "type": "public-key", "alg": -257 }  // RS256
-      ],
-      "authenticatorSelection": {
-        "residentKey": "required",
-        "userVerification": "required"
-      },
-      "attestation": "none"
-    }
-  },
-  "session_id": "uuid-v4-session-id"
+  "options": { /* CreationChallengeResponse */ },
+  "session_id": "uuid",
+  "user_handle": "base64url-user-handle"
 }
 ```
 
-**Step 2: Browser Creates Credential**
-
-```javascript
-// Client-side JavaScript
-const options = response.options;
-
-const credential = await navigator.credentials.create({
-  publicKey: options.publicKey
-});
-
-// Credential is now in `credential` variable
-```
-
-**Step 3: Finish Registration**
-
-```bash
-curl -X POST https://issuer.example.com/webauthn/register/finish \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "uuid-from-start-response",
-    "credential": { /* PublicKeyCredential from browser */ }
-  }'
+**POST /webauthn/register/resident/finish**
+```json
+{
+  "session_id": "uuid",
+  "credential": { /* PublicKeyCredential */ },
+  "user_handle": "base64url-from-start",
+  "credential_name": "MacBook Pro Touch ID"
+}
 ```
 
 **Response:**
 ```json
 {
   "ok": true,
-  "cred_id": "base64url-credential-id",
-  "user_id_hash": "blake3-hash-of-username",
-  "registered_at": 1699454445
+  "cred_id": "base64url-cred-id",
+  "user_id_hash": "blake3-hash",
+  "registered_at": 1699454445,
+  "device_type": "platform",
+  "backup_eligible": true,
+  "is_discoverable": true
 }
 ```
 
----
+### Discoverable Authentication (Usernameless) (New)
 
-### 2. Authentication Flow
+No username required - the authenticator provides the credential.
 
-**Step 1: Start Authentication**
+**POST /webauthn/authenticate/discoverable/start**
 
-```bash
-curl -X POST https://issuer.example.com/webauthn/authenticate/start \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "alice"
-  }'
-```
+No request body needed.
 
 **Response:**
 ```json
 {
   "options": {
     "publicKey": {
-      "challenge": "base64url-encoded-challenge",
-      "rpId": "issuer.example.com",
-      "allowCredentials": [
-        {
-          "type": "public-key",
-          "id": "base64url-credential-id"
-        }
-      ],
+      "challenge": "base64url-challenge",
+      "rpId": "example.com",
+      "allowCredentials": [],
       "userVerification": "required"
     }
   },
-  "session_id": "uuid-v4-session-id"
+  "session_id": "uuid"
 }
 ```
 
-**Step 2: Browser Signs Challenge**
-
-```javascript
-const options = response.options;
-
-const assertion = await navigator.credentials.get({
-  publicKey: options.publicKey
-});
+**POST /webauthn/authenticate/discoverable/finish**
+```json
+{
+  "session_id": "uuid",
+  "credential": { /* PublicKeyCredential with userHandle */ }
+}
 ```
 
-**Step 3: Finish Authentication**
+### Standard Authentication
 
-```bash
-curl -X POST https://issuer.example.com/webauthn/authenticate/finish \
-  -H "Content-Type: application/json" \
-  -d '{
-    "session_id": "uuid-from-start-response",
-    "credential": { /* PublicKeyCredential from browser */ }
-  }'
+**POST /webauthn/authenticate/start**
+```json
+{
+  "username": "alice"
+}
 ```
+
+**POST /webauthn/authenticate/finish**
+```json
+{
+  "session_id": "uuid",
+  "credential": { /* PublicKeyCredential */ }
+}
+```
+
+### Credential Management (New)
+
+**GET /webauthn/credentials/:username**
+
+List all credentials for a user with sync status.
+
+**Response:**
+```json
+{
+  "credentials": [
+    {
+      "cred_id": "base64url",
+      "device_type": "platform",
+      "backup_eligible": true,
+      "backup_state": true,
+      "is_discoverable": true,
+      "registered_at": 1699454445,
+      "last_used_at": 1699458045,
+      "transports": ["internal", "hybrid"],
+      "aaguid": "00000000-0000-0000-0000-000000000000",
+      "friendly_name": "MacBook Pro Touch ID"
+    }
+  ],
+  "total": 1
+}
+```
+
+**GET /webauthn/admin/credentials**
+
+Admin endpoint to list all credentials with statistics.
+
+**Response:**
+```json
+{
+  "credentials": [ /* array of CredentialSummary */ ],
+  "total": 150,
+  "by_device_type": {
+    "platform": 100,
+    "cross-platform": 40,
+    "hybrid": 10
+  },
+  "backup_stats": {
+    "total_backup_eligible": 110,
+    "total_backed_up": 95,
+    "hardware_bound": 40
+  }
+}
+```
+
+**DELETE /webauthn/credentials/:cred_id**
+
+Revoke a credential.
 
 **Response:**
 ```json
 {
   "ok": true,
-  "cred_id": "base64url-credential-id",
-  "username": "alice",
-  "authenticated_at": 1699454445,
-  "proof": "base64url-encoded-auth-proof"
+  "message": "Credential revoked successfully"
 }
 ```
-
----
-
-### 3. Token Issuance with WebAuthn Proof
-
-After successful authentication, use the `proof` to request a token:
-
-```bash
-curl -X POST https://issuer.example.com/v1/oprf/issue \
-  -H "Content-Type: application/json" \
-  -d '{
-    "blinded_element_b64": "base64url-blinded-element",
-    "sybil_proof": {
-      "type": "webauthn",
-      "username": "alice",
-      "auth_proof": "proof-from-authenticate-finish",
-      "timestamp": 1699454445
-    }
-  }'
-```
-
-**Response:**
-```json
-{
-  "token": "base64url-voprf-token",
-  "kid": "freebird-2024-11-17",
-  "exp": 1699458045
-}
-```
-
----
-
-## Security Considerations
-
-### Advantages Over Other Mechanisms
-
-| Mechanism | Energy Cost | User Friction | Sybil Resistance | Privacy |
-|-----------|-------------|---------------|------------------|---------|
-| Proof-of-Work | High | Medium | Medium | High |
-| Rate Limiting | Zero | Low | Low | Medium |
-| Invitation | Zero | Medium | High | High |
-| **WebAuthn** | **Zero** | **Low** | **High** | **High** |
-
-### Threat Model
-
-**Protects Against:**
-- ✅ Bot networks (no physical authenticators)
-- ✅ Mass token requests from VMs/cloud instances
-- ✅ Credential stuffing (origin-bound)
-- ✅ Phishing (challenge-response)
-
-**Does NOT Protect Against:**
-- ❌ Users with multiple physical devices
-- ❌ Borrowed/shared security keys
-- ❌ Social engineering (willing participants)
-
-### Best Practices
-
-1. **Combine with Rate Limiting**
-   ```bash
-   export SYBIL_RESISTANCE=combined
-   export SYBIL_COMBINED_MECHANISMS=webauthn,rate_limit
-   ```
-
-2. **Short Proof Validity**
-   ```bash
-   export WEBAUTHN_MAX_PROOF_AGE=300  # 5 minutes
-   ```
-
-3. **Use a Strong Proof Secret** ⚠️ **CRITICAL**
-   ```bash
-   # Generate a cryptographically random secret
-   export WEBAUTHN_PROOF_SECRET="$(openssl rand -base64 32)"
-   # Without this, proofs use a deterministic key (less secure)
-   ```
-
-4. **Credential Lifecycle Management**
-   ```bash
-   export WEBAUTHN_CRED_TTL_SECS=31536000  # Expire after 1 year
-   ```
-
-5. **Monitor Registration Patterns**
-   - Alert on unusual registration spikes
-   - Track credentials per user (prevent device farming)
 
 ---
 
 ## Redis Schema
 
-### Credential Storage
+### Credential Storage (Extended)
 
 ```
 Key:   webauthn:cred:{cred_id_base64}
 Value: JSON StoredCredential
 TTL:   Optional (WEBAUTHN_CRED_TTL_SECS)
 
-Example:
 {
   "cred_id": [1, 2, 3, ...],
   "credential": { /* Passkey data */ },
   "user_id_hash": "blake3-hash",
   "registered_at": 1699454445,
-  "last_used_at": 1699458045
+  "last_used_at": 1699458045,
+  "device_type": "platform",
+  "backup_eligible": true,
+  "backup_state": true,
+  "transports": ["internal", "hybrid"],
+  "attestation_format": "apple",
+  "aaguid": "00000000-0000-0000-0000-000000000000",
+  "is_discoverable": true,
+  "user_handle": "base64url-user-handle",
+  "friendly_name": "MacBook Pro Touch ID"
 }
 ```
 
@@ -359,191 +346,153 @@ Example:
 Key:   webauthn:user:{user_id_hash}
 Type:  SET
 Value: Set of credential keys
-TTL:   Optional (matches cred TTL)
-
-Example:
-SMEMBERS webauthn:user:abc123
--> ["webauthn:cred:xyz789", "webauthn:cred:def456"]
 ```
+
+### User Handle Mapping (New)
+
+```
+Key:   webauthn:handle:{user_handle_base64}
+Value: username (string)
+TTL:   Optional (matches cred TTL)
+```
+
+### Discoverable Credentials Index (New)
+
+```
+Key:   webauthn:discoverable:{user_handle_base64}
+Type:  SET
+Value: Set of credential keys for discoverable lookup
+```
+
+### Audit Metadata (New)
+
+```
+Key:   webauthn:audit:{cred_id_base64}
+Value: JSON audit data
+TTL:   30 days
+
+{
+  "username": "alice",
+  "registered_at": 1699454445,
+  "policy": "Direct",
+  "attestation_format": "packed",
+  "aaguid": "fa2b99dc-...",
+  "self_attestation": false,
+  "backup_eligible": true,
+  "backup_state": false,
+  "client_ip": "192.168.1.1",
+  "user_agent": null
+}
+```
+
+---
+
+## Security Considerations
+
+### Attestation Policy Levels
+
+| Level | Description | Use Case |
+|-------|-------------|----------|
+| `none` | Accept any attestation | Development, low-security |
+| `indirect` | Accept self/indirect attestation | General use |
+| `direct` | Require verifiable attestation | Enterprise |
+| `enterprise` | Require certificate chain | Managed devices |
+
+### Backup-Eligible vs Hardware-Bound Credentials
+
+**Backup-Eligible (BE flag = true):**
+- Can be synced across devices (iCloud Keychain, Google Password Manager)
+- More convenient for users
+- Different threat model (credential may exist on multiple devices)
+
+**Hardware-Bound (BE flag = false):**
+- Cannot be exported or synced
+- Stronger security guarantee
+- Lost device = lost credential
+
+### Threat Model
+
+**Protects Against:**
+- Bot networks (no physical authenticators)
+- Mass token requests from VMs/cloud instances
+- Credential stuffing (origin-bound)
+- Phishing (challenge-response)
+
+**Does NOT Protect Against:**
+- Users with multiple physical devices
+- Borrowed/shared security keys
+- Social engineering (willing participants)
 
 ---
 
 ## Client-Side Integration
 
-### HTML/JavaScript Example
+### Discoverable Credential Registration
 
-```html
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Freebird WebAuthn Demo</title>
-</head>
-<body>
-  <h1>WebAuthn Registration</h1>
-  <button id="register">Register Passkey</button>
-  <button id="authenticate">Authenticate</button>
-  <div id="status"></div>
+```javascript
+// Start resident key registration
+const startResp = await fetch('/webauthn/register/resident/start', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    username: 'alice',
+    credential_name: 'My MacBook'
+  })
+});
+const { options, session_id, user_handle } = await startResp.json();
 
-  <script>
-    const API_BASE = 'http://localhost:8081';
+// Create credential (browser prompts user)
+const credential = await navigator.credentials.create({
+  publicKey: options.publicKey
+});
 
-    // Registration
-    document.getElementById('register').onclick = async () => {
-      const username = prompt('Enter username:');
-      
-      // Start registration
-      const startResp = await fetch(`${API_BASE}/webauthn/register/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username })
-      });
-      const { options, session_id } = await startResp.json();
-
-      // Create credential
-      const credential = await navigator.credentials.create({
-        publicKey: options.publicKey
-      });
-
-      // Finish registration
-      const finishResp = await fetch(`${API_BASE}/webauthn/register/finish`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id,
-          credential: {
-            id: credential.id,
-            rawId: arrayBufferToBase64(credential.rawId),
-            response: {
-              attestationObject: arrayBufferToBase64(
-                credential.response.attestationObject
-              ),
-              clientDataJSON: arrayBufferToBase64(
-                credential.response.clientDataJSON
-              )
-            },
-            type: credential.type
-          }
-        })
-      });
-
-      const result = await finishResp.json();
-      document.getElementById('status').textContent = 
-        `Registered! Credential ID: ${result.cred_id}`;
-    };
-
-    // Authentication
-    document.getElementById('authenticate').onclick = async () => {
-      const username = prompt('Enter username:');
-      
-      // Start authentication
-      const startResp = await fetch(`${API_BASE}/webauthn/authenticate/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username })
-      });
-      const { options, session_id } = await startResp.json();
-
-      // Get assertion
-      const assertion = await navigator.credentials.get({
-        publicKey: options.publicKey
-      });
-
-      // Finish authentication
-      const finishResp = await fetch(`${API_BASE}/webauthn/authenticate/finish`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          session_id,
-          credential: {
-            id: assertion.id,
-            rawId: arrayBufferToBase64(assertion.rawId),
-            response: {
-              authenticatorData: arrayBufferToBase64(
-                assertion.response.authenticatorData
-              ),
-              clientDataJSON: arrayBufferToBase64(
-                assertion.response.clientDataJSON
-              ),
-              signature: arrayBufferToBase64(
-                assertion.response.signature
-              ),
-              userHandle: assertion.response.userHandle ? 
-                arrayBufferToBase64(assertion.response.userHandle) : null
-            },
-            type: assertion.type
-          }
-        })
-      });
-
-      const result = await finishResp.json();
-      document.getElementById('status').textContent = 
-        `Authenticated! Proof: ${result.proof}`;
-      
-      // Now use result.proof for token issuance
-      console.log('Auth proof for token issuance:', result.proof);
-    };
-
-    function arrayBufferToBase64(buffer) {
-      const bytes = new Uint8Array(buffer);
-      let binary = '';
-      for (let i = 0; i < bytes.byteLength; i++) {
-        binary += String.fromCharCode(bytes[i]);
-      }
-      return btoa(binary)
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=/g, '');
-    }
-  </script>
-</body>
-</html>
+// Finish registration
+const finishResp = await fetch('/webauthn/register/resident/finish', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    session_id,
+    user_handle,
+    credential_name: 'My MacBook',
+    credential: serializeCredential(credential)
+  })
+});
 ```
 
----
+### Usernameless Authentication
 
-## Troubleshooting
+```javascript
+// Start discoverable auth (no username needed!)
+const startResp = await fetch('/webauthn/authenticate/discoverable/start', {
+  method: 'POST'
+});
+const { options, session_id } = await startResp.json();
 
-### "WEBAUTHN_RP_ID not set"
+// Get assertion (authenticator shows available credentials)
+const assertion = await navigator.credentials.get({
+  publicKey: options.publicKey,
+  mediation: 'conditional' // For autofill UI
+});
 
-```bash
-# Fix: Set required environment variables
-export WEBAUTHN_RP_ID=localhost
-export WEBAUTHN_RP_ORIGIN=http://localhost:8081
+// Finish auth
+const finishResp = await fetch('/webauthn/authenticate/discoverable/finish', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    session_id,
+    credential: serializeAssertion(assertion)
+  })
+});
+
+// Response includes username resolved from userHandle
+const { username, proof } = await finishResp.json();
 ```
-
-### "Invalid origin URL"
-
-**Problem:** RP_ORIGIN doesn't match RP_ID
-
-```bash
-# Bad
-export WEBAUTHN_RP_ID=example.com
-export WEBAUTHN_RP_ORIGIN=http://localhost:8081  # Mismatch!
-
-# Good
-export WEBAUTHN_RP_ID=localhost
-export WEBAUTHN_RP_ORIGIN=http://localhost:8081
-```
-
-### "User has no registered credentials"
-
-**Problem:** Trying to authenticate before registration
-
-**Solution:**
-1. Complete registration flow first
-2. Verify credential was saved: `redis-cli KEYS "webauthn:cred:*"`
-
-### "Authentication proof expired"
-
-**Problem:** Proof too old (default: 5 minutes)
-
-**Solution:**
-- Request tokens immediately after authentication
-- Or increase timeout: `export WEBAUTHN_MAX_PROOF_AGE=600`
 
 ---
 
 ## Testing
+
+### Manual Testing
 
 ```bash
 # Build with WebAuthn feature
@@ -555,34 +504,50 @@ export WEBAUTHN_RP_NAME="Freebird Test"
 export WEBAUTHN_RP_ORIGIN=http://localhost:8081
 export WEBAUTHN_REDIS_URL=redis://localhost:6379
 export SYBIL_RESISTANCE=webauthn
+export WEBAUTHN_REQUIRE_ATTESTATION=true
+export WEBAUTHN_ATTESTATION_POLICY=direct
 
 # Run issuer
 ./target/release/issuer
-
-# Test with browser (open HTML demo)
-# Or use Postman/curl with WebAuthn simulator
 ```
 
+### Testing with Different Authenticators
+
+| Authenticator | Transport | Type | Notes |
+|---------------|-----------|------|-------|
+| macOS Touch ID | internal | Platform | Uses Apple Secure Enclave |
+| Windows Hello | internal | Platform | TPM-based |
+| YubiKey | usb, nfc | Cross-platform | Hardware security key |
+| iPhone via QR | hybrid | Cross-platform | BLE + QR pairing |
+| Android Phone | hybrid | Cross-platform | Google Password Manager |
+
 ---
 
-## Comparison to Other Systems
+## Troubleshooting
 
-| System | Mechanism | User Experience | Sybil Resistance |
-|--------|-----------|-----------------|------------------|
-| Privacy Pass | CAPTCHA | Annoying | Medium |
-| Cloudflare Turnstile | hCaptcha | Moderate | Medium |
-| reCAPTCHA | Image challenges | Frustrating | Medium |
-| **Freebird WebAuthn** | **Biometric/PIN** | **Seamless** | **High** |
+### "AAGUID not in allowlist"
 
----
+Your authenticator's AAGUID isn't in `WEBAUTHN_ALLOWED_AAGUIDS`.
 
-## Future Enhancements
+**Solution:** Add the AAGUID or disable the allowlist.
 
-- [ ] Attestation verification (verify authenticator models)
-- [ ] Credential management UI (list/revoke credentials)
-- [ ] Multi-instance session storage (Redis-backed sessions)
-- [ ] Credential usage analytics (track device usage patterns)
-- [ ] Integration with mobile apps (platform authenticators)
+### "Maximum credentials per user reached"
+
+User has reached `WEBAUTHN_MAX_CREDENTIALS_PER_USER` limit.
+
+**Solution:** Revoke unused credentials or increase the limit.
+
+### "Hardware authenticator required"
+
+Policy requires attestation but a software/self-attested credential was provided.
+
+**Solution:** Use a hardware security key or change policy to `indirect`.
+
+### "User handle required for discoverable authentication"
+
+The credential assertion doesn't include a userHandle.
+
+**Solution:** The credential must be registered as a resident key (discoverable).
 
 ---
 
@@ -592,7 +557,8 @@ export SYBIL_RESISTANCE=webauthn
 - [Production Deployment](../docs/PRODUCTION.md)
 - [Security Model](../docs/SECURITY.md)
 - [WebAuthn Specification](https://www.w3.org/TR/webauthn-2/)
+- [Passkeys](https://passkeys.dev)
 
 ---
 
-**WebAuthn + Freebird = Privacy-Preserving Proof of Humanity** 🕊️✨
+**WebAuthn + Freebird = Privacy-Preserving Proof of Humanity**
