@@ -186,18 +186,21 @@ impl SessionData {
 // --- Router Factory ---
 
 pub fn router(state: Arc<WebAuthnState>) -> Router {
+    use super::discoverable::{discoverable_router, admin_router};
+
     let use_attestation = std::env::var("WEBAUTHN_REQUIRE_ATTESTATION")
         .unwrap_or_else(|_| "false".to_string())
         .eq_ignore_ascii_case("true");
 
-    if use_attestation {
+    // Base routes for standard registration/authentication
+    let base_router = if use_attestation {
         Router::new()
-            .route("/register/start", post(start_registration))
+            .route("/register/start", post(start_registration_extended))
             .route("/register/finish", post(finish_registration_with_attestation))
             .route("/authenticate/start", post(start_authentication))
             .route("/authenticate/finish", post(finish_authentication))
             .route("/info", get(webauthn_info))
-            .with_state(state)
+            .with_state(state.clone())
     } else {
         Router::new()
             .route("/register/start", post(start_registration))
@@ -205,8 +208,13 @@ pub fn router(state: Arc<WebAuthnState>) -> Router {
             .route("/authenticate/start", post(start_authentication))
             .route("/authenticate/finish", post(finish_authentication))
             .route("/info", get(webauthn_info))
-            .with_state(state)
-    }
+            .with_state(state.clone())
+    };
+
+    // Merge discoverable credential routes
+    base_router
+        .merge(discoverable_router(state.clone()))
+        .merge(admin_router(state))
 }
 
 // --- Handlers ---
@@ -682,12 +690,134 @@ pub async fn webauthn_info(State(state): State<Arc<WebAuthnState>>) -> Json<WebA
     })
 }
 
-/// Extended finish registration with policy enforcement
+// ============================================================================
+// Extended Registration (with attestation policy enforcement)
+// ============================================================================
+
+/// Extended start registration that checks user credential limits
+pub async fn start_registration_extended(
+    State(state): State<Arc<WebAuthnState>>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(req): Json<StartRegistrationRequest>,
+) -> Result<Json<StartRegistrationResponse>, (StatusCode, String)> {
+    use super::attestation::AttestationConfig;
+
+    debug!(username = %req.username, "Starting extended WebAuthn registration");
+
+    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy)
+        .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+
+    // Check rate limit
+    if let Err(e) = state.rate_limiter.check_registration_allowed(client_ip).await {
+        warn!(ip = %client_ip, error = %e, "Registration rate limited");
+        return Err((e.status_code(), e.to_string()));
+    }
+
+    state.rate_limiter.record_registration_attempt(client_ip).await;
+
+    // Check max credentials per user
+    let config = AttestationConfig::global();
+    let user_id_hash = {
+        use blake3::Hasher;
+        let mut hasher = Hasher::new();
+        hasher.update(b"webauthn:user:");
+        hasher.update(req.username.as_bytes());
+        hasher.finalize().to_hex().to_string()
+    };
+
+    let existing_creds = state
+        .cred_store
+        .load_user_credentials(&user_id_hash)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    if existing_creds.len() >= config.max_credentials_per_user {
+        warn!(
+            username = %req.username,
+            count = existing_creds.len(),
+            max = config.max_credentials_per_user,
+            "User has reached maximum credential limit"
+        );
+        return Err((
+            StatusCode::CONFLICT,
+            format!(
+                "Maximum of {} credentials per user reached",
+                config.max_credentials_per_user
+            ),
+        ));
+    }
+
+    // Continue with normal registration flow
+    let exclude_credentials = if existing_creds.is_empty() {
+        None
+    } else {
+        Some(
+            existing_creds
+                .iter()
+                .map(|c| c.cred_id.clone().into())
+                .collect(),
+        )
+    };
+
+    let (options, reg_state) = state
+        .webauthn
+        .webauthn
+        .start_passkey_registration(
+            Uuid::new_v4(),
+            &req.username,
+            &req.display_name
+                .clone()
+                .unwrap_or_else(|| req.username.clone()),
+            exclude_credentials,
+        )
+        .map_err(|e| {
+            warn!(error = %e, "Failed to start registration");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Registration start failed: {}", e),
+            )
+        })?;
+
+    let session_id = uuid::Uuid::new_v4().to_string();
+
+    {
+        let mut sessions = state.sessions.write().await;
+        sessions.insert(
+            session_id.clone(),
+            SessionData::Registration {
+                state: reg_state,
+                username: req.username.clone(),
+                created_at: chrono::Utc::now().timestamp(),
+                client_ip,
+            },
+        );
+        sessions.retain(|_, session| !session.is_expired());
+    }
+
+    state.rate_limiter.record_session_created(client_ip).await;
+
+    info!(
+        username = %req.username,
+        session_id = %session_id,
+        "Started extended WebAuthn registration"
+    );
+
+    Ok(Json(StartRegistrationResponse {
+        options,
+        session_id,
+    }))
+}
+
+/// Extended finish registration with full attestation policy enforcement
 pub async fn finish_registration_with_attestation(
     State(state): State<Arc<WebAuthnState>>,
     Json(req): Json<FinishRegistrationRequest>,
 ) -> Result<Json<FinishRegistrationResponse>, (StatusCode, String)> {
-    debug!(session_id = %req.session_id, "Finishing WebAuthn registration with policy check");
+    use super::attestation::{enforce_policy, parse_attestation_info, AttestationConfig, RegistrationAuditMetadata, store_audit_metadata};
+    use super::store::{CredentialCreateOptions, DeviceType};
+
+    debug!(session_id = %req.session_id, "Finishing WebAuthn registration with full attestation check");
 
     let (reg_state, username, client_ip) = {
         let mut sessions = state.sessions.write().await;
@@ -696,7 +826,6 @@ pub async fn finish_registration_with_attestation(
                 state, username, client_ip, ..
             }) => (state, username, client_ip),
             Some(session) => {
-                // Wrong session type - still record session ended
                 state.rate_limiter.record_session_ended(session.client_ip()).await;
                 return Err((StatusCode::BAD_REQUEST, "Invalid session type".to_string()));
             }
@@ -709,8 +838,22 @@ pub async fn finish_registration_with_attestation(
         }
     };
 
-    // Record session ended regardless of outcome
     state.rate_limiter.record_session_ended(client_ip).await;
+
+    // Parse attestation info BEFORE finishing registration
+    let attestation_info = parse_attestation_info(&req.credential);
+
+    // Enforce attestation policy
+    let config = AttestationConfig::global();
+    let policy_result = enforce_policy(&req.credential, config)?;
+
+    info!(
+        allowed = policy_result.allowed,
+        reason = %policy_result.reason,
+        format = %attestation_info.format,
+        aaguid = ?attestation_info.aaguid,
+        "Attestation policy check completed"
+    );
 
     // Complete registration
     let passkey = state
@@ -725,12 +868,6 @@ pub async fn finish_registration_with_attestation(
             )
         })?;
 
-    // Apply policy checks if configured
-    if should_enforce_policy() {
-        enforce_registration_policy(&req.credential)?;
-    }
-
-    // Continue with the existing registration flow
     let user_id_hash = {
         use blake3::Hasher;
         let mut hasher = Hasher::new();
@@ -741,10 +878,35 @@ pub async fn finish_registration_with_attestation(
 
     let cred_id = passkey.cred_id().clone();
 
-    // Save credential
+    // Determine device type from attestation
+    let device_type = match attestation_info.format.as_str() {
+        "apple" | "tpm" | "android-key" => DeviceType::Platform,
+        "packed" | "fido-u2f" => DeviceType::CrossPlatform,
+        _ => DeviceType::Unknown,
+    };
+
+    // Save credential with extended metadata
+    let create_options = CredentialCreateOptions {
+        device_type,
+        backup_eligible: attestation_info.flags.backup_eligible,
+        backup_state: attestation_info.flags.backup_state,
+        transports: Vec::new(),
+        attestation_format: Some(attestation_info.format.clone()),
+        aaguid: attestation_info.aaguid.clone(),
+        is_discoverable: false,
+        user_handle: None,
+        friendly_name: None,
+    };
+
     state
         .cred_store
-        .save(cred_id.clone().into(), passkey, user_id_hash.clone())
+        .save_with_options(
+            cred_id.clone().into(),
+            passkey,
+            user_id_hash.clone(),
+            username.clone(),
+            create_options,
+        )
         .await
         .map_err(|e| {
             warn!(error = %e, "Failed to save credential");
@@ -754,9 +916,21 @@ pub async fn finish_registration_with_attestation(
             )
         })?;
 
-    // Optionally store policy metadata
+    // Store audit metadata if Redis is configured
     if let Ok(redis_url) = std::env::var("WEBAUTHN_REDIS_URL") {
-        store_registration_metadata(&redis_url, &cred_id, &username).await;
+        let audit_metadata = RegistrationAuditMetadata {
+            username: username.clone(),
+            registered_at: chrono::Utc::now().timestamp(),
+            policy: format!("{:?}", config.policy),
+            attestation_format: attestation_info.format.clone(),
+            aaguid: attestation_info.aaguid.clone(),
+            self_attestation: attestation_info.self_attestation,
+            backup_eligible: attestation_info.flags.backup_eligible,
+            backup_state: attestation_info.flags.backup_state,
+            client_ip: Some(client_ip.to_string()),
+            user_agent: None,
+        };
+        store_audit_metadata(&redis_url, &cred_id, &audit_metadata).await;
     }
 
     let cred_id_b64 = base64ct::Base64UrlUnpadded::encode_string(&cred_id);
@@ -764,7 +938,9 @@ pub async fn finish_registration_with_attestation(
     info!(
         username = %username,
         cred_id = %cred_id_b64,
-        "Completed WebAuthn registration with policy enforcement"
+        device_type = %device_type,
+        backup_eligible = attestation_info.flags.backup_eligible,
+        "Completed WebAuthn registration with attestation enforcement"
     );
 
     Ok(Json(FinishRegistrationResponse {
@@ -774,98 +950,3 @@ pub async fn finish_registration_with_attestation(
         registered_at: chrono::Utc::now().timestamp(),
     }))
 }
-
-/// Check if policy enforcement is enabled
-fn should_enforce_policy() -> bool {
-    std::env::var("WEBAUTHN_REQUIRE_ATTESTATION")
-        .unwrap_or_else(|_| "false".to_string())
-        .eq_ignore_ascii_case("true")
-}
-
-/// Enforce registration policy based on configuration
-fn enforce_registration_policy(
-    credential: &RegisterPublicKeyCredential,
-) -> Result<(), (StatusCode, String)> {
-    let policy =
-        std::env::var("WEBAUTHN_ATTESTATION_POLICY").unwrap_or_else(|_| "none".to_string());
-
-    match policy.as_str() {
-        "none" => {
-            info!("No attestation policy enforcement");
-            Ok(())
-        }
-        "strict" => {
-            // Check the attestation object size as a heuristic
-            // Use to_vec() to get the actual bytes
-            let data = credential.response.attestation_object.to_vec();
-            let size = data.len();
-
-            if size < 200 {
-                // Very small attestation object likely means "none" format
-                warn!("Registration rejected: attestation object too small (likely software key)");
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    "Hardware authenticator required".to_string(),
-                ));
-            }
-            info!(
-                "Registration accepted: attestation object present (size: {} bytes)",
-                size
-            );
-            Ok(())
-        }
-        "log_only" => {
-            // Log attestation details but don't enforce
-            let data = credential.response.attestation_object.to_vec();
-            let size = data.len();
-            info!("Attestation object size: {} bytes", size);
-            Ok(())
-        }
-        _ => {
-            warn!("Unknown attestation policy: {}", policy);
-            Ok(())
-        }
-    }
-}
-
-/// Store registration metadata for monitoring
-async fn store_registration_metadata(redis_url: &str, cred_id: &[u8], username: &str) {
-    // Store metadata about the registration for analytics
-    if let Ok(client) = redis::Client::open(redis_url) {
-        if let Ok(mut conn) = client.get_async_connection().await {
-            let metadata = RegistrationMetadata {
-                username: username.to_string(),
-                registered_at: chrono::Utc::now().timestamp(),
-                policy: std::env::var("WEBAUTHN_ATTESTATION_POLICY")
-                    .unwrap_or_else(|_| "none".to_string()),
-            };
-
-            if let Ok(json) = serde_json::to_string(&metadata) {
-                let key = format!(
-                    "webauthn:metadata:{}",
-                    base64ct::Base64UrlUnpadded::encode_string(cred_id)
-                );
-
-                let _: Result<(), _> = redis::cmd("SET")
-                    .arg(&key)
-                    .arg(&json)
-                    .arg("EX")
-                    .arg(86400) // 24 hour TTL for metadata
-                    .query_async(&mut conn)
-                    .await;
-
-                info!("Stored registration metadata for monitoring");
-            }
-        }
-    }
-}
-
-/// Metadata stored for each registration
-#[derive(Debug, Serialize, Deserialize)]
-struct RegistrationMetadata {
-    username: String,
-    registered_at: i64,
-    policy: String,
-}
-
-// NOTE: You will need to adapt the imports in the copied code to use `super::store` etc.
