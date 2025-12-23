@@ -17,6 +17,10 @@ path = "src/main.rs"
 name = "freebird-validate-config"
 path = "src/bin/validate_config.rs"
 
+[[bin]]
+name = "freebird-cli"
+path = "src/bin/cli.rs"
+
 [features]
 default = []
 human-gate-webauthn = [
@@ -58,7 +62,9 @@ uuid = { version = "1", features = ["v4", "serde"], optional = true }
 chrono = { version = "0.4", optional = true }
 async-trait = "0.1"  # For async trait implementations
 redis = { version = "0.24", features = ["aio", "tokio-comp"], optional = true }
-reqwest = "0.12.24"
+reqwest = { version = "0.12.24", features = ["json"] }
+clap = { version = "4", features = ["derive", "env"] }
+colored = "2"
 
 [dev-dependencies]
 serial_test = "3"
