@@ -320,10 +320,6 @@ fn env_bool(key: &str) -> bool {
     env::var(key).map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false)
 }
 
-fn env_u64(key: &str, default: u64) -> u64 {
-    env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
-}
-
 fn env_u32(key: &str, default: u32) -> u32 {
     env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
 }

@@ -482,6 +482,22 @@ impl Application {
         if let Some(key) = config.admin_api_key {
             if key.len() >= 32 {
                 if let Some(inv_sys) = invitation_system {
+                    // Create config summary for admin API
+                    #[cfg(feature = "human-gate-webauthn")]
+                    let webauthn_enabled = webauthn_state.is_some();
+                    #[cfg(not(feature = "human-gate-webauthn"))]
+                    let webauthn_enabled = false;
+
+                    let config_summary = routes::admin::ConfigSummary {
+                        issuer_id: config.issuer_id.clone(),
+                        sybil_config: routes::admin::SybilConfigSummary::from_config(&config.sybil_config),
+                        epoch_duration_secs: config.epoch_duration_sec,
+                        epoch_retention: config.epoch_retention,
+                        require_tls: config.require_tls,
+                        behind_proxy: config.behind_proxy,
+                        webauthn_enabled,
+                    };
+
                     #[cfg(feature = "human-gate-webauthn")]
                     let admin = routes::admin_router(
                         inv_sys,
@@ -491,6 +507,7 @@ impl Application {
                         key,
                         config.behind_proxy,
                         webauthn_state.as_ref().map(|ws| ws.cred_store.clone()),
+                        config_summary,
                     );
                     #[cfg(not(feature = "human-gate-webauthn"))]
                     let admin = routes::admin_router(
@@ -500,6 +517,7 @@ impl Application {
                         audit_log.clone(),
                         key,
                         config.behind_proxy,
+                        config_summary,
                     );
                     app = app.nest("/admin", admin);
                 }

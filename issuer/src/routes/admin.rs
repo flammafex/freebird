@@ -59,6 +59,20 @@ pub struct AdminState {
     /// Optional WebAuthn credential store (only if webauthn feature enabled)
     #[cfg(feature = "human-gate-webauthn")]
     pub webauthn_store: Option<crate::webauthn::CredentialStore>,
+    /// Configuration summary for the admin API
+    pub config_summary: ConfigSummary,
+}
+
+/// Sanitized configuration summary (no secrets)
+#[derive(Clone, Debug)]
+pub struct ConfigSummary {
+    pub issuer_id: String,
+    pub sybil_config: SybilConfigSummary,
+    pub epoch_duration_secs: u64,
+    pub epoch_retention: u32,
+    pub require_tls: bool,
+    pub behind_proxy: bool,
+    pub webauthn_enabled: bool,
 }
 
 // ============================================================================
@@ -167,6 +181,249 @@ pub struct HealthResponse {
     pub status: String,
     pub uptime_seconds: u64,
     pub invitation_system_status: String,
+}
+
+/// Sybil configuration summary (sanitized - no secrets)
+#[derive(Debug, Clone, Serialize)]
+pub struct SybilConfigSummary {
+    /// Current Sybil resistance mode
+    pub mode: String,
+    /// Human-readable description of the mode
+    pub mode_description: String,
+    /// Configuration details specific to the current mode
+    pub settings: SybilModeSettings,
+    /// Combined mode mechanisms (only if mode is "combined")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub combined_mechanisms: Option<Vec<String>>,
+    /// Combined mode type (only if mode is "combined")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub combined_mode_type: Option<String>,
+    /// Combined threshold (only if mode is "combined" with threshold)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub combined_threshold: Option<u32>,
+}
+
+/// Mode-specific settings (sanitized)
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum SybilModeSettings {
+    None {},
+    ProofOfWork {
+        difficulty: u32,
+    },
+    RateLimit {
+        interval: String,
+        interval_secs: u64,
+    },
+    Invitation {
+        invites_per_user: u32,
+        cooldown: String,
+        cooldown_secs: u64,
+        expires: String,
+        expires_secs: u64,
+        new_user_wait: String,
+        new_user_wait_secs: u64,
+        persistence_path: String,
+        bootstrap_users_configured: bool,
+    },
+    ProgressiveTrust {
+        levels: Vec<TrustLevelSummary>,
+        persistence_path: String,
+    },
+    ProofOfDiversity {
+        min_score: u8,
+        persistence_path: String,
+    },
+    MultiPartyVouching {
+        required_vouchers: u32,
+        cooldown: String,
+        cooldown_secs: u64,
+        expires: String,
+        expires_secs: u64,
+        new_user_wait: String,
+        new_user_wait_secs: u64,
+        persistence_path: String,
+    },
+    FederatedTrust {
+        enabled: bool,
+        max_depth: u32,
+        min_paths: u32,
+        require_direct: bool,
+        min_trust_level: u8,
+        cache_ttl: String,
+        cache_ttl_secs: u64,
+        trusted_roots_count: usize,
+        blocked_issuers_count: usize,
+    },
+    WebAuthn {
+        max_proof_age: Option<String>,
+        max_proof_age_secs: Option<i64>,
+    },
+}
+
+/// Summary of a progressive trust level
+#[derive(Debug, Clone, Serialize)]
+pub struct TrustLevelSummary {
+    pub min_age: String,
+    pub min_age_secs: u64,
+    pub max_tokens: u32,
+    pub cooldown: String,
+    pub cooldown_secs: u64,
+}
+
+impl SybilConfigSummary {
+    /// Create a summary from a SybilConfig
+    pub fn from_config(config: &crate::config::SybilConfig) -> Self {
+        use freebird_common::duration::format_duration;
+
+        let (mode_description, settings) = match config.mode.as_str() {
+            "none" => (
+                "No Sybil resistance - anyone can request tokens".to_string(),
+                SybilModeSettings::None {},
+            ),
+            "pow" | "proof_of_work" => (
+                format!("Proof of Work with {} leading zero bits required", config.pow_difficulty),
+                SybilModeSettings::ProofOfWork {
+                    difficulty: config.pow_difficulty,
+                },
+            ),
+            "rate_limit" => (
+                format!("Rate limiting - one token per {}", format_duration(config.rate_limit_secs)),
+                SybilModeSettings::RateLimit {
+                    interval: format_duration(config.rate_limit_secs),
+                    interval_secs: config.rate_limit_secs,
+                },
+            ),
+            "invitation" => (
+                "Invitation-based - users need valid invitation codes".to_string(),
+                SybilModeSettings::Invitation {
+                    invites_per_user: config.invite_per_user,
+                    cooldown: format_duration(config.invite_cooldown_secs),
+                    cooldown_secs: config.invite_cooldown_secs,
+                    expires: format_duration(config.invite_expires_secs),
+                    expires_secs: config.invite_expires_secs,
+                    new_user_wait: format_duration(config.invite_new_user_wait_secs),
+                    new_user_wait_secs: config.invite_new_user_wait_secs,
+                    persistence_path: config.invite_persistence_path.display().to_string(),
+                    bootstrap_users_configured: config.bootstrap_users.is_some(),
+                },
+            ),
+            "progressive_trust" => {
+                let levels: Vec<TrustLevelSummary> = config.progressive_trust_levels
+                    .iter()
+                    .filter_map(|s| {
+                        let parts: Vec<&str> = s.split(':').collect();
+                        if parts.len() >= 3 {
+                            let min_age_secs: u64 = freebird_common::duration::parse_duration(parts[0]).ok()?;
+                            let max_tokens: u32 = parts[1].parse().ok()?;
+                            let cooldown_secs: u64 = freebird_common::duration::parse_duration(parts[2]).ok()?;
+                            Some(TrustLevelSummary {
+                                min_age: format_duration(min_age_secs),
+                                min_age_secs,
+                                max_tokens,
+                                cooldown: format_duration(cooldown_secs),
+                                cooldown_secs,
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                (
+                    format!("Progressive Trust with {} trust levels", levels.len()),
+                    SybilModeSettings::ProgressiveTrust {
+                        levels,
+                        persistence_path: config.progressive_trust_persistence_path.display().to_string(),
+                    },
+                )
+            }
+            "proof_of_diversity" => (
+                format!("Proof of Diversity - minimum score {} required", config.proof_of_diversity_min_score),
+                SybilModeSettings::ProofOfDiversity {
+                    min_score: config.proof_of_diversity_min_score,
+                    persistence_path: config.proof_of_diversity_persistence_path.display().to_string(),
+                },
+            ),
+            "multi_party_vouching" => (
+                format!("Multi-Party Vouching - {} vouchers required", config.multi_party_vouching_required_vouchers),
+                SybilModeSettings::MultiPartyVouching {
+                    required_vouchers: config.multi_party_vouching_required_vouchers,
+                    cooldown: format_duration(config.multi_party_vouching_cooldown_secs),
+                    cooldown_secs: config.multi_party_vouching_cooldown_secs,
+                    expires: format_duration(config.multi_party_vouching_expires_secs),
+                    expires_secs: config.multi_party_vouching_expires_secs,
+                    new_user_wait: format_duration(config.multi_party_vouching_new_user_wait_secs),
+                    new_user_wait_secs: config.multi_party_vouching_new_user_wait_secs,
+                    persistence_path: config.multi_party_vouching_persistence_path.display().to_string(),
+                },
+            ),
+            "federated_trust" => (
+                "Federated Trust - cross-issuer trust verification".to_string(),
+                SybilModeSettings::FederatedTrust {
+                    enabled: config.federated_trust_enabled,
+                    max_depth: config.federated_trust_max_depth,
+                    min_paths: config.federated_trust_min_paths,
+                    require_direct: config.federated_trust_require_direct,
+                    min_trust_level: config.federated_trust_min_trust_level,
+                    cache_ttl: format_duration(config.federated_trust_cache_ttl_secs),
+                    cache_ttl_secs: config.federated_trust_cache_ttl_secs,
+                    trusted_roots_count: config.federated_trust_trusted_roots.len(),
+                    blocked_issuers_count: config.federated_trust_blocked_issuers.len(),
+                },
+            ),
+            "webauthn" => (
+                "WebAuthn - hardware-backed authentication".to_string(),
+                SybilModeSettings::WebAuthn {
+                    max_proof_age: config.webauthn_max_proof_age.map(|s| format_duration(s as u64)),
+                    max_proof_age_secs: config.webauthn_max_proof_age,
+                },
+            ),
+            "combined" => (
+                format!("Combined mode ({}) with {} mechanisms", config.combined_mode, config.combined_mechanisms.len()),
+                SybilModeSettings::None {}, // Settings will be in combined_* fields
+            ),
+            other => (
+                format!("Unknown mode: {}", other),
+                SybilModeSettings::None {},
+            ),
+        };
+
+        let (combined_mechanisms, combined_mode_type, combined_threshold) = if config.mode == "combined" {
+            (
+                Some(config.combined_mechanisms.clone()),
+                Some(config.combined_mode.clone()),
+                if config.combined_mode == "threshold" {
+                    Some(config.combined_threshold)
+                } else {
+                    None
+                },
+            )
+        } else {
+            (None, None, None)
+        };
+
+        Self {
+            mode: config.mode.clone(),
+            mode_description,
+            settings,
+            combined_mechanisms,
+            combined_mode_type,
+            combined_threshold,
+        }
+    }
+}
+
+/// Response containing current configuration
+#[derive(Debug, Serialize)]
+pub struct ConfigResponse {
+    pub issuer_id: String,
+    pub sybil: SybilConfigSummary,
+    pub epoch_duration: String,
+    pub epoch_duration_secs: u64,
+    pub epoch_retention: u32,
+    pub require_tls: bool,
+    pub behind_proxy: bool,
+    pub webauthn_enabled: bool,
 }
 
 /// Request to rotate to a new key
@@ -620,6 +877,30 @@ pub async fn get_stats_handler(
         timestamp,
         owner,
         user_count,
+    }))
+}
+
+/// Get current configuration (sanitized - no secrets)
+pub async fn get_config_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<Json<ConfigResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
+    let summary = &state.config_summary;
+
+    info!("Admin: retrieved configuration summary");
+
+    Ok(Json(ConfigResponse {
+        issuer_id: summary.issuer_id.clone(),
+        sybil: summary.sybil_config.clone(),
+        epoch_duration: freebird_common::duration::format_duration(summary.epoch_duration_secs),
+        epoch_duration_secs: summary.epoch_duration_secs,
+        epoch_retention: summary.epoch_retention,
+        require_tls: summary.require_tls,
+        behind_proxy: summary.behind_proxy,
+        webauthn_enabled: summary.webauthn_enabled,
     }))
 }
 
@@ -1758,6 +2039,7 @@ pub fn admin_router(
     api_key: String,
     behind_proxy: bool,
     webauthn_store: Option<crate::webauthn::CredentialStore>,
+    config_summary: ConfigSummary,
 ) -> axum::Router {
     let state = Arc::new(AdminState {
         invitation_system,
@@ -1768,6 +2050,7 @@ pub fn admin_router(
         rate_limiter: AdminRateLimiter::new(),
         behind_proxy,
         webauthn_store,
+        config_summary,
     });
 
     build_admin_router(state)
@@ -1781,6 +2064,7 @@ pub fn admin_router(
     audit_log: Arc<AuditLog>,
     api_key: String,
     behind_proxy: bool,
+    config_summary: ConfigSummary,
 ) -> axum::Router {
     let state = Arc::new(AdminState {
         invitation_system,
@@ -1790,6 +2074,7 @@ pub fn admin_router(
         api_key,
         rate_limiter: AdminRateLimiter::new(),
         behind_proxy,
+        config_summary,
     });
 
     build_admin_router(state)
@@ -1800,6 +2085,7 @@ fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
         .route("/", axum::routing::get(admin_ui_handler))
         .route("/health", axum::routing::get(health_handler))
         .route("/stats", axum::routing::get(get_stats_handler))
+        .route("/config", axum::routing::get(get_config_handler))
         .route("/users", axum::routing::get(list_users_handler))
         .route("/users/:user_id", axum::routing::get(get_user_details_handler))
         .route("/invites/grant", axum::routing::post(grant_invites_handler))
