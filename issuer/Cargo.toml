@@ -9,6 +9,14 @@ homepage = "https://github.com/flammafex/freebird"
 keywords = ["privacy", "authentication", "issuer", "tokens"]
 categories = ["authentication", "web-programming"]
 
+[[bin]]
+name = "freebird-issuer"
+path = "src/main.rs"
+
+[[bin]]
+name = "freebird-validate-config"
+path = "src/bin/validate_config.rs"
+
 [features]
 default = []
 human-gate-webauthn = [

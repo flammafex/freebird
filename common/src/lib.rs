@@ -10,6 +10,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 pub mod api;
+pub mod duration;
 pub mod federation;
 pub mod logging {
     use std::sync::Once;
