@@ -73,6 +73,9 @@ enum Commands {
     /// Show issuer configuration
     Config,
 
+    /// Show Prometheus metrics
+    Metrics,
+
     /// User management commands
     #[command(subcommand)]
     Users(UsersCommands),
@@ -726,6 +729,26 @@ async fn main() -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&config.sybil.settings)?);
                 }
             }
+        }
+
+        Commands::Metrics => {
+            // Metrics endpoint returns plain text, not JSON
+            let url = format!("{}/admin/metrics", api.base_url);
+            let resp = api.client
+                .get(&url)
+                .header("X-Admin-Key", &api.admin_key)
+                .send()
+                .await
+                .context("Failed to connect to issuer")?;
+
+            if !resp.status().is_success() {
+                let status = resp.status();
+                let body = resp.text().await.unwrap_or_default();
+                anyhow::bail!("API error ({}): {}", status, body);
+            }
+
+            let metrics = resp.text().await.context("Failed to read response")?;
+            println!("{}", metrics);
         }
 
         Commands::Users(cmd) => match cmd {

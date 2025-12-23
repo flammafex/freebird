@@ -904,6 +904,101 @@ pub async fn get_config_handler(
     }))
 }
 
+/// Prometheus metrics endpoint
+/// Returns metrics in Prometheus text exposition format
+pub async fn metrics_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+) -> Result<String, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
+    let stats = state.invitation_system.get_stats().await;
+    let key_stats = state.multi_key_voprf.key_stats().await;
+
+    let mut output = String::new();
+
+    // Helper to add a metric
+    macro_rules! metric {
+        ($name:expr, $type:expr, $help:expr, $value:expr) => {
+            output.push_str(&format!(
+                "# HELP {} {}\n# TYPE {} {}\n{} {}\n",
+                $name, $help, $name, $type, $name, $value
+            ));
+        };
+    }
+
+    // User metrics
+    metric!(
+        "freebird_users_total",
+        "gauge",
+        "Total number of registered users",
+        stats.total_users
+    );
+    metric!(
+        "freebird_users_banned",
+        "gauge",
+        "Number of banned users",
+        stats.banned_users
+    );
+
+    // Invitation metrics
+    metric!(
+        "freebird_invitations_total",
+        "counter",
+        "Total invitations created",
+        stats.total_invitations
+    );
+    metric!(
+        "freebird_invitations_redeemed",
+        "counter",
+        "Total invitations redeemed",
+        stats.redeemed_invitations
+    );
+    metric!(
+        "freebird_invitations_pending",
+        "gauge",
+        "Pending invitations",
+        stats.pending_invitations
+    );
+
+    // Key metrics (use pre-computed stats)
+    metric!(
+        "freebird_keys_total",
+        "gauge",
+        "Total number of signing keys",
+        key_stats.total_keys
+    );
+    metric!(
+        "freebird_keys_active",
+        "gauge",
+        "Number of active signing keys",
+        key_stats.active_keys
+    );
+    metric!(
+        "freebird_keys_deprecated",
+        "gauge",
+        "Number of deprecated signing keys",
+        key_stats.deprecated_keys
+    );
+    metric!(
+        "freebird_keys_expiring_soon",
+        "gauge",
+        "Number of keys expiring within 7 days",
+        key_stats.expiring_soon
+    );
+
+    // Sybil mode info (as a label)
+    output.push_str(&format!(
+        "# HELP freebird_info Freebird instance information\n# TYPE freebird_info gauge\nfreebird_info{{sybil_mode=\"{}\"}} 1\n",
+        state.config_summary.sybil_config.mode
+    ));
+
+    info!("Admin: retrieved Prometheus metrics");
+
+    Ok(output)
+}
+
 pub async fn grant_invites_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -2086,6 +2181,7 @@ fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
         .route("/health", axum::routing::get(health_handler))
         .route("/stats", axum::routing::get(get_stats_handler))
         .route("/config", axum::routing::get(get_config_handler))
+        .route("/metrics", axum::routing::get(metrics_handler))
         .route("/users", axum::routing::get(list_users_handler))
         .route("/users/:user_id", axum::routing::get(get_user_details_handler))
         .route("/invites/grant", axum::routing::post(grant_invites_handler))
