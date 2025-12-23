@@ -1049,6 +1049,13 @@
       <button
         type="button"
         class="tab issuer-only"
+        onclick="switchTab('sybil')"
+      >
+        🛡️ Sybil
+      </button>
+      <button
+        type="button"
+        class="tab issuer-only"
         onclick="switchTab('users')"
       >
         👥 Users
@@ -1126,6 +1133,18 @@
           </button>
           <button type="button" onclick="resetActivityChart()">Reset</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Sybil Configuration Tab -->
+    <div id="sybil-tab" class="tab-content">
+      <h2>🛡️ Sybil Resistance Configuration</h2>
+      <p>View the current Sybil resistance settings for this issuer.</p>
+
+      <button type="button" onclick="loadSybilConfig()">🔄 Refresh</button>
+
+      <div id="sybilConfigContainer" class="mt-20">
+        <p class="text-small">Click "Refresh" to load configuration...</p>
       </div>
     </div>
 
@@ -1729,6 +1748,10 @@
           return this.request("/stats");
         }
 
+        async getConfig() {
+          return this.request("/config");
+        }
+
         async getUsers(limit = 50, offset = 0) {
           return this.request(`/users?limit=${limit}&offset=${offset}`);
         }
@@ -1965,6 +1988,8 @@
           loadTrustedIssuers();
         } else if (tabName === "cache") {
           loadCacheStats();
+        } else if (tabName === "sybil") {
+          loadSybilConfig();
         }
       }
 
@@ -2201,6 +2226,140 @@
           }
         } catch (error) {
           container.innerHTML = `<div class="message error">❌ Failed to load stats: ${error.message}</div>`;
+        }
+      }
+
+      // ============================================================================
+      // User Management Functions
+      // ============================================================================
+      // Sybil Configuration Functions
+      // ============================================================================
+
+      async function loadSybilConfig() {
+        if (!state.apiKey) {
+          showMessage(
+            "sybilConfigContainer",
+            "warning",
+            "Please configure your API key first",
+          );
+          return;
+        }
+        const container = document.getElementById("sybilConfigContainer");
+        container.innerHTML =
+          '<p><span class="spinner"></span> Loading configuration...</p>';
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const data = await api.getConfig();
+
+          let html = `
+            <div class="stats-grid">
+              <div class="stat-card">
+                <h3>Sybil Mode</h3>
+                <p class="value" style="font-size: 1.4em;">${data.sybil.mode}</p>
+              </div>
+              <div class="stat-card">
+                <h3>Issuer ID</h3>
+                <p class="value" style="font-size: 0.9em; word-break: break-all;">${data.issuer_id}</p>
+              </div>
+              <div class="stat-card">
+                <h3>Epoch Duration</h3>
+                <p class="value">${data.epoch_duration}</p>
+              </div>
+              <div class="stat-card">
+                <h3>Epoch Retention</h3>
+                <p class="value">${data.epoch_retention}</p>
+              </div>
+            </div>
+
+            <div class="form-section" style="margin-top: 20px;">
+              <h3>Mode Description</h3>
+              <p>${data.sybil.mode_description}</p>
+            </div>
+          `;
+
+          // Render mode-specific settings
+          const settings = data.sybil.settings;
+          if (settings && Object.keys(settings).length > 0) {
+            html += `
+              <div class="form-section">
+                <h3>Mode Settings</h3>
+                <table>
+                  <thead>
+                    <tr><th>Setting</th><th>Value</th></tr>
+                  </thead>
+                  <tbody>
+            `;
+
+            for (const [key, value] of Object.entries(settings)) {
+              const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+              let displayValue = value;
+              if (Array.isArray(value)) {
+                // Handle trust levels array
+                if (value.length > 0 && typeof value[0] === 'object') {
+                  displayValue = '<ul style="margin: 0; padding-left: 20px;">';
+                  for (const level of value) {
+                    displayValue += '<li style="margin: 5px 0;">';
+                    displayValue += `Age: ${level.min_age}, Tokens: ${level.max_tokens}, Cooldown: ${level.cooldown}`;
+                    displayValue += '</li>';
+                  }
+                  displayValue += '</ul>';
+                } else {
+                  displayValue = value.join(', ');
+                }
+              } else if (typeof value === 'boolean') {
+                displayValue = value ? '✅ Yes' : '❌ No';
+              } else if (typeof value === 'object' && value !== null) {
+                displayValue = JSON.stringify(value, null, 2);
+              }
+              html += `<tr><td><strong>${displayKey}</strong></td><td>${displayValue}</td></tr>`;
+            }
+
+            html += `
+                  </tbody>
+                </table>
+              </div>
+            `;
+          }
+
+          // Render combined mode info if applicable
+          if (data.sybil.combined_mechanisms) {
+            html += `
+              <div class="form-section">
+                <h3>Combined Mode Configuration</h3>
+                <table>
+                  <thead>
+                    <tr><th>Setting</th><th>Value</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td><strong>Mode Type</strong></td><td>${data.sybil.combined_mode_type || 'or'}</td></tr>
+                    <tr><td><strong>Mechanisms</strong></td><td>${data.sybil.combined_mechanisms.join(', ')}</td></tr>
+                    ${data.sybil.combined_threshold ? `<tr><td><strong>Threshold</strong></td><td>${data.sybil.combined_threshold} required</td></tr>` : ''}
+                  </tbody>
+                </table>
+              </div>
+            `;
+          }
+
+          // System config section
+          html += `
+            <div class="form-section">
+              <h3>System Configuration</h3>
+              <table>
+                <thead>
+                  <tr><th>Setting</th><th>Value</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><strong>Require TLS</strong></td><td>${data.require_tls ? '✅ Yes' : '❌ No'}</td></tr>
+                  <tr><td><strong>Behind Proxy</strong></td><td>${data.behind_proxy ? '✅ Yes' : '❌ No'}</td></tr>
+                  <tr><td><strong>WebAuthn Enabled</strong></td><td>${data.webauthn_enabled ? '✅ Yes' : '❌ No'}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          `;
+
+          container.innerHTML = html;
+        } catch (error) {
+          container.innerHTML = `<div class="message error">Failed to load configuration: ${error.message}</div>`;
         }
       }
 

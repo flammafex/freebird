@@ -256,6 +256,111 @@ impl Default for TrustPolicy {
     }
 }
 
+impl TrustPolicy {
+    /// Create a TrustPolicy from environment variables.
+    ///
+    /// This allows operators to configure federation trust policies without
+    /// code changes. All values have sensible defaults.
+    ///
+    /// # Environment Variables
+    ///
+    /// - `TRUST_POLICY_ENABLED` - Enable federation (default: true)
+    /// - `TRUST_POLICY_MAX_DEPTH` - Maximum trust graph depth (default: 2)
+    /// - `TRUST_POLICY_MIN_PATHS` - Minimum independent trust paths (default: 1)
+    /// - `TRUST_POLICY_REQUIRE_DIRECT` - Only accept direct vouches (default: false)
+    /// - `TRUST_POLICY_TRUSTED_ROOTS` - Comma-separated list of trusted root issuer IDs
+    /// - `TRUST_POLICY_BLOCKED_ISSUERS` - Comma-separated list of blocked issuer IDs
+    /// - `TRUST_POLICY_REFRESH_INTERVAL` - Metadata refresh interval (default: "1h")
+    ///   Supports human-readable durations: "30m", "1h", "1d"
+    /// - `TRUST_POLICY_MIN_TRUST_LEVEL` - Minimum vouch trust level 0-100 (default: 50)
+    ///
+    /// # Examples
+    ///
+    /// ```bash
+    /// # Enable federation with custom roots
+    /// TRUST_POLICY_ENABLED=true
+    /// TRUST_POLICY_TRUSTED_ROOTS=issuer:mozilla:v1,issuer:eff:v1
+    /// TRUST_POLICY_MAX_DEPTH=3
+    /// TRUST_POLICY_REFRESH_INTERVAL=30m
+    /// ```
+    pub fn from_env() -> Self {
+        use crate::duration::env_duration;
+        use std::env;
+
+        let enabled = env::var("TRUST_POLICY_ENABLED")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(true);
+
+        let max_trust_depth = env::var("TRUST_POLICY_MAX_DEPTH")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(2);
+
+        let min_trust_paths = env::var("TRUST_POLICY_MIN_PATHS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+
+        let require_direct_trust = env::var("TRUST_POLICY_REQUIRE_DIRECT")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false);
+
+        let trusted_roots = env::var("TRUST_POLICY_TRUSTED_ROOTS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let blocked_issuers = env::var("TRUST_POLICY_BLOCKED_ISSUERS")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Supports human-readable durations: "30m", "1h", "1d"
+        let refresh_interval_secs = env_duration("TRUST_POLICY_REFRESH_INTERVAL", 3600);
+
+        let min_trust_level = env::var("TRUST_POLICY_MIN_TRUST_LEVEL")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(50);
+
+        Self {
+            enabled,
+            max_trust_depth,
+            min_trust_paths,
+            require_direct_trust,
+            trusted_roots,
+            blocked_issuers,
+            refresh_interval_secs,
+            min_trust_level,
+        }
+    }
+
+    /// Check if this policy has any trusted roots configured
+    pub fn has_trusted_roots(&self) -> bool {
+        !self.trusted_roots.is_empty()
+    }
+
+    /// Check if a specific issuer is blocked
+    pub fn is_blocked(&self, issuer_id: &str) -> bool {
+        self.blocked_issuers.contains(&issuer_id.to_string())
+    }
+
+    /// Check if a specific issuer is a trusted root
+    pub fn is_trusted_root(&self, issuer_id: &str) -> bool {
+        self.trusted_roots.contains(&issuer_id.to_string())
+    }
+}
+
 // Default value functions for serde
 fn default_true() -> bool { true }
 fn default_max_trust_depth() -> u32 { 2 }
@@ -583,5 +688,84 @@ mod tests {
 
         // Should NOT verify with different key
         assert!(!revocation.verify(&pk_b), "Should not verify with wrong key");
+    }
+
+    #[test]
+    fn test_trust_policy_from_env_defaults() {
+        // Clear all trust policy env vars
+        std::env::remove_var("TRUST_POLICY_ENABLED");
+        std::env::remove_var("TRUST_POLICY_MAX_DEPTH");
+        std::env::remove_var("TRUST_POLICY_MIN_PATHS");
+        std::env::remove_var("TRUST_POLICY_REQUIRE_DIRECT");
+        std::env::remove_var("TRUST_POLICY_TRUSTED_ROOTS");
+        std::env::remove_var("TRUST_POLICY_BLOCKED_ISSUERS");
+        std::env::remove_var("TRUST_POLICY_REFRESH_INTERVAL");
+        std::env::remove_var("TRUST_POLICY_MIN_TRUST_LEVEL");
+
+        let policy = TrustPolicy::from_env();
+
+        // Should match defaults
+        assert!(policy.enabled);
+        assert_eq!(policy.max_trust_depth, 2);
+        assert_eq!(policy.min_trust_paths, 1);
+        assert!(!policy.require_direct_trust);
+        assert!(policy.trusted_roots.is_empty());
+        assert!(policy.blocked_issuers.is_empty());
+        assert_eq!(policy.refresh_interval_secs, 3600);
+        assert_eq!(policy.min_trust_level, 50);
+    }
+
+    #[test]
+    fn test_trust_policy_from_env_custom() {
+        // Set custom values
+        std::env::set_var("TRUST_POLICY_ENABLED", "false");
+        std::env::set_var("TRUST_POLICY_MAX_DEPTH", "5");
+        std::env::set_var("TRUST_POLICY_MIN_PATHS", "3");
+        std::env::set_var("TRUST_POLICY_REQUIRE_DIRECT", "true");
+        std::env::set_var("TRUST_POLICY_TRUSTED_ROOTS", "issuer:a:v1, issuer:b:v1");
+        std::env::set_var("TRUST_POLICY_BLOCKED_ISSUERS", "issuer:bad:v1");
+        std::env::set_var("TRUST_POLICY_REFRESH_INTERVAL", "30m");
+        std::env::set_var("TRUST_POLICY_MIN_TRUST_LEVEL", "75");
+
+        let policy = TrustPolicy::from_env();
+
+        assert!(!policy.enabled);
+        assert_eq!(policy.max_trust_depth, 5);
+        assert_eq!(policy.min_trust_paths, 3);
+        assert!(policy.require_direct_trust);
+        assert_eq!(policy.trusted_roots, vec!["issuer:a:v1", "issuer:b:v1"]);
+        assert_eq!(policy.blocked_issuers, vec!["issuer:bad:v1"]);
+        assert_eq!(policy.refresh_interval_secs, 1800); // 30 minutes
+        assert_eq!(policy.min_trust_level, 75);
+
+        // Cleanup
+        std::env::remove_var("TRUST_POLICY_ENABLED");
+        std::env::remove_var("TRUST_POLICY_MAX_DEPTH");
+        std::env::remove_var("TRUST_POLICY_MIN_PATHS");
+        std::env::remove_var("TRUST_POLICY_REQUIRE_DIRECT");
+        std::env::remove_var("TRUST_POLICY_TRUSTED_ROOTS");
+        std::env::remove_var("TRUST_POLICY_BLOCKED_ISSUERS");
+        std::env::remove_var("TRUST_POLICY_REFRESH_INTERVAL");
+        std::env::remove_var("TRUST_POLICY_MIN_TRUST_LEVEL");
+    }
+
+    #[test]
+    fn test_trust_policy_helper_methods() {
+        let policy = TrustPolicy {
+            enabled: true,
+            max_trust_depth: 2,
+            min_trust_paths: 1,
+            require_direct_trust: false,
+            trusted_roots: vec!["issuer:root:v1".to_string()],
+            blocked_issuers: vec!["issuer:bad:v1".to_string()],
+            refresh_interval_secs: 3600,
+            min_trust_level: 50,
+        };
+
+        assert!(policy.has_trusted_roots());
+        assert!(policy.is_trusted_root("issuer:root:v1"));
+        assert!(!policy.is_trusted_root("issuer:other:v1"));
+        assert!(policy.is_blocked("issuer:bad:v1"));
+        assert!(!policy.is_blocked("issuer:good:v1"));
     }
 }
