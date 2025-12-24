@@ -108,7 +108,7 @@ Resources depend on your anticipated user base and Sybil resistance complexity.
 - **Verifiability**: DLEQ proofs ensure correct token generation using the committed key.
 - **Single-Use**: Nullifier-based replay protection ensures tokens are spent exactly once.
 
-### Implementation Status (v0.1.0)
+### Implementation Status
 
 **Core Features:**
 - ✅ **P-256 VOPRF** with DLEQ proofs
@@ -116,14 +116,17 @@ Resources depend on your anticipated user base and Sybil resistance complexity.
 - ✅ **Key Rotation**: Zero-downtime rotation with grace periods for deprecated keys
 - ✅ **Storage Backends**: In-memory (dev) and Redis (prod) support
 - ✅ **Multi-Issuer Federation**: Signature-based tokens enable verifiers to authenticate tokens from multiple issuers (see [`FEDERATION.md`](docs/FEDERATION.md))
-- ✅ **Web Admin Dashboard**: Modern single-page UI for system management, user administration, and key rotation
+- ✅ **Unified Admin Dashboard**: Single-page UI for both issuer and verifier management
+- ✅ **Admin CLI**: `freebird-cli` command-line tool for scripting and automation
 - ✅ **Admin API**: HTTP endpoints for user management, key rotation, and stats
+- ✅ **Prometheus Metrics**: `/admin/metrics` endpoint for monitoring and alerting
+- ✅ **Config Validation**: Pre-flight configuration checker
 
 **Sybil Resistance Mechanisms:**
 - ✅ **Invitation System**: Cryptographically signed invites with ban-trees and reputation tracking
 - ✅ **Proof of Work**: Configurable computational cost
 - ✅ **Rate Limiting**: IP or fingerprint-based throttling
-- ✅ **WebAuthn/FIDO2**: Hardware-backed "Proof of Humanity" (Feature flagged)
+- ✅ **WebAuthn/FIDO2**: Hardware-backed "Proof of Humanity" with attestation policies, discoverable credentials, and credential management
 - ✅ **Combined**: Stack multiple mechanisms for defense-in-depth
 
 ---
@@ -159,42 +162,152 @@ const isValid = await client.verifyToken(token);
 
 ---
 
-## 🖥️ Web Admin Dashboard
+## 🖥️ Command-Line Interface
 
-Freebird includes a modern, single-page web interface for managing your deployment—no command-line required.
+Freebird includes `freebird-cli`, a command-line tool for managing your deployment programmatically.
 
-### Features
+### Installation
+
+```bash
+# From source
+cargo install --path issuer --bin freebird-cli
+
+# Or use the Docker image
+docker run --rm freebird/cli --help
+```
+
+### Configuration
+
+```bash
+# Set connection details via environment
+export FREEBIRD_ISSUER_URL=http://localhost:8081
+export FREEBIRD_ADMIN_KEY=your-admin-key
+
+# Or pass via CLI flags
+freebird-cli --url http://localhost:8081 --key your-admin-key <command>
+```
+
+### Commands
+
+```bash
+# System
+freebird-cli health              # Check issuer health
+freebird-cli stats               # Show statistics
+freebird-cli config              # Show configuration
+freebird-cli metrics             # Show Prometheus metrics
+freebird-cli audit               # View audit log
+
+# User Management
+freebird-cli users list          # List all users
+freebird-cli users get <id>      # Get user details
+freebird-cli users ban <id>      # Ban a user
+freebird-cli users ban <id> --tree  # Ban user and their invite tree
+
+# Invitations
+freebird-cli invites list        # List invitations
+freebird-cli invites create <user> --count 5  # Create invitations
+freebird-cli invites grant <user> --count 3   # Grant invite slots
+
+# Key Management
+freebird-cli keys list           # List signing keys
+freebird-cli keys rotate         # Rotate signing key
+freebird-cli keys cleanup        # Remove expired keys
+
+# Federation
+freebird-cli federation vouches  # List federation vouches
+freebird-cli federation vouch <issuer> --level 5  # Add vouch
+freebird-cli federation revocations  # List revocations
+
+# Data Export
+freebird-cli export users        # Export users to JSON
+freebird-cli export invitations  # Export invitations to JSON
+freebird-cli export audit        # Export audit log to JSON
+```
+
+### Output Formats
+
+```bash
+# Table output (default)
+freebird-cli users list
+
+# JSON output (for scripting)
+freebird-cli --format json users list
+
+# Compact output
+freebird-cli --format compact stats
+```
+
+---
+
+## 🖥️ Unified Admin Dashboard
+
+Freebird includes a modern, single-page web interface for managing your deployment. The UI automatically detects which service it's connected to (issuer or verifier) and shows the appropriate features.
+
+### Issuer Features
 
 **📊 Dashboard Tab:**
-- View real-time system statistics
-- Monitor user counts, invitations, and redemptions
-- Track banned users and system health
-- One-click refresh
+- Real-time system statistics (users, invitations, redemptions)
+- Interactive activity charts with Canvas visualization
+- Monitor banned users and system health
 
 **👥 User Management Tab:**
-- View all users with search and filtering
-- Inspect detailed user profiles and reputation scores
-- View invitation trees and relationships
-- Ban individual users or entire invitation trees
+- Search and filter users
+- View detailed user profiles with reputation scores
+- Interactive invitation tree visualization
+- Ban users individually or recursively (entire invite tree)
 
 **🎫 Invitations Tab:**
 - Create cryptographically signed invitation codes
 - Grant invitation quota to users
-- View invitation history and redemption status
-- Copy codes and signatures with one click
+- Track redemption status and expiration
 
 **🔑 Key Management Tab:**
 - View active and deprecated cryptographic keys
 - Rotate keys with configurable grace periods
 - Clean up expired keys
-- Monitor key status and expiration
+
+**⚙️ Sybil Configuration Tab:**
+- View current Sybil resistance mode and settings
+- Monitor resistance mechanism statistics
+
+**📋 Audit Logs Tab:**
+- Comprehensive system activity logs
+- Filter by level (info, warning, error, success)
+- Search logs by keyword
+
+**🤝 Federation Tab:**
+- Manage federation relationships with other issuers
+- View trusted peers and cross-issuer policies
+
+**🔐 WebAuthn Tab:**
+- Register FIDO2 credentials and security keys
+- Manage biometric authentication
+
+### Verifier Features
+
+**📊 Dashboard Tab:**
+- Verification statistics and epoch information
+- Uptime and store backend status
+- Trusted issuer count
+
+**🔗 Trusted Issuers Tab:**
+- View all configured trusted issuers
+- Inspect issuer details (public key, context, expiration)
+- Trigger issuer metadata refresh
+
+**💾 Cache Tab:**
+- Replay cache statistics
+- Cache backend status
+- Cache management operations
 
 ### Access
 
-Once your Freebird issuer is running, access the dashboard at:
-
 ```
+# Issuer Admin
 http://localhost:8081/admin
+
+# Verifier Admin
+http://localhost:8082/admin
 ```
 
 **Authentication:** Requires the `ADMIN_API_KEY` from your `.env` file (minimum 32 characters).
@@ -202,12 +315,53 @@ http://localhost:8081/admin
 ### Architecture
 
 - **Zero dependencies**: Single HTML file with embedded CSS and JavaScript
-- **No build step**: Served directly from the issuer binary
-- **Minimal footprint**: ~1300 lines including all features
-- **Modern UI**: Clean, responsive design using water.css
+- **No build step**: Served directly from the binary
+- **Service detection**: Automatically adapts to issuer or verifier
+- **Modern UI**: Clean, responsive design with dark mode support
 - **Secure**: API key stored in browser localStorage only
 
 📖 **[Complete Admin Dashboard Documentation →](admin-ui/README.md)**
+
+---
+
+## 📊 Prometheus Metrics
+
+Freebird exposes metrics in Prometheus text exposition format for monitoring and alerting integration.
+
+### Endpoint
+
+```bash
+curl -H "X-Admin-Key: $ADMIN_API_KEY" http://localhost:8081/admin/metrics
+```
+
+### Available Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `freebird_users_total` | Gauge | Total registered users |
+| `freebird_users_banned` | Gauge | Number of banned users |
+| `freebird_invitations_total` | Gauge | Total invitations created |
+| `freebird_invitations_redeemed` | Gauge | Total invitations redeemed |
+| `freebird_invitations_pending` | Gauge | Pending invitations |
+| `freebird_keys_total` | Gauge | Total signing keys |
+| `freebird_keys_active` | Gauge | Active signing keys |
+| `freebird_keys_deprecated` | Gauge | Deprecated signing keys |
+| `freebird_keys_expiring_soon` | Gauge | Keys expiring within 7 days |
+| `freebird_info` | Info | Instance metadata with `sybil_mode` label |
+
+### Prometheus Configuration
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'freebird'
+    static_configs:
+      - targets: ['localhost:8081']
+    metrics_path: /admin/metrics
+    authorization:
+      type: 'Bearer'
+      credentials: 'your-admin-api-key'
+```
 
 ---
 
@@ -280,9 +434,39 @@ cp .env.example .env
 
 # Edit with your preferred editor
 nano .env
+
+# Validate configuration before starting
+freebird-validate-config
 ```
 
 The `.env.example` file contains **all** available configuration options with detailed comments and sensible defaults.
+
+### Configuration Validation
+
+Before starting Freebird, validate your configuration:
+
+```bash
+source .env && freebird-validate-config
+```
+
+This checks for:
+- Missing required variables
+- Invalid duration formats
+- Missing key files
+- Common configuration errors
+
+### Human-Readable Duration Format
+
+Duration fields support human-readable formats:
+
+| Format | Example | Description |
+|--------|---------|-------------|
+| Days | `30d` | 30 days |
+| Hours | `24h` | 24 hours |
+| Minutes | `30m` | 30 minutes |
+| Seconds | `45s` | 45 seconds |
+| Combined | `1d12h` | 1 day and 12 hours |
+| Raw | `3600` | Seconds (backward compatible) |
 
 ### Key Configuration Variables
 
@@ -293,16 +477,26 @@ The `.env.example` file contains **all** available configuration options with de
 | `BIND_ADDR` | `0.0.0.0:8081` | Listening address |
 | `SYBIL_RESISTANCE` | `none` | `invitation`, `pow`, `rate_limit`, `webauthn`, `combined`, etc. |
 | `ADMIN_API_KEY` | (None) | Required for Admin API (min 32 chars) |
-| `EPOCH_DURATION_SEC` | `86400` | Key rotation epoch duration (seconds) |
+| `EPOCH_DURATION` | `1d` | Key rotation epoch duration |
 
 **Verifier:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ISSUER_URL` | `http://localhost:8081/.well-known/issuer` | Issuer metadata URL |
+| `ISSUER_URL` | `http://localhost:8081/.well-known/issuer` | Issuer metadata URL (comma-separated for multiple) |
 | `REDIS_URL` | (None) | Redis URL for persistent nullifier storage |
 | `MAX_CLOCK_SKEW_SECS` | `300` | Clock skew tolerance (seconds) |
 
-📖 **See [.env.example](.env.example) for the complete configuration reference** with all 56+ available options.
+**Trust Policy (Federation):**
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRUST_POLICY_ENABLED` | `true` | Enable federation trust graph traversal |
+| `TRUST_POLICY_MAX_DEPTH` | `2` | Maximum hops in trust graph (0 = direct only) |
+| `TRUST_POLICY_MIN_PATHS` | `1` | Minimum independent trust paths required |
+| `TRUST_POLICY_REQUIRE_DIRECT` | `false` | Only accept issuers with direct vouches |
+| `TRUST_POLICY_TRUSTED_ROOTS` | (None) | Comma-separated list of always-trusted issuer IDs |
+| `TRUST_POLICY_BLOCKED_ISSUERS` | (None) | Comma-separated list of blocked issuer IDs |
+
+📖 **See [.env.example](.env.example) for the complete configuration reference** with all 60+ available options.
 
 ---
 
