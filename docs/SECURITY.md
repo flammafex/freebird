@@ -581,24 +581,58 @@ See [HSM_HYBRID_MODE.md](HSM_HYBRID_MODE.md) for implementation details.
 
 ---
 
-## Responsible Disclosure
+## Security Policy
 
-**Found a security vulnerability?**
+### Reporting Security Vulnerabilities
 
-Please report privately via:
-- GitHub Security Advisories
-- Email: security@yourproject.com (encrypted PGP preferred)
+The Freebird project takes security seriously. We appreciate your efforts to responsibly disclose your findings.
 
-**Do NOT:**
-- Open public GitHub issues for vulnerabilities
-- Disclose vulnerabilities before patch is available
-- Exploit vulnerabilities maliciously
+**DO NOT** open public GitHub issues for security vulnerabilities.
 
-**We will:**
-- Respond within 48 hours
-- Provide credit in security advisory (if desired)
-- Fix critical issues ASAP
-- Coordinate disclosure timeline
+Instead, please report security vulnerabilities by:
+
+1. **GitHub Security Advisories**: Use the "Security" tab on the GitHub repository
+2. **Email**: Send details to security@freebird.dev
+3. **GPG Encrypted**: For highly sensitive reports, use GPG encryption (key available on request)
+
+### What to Include
+
+- **Description**: Clear description of the vulnerability
+- **Impact**: Potential impact and attack scenarios
+- **Reproduction**: Step-by-step instructions to reproduce
+- **PoC**: Proof-of-concept code if applicable
+- **Severity**: Your assessment of severity (Critical/High/Medium/Low)
+- **Environment**: Affected versions and configurations
+
+### Response Timeline
+
+| Severity | Fix Timeline |
+|----------|--------------|
+| Critical | 7 days |
+| High | 14 days |
+| Medium | 30 days |
+| Low | 60 days |
+
+- **Initial Response**: Within 48 hours
+- **Triage**: Within 5 business days
+
+### Disclosure Policy
+
+- We request **90 days** before public disclosure
+- We will credit reporters (unless they prefer anonymity)
+- We will coordinate disclosure timing with reporters
+
+### Security Updates
+
+Security updates will be:
+- Published in GitHub Security Advisories
+- Tagged with security labels in releases
+- Documented in CHANGELOG.md
+- Announced via project communication channels
+
+### Bug Bounty
+
+We do not currently offer a bug bounty program. This may change as the project matures.
 
 ---
 
