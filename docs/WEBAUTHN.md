@@ -14,12 +14,13 @@ Freebird supports **WebAuthn/FIDO2** as a Sybil resistance mechanism. This provi
 - **Redis-Backed Storage**: Production-ready persistent credential storage
 - **Multi-Device Support**: Users can register multiple authenticators
 
-### Extended Features (New)
+### Advanced Features
 - **Attestation Policy Enforcement**: Verify authenticator models via AAGUID allowlists
 - **Discoverable Credentials**: True passwordless/usernameless authentication (resident keys)
 - **Multi-Device Credential Management**: Track backup eligibility, sync status, device types
 - **Credential Revocation**: Admin endpoints to list and revoke credentials
 - **Audit Logging**: Comprehensive registration and authentication audit trail
+- **Rate Limiting**: Per-IP protection against brute force and DoS attacks
 
 ---
 
@@ -82,17 +83,17 @@ export WEBAUTHN_RP_ORIGIN=http://localhost:8081    # Origin URL
 
 # WebAuthn Credential Storage
 export WEBAUTHN_REDIS_URL=redis://localhost:6379   # Redis for credentials
-export WEBAUTHN_CRED_TTL_SECS=31536000             # 1 year (optional)
+export WEBAUTHN_CRED_TTL=1y                        # Credential TTL (optional)
 
 # Sybil Resistance
 export SYBIL_RESISTANCE=webauthn                   # Enable WebAuthn gate
-export WEBAUTHN_MAX_PROOF_AGE=300                  # 5 minutes
+export WEBAUTHN_MAX_PROOF_AGE=5m                   # Proof validity window
 
 # Security: Proof Secret (RECOMMENDED for production)
 export WEBAUTHN_PROOF_SECRET="your-random-secret-here"
 ```
 
-### Attestation Policy Configuration (New)
+### Attestation Policy Configuration
 
 ```bash
 # Attestation Policy Level
@@ -110,7 +111,7 @@ export WEBAUTHN_ALLOWED_AAGUIDS=fa2b99dc-9e39-4257-8f92-4a30d23c4118,c5ef55ff-ad
 export WEBAUTHN_AUDIT_LOGGING=true
 ```
 
-### Credential Management Configuration (New)
+### Credential Management Configuration
 
 ```bash
 # Maximum credentials per user (prevent device farming)
@@ -121,6 +122,28 @@ export WEBAUTHN_ALLOW_CREDENTIAL_REVOCATION=true
 
 # Force resident key registration (discoverable credentials)
 export WEBAUTHN_REQUIRE_RESIDENT_KEY=false
+```
+
+### Rate Limiting Configuration
+
+```bash
+# Maximum registration attempts per IP per window (default: 10)
+export WEBAUTHN_MAX_REGISTRATION_ATTEMPTS=10
+
+# Maximum authentication attempts per IP per window (default: 20)
+export WEBAUTHN_MAX_AUTH_ATTEMPTS=20
+
+# Rate limit window duration (default: 5m)
+export WEBAUTHN_RATE_LIMIT_WINDOW=5m
+
+# Block duration after exceeding limit (default: 15m)
+export WEBAUTHN_BLOCK_DURATION=15m
+
+# Maximum concurrent sessions per IP (default: 50)
+export WEBAUTHN_MAX_SESSIONS_PER_IP=50
+
+# Maximum total active sessions system-wide (default: 10000)
+export WEBAUTHN_MAX_TOTAL_SESSIONS=10000
 ```
 
 ### Well-Known AAGUIDs
@@ -157,7 +180,7 @@ export WEBAUTHN_REQUIRE_RESIDENT_KEY=false
 }
 ```
 
-### Resident Key Registration (New)
+### Resident Key Registration
 
 Enables true passwordless authentication with credentials stored on the authenticator.
 
@@ -202,9 +225,9 @@ Enables true passwordless authentication with credentials stored on the authenti
 }
 ```
 
-### Discoverable Authentication (Usernameless) (New)
+### Discoverable Authentication (Usernameless)
 
-No username required - the authenticator provides the credential.
+No username required—the authenticator provides the credential.
 
 **POST /webauthn/authenticate/discoverable/start**
 
@@ -250,7 +273,7 @@ No request body needed.
 }
 ```
 
-### Credential Management (New)
+### Credential Management
 
 **GET /webauthn/credentials/:username**
 
@@ -315,7 +338,7 @@ Revoke a credential.
 
 ## Redis Schema
 
-### Credential Storage (Extended)
+### Credential Storage
 
 ```
 Key:   webauthn:cred:{cred_id_base64}
@@ -348,7 +371,7 @@ Type:  SET
 Value: Set of credential keys
 ```
 
-### User Handle Mapping (New)
+### User Handle Mapping
 
 ```
 Key:   webauthn:handle:{user_handle_base64}
@@ -356,7 +379,7 @@ Value: username (string)
 TTL:   Optional (matches cred TTL)
 ```
 
-### Discoverable Credentials Index (New)
+### Discoverable Credentials Index
 
 ```
 Key:   webauthn:discoverable:{user_handle_base64}
@@ -364,7 +387,7 @@ Type:  SET
 Value: Set of credential keys for discoverable lookup
 ```
 
-### Audit Metadata (New)
+### Audit Metadata
 
 ```
 Key:   webauthn:audit:{cred_id_base64}
@@ -410,6 +433,20 @@ TTL:   30 days
 - Stronger security guarantee
 - Lost device = lost credential
 
+### Rate Limiting
+
+WebAuthn endpoints include built-in rate limiting to prevent abuse:
+
+| Protection | Default | Description |
+|------------|---------|-------------|
+| Registration attempts | 10/5min | Per-IP limit on registration starts |
+| Authentication attempts | 20/5min | Per-IP limit on authentication starts |
+| Block duration | 15 min | Lockout period after exceeding limits |
+| Sessions per IP | 50 | Maximum concurrent challenge sessions |
+| Total sessions | 10,000 | System-wide session limit |
+
+When rate limited, endpoints return HTTP 429 with a `Retry-After` header.
+
 ### Threat Model
 
 **Protects Against:**
@@ -417,6 +454,8 @@ TTL:   30 days
 - Mass token requests from VMs/cloud instances
 - Credential stuffing (origin-bound)
 - Phishing (challenge-response)
+- Brute force attacks (rate limiting)
+- Memory exhaustion attacks (session limits)
 
 **Does NOT Protect Against:**
 - Users with multiple physical devices
@@ -549,15 +588,28 @@ The credential assertion doesn't include a userHandle.
 
 **Solution:** The credential must be registered as a resident key (discoverable).
 
+### "Rate limited" / HTTP 429
+
+Too many requests from your IP address.
+
+**Solution:** Wait for the `Retry-After` period (default 15 minutes) or adjust rate limit configuration.
+
+### "Service temporarily unavailable" / HTTP 503
+
+System has reached maximum concurrent sessions.
+
+**Solution:** Wait for sessions to expire or increase `WEBAUTHN_MAX_TOTAL_SESSIONS`.
+
 ---
 
 ## Related Documentation
 
-- [Sybil Resistance Mechanisms](../docs/SYBIL_RESISTANCE.md)
-- [Production Deployment](../docs/PRODUCTION.md)
-- [Security Model](../docs/SECURITY.md)
-- [WebAuthn Specification](https://www.w3.org/TR/webauthn-2/)
-- [Passkeys](https://passkeys.dev)
+- [Sybil Resistance Mechanisms](SYBIL_RESISTANCE.md)
+- [Production Deployment](PRODUCTION.md)
+- [Security Model](SECURITY.md)
+- [Troubleshooting Guide](TROUBLESHOOTING.md)
+- [WebAuthn Specification](https://www.w3.org/TR/webauthn-3/)
+- [Passkeys Developer Guide](https://passkeys.dev)
 
 ---
 
