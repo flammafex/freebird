@@ -286,9 +286,36 @@ curl -X POST \
   http://localhost:8080/admin/federation/vouches
 ```
 
-### Admin API
+### Admin API & CLI
 
-Layer 2 includes REST endpoints for managing federation:
+Layer 2 includes REST endpoints and CLI commands for managing federation.
+
+#### CLI Commands
+
+```bash
+# List vouches
+freebird-cli federation vouches
+
+# Add a vouch for another issuer
+freebird-cli federation vouch issuer:eff:v1 --level 90
+
+# Remove a vouch
+freebird-cli federation unvouch issuer:eff:v1
+
+# List revocations
+freebird-cli federation revocations
+
+# Add a revocation
+freebird-cli federation revoke issuer:compromised:v1 --reason "Key compromised"
+
+# Remove a revocation
+freebird-cli federation unrevoke issuer:compromised:v1
+
+# Export federation data
+freebird-cli export federation
+```
+
+#### REST API Endpoints
 
 ```bash
 # List vouches
@@ -325,79 +352,76 @@ All endpoints require `X-Admin-Key` header authentication.
 
 ### Persistent Storage
 
-Vouches and revocations are stored in `./data/federation/`:
-- `vouches.json` - All active vouches
-- `revocations.json` - All active revocations
+Vouches and revocations are stored in `$FEDERATION_DATA_PATH` (default: `/data/federation`):
 
-Files are pretty-printed JSON for easy inspection and manual editing.
+```
+/data/federation/
+├── vouches.json      # Active vouches
+└── revocations.json  # Active revocations
+```
+
+Files are pretty-printed JSON for easy inspection and backup.
 
 ---
 
 ## Configuration
 
-### Issuer Configuration (Layer 1)
+### Issuer Configuration
 
 ```bash
-# Standard issuer configuration
-ISSUER_ID="issuer:example:v1"
-BIND_ADDR="0.0.0.0:8081"
-TOKEN_TTL_MIN=10
-EPOCH_DURATION_SEC=86400
-EPOCH_RETENTION=2
+# Core issuer settings
+export ISSUER_ID=issuer:example:v1
+export ISSUER_BIND_ADDR=0.0.0.0:8081
+export TOKEN_TTL_MIN=10
+export EPOCH_DURATION=1d
+export EPOCH_RETENTION=2
+
+# Federation data storage
+export FEDERATION_DATA_PATH=/data/federation
+
+# Admin API (required for federation management)
+export ADMIN_API_KEY=your-secure-key-at-least-32-characters
 ```
 
-No additional configuration needed - signature-based tokens are automatic.
+Signature-based tokens are automatic—no additional configuration needed for Layer 1.
 
-### Issuer Configuration (Layer 2)
-
-```bash
-# Enable admin API for federation management
-ADMIN_API_KEY="<64-character-key>"
-
-# Federation data stored in ./data/federation/
-```
-
-### Verifier Configuration (Layer 1)
+### Verifier Configuration
 
 ```bash
-# Standard verifier configuration
-BIND_ADDR="0.0.0.0:8082"
-MAX_CLOCK_SKEW_SECS=300
-EPOCH_DURATION_SEC=86400
-EPOCH_RETENTION=2
+# Core verifier settings
+export VERIFIER_BIND_ADDR=0.0.0.0:8082
+export MAX_CLOCK_SKEW_SECS=300
+export VERIFIER_EPOCH_DURATION=1d
+export VERIFIER_EPOCH_RETENTION=2
+
+# Issuer URL (comma-separated for multiple issuers)
+export ISSUER_URL=https://issuer-a.example.com/.well-known/issuer,https://issuer-b.example.com/.well-known/issuer
+
+# Trust Policy (Layer 2 Federation)
+export TRUST_POLICY_ENABLED=true
+export TRUST_POLICY_MAX_DEPTH=2
+export TRUST_POLICY_MIN_PATHS=1
+export TRUST_POLICY_REQUIRE_DIRECT=false
+export TRUST_POLICY_TRUSTED_ROOTS=issuer:mozilla:v1,issuer:eff:v1
+export TRUST_POLICY_BLOCKED_ISSUERS=issuer:compromised:v1
+export TRUST_POLICY_REFRESH_INTERVAL=1h
+export TRUST_POLICY_MIN_TRUST_LEVEL=50
 ```
 
 **Note**: No secret key required! Verifier operates entirely with public keys.
 
-### Verifier Configuration (Layer 2)
+### Trust Policy Variables
 
-```rust
-use verifier::federation::TrustGraph;
-use common::federation::TrustPolicy;
-
-let policy = TrustPolicy {
-    enabled: true,
-    max_trust_depth: 2,
-    min_trust_paths: 1,
-    trusted_roots: vec![
-        "issuer:mozilla:v1".to_string(),
-        "issuer:eff:v1".to_string(),
-    ],
-    blocked_issuers: vec![
-        "issuer:compromised:v1".to_string(),
-    ],
-    refresh_interval_secs: 3600,
-    min_trust_level: 50,
-    ..Default::default()
-};
-
-let trust_graph = TrustGraph::new(policy);
-
-// Check trust before accepting tokens
-if !trust_graph.is_trusted(&issuer_id, &issuer_pubkey).await {
-    return Err("Issuer not trusted");
-}
-```
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRUST_POLICY_ENABLED` | `true` | Enable federation trust graph |
+| `TRUST_POLICY_MAX_DEPTH` | `2` | Maximum hops in trust graph |
+| `TRUST_POLICY_MIN_PATHS` | `1` | Minimum independent paths required |
+| `TRUST_POLICY_REQUIRE_DIRECT` | `false` | Only accept direct vouches from roots |
+| `TRUST_POLICY_TRUSTED_ROOTS` | None | Comma-separated list of trusted root issuers |
+| `TRUST_POLICY_BLOCKED_ISSUERS` | None | Comma-separated list of blocked issuers |
+| `TRUST_POLICY_REFRESH_INTERVAL` | `1h` | How often to refresh federation metadata |
+| `TRUST_POLICY_MIN_TRUST_LEVEL` | `50` | Minimum trust level (0-100) for vouches |
 
 ---
 
@@ -508,15 +532,13 @@ UC Berkeley (root) ───vouches──→ Stanford ───vouches──→ 
        └─────vouches──→ UCLA
 ```
 
-**Policy**:
-```rust
-TrustPolicy {
-    trusted_roots: ["issuer:berkeley:v1"],
-    max_trust_depth: 2,
-    min_trust_paths: 1,
-    min_trust_level: 80,
-    ..Default::default()
-}
+**Configuration**:
+```bash
+TRUST_POLICY_ENABLED=true
+TRUST_POLICY_TRUSTED_ROOTS=issuer:berkeley:v1
+TRUST_POLICY_MAX_DEPTH=2
+TRUST_POLICY_MIN_PATHS=1
+TRUST_POLICY_MIN_TRUST_LEVEL=80
 ```
 
 **Benefits**: Consortium members vouch for each other, automated trust propagation.
@@ -532,18 +554,13 @@ EU Commission (root) ───vouches──→ Germany eID
                                └──→ France eID
 ```
 
-**Policy**:
-```rust
-TrustPolicy {
-    trusted_roots: vec![
-        "issuer:usa-gov:v1",
-        "issuer:eu-commission:v1",
-    ],
-    max_trust_depth: 1,  // Only direct vouches
-    require_direct_trust: true,
-    min_trust_level: 95,
-    ..Default::default()
-}
+**Configuration**:
+```bash
+TRUST_POLICY_ENABLED=true
+TRUST_POLICY_TRUSTED_ROOTS=issuer:usa-gov:v1,issuer:eu-commission:v1
+TRUST_POLICY_MAX_DEPTH=1
+TRUST_POLICY_REQUIRE_DIRECT=true
+TRUST_POLICY_MIN_TRUST_LEVEL=95
 ```
 
 **Benefits**: Government-level trust anchors, regional issuers, strict trust policy.
@@ -557,15 +574,13 @@ Alice ───vouches──→ Bob ───vouches──→ Charlie
   └─────────vouches───┘
 ```
 
-**Policy**:
-```rust
-TrustPolicy {
-    trusted_roots: vec!["issuer:alice:v1"],
-    max_trust_depth: 2,
-    min_trust_paths: 2,  // Require 2 independent paths
-    min_trust_level: 70,
-    ..Default::default()
-}
+**Configuration**:
+```bash
+TRUST_POLICY_ENABLED=true
+TRUST_POLICY_TRUSTED_ROOTS=issuer:alice:v1
+TRUST_POLICY_MAX_DEPTH=2
+TRUST_POLICY_MIN_PATHS=2
+TRUST_POLICY_MIN_TRUST_LEVEL=70
 ```
 
 **Result**: Charlie trusted (2 paths: Alice→Bob→Charlie and Alice→Charlie)
@@ -667,16 +682,14 @@ curl http://localhost:8080/.well-known/federation
 - [ActivityPub](https://www.w3.org/TR/activitypub/) - Federated Networks (inspiration)
 
 ### Documentation
-- [How It Works](./HOW_IT_WORKS.md) - VOPRF protocol details
-- [Security](./SECURITY.md) - Security architecture
-- [API Reference](./API.md) - HTTP endpoints
-- [Configuration](./CONFIGURATION.md) - Configuration reference
+- [How It Works](HOW_IT_WORKS.md) - VOPRF protocol details
+- [Security Model](SECURITY.md) - Security architecture
+- [API Reference](API.md) - HTTP endpoints
+- [Configuration Reference](CONFIGURATION.md) - Environment variables
+- [WebAuthn Guide](WEBAUTHN.md) - Hardware-backed authentication
 
 ---
 
 ## Support
 
-For questions or issues:
-- **GitHub Issues**: https://github.com/flammafex/freebird/issues
-- **Documentation**: `docs/`
-- **Security**: See `SECURITY.md`
+For questions or issues, check the [Troubleshooting Guide](TROUBLESHOOTING.md) or open a GitHub issue.
