@@ -1,35 +1,44 @@
-# 🔧 Admin API Reference
+# Admin API Reference
 
-Complete HTTP API for managing the Freebird invitation system and key rotation.
+Complete HTTP API for managing Freebird issuer and verifier services. The Admin API provides endpoints for user management, invitation handling, key rotation, Sybil configuration, audit logs, and system monitoring.
 
 ---
 
 ## Overview
 
-The Admin API provides administrative endpoints for:
-- Managing invitations (grant, inspect)
-- User management (ban, bootstrap)
-- System statistics
-- Key rotation
-- State persistence
+The Admin API provides administrative endpoints for both issuer and verifier services:
+
+**Shared Endpoints:**
+- Health checks and system statistics
+- Configuration inspection
+- Prometheus metrics
+
+**Issuer-Only Endpoints:**
+- User management (list, inspect, ban)
+- Invitation management (create, grant, list)
+- Key rotation and lifecycle
+- Sybil resistance configuration
+- Audit logs
+- WebAuthn credential management
+
+**Verifier-Only Endpoints:**
+- Trusted issuer management
+- Replay cache operations
 
 **Requirements:**
-- Invitation-based Sybil resistance must be enabled
 - `ADMIN_API_KEY` environment variable must be set (minimum 32 characters)
-- All requests require `X-Admin-Key` header for authentication
+- All requests (except health check) require `X-Admin-Key` header for authentication
 
 ---
 
 ## Configuration
 
 ```bash
-# Enable Admin API (requires invitation system)
-export SYBIL_RESISTANCE=invitation
+# Enable Admin API
 export ADMIN_API_KEY=your-secure-random-key-at-least-32-characters
 
-# Optionally configure invitation system
-export SYBIL_INVITE_PER_USER=5
-export SYBIL_INVITE_BOOTSTRAP_USERS=admin:100,alice:50
+# Optional: Configure admin port (default: same as service port)
+export ADMIN_PORT=8081
 ```
 
 **Security Notes:**
@@ -65,16 +74,19 @@ curl http://localhost:8081/admin/stats \
 
 **GET /admin/health**
 
-Check admin API availability (no authentication required).
+Check admin API availability and detect service type (no authentication required).
 
 **Response:**
 ```json
 {
   "status": "ok",
+  "service": "issuer",
   "uptime_seconds": 3600,
-  "invitation_system_status": "operational"
+  "version": "0.1.0"
 }
 ```
+
+The `service` field indicates which service is running (`issuer` or `verifier`). The admin UI uses this to show appropriate tabs and features.
 
 ---
 
@@ -82,7 +94,7 @@ Check admin API availability (no authentication required).
 
 **GET /admin/stats**
 
-Get invitation system statistics.
+Get system statistics. Response varies based on service type and Sybil mechanism.
 
 **Example:**
 ```bash
@@ -90,7 +102,7 @@ curl http://localhost:8081/admin/stats \
   -H "X-Admin-Key: your-admin-api-key"
 ```
 
-**Response:**
+**Issuer Response (invitation mode):**
 ```json
 {
   "stats": {
@@ -104,7 +116,78 @@ curl http://localhost:8081/admin/stats \
 }
 ```
 
+**Verifier Response:**
+```json
+{
+  "stats": {
+    "verifications_total": 50000,
+    "verifications_success": 49500,
+    "trusted_issuers": 3,
+    "cache_size": 12500
+  },
+  "epoch": 1699454445,
+  "uptime_seconds": 86400
+}
+```
+
 ---
+
+### Configuration
+
+**GET /admin/config**
+
+Get current configuration values (sensitive values are redacted).
+
+**Example:**
+```bash
+curl http://localhost:8081/admin/config \
+  -H "X-Admin-Key: your-admin-api-key"
+```
+
+**Response:**
+```json
+{
+  "sybil_resistance": "invitation",
+  "epoch_length_seconds": 86400,
+  "invite_per_user": 5,
+  "invite_cooldown": "24h",
+  "invite_expiration": "30d"
+}
+```
+
+---
+
+### Prometheus Metrics
+
+**GET /admin/metrics**
+
+Get Prometheus-format metrics for monitoring systems.
+
+**Example:**
+```bash
+curl http://localhost:8081/admin/metrics \
+  -H "X-Admin-Key: your-admin-api-key"
+```
+
+**Response:**
+```
+# HELP freebird_tokens_issued_total Total tokens issued
+# TYPE freebird_tokens_issued_total counter
+freebird_tokens_issued_total 12500
+
+# HELP freebird_verifications_total Total verifications
+# TYPE freebird_verifications_total counter
+freebird_verifications_total{result="success"} 49500
+freebird_verifications_total{result="failure"} 500
+
+# HELP freebird_active_users Current active users
+# TYPE freebird_active_users gauge
+freebird_active_users 120
+```
+
+---
+
+## Issuer Endpoints
 
 ### Grant Invites
 
@@ -256,6 +339,50 @@ curl -X POST http://localhost:8081/admin/bootstrap/add \
 
 ---
 
+### List Users
+
+**GET /admin/users**
+
+List all users with optional filtering and pagination.
+
+**Query Parameters:**
+- `limit` (optional): Maximum results to return (default: 100)
+- `offset` (optional): Pagination offset (default: 0)
+- `filter` (optional): Filter by status (`active`, `banned`, `all`)
+
+**Example:**
+```bash
+curl "http://localhost:8081/admin/users?limit=50&filter=active" \
+  -H "X-Admin-Key: your-admin-api-key"
+```
+
+**Response:**
+```json
+{
+  "users": [
+    {
+      "user_id": "alice",
+      "invites_remaining": 3,
+      "reputation": 1.0,
+      "banned": false,
+      "joined_at": 1699000000
+    },
+    {
+      "user_id": "bob",
+      "invites_remaining": 5,
+      "reputation": 0.8,
+      "banned": false,
+      "joined_at": 1699100000
+    }
+  ],
+  "total": 120,
+  "limit": 50,
+  "offset": 0
+}
+```
+
+---
+
 ### Get User Details
 
 **GET /admin/users/:user_id**
@@ -287,6 +414,93 @@ curl http://localhost:8081/admin/users/alice \
 ```json
 {
   "error": "user not found: nonexistent_user"
+}
+```
+
+---
+
+### Create Invitations
+
+**POST /admin/invitations/create**
+
+Create cryptographically signed invitation codes for a user.
+
+**Request Body:**
+```json
+{
+  "user_id": "alice",
+  "count": 5
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:8081/admin/invitations/create \
+  -H "X-Admin-Key: your-admin-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "alice",
+    "count": 5
+  }'
+```
+
+**Response (200 OK):**
+```json
+{
+  "ok": true,
+  "invitations": [
+    {
+      "code": "Abc123XyZ456",
+      "expires_at": 1701592000
+    },
+    {
+      "code": "Def789UvW012",
+      "expires_at": 1701592000
+    }
+  ]
+}
+```
+
+---
+
+### List Invitations
+
+**GET /admin/invitations**
+
+List all invitations with optional filtering.
+
+**Query Parameters:**
+- `status` (optional): Filter by status (`pending`, `redeemed`, `expired`, `all`)
+- `user_id` (optional): Filter by inviter
+- `limit` (optional): Maximum results (default: 100)
+
+**Example:**
+```bash
+curl "http://localhost:8081/admin/invitations?status=pending&limit=50" \
+  -H "X-Admin-Key: your-admin-api-key"
+```
+
+**Response:**
+```json
+{
+  "invitations": [
+    {
+      "code": "Abc123XyZ456",
+      "inviter_id": "alice",
+      "created_at": 1699000000,
+      "expires_at": 1701592000,
+      "redeemed": false
+    },
+    {
+      "code": "Xyz789Abc123",
+      "inviter_id": "bob",
+      "created_at": 1699100000,
+      "expires_at": 1701692000,
+      "redeemed": true,
+      "invitee_id": "charlie"
+    }
+  ],
+  "total": 150
 }
 ```
 
@@ -518,7 +732,336 @@ curl -X DELETE http://localhost:8081/admin/keys/compromised-key \
 **Error Response (404 Not Found):**
 ```json
 {
-  "error": "user not found: nonexistent-key"
+  "error": "key not found: nonexistent-key"
+}
+```
+
+---
+
+### Audit Logs
+
+**GET /admin/audit**
+
+Retrieve system audit logs with filtering.
+
+**Query Parameters:**
+- `level` (optional): Filter by level (`info`, `warning`, `error`, `success`)
+- `search` (optional): Search logs by keyword
+- `limit` (optional): Maximum results (default: 100)
+- `since` (optional): Unix timestamp for earliest log entry
+
+**Example:**
+```bash
+curl "http://localhost:8081/admin/audit?level=error&limit=50" \
+  -H "X-Admin-Key: your-admin-api-key"
+```
+
+**Response:**
+```json
+{
+  "logs": [
+    {
+      "timestamp": 1699454445,
+      "level": "error",
+      "action": "ban_user",
+      "message": "User banned: spammer",
+      "details": {
+        "user_id": "spammer",
+        "ban_tree": true,
+        "banned_count": 7
+      }
+    },
+    {
+      "timestamp": 1699454400,
+      "level": "info",
+      "action": "key_rotate",
+      "message": "Key rotated: freebird-2024-Q4"
+    }
+  ],
+  "total": 1250
+}
+```
+
+---
+
+### Sybil Configuration
+
+**GET /admin/sybil/config**
+
+Get current Sybil resistance configuration.
+
+**Example:**
+```bash
+curl http://localhost:8081/admin/sybil/config \
+  -H "X-Admin-Key: your-admin-api-key"
+```
+
+**Response:**
+```json
+{
+  "mechanism": "invitation",
+  "invite_per_user": 5,
+  "invite_cooldown_seconds": 86400,
+  "invite_expiration_seconds": 2592000,
+  "pow_difficulty": 20,
+  "rate_limit_requests": 100,
+  "rate_limit_window_seconds": 3600
+}
+```
+
+---
+
+**PUT /admin/sybil/config**
+
+Update Sybil resistance configuration. Changes take effect immediately.
+
+**Request Body:**
+```json
+{
+  "invite_per_user": 10,
+  "invite_cooldown_seconds": 43200
+}
+```
+
+**Example:**
+```bash
+curl -X PUT http://localhost:8081/admin/sybil/config \
+  -H "X-Admin-Key: your-admin-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "invite_per_user": 10,
+    "invite_cooldown_seconds": 43200
+  }'
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "updated_fields": ["invite_per_user", "invite_cooldown_seconds"],
+  "config": {
+    "mechanism": "invitation",
+    "invite_per_user": 10,
+    "invite_cooldown_seconds": 43200,
+    "invite_expiration_seconds": 2592000
+  }
+}
+```
+
+---
+
+### WebAuthn Endpoints
+
+**POST /admin/webauthn/register**
+
+Begin WebAuthn credential registration.
+
+**Request Body:**
+```json
+{
+  "user_id": "alice",
+  "display_name": "Alice's YubiKey"
+}
+```
+
+**Response:**
+```json
+{
+  "challenge": "base64-encoded-challenge",
+  "rp": {
+    "name": "Freebird",
+    "id": "example.com"
+  },
+  "user": {
+    "id": "base64-user-id",
+    "name": "alice",
+    "displayName": "Alice's YubiKey"
+  },
+  "pubKeyCredParams": [
+    {"type": "public-key", "alg": -7}
+  ]
+}
+```
+
+---
+
+**GET /admin/webauthn/credentials**
+
+List all registered WebAuthn credentials.
+
+**Example:**
+```bash
+curl http://localhost:8081/admin/webauthn/credentials \
+  -H "X-Admin-Key: your-admin-api-key"
+```
+
+**Response:**
+```json
+{
+  "credentials": [
+    {
+      "credential_id": "base64-credential-id",
+      "user_id": "alice",
+      "display_name": "Alice's YubiKey",
+      "created_at": 1699000000,
+      "last_used": 1699400000,
+      "sign_count": 42
+    }
+  ]
+}
+```
+
+---
+
+**POST /admin/webauthn/credentials/remove**
+
+Remove a WebAuthn credential.
+
+**Request Body:**
+```json
+{
+  "credential_id": "base64-credential-id"
+}
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "credential_id": "base64-credential-id"
+}
+```
+
+---
+
+## Verifier Endpoints
+
+These endpoints are only available on verifier services.
+
+### List Trusted Issuers
+
+**GET /admin/issuers**
+
+List all configured trusted issuers.
+
+**Example:**
+```bash
+curl http://localhost:8082/admin/issuers \
+  -H "X-Admin-Key: your-admin-api-key"
+```
+
+**Response:**
+```json
+{
+  "issuers": [
+    {
+      "id": "primary",
+      "url": "https://issuer.example.com",
+      "public_key": "base64-public-key",
+      "context": "example.com",
+      "last_refresh": 1699454445,
+      "status": "active"
+    }
+  ]
+}
+```
+
+---
+
+### Get Issuer Details
+
+**GET /admin/issuers/:id**
+
+Get detailed information about a trusted issuer.
+
+**Response:**
+```json
+{
+  "id": "primary",
+  "url": "https://issuer.example.com",
+  "public_key": "base64-public-key",
+  "context": "example.com",
+  "expires_at": 1704067200,
+  "last_refresh": 1699454445,
+  "refresh_interval_seconds": 3600,
+  "status": "active",
+  "verification_stats": {
+    "total": 50000,
+    "success": 49500,
+    "failure": 500
+  }
+}
+```
+
+---
+
+### Refresh Issuer Metadata
+
+**POST /admin/issuers/:id/refresh**
+
+Manually trigger a metadata refresh for an issuer.
+
+**Example:**
+```bash
+curl -X POST http://localhost:8082/admin/issuers/primary/refresh \
+  -H "X-Admin-Key: your-admin-api-key"
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "issuer_id": "primary",
+  "public_key_updated": true,
+  "new_expiration": 1704067200
+}
+```
+
+---
+
+### Cache Statistics
+
+**GET /admin/cache/stats**
+
+Get replay cache statistics.
+
+**Example:**
+```bash
+curl http://localhost:8082/admin/cache/stats \
+  -H "X-Admin-Key: your-admin-api-key"
+```
+
+**Response:**
+```json
+{
+  "backend": "redis",
+  "entries": 125000,
+  "memory_bytes": 15000000,
+  "hit_rate": 0.95,
+  "evictions": 500,
+  "oldest_entry": 1699368045
+}
+```
+
+---
+
+### Clear Cache
+
+**POST /admin/cache/clear**
+
+Clear the replay cache. Use with caution—allows token replay until new entries accumulate.
+
+**Example:**
+```bash
+curl -X POST http://localhost:8082/admin/cache/clear \
+  -H "X-Admin-Key: your-admin-api-key"
+```
+
+**Response:**
+```json
+{
+  "ok": true,
+  "entries_cleared": 125000
 }
 ```
 
@@ -778,14 +1321,11 @@ ntpdate -q pool.ntp.org
 
 ## Related Documentation
 
-- [Invitation System Guide](INVITATION_SYSTEM.md) - Deep dive into invitation mechanics
-- [Key Management](KEY_MANAGEMENT.md) - Key generation, rotation, security
 - [Configuration Reference](CONFIGURATION.md) - All environment variables
-- [Production Deployment](PRODUCTION.md) - Best practices and security checklist
+- [Sybil Resistance](SYBIL_RESISTANCE.md) - Sybil mechanism comparison
+- [Key Management](KEY_MANAGEMENT.md) - Key generation, rotation, security
+- [WebAuthn](WEBAUTHN.md) - Hardware authenticator integration
+- [Federation](FEDERATION.md) - Multi-issuer trust
+- [Production Deployment](PRODUCTION.md) - Security hardening checklist
 - [Troubleshooting Guide](TROUBLESHOOTING.md) - Common issues and solutions
-
----
-
-**Questions or Issues?**
-
-Open a GitHub issue or check our [troubleshooting guide](TROUBLESHOOTING.md) for common problems.
+- [Admin UI](../admin-ui/README.md) - Web dashboard documentation
