@@ -132,7 +132,7 @@ export SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
 
 ### Detailed Guide
 
-See [Invitation System Guide](INVITATION_SYSTEM.md) for complete documentation.
+See [Configuration Reference](CONFIGURATION.md#invitation-system) for detailed settings.
 
 ---
 
@@ -310,7 +310,7 @@ export SYBIL_PROGRESSIVE_TRUST_SALT="$(openssl rand -hex 16)"
 
 ### Detailed Guide
 
-See [Progressive Trust Guide](PROGRESSIVE_TRUST.md) for complete documentation.
+See [Configuration Reference](CONFIGURATION.md#progressive-trust) for detailed settings.
 
 ---
 
@@ -390,7 +390,7 @@ Example:
 
 ### Detailed Guide
 
-See [Proof of Diversity Guide](PROOF_OF_DIVERSITY.md) for complete documentation.
+See [Configuration Reference](CONFIGURATION.md#proof-of-diversity) for detailed settings.
 
 ---
 
@@ -472,7 +472,7 @@ Day 60:   Charlie can now vouch for others (waiting period passed)
 
 ### Detailed Guide
 
-See [Multi-Party Vouching Guide](MULTI_PARTY_VOUCHING.md) for complete documentation.
+See [Configuration Reference](CONFIGURATION.md#multi-party-vouching) for detailed settings.
 
 ---
 
@@ -558,7 +558,7 @@ Student with MIT token can access:
 
 ### Detailed Guide
 
-See [Federated Trust Guide](FEDERATED_TRUST.md) for complete documentation.
+See [Federation Guide](FEDERATION.md) for complete documentation.
 
 ---
 
@@ -973,13 +973,9 @@ export SYBIL_RATE_LIMIT_SECS=3600  # Plus rate limiting
 
 ## Related Documentation
 
-- [Invitation System](INVITATION_SYSTEM.md) - Complete invitation guide
-- [Progressive Trust](PROGRESSIVE_TRUST.md) - Time-based trust escalation
-- [Proof of Diversity](PROOF_OF_DIVERSITY.md) - Anti-botnet behavioral analysis
-- [Multi-Party Vouching](MULTI_PARTY_VOUCHING.md) - Social consensus vouching
-- [Federated Trust](FEDERATED_TRUST.md) - Cross-issuer interoperability
+- [Configuration](CONFIGURATION.md) - Environment variables for all mechanisms
+- [Federation](FEDERATION.md) - Cross-issuer trust and interoperability
 - [WebAuthn](WEBAUTHN.md) - Hardware-backed authentication
-- [Configuration](CONFIGURATION.md) - Environment variables
 - [Security Model](SECURITY.md) - Threat model and guarantees
 - [API Reference](API.md) - Sybil proof formats
 
