@@ -40,6 +40,12 @@ The admin UI automatically detects whether it's running on an issuer or verifier
 - Manage federation relationships with other issuers
 - View trusted peers and cross-issuer policies
 
+**Sybil Configuration Tab:**
+- View and modify Sybil resistance settings
+- Configure invitation limits, cooldowns, and expiration
+- Adjust proof-of-work difficulty and rate limits
+- Monitor active Sybil resistance mechanism
+
 **WebAuthn Tab:**
 - Register FIDO2 credentials and security keys
 - Manage biometric authentication
@@ -169,6 +175,7 @@ pub async fn admin_ui_handler() -> impl IntoResponse {
 | `/admin/health` | GET | Health check with service type |
 | `/admin/stats` | GET | System statistics |
 | `/admin/config` | GET | Configuration values |
+| `/admin/metrics` | GET | Prometheus metrics |
 
 ### Issuer-Only
 
@@ -185,6 +192,8 @@ pub async fn admin_ui_handler() -> impl IntoResponse {
 | `/admin/keys/rotate` | POST | Rotate keys |
 | `/admin/keys/cleanup` | POST | Remove expired keys |
 | `/admin/audit` | GET | Retrieve audit logs |
+| `/admin/sybil/config` | GET | Get Sybil configuration |
+| `/admin/sybil/config` | PUT | Update Sybil configuration |
 | `/admin/webauthn/register` | POST | Register credential |
 | `/admin/webauthn/credentials` | GET | List credentials |
 | `/admin/webauthn/credentials/remove` | POST | Remove credential |
