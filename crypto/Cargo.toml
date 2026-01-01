@@ -1,0 +1,52 @@
+[package]
+name = "freebird-crypto"
+version = "0.1.3"
+edition = "2021"
+description = "Cryptographic primitives for the Freebird privacy-preserving authentication system, including VOPRF implementation"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/flammafex/freebird"
+homepage = "https://github.com/flammafex/freebird"
+keywords = ["cryptography", "voprf", "privacy", "authentication"]
+categories = ["cryptography", "authentication"]
+
+[features]
+default = ["voprf-p256"]
+voprf-p256 = []
+pkcs11 = ["cryptoki"]
+
+[dependencies]
+# Core curve + math for P-256 VOPRF implementation
+p256 = { version = "0.13", default-features = false, features = ["arithmetic", "hash2curve", "ecdsa"] }
+elliptic-curve = { version = "0.13", features = ["hash2curve"] }
+
+# Hashing / randomness
+sha2       = "0.10"
+rand       = "0.8"
+rand_core  = "0.6"
+
+# Helpers
+subtle         = "2.5"
+hkdf           = "0.12"
+hmac           = "0.12"
+base64ct       = { version = "1.8", features = ["alloc"] }
+generic-array  = "0.14"
+zeroize        = "1"
+anyhow         = "1"
+
+# HSM / PKCS#11 support (optional)
+cryptoki       = { version = "0.6", optional = true }
+async-trait    = "0.1"
+
+[dev-dependencies]
+proptest = "1.4"
+tokio = { version = "1", features = ["rt", "macros"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+rayon = "1.10"
+
+[[bench]]
+name = "voprf"
+harness = false
+
+[[bench]]
+name = "mac"
+harness = false

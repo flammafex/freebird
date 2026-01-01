@@ -1,0 +1,92 @@
+services:
+  # ----------------------------------------------------------------------------
+  # ISSUER
+  # ----------------------------------------------------------------------------
+  issuer:
+    build:
+      context: .
+      target: issuer
+    image: freebird-issuer:latest
+    ports:
+      - "8081:8081"
+    volumes:
+      # Persist keys and invitations
+      - issuer-data:/data
+    env_file:
+      - .env
+    environment:
+      # These can be overridden in .env file
+      - RUST_LOG=${RUST_LOG:-info,freebird=debug}
+      - LOG_FORMAT=${LOG_FORMAT:-plain}
+      - ISSUER_ID=${ISSUER_ID:-issuer:docker:v1}
+      - BIND_ADDR=${ISSUER_BIND_ADDR:-0.0.0.0:8081}
+      - TOKEN_TTL_MIN=${TOKEN_TTL_MIN:-10}
+      - REQUIRE_TLS=${REQUIRE_TLS:-false}
+      - BEHIND_PROXY=${BEHIND_PROXY:-false}
+      - ADMIN_API_KEY=${ADMIN_API_KEY:-dev-admin-key-must-be-at-least-32-characters-long}
+      - ISSUER_SK_PATH=${ISSUER_SK_PATH:-/data/keys/issuer_sk.bin}
+      - KEY_ROTATION_STATE_PATH=${KEY_ROTATION_STATE_PATH:-/data/keys/key_rotation_state.json}
+      - EPOCH_DURATION_SEC=${EPOCH_DURATION_SEC:-86400}
+      - EPOCH_RETENTION=${EPOCH_RETENTION:-2}
+      - SYBIL_RESISTANCE=${SYBIL_RESISTANCE:-invitation}
+      - SYBIL_INVITE_PER_USER=${SYBIL_INVITE_PER_USER:-5}
+      - SYBIL_INVITE_COOLDOWN_SECS=${SYBIL_INVITE_COOLDOWN_SECS:-3600}
+      - SYBIL_INVITE_EXPIRES_SECS=${SYBIL_INVITE_EXPIRES_SECS:-2592000}
+      - SYBIL_INVITE_NEW_USER_WAIT_SECS=${SYBIL_INVITE_NEW_USER_WAIT_SECS:-2592000}
+      - SYBIL_INVITE_PERSISTENCE_PATH=${SYBIL_INVITE_PERSISTENCE_PATH:-/data/state/invitations.json}
+      - SYBIL_INVITE_AUTOSAVE_INTERVAL_SECS=${SYBIL_INVITE_AUTOSAVE_INTERVAL_SECS:-300}
+      - SYBIL_INVITE_BOOTSTRAP_USERS=${SYBIL_INVITE_BOOTSTRAP_USERS:-admin:100}
+    networks:
+      - freebird-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8081/.well-known/issuer"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ----------------------------------------------------------------------------
+  # VERIFIER
+  # ----------------------------------------------------------------------------
+  verifier:
+    build:
+      context: .
+      target: verifier
+    image: freebird-verifier:latest
+    ports:
+      - "8082:8082"
+    env_file:
+      - .env
+    environment:
+      # These can be overridden in .env file
+      - RUST_LOG=${RUST_LOG:-info,freebird=debug}
+      - LOG_FORMAT=${LOG_FORMAT:-plain}
+      - BIND_ADDR=${VERIFIER_BIND_ADDR:-0.0.0.0:8082}
+      - ISSUER_URL=${ISSUER_URL:-http://issuer:8081/.well-known/issuer}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      - MAX_CLOCK_SKEW_SECS=${MAX_CLOCK_SKEW_SECS:-300}
+      - REFRESH_INTERVAL_MIN=${REFRESH_INTERVAL_MIN:-10}
+      - EPOCH_DURATION_SEC=${VERIFIER_EPOCH_DURATION_SEC:-86400}
+      - EPOCH_RETENTION=${VERIFIER_EPOCH_RETENTION:-2}
+    depends_on:
+      issuer:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    networks:
+      - freebird-net
+
+  # ----------------------------------------------------------------------------
+  # INFRASTRUCTURE
+  # ----------------------------------------------------------------------------
+  redis:
+    image: redis:alpine
+    volumes:
+      - redis-data:/data
+    networks:
+      - freebird-net
+
+volumes:
+  redis-data:
+  issuer-data:
+networks:
+  freebird-net:

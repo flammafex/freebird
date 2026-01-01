@@ -1,0 +1,28 @@
+{
+  "name": "@freebird/sdk",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Anonymous authentication using VOPRF (Freebird SDK)",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest",
+    "lint": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "@noble/curves": "^1.7.0",
+    "@noble/hashes": "^1.6.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1",
+    "tsup": "^7.2.0",
+    "vitest": "^0.34.0",
+    "ws": "^8.18.3"
+  }
+}

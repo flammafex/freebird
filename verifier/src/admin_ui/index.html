@@ -1,0 +1,4305 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>🕊️ Freebird Admin</title>
+    <link
+      rel="stylesheet"
+      href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.css"
+    />
+    <style>
+      :root {
+        --tab-active-color: #0076d1;
+        --success-color: #2ecc71;
+        --error-color: #e74c3c;
+        --warning-color: #f39c12;
+        --text-muted: #888;
+      }
+
+      body {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+
+      .header {
+        text-align: center;
+        margin-bottom: 30px;
+        border-bottom: 2px solid var(--tab-active-color);
+        padding-bottom: 20px;
+      }
+
+      .header h1 {
+        margin: 0;
+        font-size: 2em;
+      }
+
+      .header p {
+        margin: 5px 0 0 0;
+        opacity: 0.7;
+        font-size: 0.9em;
+      }
+
+      /* API Key Config Section */
+      .api-key-section {
+        background: var(--background-alt);
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 25px;
+      }
+
+      .api-key-section input {
+        font-family: monospace;
+        width: 100%;
+        max-width: 500px;
+      }
+
+      .api-key-section button {
+        margin-left: 10px;
+      }
+
+      .api-key-status {
+        margin-top: 10px;
+        font-size: 0.9em;
+      }
+
+      .api-key-status.success {
+        color: var(--success-color);
+      }
+
+      .api-key-status.error {
+        color: var(--error-color);
+      }
+
+      /* Tab Navigation */
+      .tabs {
+        display: flex;
+        gap: 0;
+        margin-bottom: 25px;
+        border-bottom: 2px solid var(--border);
+        overflow-x: auto;
+      }
+
+      .tab {
+        padding: 12px 24px;
+        cursor: pointer;
+        background: transparent;
+        border: none;
+        border-bottom: 3px solid transparent;
+        transition: all 0.2s;
+        font-size: 1em;
+        white-space: nowrap;
+      }
+
+      .tab:hover {
+        background: var(--background-alt);
+      }
+
+      .tab.active {
+        border-bottom-color: var(--tab-active-color);
+        font-weight: bold;
+      }
+
+      /* Tab Content */
+      .tab-content {
+        display: none;
+      }
+
+      .tab-content.active {
+        display: block;
+        animation: fadeIn 0.3s;
+      }
+
+      @keyframes fadeIn {
+        from {
+          opacity: 0;
+        }
+        to {
+          opacity: 1;
+        }
+      }
+
+      /* Stats Grid */
+      .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 15px;
+        margin-bottom: 20px;
+      }
+
+      .stat-card {
+        background: var(--background-alt);
+        padding: 20px;
+        border-radius: 5px;
+        border-left: 4px solid var(--tab-active-color);
+      }
+
+      .stat-card h3 {
+        margin: 0 0 10px 0;
+        font-size: 0.9em;
+        opacity: 0.8;
+        text-transform: uppercase;
+      }
+
+      .stat-card .value {
+        font-size: 2em;
+        font-weight: bold;
+        margin: 0;
+      }
+
+      /* Form Sections */
+      .form-section {
+        background: var(--background-alt);
+        padding: 20px;
+        border-radius: 5px;
+        margin-bottom: 20px;
+      }
+
+      .form-section h3 {
+        margin-top: 0;
+      }
+
+      .form-row {
+        display: flex;
+        gap: 10px;
+        align-items: flex-end;
+        margin-bottom: 15px;
+      }
+
+      .form-field {
+        flex: 1;
+      }
+
+      .form-field label {
+        display: block;
+        margin-bottom: 5px;
+        font-weight: bold;
+        font-size: 0.9em;
+      }
+
+      .form-field input {
+        width: 100%;
+      }
+
+      /* Results Section */
+      .results {
+        margin-top: 20px;
+      }
+
+      .invitation-item {
+        background: var(--background);
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        border-left: 3px solid var(--success-color);
+      }
+
+      .invitation-code {
+        font-family: monospace;
+        font-size: 0.9em;
+        background: var(--background-alt);
+        padding: 8px;
+        border-radius: 3px;
+        margin: 5px 0;
+        word-break: break-all;
+      }
+
+      .copy-btn {
+        padding: 5px 12px;
+        font-size: 0.85em;
+        cursor: pointer;
+      }
+
+      .invitation-meta {
+        font-size: 0.85em;
+        opacity: 0.7;
+        margin-top: 5px;
+      }
+
+      /* Tables */
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 15px;
+      }
+
+      th,
+      td {
+        text-align: left;
+        padding: 10px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      th {
+        background: var(--background-alt);
+      }
+
+      .status-active {
+        color: var(--success-color);
+        font-weight: bold;
+      }
+
+      .status-banned {
+        color: var(--error-color);
+        font-weight: bold;
+      }
+
+      .action-btn {
+        padding: 4px 8px;
+        font-size: 0.85em;
+        margin-right: 5px;
+      }
+
+      /* Modal */
+      dialog {
+        background: var(--background);
+        color: var(--text-main);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        max-width: 600px;
+        width: 90%;
+        padding: 20px;
+      }
+
+      dialog::backdrop {
+        background: rgba(0, 0, 0, 0.5);
+      }
+
+      .detail-row {
+        display: flex;
+        justify-content: space-between;
+        padding: 8px 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .detail-row:last-child {
+        border-bottom: none;
+      }
+
+      /* Messages */
+      .message {
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+      }
+
+      .message.success {
+        background: var(--success-color);
+        color: white;
+      }
+
+      .message.error {
+        background: var(--error-color);
+        color: white;
+      }
+
+      .message.warning {
+        background: var(--warning-color);
+        color: white;
+      }
+
+      .message.info {
+        background: var(--tab-active-color);
+        color: white;
+      }
+
+      /* Loading State */
+      .loading {
+        opacity: 0.6;
+        pointer-events: none;
+      }
+
+      .spinner {
+        display: inline-block;
+        width: 14px;
+        height: 14px;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        border-radius: 50%;
+        border-top-color: #fff;
+        animation: spin 0.6s linear infinite;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* Utility Classes */
+      .hidden {
+        display: none !important;
+      }
+
+      .text-mono {
+        font-family: monospace;
+      }
+
+      .text-small {
+        font-size: 0.85em;
+      }
+
+      .mt-20 {
+        margin-top: 20px;
+      }
+
+      /* Key Management */
+      .key-card {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 15px;
+        background: var(--background);
+      }
+      .key-card.active {
+        border-left: 5px solid var(--success-color);
+      }
+      .key-card.deprecated {
+        border-left: 5px solid var(--warning-color);
+      }
+
+      /* Tree Visualization */
+      .tree-canvas-container {
+        background: var(--background-alt);
+        border-radius: 8px;
+        padding: 20px;
+        margin: 20px 0;
+        overflow: auto;
+      }
+
+      #treeCanvas {
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--background);
+      }
+
+      /* Charts */
+      .chart-container {
+        background: var(--background-alt);
+        border-radius: 8px;
+        padding: 20px;
+        margin: 20px 0;
+      }
+
+      .chart-canvas {
+        border: 1px solid var(--border);
+        border-radius: 4px;
+        background: var(--background);
+      }
+
+      /* Audit Logs */
+      .log-entry {
+        background: var(--background-alt);
+        padding: 12px;
+        border-radius: 5px;
+        margin-bottom: 10px;
+        border-left: 3px solid var(--tab-active-color);
+      }
+
+      .log-entry.error {
+        border-left-color: var(--error-color);
+      }
+
+      .log-entry.warning {
+        border-left-color: var(--warning-color);
+      }
+
+      .log-entry.success {
+        border-left-color: var(--success-color);
+      }
+
+      .log-timestamp {
+        font-size: 0.85em;
+        opacity: 0.7;
+        margin-bottom: 5px;
+      }
+
+      /* WebAuthn */
+      .credential-card {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 15px;
+        background: var(--background);
+        border-left: 5px solid var(--tab-active-color);
+      }
+
+      .credential-id {
+        font-family: monospace;
+        font-size: 0.85em;
+        background: var(--background-alt);
+        padding: 5px;
+        border-radius: 3px;
+        word-break: break-all;
+      }
+
+      /* Service type badge */
+      .service-badge {
+        display: inline-block;
+        padding: 4px 12px;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        margin-left: 10px;
+      }
+
+      .service-badge.issuer {
+        background: #dbeafe;
+        color: #1d4ed8;
+      }
+
+      .service-badge.verifier {
+        background: #d1fae5;
+        color: #059669;
+      }
+
+      /* Hidden tabs */
+      .tab.hidden {
+        display: none;
+      }
+
+      .tab-content.service-hidden {
+        display: none !important;
+      }
+
+      /* ============================================================================
+           Phase 4: Polish - Enhanced Styling & Responsive Design
+           ============================================================================ */
+
+      /* Enhanced Color Variables */
+      :root {
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+        --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.1);
+        --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.1);
+        --gradient-primary: linear-gradient(135deg, #0076d1 0%, #0056a0 100%);
+        --gradient-success: linear-gradient(135deg, #2ecc71 0%, #27ae60 100%);
+        --transition-fast: 0.15s ease;
+        --transition-normal: 0.25s ease;
+        --border-radius-sm: 4px;
+        --border-radius-md: 8px;
+        --border-radius-lg: 12px;
+      }
+
+      /* Enhanced Body Styling */
+      body {
+        line-height: 1.6;
+        transition: background-color var(--transition-normal);
+      }
+
+      /* Enhanced Header */
+      .header {
+        background: var(--gradient-primary);
+        color: white;
+        border-radius: var(--border-radius-lg);
+        padding: 30px 20px;
+        margin-bottom: 30px;
+        border-bottom: none;
+        box-shadow: var(--shadow-md);
+      }
+
+      .header h1 {
+        font-size: 1.8em;
+        letter-spacing: -0.5px;
+        text-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+      }
+
+      .header p {
+        opacity: 0.9;
+        font-size: 0.95em;
+      }
+
+      #systemHealthBadge .badge {
+        display: inline-block;
+        padding: 6px 16px;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        font-weight: 600;
+        background: rgba(255, 255, 255, 0.2);
+        backdrop-filter: blur(4px);
+      }
+
+      /* Enhanced Service Badge */
+      .service-badge {
+        vertical-align: middle;
+        box-shadow: var(--shadow-sm);
+        letter-spacing: 0.5px;
+      }
+
+      /* Enhanced API Key Section */
+      .api-key-section {
+        border-radius: var(--border-radius-md);
+        box-shadow: var(--shadow-sm);
+        border: 1px solid var(--border);
+        transition: box-shadow var(--transition-normal);
+      }
+
+      .api-key-section:focus-within {
+        box-shadow: var(--shadow-md);
+      }
+
+      /* Enhanced Tab Navigation */
+      .tabs {
+        background: var(--background-alt);
+        border-radius: var(--border-radius-md);
+        padding: 8px;
+        border: none;
+        box-shadow: var(--shadow-sm);
+        scrollbar-width: thin;
+      }
+
+      .tabs::-webkit-scrollbar {
+        height: 6px;
+      }
+
+      .tabs::-webkit-scrollbar-thumb {
+        background: var(--border);
+        border-radius: 3px;
+      }
+
+      .tab {
+        border-radius: var(--border-radius-sm);
+        margin: 0 2px;
+        font-weight: 500;
+        transition: all var(--transition-fast);
+      }
+
+      .tab:hover {
+        background: var(--background);
+        transform: translateY(-1px);
+      }
+
+      .tab.active {
+        background: var(--tab-active-color);
+        color: white;
+        border-bottom: none;
+        box-shadow: var(--shadow-sm);
+      }
+
+      /* Enhanced Stat Cards */
+      .stat-card {
+        border-radius: var(--border-radius-md);
+        box-shadow: var(--shadow-sm);
+        transition:
+          transform var(--transition-fast),
+          box-shadow var(--transition-fast);
+        border-left-width: 5px;
+        position: relative;
+        overflow: hidden;
+      }
+
+      .stat-card::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 60px;
+        height: 60px;
+        background: var(--tab-active-color);
+        opacity: 0.1;
+        border-radius: 50%;
+        transform: translate(30%, -30%);
+      }
+
+      .stat-card:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-md);
+      }
+
+      .stat-card .value {
+        background: var(--gradient-primary);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+      }
+
+      /* Enhanced Form Sections */
+      .form-section {
+        border-radius: var(--border-radius-md);
+        box-shadow: var(--shadow-sm);
+        border: 1px solid var(--border);
+        transition: box-shadow var(--transition-normal);
+      }
+
+      .form-section:hover {
+        box-shadow: var(--shadow-md);
+      }
+
+      .form-section h3 {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--border);
+        margin-bottom: 15px;
+      }
+
+      /* Enhanced Buttons */
+      button,
+      .action-btn {
+        border-radius: var(--border-radius-sm);
+        font-weight: 500;
+        transition: all var(--transition-fast);
+        cursor: pointer;
+      }
+
+      button:hover:not(:disabled),
+      .action-btn:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: var(--shadow-sm);
+      }
+
+      button:active:not(:disabled),
+      .action-btn:active:not(:disabled) {
+        transform: translateY(0);
+      }
+
+      button:disabled,
+      .action-btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      /* Enhanced Tables */
+      table {
+        border-radius: var(--border-radius-md);
+        overflow: hidden;
+        box-shadow: var(--shadow-sm);
+      }
+
+      th {
+        font-weight: 600;
+        text-transform: uppercase;
+        font-size: 0.8em;
+        letter-spacing: 0.5px;
+      }
+
+      tr {
+        transition: background var(--transition-fast);
+      }
+
+      tbody tr:hover {
+        background: var(--background-alt);
+      }
+
+      /* Enhanced Messages */
+      .message {
+        border-radius: var(--border-radius-md);
+        box-shadow: var(--shadow-md);
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .message::before {
+        font-size: 1.2em;
+      }
+
+      .message.success::before {
+        content: "✓";
+      }
+      .message.error::before {
+        content: "✗";
+      }
+      .message.warning::before {
+        content: "⚠";
+      }
+      .message.info::before {
+        content: "ℹ";
+      }
+
+      /* Enhanced Modal */
+      dialog {
+        border-radius: var(--border-radius-lg);
+        box-shadow: var(--shadow-lg);
+        animation: modalSlideIn 0.3s ease;
+      }
+
+      @keyframes modalSlideIn {
+        from {
+          opacity: 0;
+          transform: translateY(-20px) scale(0.95);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0) scale(1);
+        }
+      }
+
+      /* Enhanced Spinner */
+      .spinner {
+        border-width: 3px;
+        width: 16px;
+        height: 16px;
+      }
+
+      /* Focus States for Accessibility */
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid var(--tab-active-color);
+        outline-offset: 2px;
+      }
+
+      /* ============================================================================
+           Responsive Design
+           ============================================================================ */
+
+      /* Tablet (768px and below) */
+      @media (max-width: 768px) {
+        body {
+          padding: 15px;
+        }
+
+        .header {
+          padding: 20px 15px;
+        }
+
+        .header h1 {
+          font-size: 1.5em;
+        }
+
+        .tabs {
+          padding: 6px;
+          gap: 0;
+        }
+
+        .tab {
+          padding: 10px 14px;
+          font-size: 0.9em;
+        }
+
+        .stats-grid {
+          grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+          gap: 10px;
+        }
+
+        .stat-card {
+          padding: 15px;
+        }
+
+        .stat-card .value {
+          font-size: 1.5em;
+        }
+
+        .form-row {
+          flex-direction: column;
+          gap: 15px;
+        }
+
+        .form-row button {
+          width: 100%;
+        }
+
+        .api-key-section .form-row {
+          flex-direction: column;
+        }
+
+        .api-key-section button {
+          margin-left: 0;
+          width: 100%;
+          margin-top: 10px;
+        }
+
+        /* Responsive Table */
+        table {
+          display: block;
+          overflow-x: auto;
+          white-space: nowrap;
+        }
+
+        th,
+        td {
+          padding: 8px;
+          font-size: 0.9em;
+        }
+
+        .action-btn {
+          padding: 6px 10px;
+          font-size: 0.8em;
+        }
+
+        dialog {
+          width: 95%;
+          max-height: 90vh;
+          overflow-y: auto;
+        }
+
+        .chart-container,
+        .tree-canvas-container {
+          padding: 15px;
+        }
+
+        #activityChart,
+        #treeCanvas {
+          width: 100% !important;
+          height: auto !important;
+        }
+      }
+
+      /* Mobile (480px and below) */
+      @media (max-width: 480px) {
+        body {
+          padding: 10px;
+        }
+
+        .header {
+          padding: 15px 12px;
+          border-radius: var(--border-radius-md);
+        }
+
+        .header h1 {
+          font-size: 1.3em;
+        }
+
+        .header p {
+          font-size: 0.85em;
+        }
+
+        .service-badge {
+          display: block;
+          margin: 10px auto 0;
+          width: fit-content;
+        }
+
+        .tabs {
+          padding: 4px;
+          border-radius: var(--border-radius-sm);
+        }
+
+        .tab {
+          padding: 8px 12px;
+          font-size: 0.85em;
+        }
+
+        .stats-grid {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .stat-card h3 {
+          font-size: 0.75em;
+        }
+
+        .stat-card .value {
+          font-size: 1.3em;
+        }
+
+        .form-section {
+          padding: 15px;
+        }
+
+        .form-section h3 {
+          font-size: 1em;
+        }
+
+        .invitation-item {
+          padding: 12px;
+        }
+
+        .invitation-code {
+          font-size: 0.8em;
+          padding: 6px;
+        }
+
+        .copy-btn {
+          padding: 4px 8px;
+          font-size: 0.75em;
+        }
+
+        .log-entry {
+          padding: 10px;
+        }
+
+        /* Stack detail rows on mobile */
+        .detail-row {
+          flex-direction: column;
+          gap: 4px;
+        }
+
+        .detail-row strong {
+          font-size: 0.85em;
+          opacity: 0.7;
+        }
+      }
+
+      /* Large screens (1200px and above) */
+      @media (min-width: 1200px) {
+        body {
+          max-width: 1300px;
+        }
+
+        .stats-grid {
+          grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        }
+
+        .form-row {
+          max-width: 900px;
+        }
+      }
+
+      /* Print Styles */
+      @media print {
+        .tabs,
+        .api-key-section,
+        button,
+        .action-btn {
+          display: none !important;
+        }
+
+        .tab-content {
+          display: block !important;
+        }
+
+        .header {
+          background: none;
+          color: inherit;
+          box-shadow: none;
+        }
+
+        .stat-card,
+        .form-section {
+          box-shadow: none;
+          border: 1px solid #ccc;
+        }
+      }
+
+      /* Dark Mode Enhancements */
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+          --shadow-md: 0 4px 6px rgba(0, 0, 0, 0.3);
+          --shadow-lg: 0 10px 15px rgba(0, 0, 0, 0.4);
+        }
+
+        .stat-card::before {
+          opacity: 0.15;
+        }
+
+        .service-badge.issuer {
+          background: #1e3a5f;
+          color: #60a5fa;
+        }
+
+        .service-badge.verifier {
+          background: #14532d;
+          color: #4ade80;
+        }
+      }
+
+      /* Reduced Motion */
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+
+      /* Touch Device Optimizations */
+      @media (hover: none) and (pointer: coarse) {
+        .tab:hover,
+        .stat-card:hover,
+        button:hover {
+          transform: none;
+        }
+
+        button,
+        .action-btn,
+        .tab {
+          min-height: 44px;
+          min-width: 44px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>🕊️ Freebird Admin<span id="serviceBadge"></span></h1>
+      <p>Authorization without identity. Privacy without compromise.</p>
+      <div id="systemHealthBadge" style="margin-top: 10px">
+        <span class="badge">Checking...</span>
+      </div>
+    </div>
+
+    <!-- API Key Configuration -->
+    <div class="api-key-section">
+      <label for="apiKey"><strong>Admin API Key</strong></label>
+      <div class="form-row">
+        <div class="form-field">
+          <input
+            type="password"
+            id="apiKey"
+            placeholder="Enter your admin API key (min 32 characters)"
+            autocomplete="off"
+          />
+        </div>
+        <button type="button" onclick="saveApiKey()">Save &amp; Test</button>
+        <button type="button" onclick="clearApiKey()">Clear</button>
+      </div>
+      <div id="apiKeyStatus" class="api-key-status"></div>
+    </div>
+
+    <div class="tabs">
+      <button type="button" class="tab active" onclick="switchTab('dashboard')">
+        📊 Dashboard
+      </button>
+      <!-- Issuer-only tabs -->
+      <button
+        type="button"
+        class="tab issuer-only"
+        onclick="switchTab('sybil')"
+      >
+        🛡️ Sybil
+      </button>
+      <button
+        type="button"
+        class="tab issuer-only"
+        onclick="switchTab('users')"
+      >
+        👥 Users
+      </button>
+      <button
+        type="button"
+        class="tab issuer-only"
+        onclick="switchTab('invitations')"
+      >
+        🎫 Invitations
+      </button>
+      <button type="button" class="tab issuer-only" onclick="switchTab('keys')">
+        🔑 Keys
+      </button>
+      <button
+        type="button"
+        class="tab issuer-only"
+        onclick="switchTab('audit')"
+      >
+        📝 Audit
+      </button>
+      <button
+        type="button"
+        class="tab issuer-only"
+        onclick="switchTab('federation')"
+      >
+        🌐 Federation
+      </button>
+      <button
+        type="button"
+        class="tab issuer-only"
+        onclick="switchTab('webauthn')"
+      >
+        🔐 WebAuthn
+      </button>
+      <!-- Verifier-only tabs -->
+      <button
+        type="button"
+        class="tab verifier-only hidden"
+        onclick="switchTab('trusted-issuers')"
+      >
+        🏛️ Issuers
+      </button>
+      <button
+        type="button"
+        class="tab verifier-only hidden"
+        onclick="switchTab('cache')"
+      >
+        💾 Cache
+      </button>
+    </div>
+
+    <div id="dashboard-tab" class="tab-content active">
+      <h2>System Statistics</h2>
+      <button type="button" onclick="loadStats()">🔄 Refresh</button>
+
+      <div id="statsContainer" class="mt-20">
+        <p class="text-small">Click "Refresh" to load system statistics...</p>
+      </div>
+
+      <div class="chart-container">
+        <h3>📈 Real-Time Activity Chart</h3>
+        <p class="text-small">
+          Live visualization of system activity over time
+        </p>
+        <canvas
+          id="activityChart"
+          class="chart-canvas"
+          width="800"
+          height="300"
+        ></canvas>
+        <div style="margin-top: 15px">
+          <button type="button" onclick="updateActivityChart()">
+            Update Chart
+          </button>
+          <button type="button" onclick="resetActivityChart()">Reset</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sybil Configuration Tab -->
+    <div id="sybil-tab" class="tab-content">
+      <h2>🛡️ Sybil Resistance Configuration</h2>
+      <p>View the current Sybil resistance settings for this issuer.</p>
+
+      <button type="button" onclick="loadSybilConfig()">🔄 Refresh</button>
+
+      <div id="sybilConfigContainer" class="mt-20">
+        <p class="text-small">Click "Refresh" to load configuration...</p>
+      </div>
+    </div>
+
+    <div id="users-tab" class="tab-content">
+      <h2>User Management</h2>
+
+      <div class="form-row">
+        <div class="form-field">
+          <input
+            type="text"
+            id="userSearch"
+            placeholder="Search users..."
+            onkeyup="filterUsers()"
+          />
+        </div>
+        <button type="button" onclick="loadUsers()">🔄 Refresh List</button>
+        <button
+          type="button"
+          onclick="exportUsers('json')"
+          style="margin-left: 10px"
+        >
+          📥 Export JSON
+        </button>
+        <button
+          type="button"
+          onclick="exportUsers('csv')"
+          style="margin-left: 5px"
+        >
+          📥 Export CSV
+        </button>
+      </div>
+
+      <div id="usersContainer">
+        <p class="text-small">Loading users...</p>
+      </div>
+    </div>
+
+    <dialog id="userModal">
+      <div id="userModalContent"></div>
+      <div style="margin-top: 20px; text-align: right">
+        <button
+          type="button"
+          onclick="document.getElementById('userModal').close()"
+        >
+          Close
+        </button>
+      </div>
+    </dialog>
+
+    <div id="invitations-tab" class="tab-content">
+      <div class="form-section">
+        <h3>🎫 Create Invitations</h3>
+        <p class="text-small">
+          Generate invitation codes for a user to share with others.
+        </p>
+
+        <div class="form-row">
+          <div class="form-field">
+            <label for="inviterUserId">User ID (Inviter)</label>
+            <input
+              type="text"
+              id="inviterUserId"
+              placeholder="e.g., admin, alice, bob"
+              value="admin"
+            />
+          </div>
+          <div class="form-field" style="max-width: 150px">
+            <label for="inviteCount">Count</label>
+            <input type="number" id="inviteCount" min="1" max="100" value="1" />
+          </div>
+          <button type="button" onclick="createInvitations()">
+            Create Invitations
+          </button>
+        </div>
+      </div>
+
+      <div id="invitationsResults"></div>
+
+      <div class="form-section">
+        <h3>➕ Grant Invitation Quota</h3>
+        <p class="text-small">
+          Increase a user's invitation quota (doesn't create codes).
+        </p>
+
+        <div class="form-row">
+          <div class="form-field">
+            <label for="grantUserId">User ID</label>
+            <input
+              type="text"
+              id="grantUserId"
+              placeholder="e.g., alice, bob"
+            />
+          </div>
+          <div class="form-field" style="max-width: 150px">
+            <label for="grantCount">Count</label>
+            <input type="number" id="grantCount" min="1" max="1000" value="5" />
+          </div>
+          <button type="button" onclick="grantInvites()">Grant Invites</button>
+        </div>
+      </div>
+
+      <div id="grantResults"></div>
+
+      <div class="form-section">
+        <h3>📋 Recent Invitations</h3>
+        <p class="text-small">
+          View recently created invitation codes and their status.
+        </p>
+
+        <!-- Filter controls -->
+        <div class="form-row" style="margin-bottom: 15px; flex-wrap: wrap">
+          <div class="form-field" style="max-width: 150px">
+            <label for="invitationStatusFilter">Status</label>
+            <select
+              id="invitationStatusFilter"
+              onchange="applyInvitationFilters()"
+            >
+              <option value="all">All</option>
+              <option value="pending">Pending</option>
+              <option value="redeemed">Redeemed</option>
+            </select>
+          </div>
+          <div class="form-field" style="max-width: 200px">
+            <label for="invitationInviterFilter">Inviter ID</label>
+            <input
+              type="text"
+              id="invitationInviterFilter"
+              placeholder="Filter by inviter..."
+              onchange="applyInvitationFilters()"
+            />
+          </div>
+          <div class="form-field" style="max-width: 180px">
+            <label for="invitationDateFrom">From Date</label>
+            <input
+              type="date"
+              id="invitationDateFrom"
+              onchange="applyInvitationFilters()"
+            />
+          </div>
+          <div class="form-field" style="max-width: 180px">
+            <label for="invitationDateTo">To Date</label>
+            <input
+              type="date"
+              id="invitationDateTo"
+              onchange="applyInvitationFilters()"
+            />
+          </div>
+          <button
+            type="button"
+            onclick="clearInvitationFilters()"
+            style="align-self: flex-end"
+          >
+            Clear Filters
+          </button>
+        </div>
+
+        <div style="margin-bottom: 15px">
+          <button type="button" onclick="loadInvitationHistory()">
+            🔄 Refresh
+          </button>
+          <button
+            type="button"
+            onclick="exportInvitations('json')"
+            style="margin-left: 10px"
+          >
+            📥 Export JSON
+          </button>
+          <button
+            type="button"
+            onclick="exportInvitations('csv')"
+            style="margin-left: 5px"
+          >
+            📥 Export CSV
+          </button>
+        </div>
+
+        <div id="invitationHistoryContainer" class="mt-20">
+          <p class="text-small">
+            Click "Refresh" to load invitation history...
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Keys Tab -->
+    <div id="keys-tab" class="tab-content">
+      <h2>🔑 Key Management</h2>
+      <p>Manage cryptographic keys for VOPRF token issuance.</p>
+
+      <div class="form-section">
+        <h3>📋 Active Keys</h3>
+        <div id="keysTable"></div>
+      </div>
+
+      <div class="form-section">
+        <h3>🔄 Rotate Key</h3>
+        <p class="text-small">
+          Generate a new key with a grace period for the old key.
+        </p>
+
+        <div class="form-row">
+          <div class="form-field">
+            <label for="newKid">New Key ID</label>
+            <input
+              type="text"
+              id="newKid"
+              placeholder="e.g., freebird-2025-11-25"
+              value=""
+            />
+          </div>
+          <div class="form-field" style="max-width: 200px">
+            <label for="gracePeriodSecs">Grace Period (seconds)</label>
+            <input
+              type="number"
+              id="gracePeriodSecs"
+              min="0"
+              max="86400"
+              value="3600"
+            />
+          </div>
+          <button type="button" onclick="rotateKey()">Rotate Key</button>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <h3>🧹 Cleanup Expired Keys</h3>
+        <p class="text-small">
+          Remove expired keys that are past their grace period.
+        </p>
+        <button type="button" onclick="cleanupKeys()">Cleanup Keys</button>
+      </div>
+
+      <div id="keysResults"></div>
+    </div>
+
+    <!-- Audit Logs Tab -->
+    <div id="audit-tab" class="tab-content">
+      <h2>📝 Audit Logs</h2>
+      <p>View and search system activity logs.</p>
+
+      <div class="form-row">
+        <div class="form-field">
+          <input
+            type="text"
+            id="auditSearch"
+            placeholder="Search logs..."
+            onkeyup="filterAuditLogs()"
+          />
+        </div>
+        <div class="form-field" style="max-width: 200px">
+          <select id="auditLevel" onchange="filterAuditLogs()">
+            <option value="all">All Levels</option>
+            <option value="info">Info</option>
+            <option value="warning">Warning</option>
+            <option value="error">Error</option>
+            <option value="success">Success</option>
+          </select>
+        </div>
+        <button type="button" onclick="loadAuditLogs()">🔄 Refresh</button>
+        <button
+          type="button"
+          onclick="exportAudit('json')"
+          style="margin-left: 10px"
+        >
+          📥 Export JSON
+        </button>
+        <button
+          type="button"
+          onclick="exportAudit('csv')"
+          style="margin-left: 5px"
+        >
+          📥 Export CSV
+        </button>
+      </div>
+
+      <div id="auditLogsContainer" class="mt-20">
+        <p class="text-small">Click "Refresh" to load audit logs...</p>
+      </div>
+    </div>
+
+    <!-- Federation Tab -->
+    <div id="federation-tab" class="tab-content">
+      <h2>🌐 Federation Management</h2>
+      <p>
+        Manage trust relationships with other Freebird issuers through vouches
+        and revocations.
+      </p>
+
+      <!-- Vouches Section -->
+      <div class="form-section">
+        <h3>✅ Trusted Issuers (Vouches)</h3>
+        <p class="text-small">
+          Vouches allow you to express trust in other Freebird issuers, enabling
+          federated verification.
+        </p>
+
+        <div class="form-row">
+          <button type="button" onclick="loadVouches()">
+            🔄 Refresh Vouches
+          </button>
+        </div>
+
+        <div id="vouchesContainer" class="mt-20">
+          <p class="text-small">
+            Click "Refresh Vouches" to load trusted issuers...
+          </p>
+        </div>
+
+        <h4 style="margin-top: 30px">➕ Add New Vouch</h4>
+        <p class="text-small">
+          Create a cryptographic vouch for another issuer.
+        </p>
+
+        <div class="form-row">
+          <div class="form-field">
+            <label for="vouchIssuerId">Issuer ID to Vouch</label>
+            <input
+              type="text"
+              id="vouchIssuerId"
+              placeholder="e.g., issuer:example:v1"
+            />
+          </div>
+          <div class="form-field">
+            <label for="vouchPubkey">Issuer Public Key (Base64URL)</label>
+            <input
+              type="text"
+              id="vouchPubkey"
+              placeholder="SEC1 compressed public key"
+            />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-field">
+            <label for="vouchTrustLevel">Trust Level (0-100)</label>
+            <input
+              type="number"
+              id="vouchTrustLevel"
+              value="80"
+              min="0"
+              max="100"
+            />
+          </div>
+          <div class="form-field">
+            <label for="vouchExpiresDays">Expires In (days)</label>
+            <input type="number" id="vouchExpiresDays" value="365" min="1" />
+          </div>
+          <button type="button" onclick="addVouch()">Add Vouch</button>
+        </div>
+        <div id="vouchResult"></div>
+      </div>
+
+      <!-- Revocations Section -->
+      <div class="form-section">
+        <h3>🚫 Revoked Issuers</h3>
+        <p class="text-small">
+          Revocations explicitly mark issuers as untrusted, overriding any
+          vouches.
+        </p>
+
+        <div class="form-row">
+          <button type="button" onclick="loadRevocations()">
+            🔄 Refresh Revocations
+          </button>
+        </div>
+
+        <div id="revocationsContainer" class="mt-20">
+          <p class="text-small">
+            Click "Refresh Revocations" to load revoked issuers...
+          </p>
+        </div>
+
+        <h4 style="margin-top: 30px">➕ Add New Revocation</h4>
+        <p class="text-small">
+          Revoke trust from an issuer (e.g., if compromised or misbehaving).
+        </p>
+
+        <div class="form-row">
+          <div class="form-field">
+            <label for="revokeIssuerId">Issuer ID to Revoke</label>
+            <input
+              type="text"
+              id="revokeIssuerId"
+              placeholder="e.g., issuer:bad:v1"
+            />
+          </div>
+          <div class="form-field">
+            <label for="revokeReason">Reason (optional)</label>
+            <input
+              type="text"
+              id="revokeReason"
+              placeholder="e.g., compromised, spam"
+            />
+          </div>
+          <button type="button" onclick="addRevocation()">
+            Add Revocation
+          </button>
+        </div>
+        <div id="revocationResult"></div>
+      </div>
+    </div>
+
+    <!-- WebAuthn Tab -->
+    <div id="webauthn-tab" class="tab-content">
+      <h2>🔐 WebAuthn Management</h2>
+      <p>View and manage FIDO2 credentials for passwordless authentication.</p>
+
+      <div class="form-section">
+        <h3>🔑 Registered Credentials</h3>
+        <p class="text-small">
+          View and manage registered WebAuthn credentials. Users register
+          credentials through the normal authentication flow.
+        </p>
+
+        <div class="form-row">
+          <div class="form-field">
+            <input
+              type="text"
+              id="credentialSearch"
+              placeholder="Search by User ID hash..."
+              onkeyup="filterWebAuthnCredentials()"
+            />
+          </div>
+          <button type="button" onclick="loadWebAuthnCredentials()">
+            🔄 Refresh
+          </button>
+        </div>
+
+        <div id="webauthnCredentialsContainer" class="mt-20">
+          <p class="text-small">Click "Refresh" to load credentials...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Verifier: Trusted Issuers Tab -->
+    <div id="trusted-issuers-tab" class="tab-content verifier-only">
+      <h2>🏛️ Trusted Issuers</h2>
+      <p>View and manage trusted token issuers for verification.</p>
+
+      <div class="form-section">
+        <h3>📋 Loaded Issuers</h3>
+        <p class="text-small">
+          Issuers whose tokens this verifier will accept.
+        </p>
+
+        <div class="form-row">
+          <button type="button" onclick="loadTrustedIssuers()">
+            🔄 Refresh
+          </button>
+        </div>
+
+        <div id="trustedIssuersContainer" class="mt-20">
+          <p class="text-small">Click "Refresh" to load issuers...</p>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <h3>⚙️ Configuration</h3>
+        <p class="text-small">Issuer refresh and trust settings.</p>
+        <div id="issuerConfigContainer">
+          <p class="text-small">Loading configuration...</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Verifier: Cache Tab -->
+    <div id="cache-tab" class="tab-content verifier-only">
+      <h2>💾 Replay Cache</h2>
+      <p>Monitor and manage the token replay detection cache.</p>
+
+      <div class="form-section">
+        <h3>📊 Cache Statistics</h3>
+        <div id="cacheStatsContainer">
+          <p class="text-small">Loading cache stats...</p>
+        </div>
+        <div style="margin-top: 15px">
+          <button type="button" onclick="loadCacheStats()">
+            🔄 Refresh Stats
+          </button>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <h3>🗑️ Clear Cache</h3>
+        <p class="text-small" style="color: var(--warning-color)">
+          ⚠️ Warning: Clearing the cache allows previously-used tokens to be
+          replayed. Only use in development.
+        </p>
+        <button
+          type="button"
+          onclick="clearCache()"
+          style="background: var(--error-color)"
+        >
+          Clear Replay Cache
+        </button>
+        <div id="cacheClearResult"></div>
+      </div>
+    </div>
+
+    <script>
+      // ============================================================================
+      // Configuration & State
+      // ============================================================================
+
+      const CONFIG = {
+        issuerUrl:
+          window.location.hostname === "localhost"
+            ? "http://localhost:8081"
+            : window.location.origin,
+        adminPath: "/admin",
+      };
+
+      let state = {
+        apiKey: localStorage.getItem("freebirdAdminKey") || "",
+        serviceType: null, // 'issuer' or 'verifier' - detected from /health response
+        currentTab: "dashboard",
+        users: [],
+        auditLogs: [],
+        activityChartData: {
+          labels: [],
+          users: [],
+          invitations: [],
+          redemptions: [],
+        },
+        // Users pagination state
+        usersPagination: {
+          currentPage: 1,
+          pageSize: 20,
+          total: 0,
+          hasMore: false,
+        },
+        // Invitation pagination and filter state
+        invitationsPagination: {
+          currentPage: 1,
+          pageSize: 20,
+          total: 0,
+          hasMore: false,
+        },
+        invitationFilters: {
+          status: "all",
+          inviter_id: "",
+          date_from: "",
+          date_to: "",
+        },
+        // Audit log pagination state
+        auditPagination: {
+          currentPage: 1,
+          pageSize: 50,
+          total: 0,
+          hasMore: false,
+        },
+        // WebAuthn credentials cache
+        webauthnCredentials: [],
+      };
+
+      // ============================================================================
+      // API Client
+      // ============================================================================
+
+      class FreebirdAdminAPI {
+        constructor(baseUrl, apiKey) {
+          this.baseUrl = baseUrl;
+          this.apiKey = apiKey;
+        }
+
+        async request(endpoint, options = {}) {
+          const url = `${this.baseUrl}${CONFIG.adminPath}${endpoint}`;
+          const headers = {
+            "X-Admin-Key": this.apiKey,
+            "Content-Type": "application/json",
+            ...options.headers,
+          };
+
+          try {
+            const response = await fetch(url, {
+              ...options,
+              headers,
+            });
+
+            const data = await response.json().catch(() => null);
+
+            if (!response.ok) {
+              throw new Error(
+                data?.message ||
+                  data?.error ||
+                  `HTTP ${response.status}: ${response.statusText}`,
+              );
+            }
+
+            return data;
+          } catch (error) {
+            console.error("API Error:", error);
+            throw error;
+          }
+        }
+
+        async getHealth() {
+          return this.request("/health");
+        }
+
+        async getStats() {
+          return this.request("/stats");
+        }
+
+        async getConfig() {
+          return this.request("/config");
+        }
+
+        async getUsers(limit = 50, offset = 0) {
+          return this.request(`/users?limit=${limit}&offset=${offset}`);
+        }
+
+        async getUserDetails(userId) {
+          return this.request(`/users/${userId}`);
+        }
+
+        async banUser(userId, banTree) {
+          return this.request("/users/ban", {
+            method: "POST",
+            body: JSON.stringify({
+              user_id: userId,
+              ban_tree: banTree,
+            }),
+          });
+        }
+
+        async createInvitations(inviterId, count) {
+          return this.request("/invitations/create", {
+            method: "POST",
+            body: JSON.stringify({
+              inviter_id: inviterId,
+              count: count,
+            }),
+          });
+        }
+
+        async grantInvites(userId, count) {
+          return this.request("/invites/grant", {
+            method: "POST",
+            body: JSON.stringify({
+              user_id: userId,
+              count: count,
+            }),
+          });
+        }
+
+        async getKeys() {
+          return this.request("/keys");
+        }
+
+        async rotateKey(newKid, gracePeriodSecs) {
+          return this.request("/keys/rotate", {
+            method: "POST",
+            body: JSON.stringify({
+              new_kid: newKid,
+              grace_period_secs: gracePeriodSecs,
+            }),
+          });
+        }
+
+        async cleanupKeys() {
+          return this.request("/keys/cleanup", {
+            method: "POST",
+          });
+        }
+
+        async getInvitations(limit = 50, offset = 0, filters = {}) {
+          let url = `/invitations?limit=${limit}&offset=${offset}`;
+          if (filters.status && filters.status !== "all") {
+            url += `&status=${filters.status}`;
+          }
+          if (filters.inviter_id) {
+            url += `&inviter_id=${encodeURIComponent(filters.inviter_id)}`;
+          }
+          if (filters.date_from) {
+            url += `&date_from=${filters.date_from}`;
+          }
+          if (filters.date_to) {
+            url += `&date_to=${filters.date_to}`;
+          }
+          return this.request(url);
+        }
+
+        // Export methods
+        async exportInvitations(format = "json") {
+          return this.request(`/export/invitations?format=${format}`);
+        }
+
+        async exportUsers(format = "json") {
+          return this.request(`/export/users?format=${format}`);
+        }
+
+        async exportAudit(format = "json") {
+          return this.request(`/export/audit?format=${format}`);
+        }
+
+        async registerOwner(userId) {
+          return this.request("/register-owner", {
+            method: "POST",
+            body: JSON.stringify({
+              user_id: userId,
+            }),
+          });
+        }
+
+        async getAuditLogs(limit = 100, offset = 0) {
+          return this.request(`/audit?limit=${limit}&offset=${offset}`);
+        }
+
+        // Federation API methods
+        async getVouches() {
+          return this.request("/federation/vouches");
+        }
+
+        async addVouch(vouch) {
+          return this.request("/federation/vouches", {
+            method: "POST",
+            body: JSON.stringify({ vouch }),
+          });
+        }
+
+        async removeVouch(issuerId) {
+          return this.request(
+            `/federation/vouches/${encodeURIComponent(issuerId)}`,
+            {
+              method: "DELETE",
+            },
+          );
+        }
+
+        async getRevocations() {
+          return this.request("/federation/revocations");
+        }
+
+        async addRevocation(revocation) {
+          return this.request("/federation/revocations", {
+            method: "POST",
+            body: JSON.stringify({ revocation }),
+          });
+        }
+
+        async removeRevocation(issuerId) {
+          return this.request(
+            `/federation/revocations/${encodeURIComponent(issuerId)}`,
+            {
+              method: "DELETE",
+            },
+          );
+        }
+
+        async getWebAuthnCredentials() {
+          return this.request("/webauthn/credentials");
+        }
+
+        async deleteWebAuthnCredential(credentialId) {
+          return this.request(
+            `/webauthn/credentials/${encodeURIComponent(credentialId)}`,
+            {
+              method: "DELETE",
+            },
+          );
+        }
+
+        async getWebAuthnStats() {
+          return this.request("/webauthn/stats");
+        }
+
+        // ============================================================
+        // Verifier-specific API methods
+        // ============================================================
+
+        async getVerifierConfig() {
+          return this.request("/config");
+        }
+
+        async getTrustedIssuers() {
+          return this.request("/issuers");
+        }
+
+        async getIssuerDetails(issuerId) {
+          return this.request(`/issuers/${encodeURIComponent(issuerId)}`);
+        }
+
+        async refreshIssuer(issuerId) {
+          return this.request(
+            `/issuers/${encodeURIComponent(issuerId)}/refresh`,
+            {
+              method: "POST",
+            },
+          );
+        }
+
+        async getCacheStats() {
+          return this.request("/cache/stats");
+        }
+
+        async clearCache() {
+          return this.request("/cache/clear", {
+            method: "POST",
+          });
+        }
+      }
+
+      // ============================================================================
+      // UI Functions
+      // ============================================================================
+
+      function showMessage(containerId, type, message) {
+        const container = document.getElementById(containerId);
+        container.innerHTML = `<div class="message ${type}">${message}</div>`;
+
+        if (type === "success") {
+          setTimeout(() => {
+            container.innerHTML = "";
+          }, 5000);
+        }
+      }
+
+      function switchTab(tabName) {
+        // Update tab buttons
+        document
+          .querySelectorAll(".tab")
+          .forEach((tab) => tab.classList.remove("active"));
+        event.target.classList.add("active");
+
+        // Update tab content
+        document.querySelectorAll(".tab-content").forEach((content) => {
+          content.classList.remove("active");
+        });
+        document.getElementById(`${tabName}-tab`).classList.add("active");
+
+        state.currentTab = tabName;
+
+        // Auto-load data
+        if (tabName === "users" && state.users.length === 0) {
+          loadUsers();
+        } else if (tabName === "keys") {
+          loadKeys();
+        } else if (tabName === "invitations") {
+          loadInvitationHistory();
+        } else if (tabName === "trusted-issuers") {
+          loadTrustedIssuers();
+        } else if (tabName === "cache") {
+          loadCacheStats();
+        } else if (tabName === "sybil") {
+          loadSybilConfig();
+        }
+      }
+
+      function copyToClipboard(text, buttonElement) {
+        navigator.clipboard
+          .writeText(text)
+          .then(() => {
+            const originalText = buttonElement.textContent;
+            buttonElement.textContent = "✓ Copied!";
+            buttonElement.style.background = "var(--success-color)";
+
+            setTimeout(() => {
+              buttonElement.textContent = originalText;
+              buttonElement.style.background = "";
+            }, 2000);
+          })
+          .catch((err) => {
+            alert("Failed to copy: " + err);
+          });
+      }
+
+      // ============================================================================
+      // API Key Management
+      // ============================================================================
+
+      async function saveApiKey() {
+        const apiKey = document.getElementById("apiKey").value.trim();
+        const statusEl = document.getElementById("apiKeyStatus");
+
+        if (!apiKey) {
+          statusEl.className = "api-key-status error";
+          statusEl.textContent = "❌ API key cannot be empty";
+          return;
+        }
+
+        if (apiKey.length < 32) {
+          statusEl.className = "api-key-status error";
+          statusEl.textContent = "❌ API key must be at least 32 characters";
+          return;
+        }
+
+        // Test the API key
+        statusEl.className = "api-key-status";
+        statusEl.innerHTML = '<span class="spinner"></span> Testing API key...';
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, apiKey);
+          const health = await api.getHealth();
+
+          // Save to localStorage
+          localStorage.setItem("freebirdAdminKey", apiKey);
+          state.apiKey = apiKey;
+
+          // Detect service type from health response
+          state.serviceType = health.service || "issuer"; // Default to issuer for backward compat
+          updateUIForServiceType();
+
+          statusEl.className = "api-key-status success";
+          statusEl.textContent = `✓ API key saved and verified (${state.serviceType})`;
+
+          // Update health badge
+          updateHealthBadge();
+        } catch (error) {
+          statusEl.className = "api-key-status error";
+          statusEl.textContent = `❌ Invalid API key: ${error.message}`;
+
+          // Update health badge to show error
+          updateHealthBadge();
+        }
+      }
+
+      // Update the UI based on the detected service type
+      function updateUIForServiceType() {
+        const serviceBadge = document.getElementById("serviceBadge");
+
+        // Update service badge in header
+        if (state.serviceType === "verifier") {
+          serviceBadge.innerHTML =
+            '<span class="service-badge verifier">Verifier</span>';
+        } else {
+          serviceBadge.innerHTML =
+            '<span class="service-badge issuer">Issuer</span>';
+        }
+
+        // Toggle tab visibility based on service type
+        document.querySelectorAll(".tab.issuer-only").forEach((tab) => {
+          tab.classList.toggle("hidden", state.serviceType === "verifier");
+        });
+        document.querySelectorAll(".tab.verifier-only").forEach((tab) => {
+          tab.classList.toggle("hidden", state.serviceType !== "verifier");
+        });
+
+        // Toggle tab content visibility
+        document
+          .querySelectorAll(".tab-content.issuer-only")
+          .forEach((content) => {
+            content.classList.toggle(
+              "service-hidden",
+              state.serviceType === "verifier",
+            );
+          });
+        document
+          .querySelectorAll(".tab-content.verifier-only")
+          .forEach((content) => {
+            content.classList.toggle(
+              "service-hidden",
+              state.serviceType !== "verifier",
+            );
+          });
+
+        // If current tab is hidden, switch to dashboard
+        const currentTabButton = document.querySelector(
+          `.tab[onclick*="'${state.currentTab}'"]`,
+        );
+        if (currentTabButton && currentTabButton.classList.contains("hidden")) {
+          switchTab("dashboard");
+        }
+      }
+
+      function clearApiKey() {
+        localStorage.removeItem("freebirdAdminKey");
+        state.apiKey = "";
+        document.getElementById("apiKey").value = "";
+        document.getElementById("apiKeyStatus").textContent = "";
+
+        // Update health badge
+        updateHealthBadge();
+      }
+
+      // ============================================================================
+      // Dashboard Functions
+      // ============================================================================
+
+      async function loadStats() {
+        if (!state.apiKey) {
+          showMessage(
+            "statsContainer",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+        const container = document.getElementById("statsContainer");
+        container.innerHTML =
+          '<p><span class="spinner"></span> Loading statistics...</p>';
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const data = await api.getStats();
+
+          // Check if this is verifier stats (has current_epoch) or issuer stats (has stats.total_users)
+          if (
+            state.serviceType === "verifier" ||
+            data.current_epoch !== undefined
+          ) {
+            // Verifier stats
+            const timestamp = new Date(data.timestamp * 1000).toLocaleString();
+            const [minEpoch, maxEpoch] = data.valid_epoch_range || [0, 0];
+
+            container.innerHTML = `
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <h3>Current Epoch</h3>
+                                <p class="value">${data.current_epoch || 0}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Valid Epoch Range</h3>
+                                <p class="value" style="font-size: 1.2em;">${minEpoch} - ${maxEpoch}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Issuers Loaded</h3>
+                                <p class="value">${data.issuers_loaded || 0}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Store Backend</h3>
+                                <p class="value" style="font-size: 1.2em;">${data.store_backend || "unknown"}</p>
+                            </div>
+                        </div>
+                        <p class="text-small" style="opacity: 0.6;">Last updated: ${timestamp}</p>
+                    `;
+          } else {
+            // Issuer stats
+            const stats = data.stats;
+            const timestamp = new Date(data.timestamp * 1000).toLocaleString();
+            const owner = data.owner;
+            const userCount = data.user_count || 0;
+
+            // Truncate owner public key for display (show first 8 and last 4 chars)
+            let ownerDisplay = "No owner registered";
+            if (owner) {
+              if (owner.length > 16) {
+                ownerDisplay =
+                  owner.substring(0, 8) +
+                  "..." +
+                  owner.substring(owner.length - 4);
+              } else {
+                ownerDisplay = owner;
+              }
+            }
+
+            container.innerHTML = `
+                        <div class="form-section" style="margin-bottom: 20px; border-left: 4px solid ${owner ? "var(--success-color)" : "var(--warning-color)"};">
+                            <h3>👤 Instance Owner</h3>
+                            <p class="text-mono" style="font-size: 1.1em;">${ownerDisplay}</p>
+                            ${owner ? `<p class="text-small" style="opacity: 0.6;">Full key: <code style="word-break: break-all;">${owner}</code></p>` : '<p class="text-small" style="opacity: 0.6;">Use POST /admin/register-owner to set the owner</p>'}
+                        </div>
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <h3>Total Users</h3>
+                                <p class="value">${stats.total_users || 0}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Redeemed Users</h3>
+                                <p class="value">${userCount}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Total Invitations</h3>
+                                <p class="value">${stats.total_invitations || 0}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Redeemed</h3>
+                                <p class="value">${stats.redeemed_invitations || 0}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Pending</h3>
+                                <p class="value">${stats.pending_invitations || 0}</p>
+                            </div>
+                            <div class="stat-card">
+                                <h3>Banned Users</h3>
+                                <p class="value">${stats.banned_users || 0}</p>
+                            </div>
+                        </div>
+                        <p class="text-small" style="opacity: 0.6;">Last updated: ${timestamp}</p>
+                    `;
+          }
+        } catch (error) {
+          container.innerHTML = `<div class="message error">❌ Failed to load stats: ${error.message}</div>`;
+        }
+      }
+
+      // ============================================================================
+      // User Management Functions
+      // ============================================================================
+      // Sybil Configuration Functions
+      // ============================================================================
+
+      async function loadSybilConfig() {
+        if (!state.apiKey) {
+          showMessage(
+            "sybilConfigContainer",
+            "warning",
+            "Please configure your API key first",
+          );
+          return;
+        }
+        const container = document.getElementById("sybilConfigContainer");
+        container.innerHTML =
+          '<p><span class="spinner"></span> Loading configuration...</p>';
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const data = await api.getConfig();
+
+          let html = `
+            <div class="stats-grid">
+              <div class="stat-card">
+                <h3>Sybil Mode</h3>
+                <p class="value" style="font-size: 1.4em;">${data.sybil.mode}</p>
+              </div>
+              <div class="stat-card">
+                <h3>Issuer ID</h3>
+                <p class="value" style="font-size: 0.9em; word-break: break-all;">${data.issuer_id}</p>
+              </div>
+              <div class="stat-card">
+                <h3>Epoch Duration</h3>
+                <p class="value">${data.epoch_duration}</p>
+              </div>
+              <div class="stat-card">
+                <h3>Epoch Retention</h3>
+                <p class="value">${data.epoch_retention}</p>
+              </div>
+            </div>
+
+            <div class="form-section" style="margin-top: 20px;">
+              <h3>Mode Description</h3>
+              <p>${data.sybil.mode_description}</p>
+            </div>
+          `;
+
+          // Render mode-specific settings
+          const settings = data.sybil.settings;
+          if (settings && Object.keys(settings).length > 0) {
+            html += `
+              <div class="form-section">
+                <h3>Mode Settings</h3>
+                <table>
+                  <thead>
+                    <tr><th>Setting</th><th>Value</th></tr>
+                  </thead>
+                  <tbody>
+            `;
+
+            for (const [key, value] of Object.entries(settings)) {
+              const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+              let displayValue = value;
+              if (Array.isArray(value)) {
+                // Handle trust levels array
+                if (value.length > 0 && typeof value[0] === 'object') {
+                  displayValue = '<ul style="margin: 0; padding-left: 20px;">';
+                  for (const level of value) {
+                    displayValue += '<li style="margin: 5px 0;">';
+                    displayValue += `Age: ${level.min_age}, Tokens: ${level.max_tokens}, Cooldown: ${level.cooldown}`;
+                    displayValue += '</li>';
+                  }
+                  displayValue += '</ul>';
+                } else {
+                  displayValue = value.join(', ');
+                }
+              } else if (typeof value === 'boolean') {
+                displayValue = value ? '✅ Yes' : '❌ No';
+              } else if (typeof value === 'object' && value !== null) {
+                displayValue = JSON.stringify(value, null, 2);
+              }
+              html += `<tr><td><strong>${displayKey}</strong></td><td>${displayValue}</td></tr>`;
+            }
+
+            html += `
+                  </tbody>
+                </table>
+              </div>
+            `;
+          }
+
+          // Render combined mode info if applicable
+          if (data.sybil.combined_mechanisms) {
+            html += `
+              <div class="form-section">
+                <h3>Combined Mode Configuration</h3>
+                <table>
+                  <thead>
+                    <tr><th>Setting</th><th>Value</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td><strong>Mode Type</strong></td><td>${data.sybil.combined_mode_type || 'or'}</td></tr>
+                    <tr><td><strong>Mechanisms</strong></td><td>${data.sybil.combined_mechanisms.join(', ')}</td></tr>
+                    ${data.sybil.combined_threshold ? `<tr><td><strong>Threshold</strong></td><td>${data.sybil.combined_threshold} required</td></tr>` : ''}
+                  </tbody>
+                </table>
+              </div>
+            `;
+          }
+
+          // System config section
+          html += `
+            <div class="form-section">
+              <h3>System Configuration</h3>
+              <table>
+                <thead>
+                  <tr><th>Setting</th><th>Value</th></tr>
+                </thead>
+                <tbody>
+                  <tr><td><strong>Require TLS</strong></td><td>${data.require_tls ? '✅ Yes' : '❌ No'}</td></tr>
+                  <tr><td><strong>Behind Proxy</strong></td><td>${data.behind_proxy ? '✅ Yes' : '❌ No'}</td></tr>
+                  <tr><td><strong>WebAuthn Enabled</strong></td><td>${data.webauthn_enabled ? '✅ Yes' : '❌ No'}</td></tr>
+                </tbody>
+              </table>
+            </div>
+          `;
+
+          container.innerHTML = html;
+        } catch (error) {
+          container.innerHTML = `<div class="message error">Failed to load configuration: ${error.message}</div>`;
+        }
+      }
+
+      // ============================================================================
+      // User Management Functions
+      // ============================================================================
+
+      async function loadUsers(page = null) {
+        if (!state.apiKey) {
+          showMessage(
+            "usersContainer",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        // Update current page if specified
+        if (page !== null) {
+          state.usersPagination.currentPage = page;
+        }
+
+        const container = document.getElementById("usersContainer");
+        container.innerHTML =
+          '<p><span class="spinner"></span> Loading users...</p>';
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const { pageSize, currentPage } = state.usersPagination;
+          const offset = (currentPage - 1) * pageSize;
+
+          const response = await api.getUsers(pageSize, offset);
+
+          // Update pagination state
+          state.usersPagination.total = response.total;
+          state.usersPagination.hasMore = response.has_more;
+
+          state.users = response.users; // Cache for filtering
+          renderUsersTable(response.users, response.total);
+        } catch (error) {
+          container.innerHTML = `<div class="message error">❌ Failed to load users: ${error.message}</div>`;
+        }
+      }
+
+      function renderUsersTable(users, total = null) {
+        const container = document.getElementById("usersContainer");
+
+        if (users.length === 0) {
+          container.innerHTML = "<p>No users found.</p>";
+          return;
+        }
+
+        const { currentPage, pageSize } = state.usersPagination;
+        const totalCount = total !== null ? total : state.usersPagination.total;
+        const totalPages = Math.ceil(totalCount / pageSize);
+
+        let html = "";
+
+        // Pagination controls (top)
+        if (totalCount > 0) {
+          html += renderUsersPaginationControls(
+            currentPage,
+            totalPages,
+            totalCount,
+          );
+        }
+
+        html += `
+                <table>
+                    <thead>
+                        <tr>
+                            <th>User ID</th>
+                            <th>Invites Left</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+        users.forEach((user) => {
+          const statusClass = user.banned ? "status-banned" : "status-active";
+          const statusText = user.banned ? "BANNED" : "Active";
+
+          html += `
+                    <tr>
+                        <td class="text-mono">${user.user_id}</td>
+                        <td>${user.invites_remaining}</td>
+                        <td class="${statusClass}">${statusText}</td>
+                        <td>
+                            <button type="button" class="action-btn" onclick="showUserDetails('${user.user_id}')">Details</button>
+                            ${!user.banned ? `<button class="action-btn" style="background: var(--error-color); color: white;" onclick="confirmBan('${user.user_id}')">Ban</button>` : ""}
+                        </td>
+                    </tr>
+                `;
+        });
+
+        html += "</tbody></table>";
+
+        // Pagination controls (bottom)
+        if (totalCount > 0) {
+          html += renderUsersPaginationControls(
+            currentPage,
+            totalPages,
+            totalCount,
+          );
+        }
+
+        container.innerHTML = html;
+      }
+
+      function renderUsersPaginationControls(currentPage, totalPages, total) {
+        const { pageSize } = state.usersPagination;
+        const startItem = (currentPage - 1) * pageSize + 1;
+        const endItem = Math.min(currentPage * pageSize, total);
+
+        let html =
+          '<div style="display: flex; justify-content: space-between; align-items: center; margin: 15px 0; padding: 10px; background: var(--background-alt); border-radius: 5px;">';
+
+        // Left: Page info
+        html += `<div class="text-small">Showing ${startItem}-${endItem} of ${total} users</div>`;
+
+        // Center: Page numbers
+        html += '<div style="display: flex; gap: 5px; align-items: center;">';
+
+        // Previous button
+        html += `<button class="action-btn" ${currentPage <= 1 ? "disabled" : ""} onclick="loadUsers(${currentPage - 1})">← Prev</button>`;
+
+        // Page numbers (show up to 5 pages centered on current)
+        const startPage = Math.max(1, currentPage - 2);
+        const endPage = Math.min(totalPages, startPage + 4);
+
+        if (startPage > 1) {
+          html += `<button type="button" class="action-btn" onclick="loadUsers(1)">1</button>`;
+          if (startPage > 2) {
+            html += '<span style="padding: 0 5px;">...</span>';
+          }
+        }
+
+        for (let p = startPage; p <= endPage; p++) {
+          const isActive = p === currentPage;
+          html += `<button class="action-btn" style="${isActive ? "background: var(--tab-active-color); color: white;" : ""}" onclick="loadUsers(${p})">${p}</button>`;
+        }
+
+        if (endPage < totalPages) {
+          if (endPage < totalPages - 1) {
+            html += '<span style="padding: 0 5px;">...</span>';
+          }
+          html += `<button type="button" class="action-btn" onclick="loadUsers(${totalPages})">${totalPages}</button>`;
+        }
+
+        // Next button
+        html += `<button class="action-btn" ${currentPage >= totalPages ? "disabled" : ""} onclick="loadUsers(${currentPage + 1})">Next →</button>`;
+
+        html += "</div>";
+
+        // Right: Page size selector
+        html += `<div class="text-small">
+                <label>Per page:
+                    <select onchange="changeUsersPageSize(this.value)" style="padding: 4px; font-size: 0.9em;">
+                        <option value="10" ${pageSize === 10 ? "selected" : ""}>10</option>
+                        <option value="20" ${pageSize === 20 ? "selected" : ""}>20</option>
+                        <option value="50" ${pageSize === 50 ? "selected" : ""}>50</option>
+                        <option value="100" ${pageSize === 100 ? "selected" : ""}>100</option>
+                    </select>
+                </label>
+            </div>`;
+
+        html += "</div>";
+        return html;
+      }
+
+      function changeUsersPageSize(newSize) {
+        state.usersPagination.pageSize = parseInt(newSize);
+        state.usersPagination.currentPage = 1; // Reset to first page
+        loadUsers();
+      }
+
+      function filterUsers() {
+        const query = document.getElementById("userSearch").value.toLowerCase();
+        const filtered = state.users.filter((user) =>
+          user.user_id.toLowerCase().includes(query),
+        );
+        // Note: This filters the current page only; for full filtering,
+        // consider server-side filtering in the future
+        renderUsersTable(filtered, filtered.length);
+      }
+
+      async function showUserDetails(userId) {
+        const modal = document.getElementById("userModal");
+        const content = document.getElementById("userModalContent");
+
+        content.innerHTML =
+          '<p><span class="spinner"></span> Loading details...</p>';
+        modal.showModal();
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const details = await api.getUserDetails(userId);
+
+          const joined = new Date(details.joined_at * 1000).toLocaleString();
+          const lastInvite = details.last_invite_at
+            ? new Date(details.last_invite_at * 1000).toLocaleString()
+            : "Never";
+
+          let inviteesHtml = "None";
+          if (details.invitees.length > 0) {
+            inviteesHtml =
+              '<ul style="margin: 0; padding-left: 20px;">' +
+              details.invitees
+                .map((i) => `<li class="text-mono">${i}</li>`)
+                .join("") +
+              "</ul>";
+          }
+
+          let html = `
+                    <h2>User: <span class="text-mono">${details.user_id}</span></h2>
+                    
+                    <div class="detail-row">
+                        <strong>Status:</strong>
+                        <span class="${details.banned ? "status-banned" : "status-active"}">
+                            ${details.banned ? "BANNED" : "Active"}
+                        </span>
+                    </div>
+                    <div class="detail-row">
+                        <strong>Joined:</strong>
+                        <span>${joined}</span>
+                    </div>
+                    <div class="detail-row">
+                        <strong>Reputation:</strong>
+                        <span>${(details.reputation * 100).toFixed(0)}%</span>
+                    </div>
+                    <div class="detail-row">
+                        <strong>Invites Remaining:</strong>
+                        <span>${details.invites_remaining}</span>
+                    </div>
+                    <div class="detail-row">
+                        <strong>Invites Used:</strong>
+                        <span>${details.invites_used.length}</span>
+                    </div>
+                    <div class="detail-row">
+                        <strong>Last Invite Sent:</strong>
+                        <span>${lastInvite}</span>
+                    </div>
+                    
+                    <h3>Invite Tree</h3>
+                    <div style="max-height: 200px; overflow-y: auto; background: var(--background-alt); padding: 10px; border-radius: 5px;">
+                        ${inviteesHtml}
+                    </div>
+
+                    <h3>Interactive Tree Visualization</h3>
+                    <div class="tree-canvas-container">
+                        <canvas id="treeCanvas" width="600" height="200"></canvas>
+                    </div>
+
+                    <div style="margin-top: 20px; border-top: 1px solid var(--border); padding-top: 10px;">
+                        ${
+                          !details.banned
+                            ? `
+                            <button style="background: var(--error-color); color: white;" onclick="confirmBan('${details.user_id}')">Ban User</button>
+                            <button style="background: #c0392b; color: white;" onclick="confirmBan('${details.user_id}', true)">Ban Tree (Recursive)</button>
+                        `
+                            : '<p class="status-banned">This user is banned.</p>'
+                        }
+                    </div>
+                `;
+
+          content.innerHTML = html;
+
+          // Draw invitation tree visualization
+          drawInvitationTree(details.user_id, details.invitees);
+        } catch (error) {
+          content.innerHTML = `<div class="message error">Failed to load details: ${error.message}</div>`;
+        }
+      }
+
+      async function confirmBan(userId, banTree = false) {
+        const msg = banTree
+          ? `Are you sure you want to ban ${userId} AND all users they invited? This cannot be undone.`
+          : `Are you sure you want to ban ${userId}?`;
+
+        if (!confirm(msg)) return;
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const result = await api.banUser(userId, banTree);
+
+          alert(`Success! Banned ${result.banned_count} user(s).`);
+          document.getElementById("userModal").close();
+          loadUsers(); // Refresh list
+        } catch (error) {
+          alert(`Failed to ban user: ${error.message}`);
+        }
+      }
+
+      // ============================================================================
+      // Invitation Functions
+      // ============================================================================
+
+      async function createInvitations() {
+        if (!state.apiKey) {
+          showMessage(
+            "invitationsResults",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        const inviterId = document.getElementById("inviterUserId").value.trim();
+        const count = parseInt(document.getElementById("inviteCount").value);
+
+        if (!inviterId) {
+          showMessage("invitationsResults", "error", "❌ User ID is required");
+          return;
+        }
+
+        if (count < 1 || count > 100) {
+          showMessage(
+            "invitationsResults",
+            "error",
+            "❌ Count must be between 1 and 100",
+          );
+          return;
+        }
+
+        showMessage(
+          "invitationsResults",
+          "info",
+          `<span class="spinner"></span> Creating ${count} invitation(s) for ${inviterId}...`,
+        );
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const result = await api.createInvitations(inviterId, count);
+
+          let html = `<div class="message success">✓ Created ${result.invitations.length} invitation(s) for ${result.inviter_id}</div>`;
+          html += '<div class="results">';
+
+          result.invitations.forEach((inv, index) => {
+            const expiresAt = new Date(inv.expires_at * 1000).toLocaleString();
+            html += `
+                        <div class="invitation-item">
+                            <strong>Invitation ${index + 1}</strong>
+                            <div class="invitation-code">
+                                <strong>Code:</strong> ${inv.code}
+                                <button type="button" class="copy-btn" onclick="copyToClipboard('${inv.code}', this)">📋 Copy</button>
+                            </div>
+                            <div class="invitation-code">
+                                <strong>Signature:</strong> ${inv.signature}
+                                <button type="button" class="copy-btn" onclick="copyToClipboard('${inv.signature}', this)">📋 Copy</button>
+                            </div>
+                            <div class="invitation-meta">Expires: ${expiresAt}</div>
+                        </div>
+                    `;
+          });
+
+          html += "</div>";
+          document.getElementById("invitationsResults").innerHTML = html;
+        } catch (error) {
+          showMessage(
+            "invitationsResults",
+            "error",
+            `❌ Failed: ${error.message}`,
+          );
+        }
+      }
+
+      async function grantInvites() {
+        if (!state.apiKey) {
+          showMessage(
+            "grantResults",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        const userId = document.getElementById("grantUserId").value.trim();
+        const count = parseInt(document.getElementById("grantCount").value);
+
+        if (!userId) {
+          showMessage("grantResults", "error", "❌ User ID is required");
+          return;
+        }
+
+        if (count < 1) {
+          showMessage("grantResults", "error", "❌ Count must be at least 1");
+          return;
+        }
+
+        showMessage(
+          "grantResults",
+          "info",
+          `<span class="spinner"></span> Granting ${count} invite(s) to ${userId}...`,
+        );
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const result = await api.grantInvites(userId, count);
+
+          showMessage(
+            "grantResults",
+            "success",
+            `✓ Granted ${result.invites_granted} invite(s) to ${result.user_id}`,
+          );
+        } catch (error) {
+          showMessage("grantResults", "error", `❌ Failed: ${error.message}`);
+        }
+      }
+
+      async function loadInvitationHistory(page = null) {
+        if (!state.apiKey) {
+          showMessage(
+            "invitationHistoryContainer",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        // Update current page if specified
+        if (page !== null) {
+          state.invitationsPagination.currentPage = page;
+        }
+
+        const container = document.getElementById("invitationHistoryContainer");
+        container.innerHTML =
+          '<p><span class="spinner"></span> Loading invitation history...</p>';
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const { pageSize, currentPage } = state.invitationsPagination;
+          const offset = (currentPage - 1) * pageSize;
+
+          // Build filters from state
+          const filters = {};
+          if (state.invitationFilters.status !== "all") {
+            filters.status = state.invitationFilters.status;
+          }
+          if (state.invitationFilters.inviter_id) {
+            filters.inviter_id = state.invitationFilters.inviter_id;
+          }
+          if (state.invitationFilters.date_from) {
+            // Convert date string to Unix timestamp
+            filters.date_from = Math.floor(
+              new Date(state.invitationFilters.date_from).getTime() / 1000,
+            );
+          }
+          if (state.invitationFilters.date_to) {
+            // Convert date string to Unix timestamp (end of day)
+            filters.date_to = Math.floor(
+              new Date(
+                state.invitationFilters.date_to + "T23:59:59",
+              ).getTime() / 1000,
+            );
+          }
+
+          const response = await api.getInvitations(pageSize, offset, filters);
+
+          // Update pagination state
+          state.invitationsPagination.total = response.total;
+          state.invitationsPagination.hasMore = response.has_more;
+
+          const invitations = response.invitations;
+          const totalPages = Math.ceil(response.total / pageSize);
+
+          if (!invitations || invitations.length === 0) {
+            container.innerHTML =
+              '<p class="text-small">No invitations found.</p>';
+            return;
+          }
+
+          let html = "";
+
+          // Pagination controls (top)
+          html += renderInvitationPaginationControls(
+            currentPage,
+            totalPages,
+            response.total,
+          );
+
+          // Table
+          html += "<table><thead><tr>";
+          html += "<th>Code</th>";
+          html += "<th>Created By</th>";
+          html += "<th>Created At</th>";
+          html += "<th>Used By</th>";
+          html += "<th>Status</th>";
+          html += "<th>Expires At</th>";
+          html += "</tr></thead><tbody>";
+
+          invitations.forEach((invite) => {
+            const createdAt = new Date(
+              invite.created_at * 1000,
+            ).toLocaleString();
+            const expiresAt = invite.expires_at
+              ? new Date(invite.expires_at * 1000).toLocaleString()
+              : "Never";
+            const usedBy =
+              invite.invitee_id ||
+              '<span style="opacity: 0.5;">Not used</span>';
+            const codeShort = invite.code.substring(0, 8) + "...";
+            const status = invite.redeemed
+              ? '<span style="color: var(--success-color)">✓ Used</span>'
+              : '<span style="opacity: 0.5;">Pending</span>';
+
+            html += `<tr>`;
+            html += `<td><code title="${invite.code}">${codeShort}</code> <button type="button" class="copy-btn" onclick="copyToClipboard('${invite.code}', this)">📋</button></td>`;
+            html += `<td class="text-mono">${invite.inviter_id}</td>`;
+            html += `<td>${createdAt}</td>`;
+            html += `<td class="text-mono">${usedBy}</td>`;
+            html += `<td>${status}</td>`;
+            html += `<td>${expiresAt}</td>`;
+            html += `</tr>`;
+          });
+
+          html += "</tbody></table>";
+
+          // Pagination controls (bottom)
+          html += renderInvitationPaginationControls(
+            currentPage,
+            totalPages,
+            response.total,
+          );
+
+          container.innerHTML = html;
+        } catch (error) {
+          container.innerHTML = `<div class="message error">❌ Failed to load invitation history: ${error.message}</div>`;
+        }
+      }
+
+      function renderInvitationPaginationControls(
+        currentPage,
+        totalPages,
+        total,
+      ) {
+        const { pageSize } = state.invitationsPagination;
+        const startItem = (currentPage - 1) * pageSize + 1;
+        const endItem = Math.min(currentPage * pageSize, total);
+
+        let html =
+          '<div style="display: flex; justify-content: space-between; align-items: center; margin: 15px 0; padding: 10px; background: var(--background-alt); border-radius: 5px;">';
+
+        // Left: Page info
+        html += `<div class="text-small">Showing ${startItem}-${endItem} of ${total} invitations</div>`;
+
+        // Center: Page numbers
+        html += '<div style="display: flex; gap: 5px; align-items: center;">';
+
+        // Previous button
+        html += `<button class="action-btn" ${currentPage <= 1 ? "disabled" : ""} onclick="loadInvitationHistory(${currentPage - 1})">← Prev</button>`;
+
+        // Page numbers (show up to 5 pages centered on current)
+        const startPage = Math.max(1, currentPage - 2);
+        const endPage = Math.min(totalPages, startPage + 4);
+
+        if (startPage > 1) {
+          html += `<button type="button" class="action-btn" onclick="loadInvitationHistory(1)">1</button>`;
+          if (startPage > 2) {
+            html += '<span style="padding: 0 5px;">...</span>';
+          }
+        }
+
+        for (let p = startPage; p <= endPage; p++) {
+          const isActive = p === currentPage;
+          html += `<button class="action-btn" style="${isActive ? "background: var(--tab-active-color); color: white;" : ""}" onclick="loadInvitationHistory(${p})">${p}</button>`;
+        }
+
+        if (endPage < totalPages) {
+          if (endPage < totalPages - 1) {
+            html += '<span style="padding: 0 5px;">...</span>';
+          }
+          html += `<button type="button" class="action-btn" onclick="loadInvitationHistory(${totalPages})">${totalPages}</button>`;
+        }
+
+        // Next button
+        html += `<button class="action-btn" ${currentPage >= totalPages ? "disabled" : ""} onclick="loadInvitationHistory(${currentPage + 1})">Next →</button>`;
+
+        html += "</div>";
+
+        // Right: Page size selector
+        html += `<div class="text-small">
+                <label>Per page:
+                    <select onchange="changeInvitationsPageSize(this.value)" style="padding: 4px; font-size: 0.9em;">
+                        <option value="10" ${pageSize === 10 ? "selected" : ""}>10</option>
+                        <option value="20" ${pageSize === 20 ? "selected" : ""}>20</option>
+                        <option value="50" ${pageSize === 50 ? "selected" : ""}>50</option>
+                        <option value="100" ${pageSize === 100 ? "selected" : ""}>100</option>
+                    </select>
+                </label>
+            </div>`;
+
+        html += "</div>";
+        return html;
+      }
+
+      function changeInvitationsPageSize(newSize) {
+        state.invitationsPagination.pageSize = parseInt(newSize);
+        state.invitationsPagination.currentPage = 1; // Reset to first page
+        loadInvitationHistory();
+      }
+
+      // Invitation filter functions
+      function applyInvitationFilters() {
+        state.invitationFilters.status = document.getElementById(
+          "invitationStatusFilter",
+        ).value;
+        state.invitationFilters.inviter_id = document
+          .getElementById("invitationInviterFilter")
+          .value.trim();
+        state.invitationFilters.date_from =
+          document.getElementById("invitationDateFrom").value;
+        state.invitationFilters.date_to =
+          document.getElementById("invitationDateTo").value;
+        state.invitationsPagination.currentPage = 1; // Reset to first page
+        loadInvitationHistory();
+      }
+
+      function clearInvitationFilters() {
+        document.getElementById("invitationStatusFilter").value = "all";
+        document.getElementById("invitationInviterFilter").value = "";
+        document.getElementById("invitationDateFrom").value = "";
+        document.getElementById("invitationDateTo").value = "";
+        state.invitationFilters = {
+          status: "all",
+          inviter_id: "",
+          date_from: "",
+          date_to: "",
+        };
+        state.invitationsPagination.currentPage = 1;
+        loadInvitationHistory();
+      }
+
+      // Export functions
+      async function exportInvitations(format) {
+        if (!state.apiKey) {
+          alert("Please configure your API key first");
+          return;
+        }
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const data = await api.exportInvitations(format);
+
+          if (format === "csv") {
+            downloadFile(data, "invitations.csv", "text/csv");
+          } else {
+            downloadFile(
+              JSON.stringify(data, null, 2),
+              "invitations.json",
+              "application/json",
+            );
+          }
+        } catch (error) {
+          alert("Export failed: " + error.message);
+        }
+      }
+
+      async function exportUsers(format) {
+        if (!state.apiKey) {
+          alert("Please configure your API key first");
+          return;
+        }
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const data = await api.exportUsers(format);
+
+          if (format === "csv") {
+            downloadFile(data, "users.csv", "text/csv");
+          } else {
+            downloadFile(
+              JSON.stringify(data, null, 2),
+              "users.json",
+              "application/json",
+            );
+          }
+        } catch (error) {
+          alert("Export failed: " + error.message);
+        }
+      }
+
+      async function exportAudit(format) {
+        if (!state.apiKey) {
+          alert("Please configure your API key first");
+          return;
+        }
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const data = await api.exportAudit(format);
+
+          if (format === "csv") {
+            downloadFile(data, "audit_log.csv", "text/csv");
+          } else {
+            downloadFile(
+              JSON.stringify(data, null, 2),
+              "audit_log.json",
+              "application/json",
+            );
+          }
+        } catch (error) {
+          alert("Export failed: " + error.message);
+        }
+      }
+
+      function downloadFile(content, filename, mimeType) {
+        const blob = new Blob([content], { type: mimeType });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }
+
+      // ============================================================================
+      // Keys Management Functions
+      // ============================================================================
+
+      async function loadKeys() {
+        if (!state.apiKey) {
+          showMessage(
+            "keysResults",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        const keysTable = document.getElementById("keysTable");
+        keysTable.innerHTML = '<span class="spinner"></span> Loading keys...';
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const result = await api.getKeys();
+
+          if (!result.keys || result.keys.length === 0) {
+            keysTable.innerHTML = '<p class="text-small">No keys found.</p>';
+            return;
+          }
+
+          let html = "<table><thead><tr>";
+          html += "<th>Key ID</th>";
+          html += "<th>Status</th>";
+          html += "<th>Public Key</th>";
+          html += "<th>Expires At</th>";
+          html += "</tr></thead><tbody>";
+
+          result.keys.forEach((key) => {
+            const status =
+              key.status === "active"
+                ? '<span style="color: var(--success-color)">✓ Active</span>'
+                : '<span style="color: var(--warning-color)">⏰ Deprecated</span>';
+
+            const expiresAt = key.expires_at
+              ? new Date(key.expires_at * 1000).toLocaleString()
+              : "Never";
+
+            const publicKeyShort = key.pubkey_b64
+              ? key.pubkey_b64.substring(0, 32) + "..."
+              : "N/A";
+
+            html += `<tr>`;
+            html += `<td><strong>${key.kid}</strong></td>`;
+            html += `<td>${status}</td>`;
+            html += `<td><code>${publicKeyShort}</code></td>`;
+            html += `<td>${expiresAt}</td>`;
+            html += `</tr>`;
+          });
+
+          html += "</tbody></table>";
+          keysTable.innerHTML = html;
+        } catch (error) {
+          keysTable.innerHTML = "";
+          showMessage(
+            "keysResults",
+            "error",
+            `❌ Failed to load keys: ${error.message}`,
+          );
+        }
+      }
+
+      async function rotateKey() {
+        if (!state.apiKey) {
+          showMessage(
+            "keysResults",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        const newKid = document.getElementById("newKid").value.trim();
+        const gracePeriodSecs = parseInt(
+          document.getElementById("gracePeriodSecs").value,
+        );
+
+        if (!newKid) {
+          showMessage("keysResults", "error", "❌ New Key ID is required");
+          return;
+        }
+
+        if (gracePeriodSecs < 0) {
+          showMessage(
+            "keysResults",
+            "error",
+            "❌ Grace period must be non-negative",
+          );
+          return;
+        }
+
+        showMessage(
+          "keysResults",
+          "info",
+          `<span class="spinner"></span> Rotating to new key ${newKid}...`,
+        );
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const result = await api.rotateKey(newKid, gracePeriodSecs);
+
+          showMessage(
+            "keysResults",
+            "success",
+            `✓ Key rotated successfully. New key: ${result.new_kid}`,
+          );
+
+          // Clear the input
+          document.getElementById("newKid").value = "";
+
+          // Reload keys table
+          loadKeys();
+        } catch (error) {
+          showMessage(
+            "keysResults",
+            "error",
+            `❌ Failed to rotate key: ${error.message}`,
+          );
+        }
+      }
+
+      async function cleanupKeys() {
+        if (!state.apiKey) {
+          showMessage(
+            "keysResults",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        showMessage(
+          "keysResults",
+          "info",
+          '<span class="spinner"></span> Cleaning up expired keys...',
+        );
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const result = await api.cleanupKeys();
+
+          showMessage(
+            "keysResults",
+            "success",
+            `✓ Cleanup complete. Removed ${result.removed_count} expired key(s).`,
+          );
+
+          // Reload keys table
+          loadKeys();
+        } catch (error) {
+          showMessage(
+            "keysResults",
+            "error",
+            `❌ Failed to cleanup keys: ${error.message}`,
+          );
+        }
+      }
+
+      // ============================================================================
+      // Activity Chart Functions
+      // ============================================================================
+
+      function drawActivityChart() {
+        const canvas = document.getElementById("activityChart");
+        if (!canvas) return;
+
+        const ctx = canvas.getContext("2d");
+        const data = state.activityChartData;
+
+        // Clear canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (data.labels.length === 0) {
+          ctx.fillStyle = "#888";
+          ctx.font = "14px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(
+            'No data available. Click "Update Chart" to load data.',
+            canvas.width / 2,
+            canvas.height / 2,
+          );
+          return;
+        }
+
+        const padding = 50;
+        const chartWidth = canvas.width - 2 * padding;
+        const chartHeight = canvas.height - 2 * padding;
+
+        // Find max value
+        const maxValue = Math.max(
+          ...data.users,
+          ...data.invitations,
+          ...data.redemptions,
+          1,
+        );
+
+        // Draw axes
+        ctx.strokeStyle = "#666";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(padding, padding);
+        ctx.lineTo(padding, canvas.height - padding);
+        ctx.lineTo(canvas.width - padding, canvas.height - padding);
+        ctx.stroke();
+
+        // Draw grid lines
+        ctx.strokeStyle = "#333";
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= 5; i++) {
+          const y = padding + (chartHeight / 5) * i;
+          ctx.beginPath();
+          ctx.moveTo(padding, y);
+          ctx.lineTo(canvas.width - padding, y);
+          ctx.stroke();
+
+          // Y-axis labels
+          const value = Math.round(maxValue * (1 - i / 5));
+          ctx.fillStyle = "#888";
+          ctx.font = "12px sans-serif";
+          ctx.textAlign = "right";
+          ctx.fillText(value.toString(), padding - 10, y + 4);
+        }
+
+        // Draw data lines
+        function drawLine(values, color, label) {
+          if (values.length === 0) return;
+
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+
+          values.forEach((value, index) => {
+            const x = padding + (chartWidth / (values.length - 1 || 1)) * index;
+            const y =
+              canvas.height - padding - (value / maxValue) * chartHeight;
+
+            if (index === 0) {
+              ctx.moveTo(x, y);
+            } else {
+              ctx.lineTo(x, y);
+            }
+          });
+
+          ctx.stroke();
+
+          // Draw points
+          ctx.fillStyle = color;
+          values.forEach((value, index) => {
+            const x = padding + (chartWidth / (values.length - 1 || 1)) * index;
+            const y =
+              canvas.height - padding - (value / maxValue) * chartHeight;
+            ctx.beginPath();
+            ctx.arc(x, y, 4, 0, Math.PI * 2);
+            ctx.fill();
+          });
+        }
+
+        drawLine(data.users, "#0076d1", "Users");
+        drawLine(data.invitations, "#2ecc71", "Invitations");
+        drawLine(data.redemptions, "#f39c12", "Redemptions");
+
+        // Draw legend
+        const legendY = 20;
+        const legendX = canvas.width - 150;
+
+        ctx.fillStyle = "#0076d1";
+        ctx.fillRect(legendX, legendY, 15, 15);
+        ctx.fillStyle = "#ccc";
+        ctx.font = "12px sans-serif";
+        ctx.textAlign = "left";
+        ctx.fillText("Users", legendX + 20, legendY + 12);
+
+        ctx.fillStyle = "#2ecc71";
+        ctx.fillRect(legendX, legendY + 25, 15, 15);
+        ctx.fillStyle = "#ccc";
+        ctx.fillText("Invitations", legendX + 20, legendY + 37);
+
+        ctx.fillStyle = "#f39c12";
+        ctx.fillRect(legendX, legendY + 50, 15, 15);
+        ctx.fillStyle = "#ccc";
+        ctx.fillText("Redemptions", legendX + 20, legendY + 62);
+      }
+
+      async function updateActivityChart() {
+        if (!state.apiKey) {
+          alert("⚠️ Please configure your API key first");
+          return;
+        }
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const stats = await api.getStats();
+
+          // Add current stats to chart data
+          const now = new Date().toLocaleTimeString();
+          state.activityChartData.labels.push(now);
+          state.activityChartData.users.push(stats.stats.total_users || 0);
+          state.activityChartData.invitations.push(
+            stats.stats.total_invitations || 0,
+          );
+          state.activityChartData.redemptions.push(
+            stats.stats.redeemed_invitations || 0,
+          );
+
+          // Keep only last 10 data points
+          if (state.activityChartData.labels.length > 10) {
+            state.activityChartData.labels.shift();
+            state.activityChartData.users.shift();
+            state.activityChartData.invitations.shift();
+            state.activityChartData.redemptions.shift();
+          }
+
+          drawActivityChart();
+        } catch (error) {
+          alert(`Failed to update chart: ${error.message}`);
+        }
+      }
+
+      function resetActivityChart() {
+        state.activityChartData = {
+          labels: [],
+          users: [],
+          invitations: [],
+          redemptions: [],
+        };
+        drawActivityChart();
+      }
+
+      // ============================================================================
+      // Tree Visualization Functions
+      // ============================================================================
+
+      function drawInvitationTree(userId, invitees, canvasId = "treeCanvas") {
+        const canvas = document.getElementById(canvasId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        if (!invitees || invitees.length === 0) {
+          ctx.fillStyle = "#888";
+          ctx.font = "14px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(
+            "No invitees to display",
+            canvas.width / 2,
+            canvas.height / 2,
+          );
+          return;
+        }
+
+        // Tree layout
+        const nodeRadius = 25;
+        const levelHeight = 80;
+        const startX = canvas.width / 2;
+        const startY = 40;
+
+        // Draw root node
+        ctx.fillStyle = "#0076d1";
+        ctx.beginPath();
+        ctx.arc(startX, startY, nodeRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#fff";
+        ctx.font = "bold 12px sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        const rootText =
+          userId.length > 8 ? userId.substring(0, 8) + "..." : userId;
+        ctx.fillText(rootText, startX, startY);
+
+        // Draw invitees
+        const totalWidth = Math.min(invitees.length * 100, canvas.width - 100);
+        const spacing =
+          invitees.length > 1 ? totalWidth / (invitees.length - 1) : 0;
+        const startInviteX = startX - totalWidth / 2;
+
+        invitees.forEach((invitee, index) => {
+          const x =
+            invitees.length === 1 ? startX : startInviteX + spacing * index;
+          const y = startY + levelHeight;
+
+          // Draw line
+          ctx.strokeStyle = "#666";
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.moveTo(startX, startY + nodeRadius);
+          ctx.lineTo(x, y - nodeRadius);
+          ctx.stroke();
+
+          // Draw node
+          ctx.fillStyle = "#2ecc71";
+          ctx.beginPath();
+          ctx.arc(x, y, nodeRadius, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.fillStyle = "#fff";
+          ctx.font = "11px sans-serif";
+          const inviteeText =
+            invitee.length > 8 ? invitee.substring(0, 8) + "..." : invitee;
+          ctx.fillText(inviteeText, x, y);
+        });
+      }
+
+      // ============================================================================
+      // Audit Logs Functions
+      // ============================================================================
+
+      async function loadAuditLogs(page = null) {
+        if (!state.apiKey) {
+          showMessage(
+            "auditLogsContainer",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        // Update current page if specified
+        if (page !== null) {
+          state.auditPagination.currentPage = page;
+        }
+
+        const container = document.getElementById("auditLogsContainer");
+        container.innerHTML =
+          '<p><span class="spinner"></span> Loading audit logs...</p>';
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const { pageSize, currentPage } = state.auditPagination;
+          const offset = (currentPage - 1) * pageSize;
+
+          const response = await api.getAuditLogs(pageSize, offset);
+
+          // Update pagination state
+          state.auditPagination.total = response.total;
+          state.auditPagination.hasMore = response.has_more;
+
+          state.auditLogs = response.entries;
+          renderAuditLogs(response.entries, response.total);
+        } catch (error) {
+          container.innerHTML = `<div class="message error">❌ Failed to load audit logs: ${error.message}</div>`;
+        }
+      }
+
+      function renderAuditLogs(logs, total = null) {
+        const container = document.getElementById("auditLogsContainer");
+
+        if (!logs || logs.length === 0) {
+          container.innerHTML =
+            '<p class="text-small">No audit logs found.</p>';
+          return;
+        }
+
+        const { currentPage, pageSize } = state.auditPagination;
+        const totalPages = total ? Math.ceil(total / pageSize) : 1;
+
+        let html = "";
+
+        // Pagination controls (top)
+        if (total !== null) {
+          html += renderAuditPaginationControls(currentPage, totalPages, total);
+        }
+
+        // Log entries
+        logs.forEach((log) => {
+          const timestamp = new Date(log.timestamp * 1000).toLocaleString();
+          const levelClass = log.level || "info";
+
+          html += `<div class="log-entry ${levelClass}">`;
+          html += `<div class="log-timestamp">${timestamp}</div>`;
+          html += `<strong>${log.action || "Unknown Action"}</strong>`;
+          if (log.user_id) {
+            html += ` by <span class="text-mono">${log.user_id}</span>`;
+          }
+          if (log.details) {
+            html += `<div class="text-small" style="margin-top: 5px;">${log.details}</div>`;
+          }
+          html += `</div>`;
+        });
+
+        // Pagination controls (bottom)
+        if (total !== null) {
+          html += renderAuditPaginationControls(currentPage, totalPages, total);
+        }
+
+        container.innerHTML = html;
+      }
+
+      function renderAuditPaginationControls(currentPage, totalPages, total) {
+        const { pageSize } = state.auditPagination;
+        const startItem = (currentPage - 1) * pageSize + 1;
+        const endItem = Math.min(currentPage * pageSize, total);
+
+        let html =
+          '<div style="display: flex; justify-content: space-between; align-items: center; margin: 15px 0; padding: 10px; background: var(--background-alt); border-radius: 5px;">';
+
+        // Left: Page info
+        html += `<div class="text-small">Showing ${startItem}-${endItem} of ${total} entries</div>`;
+
+        // Center: Page numbers
+        html += '<div style="display: flex; gap: 5px; align-items: center;">';
+
+        // Previous button
+        html += `<button class="action-btn" ${currentPage <= 1 ? "disabled" : ""} onclick="loadAuditLogs(${currentPage - 1})">← Prev</button>`;
+
+        // Page numbers (show up to 5 pages centered on current)
+        const startPage = Math.max(1, currentPage - 2);
+        const endPage = Math.min(totalPages, startPage + 4);
+
+        if (startPage > 1) {
+          html += `<button type="button" class="action-btn" onclick="loadAuditLogs(1)">1</button>`;
+          if (startPage > 2) {
+            html += '<span style="padding: 0 5px;">...</span>';
+          }
+        }
+
+        for (let p = startPage; p <= endPage; p++) {
+          const isActive = p === currentPage;
+          html += `<button class="action-btn" style="${isActive ? "background: var(--tab-active-color); color: white;" : ""}" onclick="loadAuditLogs(${p})">${p}</button>`;
+        }
+
+        if (endPage < totalPages) {
+          if (endPage < totalPages - 1) {
+            html += '<span style="padding: 0 5px;">...</span>';
+          }
+          html += `<button type="button" class="action-btn" onclick="loadAuditLogs(${totalPages})">${totalPages}</button>`;
+        }
+
+        // Next button
+        html += `<button class="action-btn" ${currentPage >= totalPages ? "disabled" : ""} onclick="loadAuditLogs(${currentPage + 1})">Next →</button>`;
+
+        html += "</div>";
+
+        // Right: Page size selector
+        html += `<div class="text-small">
+                <label>Per page:
+                    <select onchange="changeAuditPageSize(this.value)" style="padding: 4px; font-size: 0.9em;">
+                        <option value="25" ${pageSize === 25 ? "selected" : ""}>25</option>
+                        <option value="50" ${pageSize === 50 ? "selected" : ""}>50</option>
+                        <option value="100" ${pageSize === 100 ? "selected" : ""}>100</option>
+                        <option value="200" ${pageSize === 200 ? "selected" : ""}>200</option>
+                    </select>
+                </label>
+            </div>`;
+
+        html += "</div>";
+        return html;
+      }
+
+      function changeAuditPageSize(newSize) {
+        state.auditPagination.pageSize = parseInt(newSize);
+        state.auditPagination.currentPage = 1; // Reset to first page
+        loadAuditLogs();
+      }
+
+      function filterAuditLogs() {
+        const query = document
+          .getElementById("auditSearch")
+          .value.toLowerCase();
+        const level = document.getElementById("auditLevel").value;
+
+        let filtered = state.auditLogs;
+
+        if (level !== "all") {
+          filtered = filtered.filter((log) => log.level === level);
+        }
+
+        if (query) {
+          filtered = filtered.filter((log) => {
+            return (
+              (log.action && log.action.toLowerCase().includes(query)) ||
+              (log.user_id && log.user_id.toLowerCase().includes(query)) ||
+              (log.details && log.details.toLowerCase().includes(query))
+            );
+          });
+        }
+
+        renderAuditLogs(filtered);
+      }
+
+      // ============================================================================
+      // Federation Functions
+      // ============================================================================
+
+      async function loadVouches() {
+        if (!state.apiKey) {
+          showMessage(
+            "vouchesContainer",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        const container = document.getElementById("vouchesContainer");
+        container.innerHTML =
+          '<p><span class="spinner"></span> Loading vouches...</p>';
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const vouches = await api.getVouches();
+
+          if (!vouches || vouches.length === 0) {
+            container.innerHTML =
+              '<p class="text-small">No vouches found. Add trusted issuers using the form below.</p>';
+            return;
+          }
+
+          let html = "<table><thead><tr>";
+          html += "<th>Vouched Issuer</th>";
+          html += "<th>Trust Level</th>";
+          html += "<th>Created</th>";
+          html += "<th>Expires</th>";
+          html += "<th>Actions</th>";
+          html += "</tr></thead><tbody>";
+
+          vouches.forEach((vouch) => {
+            const createdAt = new Date(
+              vouch.created_at * 1000,
+            ).toLocaleString();
+            const expiresAt = new Date(
+              vouch.expires_at * 1000,
+            ).toLocaleString();
+            const isExpired = vouch.expires_at * 1000 < Date.now();
+            const trustLevel =
+              vouch.trust_level !== null ? vouch.trust_level : "N/A";
+
+            html += `<tr ${isExpired ? 'style="opacity: 0.5;"' : ""}>`;
+            html += `<td class="text-mono">${vouch.vouched_issuer_id}</td>`;
+            html += `<td>${trustLevel}${trustLevel !== "N/A" ? "%" : ""}</td>`;
+            html += `<td>${createdAt}</td>`;
+            html += `<td>${expiresAt}${isExpired ? ' <span style="color: var(--error-color);">(expired)</span>' : ""}</td>`;
+            html += `<td><button type="button" class="action-btn danger" onclick="removeVouch('${vouch.vouched_issuer_id}')">Remove</button></td>`;
+            html += "</tr>";
+          });
+
+          html += "</tbody></table>";
+          container.innerHTML = html;
+        } catch (error) {
+          container.innerHTML = `<div class="message error">❌ Failed to load vouches: ${error.message}</div>`;
+        }
+      }
+
+      async function addVouch() {
+        if (!state.apiKey) {
+          showMessage(
+            "vouchResult",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        const issuerId = document.getElementById("vouchIssuerId").value.trim();
+        const pubkey = document.getElementById("vouchPubkey").value.trim();
+        const trustLevel =
+          parseInt(document.getElementById("vouchTrustLevel").value) || 80;
+        const expiresDays =
+          parseInt(document.getElementById("vouchExpiresDays").value) || 365;
+
+        if (!issuerId) {
+          showMessage("vouchResult", "error", "❌ Issuer ID is required");
+          return;
+        }
+
+        if (!pubkey) {
+          showMessage("vouchResult", "error", "❌ Public key is required");
+          return;
+        }
+
+        showMessage(
+          "vouchResult",
+          "info",
+          '<span class="spinner"></span> Adding vouch...',
+        );
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const now = Math.floor(Date.now() / 1000);
+          const expiresAt = now + expiresDays * 24 * 60 * 60;
+
+          // Create vouch object
+          // Note: signature will need to be generated server-side
+          const vouch = {
+            voucher_issuer_id: "self", // Will be filled by server
+            vouched_issuer_id: issuerId,
+            vouched_pubkey: pubkey,
+            expires_at: expiresAt,
+            created_at: now,
+            trust_level: trustLevel,
+            signature: "", // Will be signed by server
+          };
+
+          const result = await api.addVouch(vouch);
+
+          showMessage("vouchResult", "success", `✓ ${result.message}`);
+
+          // Clear form
+          document.getElementById("vouchIssuerId").value = "";
+          document.getElementById("vouchPubkey").value = "";
+
+          // Refresh list
+          loadVouches();
+        } catch (error) {
+          showMessage("vouchResult", "error", `❌ Failed: ${error.message}`);
+        }
+      }
+
+      async function removeVouch(issuerId) {
+        if (!confirm(`Remove vouch for ${issuerId}?`)) {
+          return;
+        }
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const result = await api.removeVouch(issuerId);
+
+          showMessage("vouchResult", "success", `✓ ${result.message}`);
+          loadVouches();
+        } catch (error) {
+          showMessage("vouchResult", "error", `❌ Failed: ${error.message}`);
+        }
+      }
+
+      async function loadRevocations() {
+        if (!state.apiKey) {
+          showMessage(
+            "revocationsContainer",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        const container = document.getElementById("revocationsContainer");
+        container.innerHTML =
+          '<p><span class="spinner"></span> Loading revocations...</p>';
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const revocations = await api.getRevocations();
+
+          if (!revocations || revocations.length === 0) {
+            container.innerHTML =
+              '<p class="text-small">No revocations found.</p>';
+            return;
+          }
+
+          let html = "<table><thead><tr>";
+          html += "<th>Revoked Issuer</th>";
+          html += "<th>Revoked At</th>";
+          html += "<th>Reason</th>";
+          html += "<th>Actions</th>";
+          html += "</tr></thead><tbody>";
+
+          revocations.forEach((rev) => {
+            const revokedAt = new Date(rev.revoked_at * 1000).toLocaleString();
+            const reason =
+              rev.reason || '<span style="opacity: 0.5;">Not specified</span>';
+
+            html += "<tr>";
+            html += `<td class="text-mono">${rev.revoked_issuer_id}</td>`;
+            html += `<td>${revokedAt}</td>`;
+            html += `<td>${reason}</td>`;
+            html += `<td><button type="button" class="action-btn" onclick="removeRevocation('${rev.revoked_issuer_id}')">Remove</button></td>`;
+            html += "</tr>";
+          });
+
+          html += "</tbody></table>";
+          container.innerHTML = html;
+        } catch (error) {
+          container.innerHTML = `<div class="message error">❌ Failed to load revocations: ${error.message}</div>`;
+        }
+      }
+
+      async function addRevocation() {
+        if (!state.apiKey) {
+          showMessage(
+            "revocationResult",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        const issuerId = document.getElementById("revokeIssuerId").value.trim();
+        const reason = document.getElementById("revokeReason").value.trim();
+
+        if (!issuerId) {
+          showMessage("revocationResult", "error", "❌ Issuer ID is required");
+          return;
+        }
+
+        showMessage(
+          "revocationResult",
+          "info",
+          '<span class="spinner"></span> Adding revocation...',
+        );
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const now = Math.floor(Date.now() / 1000);
+
+          // Create revocation object
+          const revocation = {
+            revoker_issuer_id: "self", // Will be filled by server
+            revoked_issuer_id: issuerId,
+            revoked_at: now,
+            reason: reason || null,
+            signature: "", // Will be signed by server
+          };
+
+          const result = await api.addRevocation(revocation);
+
+          showMessage("revocationResult", "success", `✓ ${result.message}`);
+
+          // Clear form
+          document.getElementById("revokeIssuerId").value = "";
+          document.getElementById("revokeReason").value = "";
+
+          // Refresh list
+          loadRevocations();
+        } catch (error) {
+          showMessage(
+            "revocationResult",
+            "error",
+            `❌ Failed: ${error.message}`,
+          );
+        }
+      }
+
+      async function removeRevocation(issuerId) {
+        if (!confirm(`Remove revocation for ${issuerId}?`)) {
+          return;
+        }
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const result = await api.removeRevocation(issuerId);
+
+          showMessage("revocationResult", "success", `✓ ${result.message}`);
+          loadRevocations();
+        } catch (error) {
+          showMessage(
+            "revocationResult",
+            "error",
+            `❌ Failed: ${error.message}`,
+          );
+        }
+      }
+
+      // ============================================================================
+      // WebAuthn Functions
+      // ============================================================================
+
+      async function loadWebAuthnCredentials() {
+        if (!state.apiKey) {
+          showMessage(
+            "webauthnCredentialsContainer",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        const container = document.getElementById(
+          "webauthnCredentialsContainer",
+        );
+        container.innerHTML =
+          '<p><span class="spinner"></span> Loading credentials...</p>';
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const response = await api.getWebAuthnCredentials();
+
+          state.webauthnCredentials = response.credentials || [];
+
+          if (state.webauthnCredentials.length === 0) {
+            container.innerHTML =
+              '<p class="text-small">No WebAuthn credentials found. WebAuthn may not be enabled, or no users have registered credentials yet.</p>';
+            return;
+          }
+
+          renderWebAuthnCredentials(state.webauthnCredentials);
+        } catch (error) {
+          container.innerHTML = `<div class="message error">❌ Failed to load credentials: ${error.message}</div>`;
+        }
+      }
+
+      function filterWebAuthnCredentials() {
+        const query = document
+          .getElementById("credentialSearch")
+          .value.toLowerCase();
+        const filtered = state.webauthnCredentials.filter(
+          (cred) =>
+            cred.user_id_hash.toLowerCase().includes(query) ||
+            cred.credential_id.toLowerCase().includes(query),
+        );
+        renderWebAuthnCredentials(filtered);
+      }
+
+      function renderWebAuthnCredentials(credentials) {
+        const container = document.getElementById(
+          "webauthnCredentialsContainer",
+        );
+
+        if (!credentials || credentials.length === 0) {
+          container.innerHTML =
+            '<p class="text-small">No matching credentials found.</p>';
+          return;
+        }
+
+        let html = "<table><thead><tr>";
+        html += "<th>Credential ID</th>";
+        html += "<th>User ID Hash</th>";
+        html += "<th>Registered</th>";
+        html += "<th>Last Used</th>";
+        html += "<th>Actions</th>";
+        html += "</tr></thead><tbody>";
+
+        credentials.forEach((cred) => {
+          const registeredAt = new Date(
+            cred.registered_at * 1000,
+          ).toLocaleString();
+          const lastUsed = cred.last_used_at
+            ? new Date(cred.last_used_at * 1000).toLocaleString()
+            : '<span style="opacity: 0.5;">Never</span>';
+
+          // Truncate credential ID for display
+          const shortCredId =
+            cred.credential_id.length > 20
+              ? cred.credential_id.substring(0, 20) + "..."
+              : cred.credential_id;
+
+          html += "<tr>";
+          html += `<td class="text-mono" title="${cred.credential_id}">${shortCredId}</td>`;
+          html += `<td class="text-mono">${cred.user_id_hash.substring(0, 16)}...</td>`;
+          html += `<td>${registeredAt}</td>`;
+          html += `<td>${lastUsed}</td>`;
+          html += `<td><button class="action-btn" style="background: var(--error-color); color: white;" onclick="deleteWebAuthnCredential('${cred.credential_id}')">Delete</button></td>`;
+          html += "</tr>";
+        });
+
+        html += "</tbody></table>";
+        html += `<p class="text-small" style="margin-top: 10px;">Total: ${credentials.length} credential(s)</p>`;
+        container.innerHTML = html;
+      }
+
+      async function deleteWebAuthnCredential(credentialId) {
+        if (
+          !confirm(
+            "Are you sure you want to delete this credential? This cannot be undone.",
+          )
+        )
+          return;
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const result = await api.deleteWebAuthnCredential(credentialId);
+
+          alert("✓ " + result.message);
+          loadWebAuthnCredentials();
+        } catch (error) {
+          alert(`❌ Failed to delete credential: ${error.message}`);
+        }
+      }
+
+      // ============================================================================
+      // Verifier: Trusted Issuers Functions
+      // ============================================================================
+
+      async function loadTrustedIssuers() {
+        if (!state.apiKey) {
+          showMessage(
+            "trustedIssuersContainer",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        const container = document.getElementById("trustedIssuersContainer");
+        container.innerHTML =
+          '<p><span class="spinner"></span> Loading trusted issuers...</p>';
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const response = await api.getTrustedIssuers();
+
+          if (!response.issuers || response.issuers.length === 0) {
+            container.innerHTML =
+              '<p class="text-small">No trusted issuers loaded. Check your ISSUER_URLS configuration.</p>';
+            return;
+          }
+
+          let html = "<table><thead><tr>";
+          html += "<th>Issuer ID</th>";
+          html += "<th>Key ID</th>";
+          html += "<th>Public Key Preview</th>";
+          html += "<th>Token Expiry</th>";
+          html += "<th>Age</th>";
+          html += "<th>Actions</th>";
+          html += "</tr></thead><tbody>";
+
+          response.issuers.forEach((issuer) => {
+            const ageDisplay =
+              issuer.age_secs !== null
+                ? formatDuration(issuer.age_secs)
+                : '<span style="opacity: 0.5;">Unknown</span>';
+
+            html += "<tr>";
+            html += `<td class="text-mono">${issuer.issuer_id}</td>`;
+            html += `<td class="text-mono">${issuer.kid}</td>`;
+            html += `<td class="text-mono">${issuer.pubkey_preview}...</td>`;
+            html += `<td>${formatDuration(issuer.exp_sec)}</td>`;
+            html += `<td>${ageDisplay}</td>`;
+            html += `<td><button type="button" class="action-btn" onclick="refreshIssuer('${issuer.issuer_id}')">🔄 Refresh</button></td>`;
+            html += "</tr>";
+          });
+
+          html += "</tbody></table>";
+          html += `<p class="text-small" style="margin-top: 10px;">Total: ${response.total} issuer(s)</p>`;
+          container.innerHTML = html;
+
+          // Also load config
+          loadIssuerConfig();
+        } catch (error) {
+          container.innerHTML = `<div class="message error">❌ Failed to load issuers: ${error.message}</div>`;
+        }
+      }
+
+      async function loadIssuerConfig() {
+        const container = document.getElementById("issuerConfigContainer");
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const config = await api.getVerifierConfig();
+
+          let html = '<div class="stats-grid">';
+          html += `<div class="stat-card"><h3>Clock Skew</h3><p class="value" style="font-size: 1.2em;">±${config.max_clock_skew_secs}s</p></div>`;
+          html += `<div class="stat-card"><h3>Epoch Duration</h3><p class="value" style="font-size: 1.2em;">${formatDuration(config.epoch_duration_sec)}</p></div>`;
+          html += `<div class="stat-card"><h3>Epoch Retention</h3><p class="value">${config.epoch_retention}</p></div>`;
+          html += `<div class="stat-card"><h3>Refresh Interval</h3><p class="value" style="font-size: 1.2em;">${config.refresh_interval_min} min</p></div>`;
+          html += "</div>";
+
+          if (config.issuer_urls && config.issuer_urls.length > 0) {
+            html += "<h4>Configured Issuer URLs</h4>";
+            html += '<ul style="font-family: monospace; font-size: 0.9em;">';
+            config.issuer_urls.forEach((url) => {
+              html += `<li>${url}</li>`;
+            });
+            html += "</ul>";
+          }
+
+          container.innerHTML = html;
+        } catch (error) {
+          container.innerHTML = `<div class="message error">❌ Failed to load config: ${error.message}</div>`;
+        }
+      }
+
+      async function refreshIssuer(issuerId) {
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const result = await api.refreshIssuer(issuerId);
+          alert(`✓ ${result.message}`);
+        } catch (error) {
+          alert(`❌ Failed to refresh issuer: ${error.message}`);
+        }
+      }
+
+      function formatDuration(seconds) {
+        if (seconds < 60) {
+          return `${seconds}s`;
+        } else if (seconds < 3600) {
+          const mins = Math.floor(seconds / 60);
+          return `${mins}m`;
+        } else if (seconds < 86400) {
+          const hours = Math.floor(seconds / 3600);
+          return `${hours}h`;
+        } else {
+          const days = Math.floor(seconds / 86400);
+          return `${days}d`;
+        }
+      }
+
+      // ============================================================================
+      // Verifier: Cache Functions
+      // ============================================================================
+
+      async function loadCacheStats() {
+        if (!state.apiKey) {
+          showMessage(
+            "cacheStatsContainer",
+            "warning",
+            "⚠️ Please configure your API key first",
+          );
+          return;
+        }
+
+        const container = document.getElementById("cacheStatsContainer");
+        container.innerHTML =
+          '<p><span class="spinner"></span> Loading cache stats...</p>';
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const stats = await api.getCacheStats();
+
+          let html = '<div class="stats-grid">';
+          html += `<div class="stat-card"><h3>Store Backend</h3><p class="value" style="font-size: 1.2em;">${stats.store_backend}</p></div>`;
+          html += `<div class="stat-card"><h3>Status</h3><p class="value" style="font-size: 1.2em; color: var(--success-color);">${stats.status}</p></div>`;
+          html += "</div>";
+
+          container.innerHTML = html;
+        } catch (error) {
+          container.innerHTML = `<div class="message error">❌ Failed to load cache stats: ${error.message}</div>`;
+        }
+      }
+
+      async function clearCache() {
+        if (
+          !confirm(
+            "⚠️ WARNING: Clearing the cache will allow previously-used tokens to be replayed. Only use in development. Continue?",
+          )
+        ) {
+          return;
+        }
+
+        const resultContainer = document.getElementById("cacheClearResult");
+        resultContainer.innerHTML =
+          '<p><span class="spinner"></span> Clearing cache...</p>';
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const result = await api.clearCache();
+
+          if (result.ok) {
+            resultContainer.innerHTML = `<div class="message success">✓ ${result.message}</div>`;
+          } else {
+            resultContainer.innerHTML = `<div class="message warning">⚠️ ${result.message}</div>`;
+          }
+
+          // Refresh stats
+          loadCacheStats();
+        } catch (error) {
+          resultContainer.innerHTML = `<div class="message error">❌ Failed to clear cache: ${error.message}</div>`;
+        }
+      }
+
+      // ============================================================================
+      // Health Check
+      // ============================================================================
+
+      async function updateHealthBadge() {
+        const badge = document.getElementById("systemHealthBadge");
+
+        if (!state.apiKey) {
+          badge.innerHTML =
+            '<span class="badge" style="background: var(--warning-color)">⚠️ No API Key</span>';
+          return;
+        }
+
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const health = await api.getHealth();
+
+          if (health.status === "ok") {
+            badge.innerHTML =
+              '<span class="badge" style="background: var(--success-color)">✓ System Healthy</span>';
+          } else {
+            badge.innerHTML =
+              '<span class="badge" style="background: var(--error-color)">✗ System Error</span>';
+          }
+        } catch (error) {
+          badge.innerHTML =
+            '<span class="badge" style="background: var(--error-color)">✗ Connection Failed</span>';
+        }
+      }
+
+      // ============================================================================
+      // Initialization
+      // ============================================================================
+
+      window.addEventListener("DOMContentLoaded", async () => {
+        // Load saved API key
+        if (state.apiKey) {
+          document.getElementById("apiKey").value = state.apiKey;
+          document.getElementById("apiKeyStatus").className =
+            "api-key-status success";
+          document.getElementById("apiKeyStatus").textContent =
+            "✓ API key loaded from storage";
+
+          // Detect service type from health endpoint
+          try {
+            const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+            const health = await api.getHealth();
+            state.serviceType = health.service || "issuer";
+            updateUIForServiceType();
+            document.getElementById("apiKeyStatus").textContent =
+              `✓ API key loaded (${state.serviceType})`;
+          } catch (error) {
+            console.error("Failed to detect service type:", error);
+            // Default to issuer if detection fails
+            state.serviceType = "issuer";
+            updateUIForServiceType();
+          }
+
+          // Auto-load stats
+          loadStats();
+
+          // Update health badge
+          updateHealthBadge();
+        }
+
+        // Initialize chart (only for issuer)
+        if (state.serviceType !== "verifier") {
+          drawActivityChart();
+        }
+      });
+    </script>
+  </body>
+</html>
