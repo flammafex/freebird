@@ -1457,6 +1457,25 @@
         <p class="text-small">
           Create a cryptographic vouch for another issuer.
         </p>
+        <p class="text-small" style="color: var(--text-muted)">
+          Provide the base64url-encoded 64-byte signature created by the
+          voucher issuer.
+        </p>
+
+        <div class="form-row">
+          <div class="form-field">
+            <label for="voucherIssuerId">Voucher Issuer ID</label>
+            <input type="text" id="voucherIssuerId" readonly />
+          </div>
+          <div class="form-field">
+            <label for="vouchSignature">Signature (Base64URL)</label>
+            <input
+              type="text"
+              id="vouchSignature"
+              placeholder="Paste base64url signature"
+            />
+          </div>
+        </div>
 
         <div class="form-row">
           <div class="form-field">
@@ -1520,6 +1539,25 @@
         <p class="text-small">
           Revoke trust from an issuer (e.g., if compromised or misbehaving).
         </p>
+        <p class="text-small" style="color: var(--text-muted)">
+          Provide the base64url-encoded 64-byte signature created by the
+          revoking issuer.
+        </p>
+
+        <div class="form-row">
+          <div class="form-field">
+            <label for="revokerIssuerId">Revoker Issuer ID</label>
+            <input type="text" id="revokerIssuerId" readonly />
+          </div>
+          <div class="form-field">
+            <label for="revocationSignature">Signature (Base64URL)</label>
+            <input
+              type="text"
+              id="revocationSignature"
+              placeholder="Paste base64url signature"
+            />
+          </div>
+        </div>
 
         <div class="form-row">
           <div class="form-field">
@@ -1648,11 +1686,13 @@
       // Configuration & State
       // ============================================================================
 
+      const resolvedOrigin =
+        window.location.origin && window.location.origin !== "null"
+          ? window.location.origin
+          : "http://localhost:8081";
+
       const CONFIG = {
-        issuerUrl:
-          window.location.hostname === "localhost"
-            ? "http://localhost:8081"
-            : window.location.origin,
+        issuerUrl: resolvedOrigin,
         adminPath: "/admin",
       };
 
@@ -1662,6 +1702,7 @@
         currentTab: "dashboard",
         users: [],
         auditLogs: [],
+        issuerId: null,
         activityChartData: {
           labels: [],
           users: [],
@@ -1702,6 +1743,54 @@
       // ============================================================================
       // API Client
       // ============================================================================
+
+      function updateIssuerIdFields() {
+        const issuerIdValue = state.issuerId || "";
+        const fields = ["voucherIssuerId", "revokerIssuerId"];
+        fields.forEach((fieldId) => {
+          const field = document.getElementById(fieldId);
+          if (!field) {
+            return;
+          }
+          field.value = issuerIdValue;
+          field.placeholder = issuerIdValue
+            ? ""
+            : "Load issuer ID from config";
+        });
+      }
+
+      async function ensureIssuerId() {
+        if (state.serviceType !== "issuer") {
+          return null;
+        }
+        if (state.issuerId) {
+          updateIssuerIdFields();
+          return state.issuerId;
+        }
+        if (!state.apiKey) {
+          return null;
+        }
+        const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+        const config = await api.getConfig();
+        state.issuerId = config.issuer_id;
+        updateIssuerIdFields();
+        return state.issuerId;
+      }
+
+      async function primeIssuerIdentity() {
+        if (!state.apiKey || state.serviceType !== "issuer") {
+          return;
+        }
+        try {
+          await ensureIssuerId();
+        } catch (error) {
+          showMessage(
+            "vouchResult",
+            "warning",
+            `⚠️ Unable to load issuer ID: ${error.message}`,
+          );
+        }
+      }
 
       class FreebirdAdminAPI {
         constructor(baseUrl, apiKey) {
@@ -1984,6 +2073,8 @@
           loadKeys();
         } else if (tabName === "invitations") {
           loadInvitationHistory();
+        } else if (tabName === "federation") {
+          primeIssuerIdentity();
         } else if (tabName === "trusted-issuers") {
           loadTrustedIssuers();
         } else if (tabName === "cache") {
@@ -2050,6 +2141,10 @@
           statusEl.className = "api-key-status success";
           statusEl.textContent = `✓ API key saved and verified (${state.serviceType})`;
 
+          if (state.serviceType === "issuer") {
+            await ensureIssuerId();
+          }
+
           // Update health badge
           updateHealthBadge();
         } catch (error) {
@@ -2107,13 +2202,20 @@
         if (currentTabButton && currentTabButton.classList.contains("hidden")) {
           switchTab("dashboard");
         }
+
+        if (state.serviceType !== "issuer") {
+          state.issuerId = null;
+        }
+        updateIssuerIdFields();
       }
 
       function clearApiKey() {
         localStorage.removeItem("freebirdAdminKey");
         state.apiKey = "";
+        state.issuerId = null;
         document.getElementById("apiKey").value = "";
         document.getElementById("apiKeyStatus").textContent = "";
+        updateIssuerIdFields();
 
         // Update health badge
         updateHealthBadge();
@@ -3681,6 +3783,7 @@
           '<p><span class="spinner"></span> Loading vouches...</p>';
 
         try {
+          await ensureIssuerId();
           const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
           const vouches = await api.getVouches();
 
@@ -3735,8 +3838,32 @@
           return;
         }
 
+        let voucherIssuerId;
+        try {
+          voucherIssuerId = await ensureIssuerId();
+        } catch (error) {
+          showMessage(
+            "vouchResult",
+            "error",
+            `❌ Failed to load issuer ID: ${error.message}`,
+          );
+          return;
+        }
+
+        if (!voucherIssuerId) {
+          showMessage(
+            "vouchResult",
+            "error",
+            "❌ Voucher issuer ID is required",
+          );
+          return;
+        }
+
         const issuerId = document.getElementById("vouchIssuerId").value.trim();
         const pubkey = document.getElementById("vouchPubkey").value.trim();
+        const signature = document
+          .getElementById("vouchSignature")
+          .value.trim();
         const trustLevel =
           parseInt(document.getElementById("vouchTrustLevel").value) || 80;
         const expiresDays =
@@ -3752,6 +3879,15 @@
           return;
         }
 
+        if (!signature) {
+          showMessage(
+            "vouchResult",
+            "error",
+            "❌ Signature (Base64URL) is required",
+          );
+          return;
+        }
+
         showMessage(
           "vouchResult",
           "info",
@@ -3764,15 +3900,14 @@
           const expiresAt = now + expiresDays * 24 * 60 * 60;
 
           // Create vouch object
-          // Note: signature will need to be generated server-side
           const vouch = {
-            voucher_issuer_id: "self", // Will be filled by server
+            voucher_issuer_id: voucherIssuerId,
             vouched_issuer_id: issuerId,
             vouched_pubkey: pubkey,
             expires_at: expiresAt,
             created_at: now,
             trust_level: trustLevel,
-            signature: "", // Will be signed by server
+            signature: signature,
           };
 
           const result = await api.addVouch(vouch);
@@ -3782,6 +3917,7 @@
           // Clear form
           document.getElementById("vouchIssuerId").value = "";
           document.getElementById("vouchPubkey").value = "";
+          document.getElementById("vouchSignature").value = "";
 
           // Refresh list
           loadVouches();
@@ -3821,6 +3957,7 @@
           '<p><span class="spinner"></span> Loading revocations...</p>';
 
         try {
+          await ensureIssuerId();
           const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
           const revocations = await api.getRevocations();
 
@@ -3867,11 +4004,44 @@
           return;
         }
 
+        let revokerIssuerId;
+        try {
+          revokerIssuerId = await ensureIssuerId();
+        } catch (error) {
+          showMessage(
+            "revocationResult",
+            "error",
+            `❌ Failed to load issuer ID: ${error.message}`,
+          );
+          return;
+        }
+
+        if (!revokerIssuerId) {
+          showMessage(
+            "revocationResult",
+            "error",
+            "❌ Revoker issuer ID is required",
+          );
+          return;
+        }
+
         const issuerId = document.getElementById("revokeIssuerId").value.trim();
         const reason = document.getElementById("revokeReason").value.trim();
+        const signature = document
+          .getElementById("revocationSignature")
+          .value.trim();
 
         if (!issuerId) {
           showMessage("revocationResult", "error", "❌ Issuer ID is required");
+          return;
+        }
+
+        if (!signature) {
+          showMessage(
+            "revocationResult",
+            "error",
+            "❌ Signature (Base64URL) is required",
+          );
           return;
         }
 
@@ -3887,11 +4057,11 @@
 
           // Create revocation object
           const revocation = {
-            revoker_issuer_id: "self", // Will be filled by server
+            revoker_issuer_id: revokerIssuerId,
             revoked_issuer_id: issuerId,
             revoked_at: now,
             reason: reason || null,
-            signature: "", // Will be signed by server
+            signature: signature,
           };
 
           const result = await api.addRevocation(revocation);
@@ -3901,6 +4071,7 @@
           // Clear form
           document.getElementById("revokeIssuerId").value = "";
           document.getElementById("revokeReason").value = "";
+          document.getElementById("revocationSignature").value = "";
 
           // Refresh list
           loadRevocations();
@@ -4281,6 +4452,10 @@
             updateUIForServiceType();
             document.getElementById("apiKeyStatus").textContent =
               `✓ API key loaded (${state.serviceType})`;
+
+            if (state.serviceType === "issuer") {
+              await ensureIssuerId();
+            }
           } catch (error) {
             console.error("Failed to detect service type:", error);
             // Default to issuer if detection fails
