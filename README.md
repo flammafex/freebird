@@ -118,7 +118,7 @@ Full SDK docs live in [docs/SDK.md](docs/SDK.md).
      │  3. Finalize → token         │                              │
      │  4. Present token            │                              │
      ├──────────────────────────────┼──────────────────────────────►
-     │  5. ✓ Authorized              │                              │
+     │  5. ✓ Authorized             │                              │
      ◄──────────────────────────────┼───────────────────────────────
 ```
 
