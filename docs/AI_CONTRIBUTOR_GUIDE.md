@@ -6,8 +6,8 @@ This guide helps AI agents ramp up quickly in the Freebird repo. It summarizes a
 
 Freebird is an anonymous authorization infrastructure built on VOPRFs. It has two primary services plus supporting components:
 
-- **Issuer (Rust)**: issues unlinkable tokens and exposes admin endpoints/UI.
-- **Verifier (Rust)**: verifies tokens and enforces replay protection.
+- **Issuer (Rust)**: issues unlinkable tokens and exposes admin endpoints/UI. Invitation-based Sybil resistance is the current default in production deployments.
+- **Verifier (Rust)**: verifies tokens and enforces replay protection (Redis optional but recommended).
 - **Interface (Rust CLI)**: dev/test client to issue/verify tokens.
 - **SDK (TypeScript)**: client integration package for browser/Node.
 - **Admin UI (static HTML)**: served by issuer/verifier binaries (embedded at build time).
@@ -41,7 +41,7 @@ Client (Interface/SDK)
        └─> issuer metadata lookup
        └─> expiration + epoch checks
        └─> signature + VOPRF verification
-       └─> replay protection (Redis or in-memory)
+       └─> replay protection (Redis preferred, in-memory supported)
 ```
 
 ## 4) Core Domains
@@ -51,6 +51,7 @@ Client (Interface/SDK)
 - **Shared API Models (common)**: Issue/Verify request/response types and Sybil proofs.
 - **Admin Operations**: Admin UI routes, key rotation, stats, audit logs.
 - **Storage**: Redis (preferred) or in-memory spend store for replay protection.
+- **Federation**: docs encourage multi-issuer federation; issuer metadata refresh supports multiple issuer URLs.
 
 ## 5) Entry Points (Where to Start Reading)
 
@@ -104,9 +105,9 @@ npm run lint
 
 ## 8) Safety / Risk Notes
 
-- **Replay protection**: ensure Redis is configured for production; in-memory is non-durable.
+- **Replay protection**: Redis is recommended for production durability; in-memory is acceptable for some deployments but non-durable.
 - **Key rotation / epochs**: changes here impact verifier compatibility.
-- **Sybil resistance**: modes are optional but can affect issuance behavior. Read config docs before changing defaults.
+- **Sybil resistance**: invitation is the current default in production; other modes are optional but can affect issuance behavior. Read config docs before changing defaults.
 - **Admin API key**: must be 32+ chars to enable admin routes.
 
 ## 9) Testing & Validation
