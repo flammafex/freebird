@@ -387,7 +387,7 @@ docker compose up --build
 curl http://localhost:8081/.well-known/issuer
 ```
 
-📖 **[Read the complete Docker Quickstart Guide →](DOCKER_QUICKSTART.md)**
+📖 **[Read the complete Docker Quickstart Guide →](docs/QUICKSTART.md)**
 
 The guide includes:
 - Detailed configuration options
@@ -405,13 +405,13 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 cargo build --release
 
 # Terminal 1: Start Issuer
-./target/release/issuer
+./target/release/freebird-issuer
 
 # Terminal 2: Start Verifier
-./target/release/verifier
+./target/release/freebird-verifier
 
 # Terminal 3: Run the CLI Interface to test the flow
-./target/release/interface --stress 5
+./target/release/freebird-interface --stress 5
 ```
 
 ---

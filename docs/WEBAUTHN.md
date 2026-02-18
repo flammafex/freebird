@@ -547,7 +547,7 @@ export WEBAUTHN_REQUIRE_ATTESTATION=true
 export WEBAUTHN_ATTESTATION_POLICY=direct
 
 # Run issuer
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### Testing with Different Authenticators

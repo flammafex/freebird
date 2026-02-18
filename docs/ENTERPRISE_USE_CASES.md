@@ -362,6 +362,6 @@ SYBIL_RATE_LIMIT_SECS=3600
 
 **Ready to Deploy?**
 
-See the main [README.md](README.md) for technical implementation details.
+See the main [README.md](../README.md) for technical implementation details.
 
 *Privacy isn't just ethical—it's profitable. Build trust, differentiate your product, and capture the privacy-conscious market.*

@@ -118,7 +118,7 @@ export FEDERATION_DATA_PATH=/data/federation
 
 ```bash
 # Network binding
-export VERIFIER_BIND_ADDR=0.0.0.0:8082
+export BIND_ADDR=0.0.0.0:8082
 
 # Issuer metadata URL (comma-separated for multiple issuers)
 export ISSUER_URL=http://issuer:8081/.well-known/issuer
@@ -133,19 +133,19 @@ export MAX_CLOCK_SKEW_SECS=300
 export REDIS_URL=redis://localhost:6379
 
 # Epoch configuration (should match issuer)
-export VERIFIER_EPOCH_DURATION=1d
-export VERIFIER_EPOCH_RETENTION=2
+export EPOCH_DURATION_SEC=86400
+export EPOCH_RETENTION=2
 ```
 
 | Variable | Default | Description | Production Value |
 |----------|---------|-------------|------------------|
-| `VERIFIER_BIND_ADDR` | `0.0.0.0:8082` | IP:PORT to listen on | `127.0.0.1:8082` |
+| `BIND_ADDR` | `0.0.0.0:8082` | IP:PORT to listen on | `127.0.0.1:8082` |
 | `ISSUER_URL` | `http://localhost:8081/.well-known/issuer` | Issuer metadata URL(s), comma-separated | HTTPS URL(s) |
 | `REFRESH_INTERVAL_MIN` | `10` | Metadata refresh interval | `5-10` minutes |
 | `MAX_CLOCK_SKEW_SECS` | `300` | Tolerance for time differences | `300` (5 minutes) |
 | `REDIS_URL` | None (in-memory) | Redis connection string | `redis://redis:6379` |
-| `VERIFIER_EPOCH_DURATION` | `1d` | Epoch duration (match issuer) | `1d` |
-| `VERIFIER_EPOCH_RETENTION` | `2` | Previous epochs to accept | `2` |
+| `EPOCH_DURATION_SEC` | `86400` | Epoch duration in seconds (match issuer) | `86400` |
+| `EPOCH_RETENTION` | `2` | Previous epochs to accept | `2` |
 
 **Storage Options:**
 - **In-Memory:** Fast, no persistence (dev/testing)
@@ -163,13 +163,14 @@ export EPOCH_DURATION=1d      # Duration of each epoch
 export EPOCH_RETENTION=2      # Previous epochs to honor
 
 # Verifier epoch settings (should match issuer)
-export VERIFIER_EPOCH_DURATION=1d
-export VERIFIER_EPOCH_RETENTION=2
+export EPOCH_DURATION_SEC=86400
+export EPOCH_RETENTION=2
 ```
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `EPOCH_DURATION` | `1d` | How long each cryptographic epoch lasts |
+| `EPOCH_DURATION_SEC` | `86400` | Verifier epoch duration in seconds |
 | `EPOCH_RETENTION` | `2` | Number of previous epochs to accept tokens from |
 
 **Key Rotation:**
@@ -239,7 +240,7 @@ export SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
 | `SYBIL_INVITE_AUTOSAVE_INTERVAL` | `5m` | Auto-save interval |
 | `SYBIL_INVITE_BOOTSTRAP_USERS` | None | Initial users with invites |
 
-See [Invitation System Guide](INVITATION_SYSTEM.md) for detailed strategies.
+See [Sybil Resistance Guide](SYBIL_RESISTANCE.md) for detailed mechanism strategies.
 
 ### Proof of Work
 
@@ -523,31 +524,40 @@ RUST_LOG=info,axum=warn,tower_http=off
 
 ### Development
 
+Use separate environment files for issuer and verifier.
+
 ```bash
-# Issuer (permissive)
+# issuer.env (permissive)
 export ISSUER_ID=issuer:dev
-export ISSUER_BIND_ADDR=127.0.0.1:8081
+export BIND_ADDR=127.0.0.1:8081
 export TOKEN_TTL_MIN=10
 export REQUIRE_TLS=false
 export SYBIL_RESISTANCE=none
 export EPOCH_DURATION=1d
+export EPOCH_RETENTION=2
 
-# Verifier (in-memory)
-export VERIFIER_BIND_ADDR=127.0.0.1:8082
+```
+
+```bash
+# verifier.env (in-memory)
+export BIND_ADDR=127.0.0.1:8082
 export ISSUER_URL=http://127.0.0.1:8081/.well-known/issuer
 export MAX_CLOCK_SKEW_SECS=300
+export EPOCH_DURATION_SEC=86400
+export EPOCH_RETENTION=2
 ```
 
 ### Staging
 
 ```bash
-# Issuer
+# issuer.staging.env
 export ISSUER_ID=issuer:staging:v1
-export ISSUER_BIND_ADDR=0.0.0.0:8081
+export BIND_ADDR=0.0.0.0:8081
 export TOKEN_TTL_MIN=60
 export REQUIRE_TLS=true
 export BEHIND_PROXY=true
 export EPOCH_DURATION=1d
+export EPOCH_RETENTION=2
 
 # Sybil resistance
 export SYBIL_RESISTANCE=invitation
@@ -556,12 +566,16 @@ export SYBIL_INVITE_PERSISTENCE_PATH=/var/lib/freebird/invitations.staging.json
 
 # Admin
 export ADMIN_API_KEY=${VAULT_STAGING_ADMIN_KEY}
+```
 
-# Verifier
-export VERIFIER_BIND_ADDR=0.0.0.0:8082
+```bash
+# verifier.staging.env
+export BIND_ADDR=0.0.0.0:8082
 export ISSUER_URL=https://issuer-staging.example.com/.well-known/issuer
 export REDIS_URL=redis://redis-staging:6379
 export REFRESH_INTERVAL_MIN=5
+export EPOCH_DURATION_SEC=86400
+export EPOCH_RETENTION=2
 
 # Logging
 export RUST_LOG=info,freebird=debug
@@ -570,9 +584,9 @@ export RUST_LOG=info,freebird=debug
 ### Production
 
 ```bash
-# Issuer (strict configuration)
+# issuer.production.env (strict configuration)
 export ISSUER_ID=issuer:production:v1
-export ISSUER_BIND_ADDR=127.0.0.1:8081  # Behind reverse proxy
+export BIND_ADDR=127.0.0.1:8081  # Behind reverse proxy
 export TOKEN_TTL_MIN=60
 export REQUIRE_TLS=true
 export BEHIND_PROXY=true
@@ -596,15 +610,17 @@ export FEDERATION_DATA_PATH=/var/lib/freebird/federation
 
 # Admin
 export ADMIN_API_KEY=${VAULT_ADMIN_API_KEY}
+```
 
-# Verifier
-export VERIFIER_BIND_ADDR=127.0.0.1:8082
+```bash
+# verifier.production.env
+export BIND_ADDR=127.0.0.1:8082
 export ISSUER_URL=https://issuer.example.com/.well-known/issuer
 export REDIS_URL=redis://redis.internal:6379
 export REFRESH_INTERVAL_MIN=10
 export MAX_CLOCK_SKEW_SECS=300
-export VERIFIER_EPOCH_DURATION=1d
-export VERIFIER_EPOCH_RETENTION=2
+export EPOCH_DURATION_SEC=86400
+export EPOCH_RETENTION=2
 
 # Logging
 export RUST_LOG=info
@@ -696,7 +712,7 @@ export EPOCH_DURATION=1d
 ```bash
 # Core
 ISSUER_ID=issuer:myservice:v1
-ISSUER_BIND_ADDR=0.0.0.0:8081
+BIND_ADDR=0.0.0.0:8081
 TOKEN_TTL_MIN=60
 REQUIRE_TLS=true
 BEHIND_PROXY=true
@@ -730,12 +746,12 @@ LOG_FORMAT=plain
 
 ```bash
 # Core
-VERIFIER_BIND_ADDR=0.0.0.0:8082
+BIND_ADDR=0.0.0.0:8082
 ISSUER_URL=http://issuer:8081/.well-known/issuer
 REFRESH_INTERVAL_MIN=10
 MAX_CLOCK_SKEW_SECS=300
-VERIFIER_EPOCH_DURATION=1d
-VERIFIER_EPOCH_RETENTION=2
+EPOCH_DURATION_SEC=86400
+EPOCH_RETENTION=2
 
 # Storage
 REDIS_URL=redis://localhost:6379
@@ -751,7 +767,7 @@ TRUST_POLICY_TRUSTED_ROOTS=issuer:trusted:v1
 ## Related Documentation
 
 - [Production Deployment](PRODUCTION.md) - Best practices and hardening
-- [Invitation System](INVITATION_SYSTEM.md) - Detailed invitation configuration
+- [Invitation System](SYBIL_RESISTANCE.md) - Detailed invitation configuration
 - [WebAuthn Guide](WEBAUTHN.md) - Hardware-backed authentication
 - [Federation Guide](FEDERATION.md) - Multi-issuer deployments
 - [Admin API Reference](ADMIN_API.md) - HTTP API documentation

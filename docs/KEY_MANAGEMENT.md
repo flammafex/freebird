@@ -20,7 +20,7 @@ Freebird uses **ECDSA P-256** keys for:
 Keys are automatically generated on first run:
 
 ```bash
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 **Output:**
@@ -60,7 +60,7 @@ chmod 600 issuer_sk.bin
 export ISSUER_SK_PATH=issuer_sk.bin
 
 # Start issuer
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### Production Options
@@ -85,7 +85,7 @@ vault kv put secret/freebird/issuer-key \
 # Fetch on startup (script)
 vault kv get -field=key secret/freebird/issuer-key > /tmp/issuer_sk.bin
 export ISSUER_SK_PATH=/tmp/issuer_sk.bin
-./target/release/issuer
+./target/release/freebird-issuer
 
 # Clean up
 shred -u /tmp/issuer_sk.bin

@@ -38,7 +38,7 @@ Comprehensive comparison of all Sybil resistance mechanisms in Freebird.
 ```bash
 export SYBIL_RESISTANCE=none
 # Or omit SYBIL_RESISTANCE entirely
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### How It Works
@@ -80,7 +80,7 @@ export SYBIL_INVITE_NEW_USER_WAIT_SECS=2592000
 export SYBIL_INVITE_PERSISTENCE_PATH=invitations.json
 export SYBIL_INVITE_AUTOSAVE_INTERVAL_SECS=300
 export SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### How It Works
@@ -143,7 +143,7 @@ See [Configuration Reference](CONFIGURATION.md#invitation-system) for detailed s
 ```bash
 export SYBIL_RESISTANCE=proof_of_work
 export SYBIL_POW_DIFFICULTY=20  # Leading zero bits required
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### How It Works
@@ -196,7 +196,7 @@ export SYBIL_POW_DIFFICULTY=20  # Leading zero bits required
 ```bash
 export SYBIL_RESISTANCE=rate_limit
 export SYBIL_RATE_LIMIT_SECS=3600  # One token per hour per client
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### How It Works
@@ -248,7 +248,7 @@ export SYBIL_PROGRESSIVE_TRUST_PERSISTENCE_PATH="progressive_trust.json"
 export SYBIL_PROGRESSIVE_TRUST_AUTOSAVE_SECS=300
 export SYBIL_PROGRESSIVE_TRUST_SECRET="$(openssl rand -base64 32)"
 export SYBIL_PROGRESSIVE_TRUST_SALT="$(openssl rand -hex 16)"
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### How It Works
@@ -325,7 +325,7 @@ export SYBIL_PROOF_OF_DIVERSITY_PERSISTENCE_PATH="proof_of_diversity.json"
 export SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE_SECS=300
 export SYBIL_PROOF_OF_DIVERSITY_SECRET="$(openssl rand -base64 32)"
 export SYBIL_PROOF_OF_DIVERSITY_SALT="$(openssl rand -hex 16)"
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### How It Works
@@ -406,7 +406,7 @@ export SYBIL_MULTI_PARTY_VOUCHING_EXPIRES_SECS=2592000
 export SYBIL_MULTI_PARTY_VOUCHING_NEW_USER_WAIT_SECS=2592000
 export SYBIL_MULTI_PARTY_VOUCHING_SECRET="$(openssl rand -base64 32)"
 export SYBIL_MULTI_PARTY_VOUCHING_SALT="$(openssl rand -hex 16)"
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### How It Works
@@ -490,7 +490,7 @@ export SYBIL_FEDERATED_TRUST_CACHE_TTL_SECS=3600
 export SYBIL_FEDERATED_TRUST_MAX_TOKEN_AGE_SECS=600
 export SYBIL_FEDERATED_TRUST_TRUSTED_ROOTS="issuer:root:v1,issuer:partner:v1"
 export SYBIL_FEDERATED_TRUST_BLOCKED_ISSUERS=""
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### How It Works
@@ -591,7 +591,7 @@ export SYBIL_COMBINED_MECHANISMS=pow,rate_limit
 export SYBIL_COMBINED_MODE=or  # Default
 export SYBIL_POW_DIFFICULTY=20
 export SYBIL_RATE_LIMIT_SECS=3600
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 #### Advanced Configuration (Custom Mechanism List)
@@ -604,7 +604,7 @@ export SYBIL_COMBINED_MODE=or
 export SYBIL_POW_DIFFICULTY=24
 export SYBIL_PROGRESSIVE_TRUST_LEVELS="0:1:86400,2592000:10:3600"
 export SYBIL_INVITE_PER_USER=5
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### Available Combination Modes

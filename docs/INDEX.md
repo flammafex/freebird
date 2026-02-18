@@ -49,7 +49,7 @@ Complete guide to deploying and using Freebird's anonymous credential system.
 
 | Document | Purpose |
 |----------|---------|
-| [Invitation System](INVITATION_SYSTEM.md) | Trust-based Sybil resistance |
+| [Invitation System](SYBIL_RESISTANCE.md) | Trust-based Sybil resistance |
 | [WebAuthn](WEBAUTHN.md) | Hardware-backed authentication |
 | [HSM Hybrid Mode](HSM_HYBRID_MODE.md) | Hardware security modules |
 | [NIP-VOPRF](NIP-VOPRF.md) | Nostr integration |
@@ -72,7 +72,7 @@ Evaluating Freebird's security:
 
 ### Community Managers
 Managing invitation-based communities:
-1. [Invitation System](INVITATION_SYSTEM.md) → [Admin API](ADMIN_API.md)
+1. [Invitation System](SYBIL_RESISTANCE.md) → [Admin API](ADMIN_API.md)
 
 ---
 
@@ -82,7 +82,7 @@ Managing invitation-based communities:
 
 **Cryptography**: [How It Works](HOW_IT_WORKS.md) • [Security Model](SECURITY.md) • [Key Management](KEY_MANAGEMENT.md) • [Federation](FEDERATION.md)
 
-**Sybil Resistance**: [Overview](SYBIL_RESISTANCE.md) • [Invitation System](INVITATION_SYSTEM.md) • [WebAuthn](WEBAUTHN.md)
+**Sybil Resistance**: [Overview](SYBIL_RESISTANCE.md) • [Invitation System](SYBIL_RESISTANCE.md) • [WebAuthn](WEBAUTHN.md)
 
 **APIs**: [API Reference](API.md) • [Admin API](ADMIN_API.md) • [SDK](SDK.md)
 

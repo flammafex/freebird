@@ -11,7 +11,6 @@ The Admin API provides administrative endpoints for both issuer and verifier ser
 **Shared Endpoints:**
 - Health checks and system statistics
 - Configuration inspection
-- Prometheus metrics
 
 **Issuer-Only Endpoints:**
 - User management (list, inspect, ban)
@@ -25,9 +24,12 @@ The Admin API provides administrative endpoints for both issuer and verifier ser
 - Trusted issuer management
 - Replay cache operations
 
+**Issuer-Only Monitoring Endpoint:**
+- Prometheus metrics (`/admin/metrics`)
+
 **Requirements:**
 - `ADMIN_API_KEY` environment variable must be set (minimum 32 characters)
-- All requests (except health check) require `X-Admin-Key` header for authentication
+- All admin requests require `X-Admin-Key` header for authentication
 
 ---
 
@@ -36,9 +38,6 @@ The Admin API provides administrative endpoints for both issuer and verifier ser
 ```bash
 # Enable Admin API
 export ADMIN_API_KEY=your-secure-random-key-at-least-32-characters
-
-# Optional: Configure admin port (default: same as service port)
-export ADMIN_PORT=8081
 ```
 
 **Security Notes:**
@@ -74,15 +73,15 @@ curl http://localhost:8081/admin/stats \
 
 **GET /admin/health**
 
-Check admin API availability and detect service type (no authentication required).
+Check admin API availability and detect service type (authentication required).
 
 **Response:**
 ```json
 {
-  "status": "ok",
   "service": "issuer",
+  "status": "ok",
   "uptime_seconds": 3600,
-  "version": "0.1.0"
+  "invitation_system_status": "operational"
 }
 ```
 
@@ -1259,7 +1258,7 @@ cp key_rotation_state.json keys.backup.$(date +%Y%m%d).json
 ```bash
 export ADMIN_API_KEY=your-secure-key-at-least-32-characters
 export SYBIL_RESISTANCE=invitation
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### 401 Unauthorized on all requests
@@ -1292,7 +1291,7 @@ ls -la invitations.json
 chmod 600 invitations.json
 
 # Check issuer logs for load errors
-./target/release/issuer 2>&1 | grep -i "invitation"
+./target/release/freebird-issuer 2>&1 | grep -i "invitation"
 ```
 
 ### Key rotation breaks token verification

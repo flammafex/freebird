@@ -371,7 +371,7 @@ Files are pretty-printed JSON for easy inspection and backup.
 ```bash
 # Core issuer settings
 export ISSUER_ID=issuer:example:v1
-export ISSUER_BIND_ADDR=0.0.0.0:8081
+export BIND_ADDR=0.0.0.0:8081
 export TOKEN_TTL_MIN=10
 export EPOCH_DURATION=1d
 export EPOCH_RETENTION=2
@@ -389,10 +389,10 @@ Signature-based tokens are automatic—no additional configuration needed for La
 
 ```bash
 # Core verifier settings
-export VERIFIER_BIND_ADDR=0.0.0.0:8082
+export BIND_ADDR=0.0.0.0:8082
 export MAX_CLOCK_SKEW_SECS=300
-export VERIFIER_EPOCH_DURATION=1d
-export VERIFIER_EPOCH_RETENTION=2
+export EPOCH_DURATION_SEC=86400
+export EPOCH_RETENTION=2
 
 # Issuer URL (comma-separated for multiple issuers)
 export ISSUER_URL=https://issuer-a.example.com/.well-known/issuer,https://issuer-b.example.com/.well-known/issuer

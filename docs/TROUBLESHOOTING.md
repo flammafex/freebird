@@ -56,7 +56,7 @@ sudo netstat -tulpn | grep :8081
 
 # Kill process or use different port
 export BIND_ADDR=127.0.0.1:9081
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ---
@@ -88,7 +88,7 @@ file issuer_sk.bin
 
 # Regenerate if corrupted
 rm issuer_sk.bin
-./target/release/issuer
+./target/release/freebird-issuer
 # Will generate new key
 ```
 
@@ -130,7 +130,7 @@ HTTP 400: Sybil resistance proof required
 ```bash
 # Option 1: Disable Sybil resistance (development only)
 export SYBIL_RESISTANCE=none
-./target/release/issuer
+./target/release/freebird-issuer
 
 # Option 2: Provide valid Sybil proof
 # See invitation system or other Sybil mechanism documentation
@@ -279,7 +279,7 @@ HTTP 401: {"ok": false, "error": "verification failed"}
 # This is not a bug - it's replay protection working correctly
 
 # To test: Use interface tool
-./target/release/interface --replay
+./target/release/freebird-interface --replay
 # Should show: "REPLAY PROTECTION WORKING!"
 ```
 
@@ -308,7 +308,7 @@ echo $TOKEN_EXP
 **Solutions:**
 ```bash
 # Option 1: Request new token
-./target/release/interface
+./target/release/freebird-interface
 
 # Option 2: Increase token TTL (issuer side)
 export TOKEN_TTL_MIN=60  # 1 hour
@@ -373,7 +373,7 @@ sudo systemctl restart systemd-timesyncd
 **Diagnosis:**
 ```bash
 # Benchmark with stress test
-time ./target/release/interface --stress 100
+time ./target/release/freebird-interface --stress 100
 
 # Check CPU usage
 top -p $(pgrep issuer)

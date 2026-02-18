@@ -23,7 +23,7 @@ Get Freebird running in 5 minutes.
 
 ```bash
 # Clone repository
-git clone [https://github.com/yourusername/freebird.git](https://github.com/yourusername/freebird.git)
+git clone https://github.com/flammafex/freebird.git
 cd freebird
 
 # Start everything
@@ -55,7 +55,7 @@ Since the CLI tool (`interface`) is a development utility, you can build it loca
 
 ```bash
 # In a new terminal window
-cargo run --release --bin interface
+cargo run --release -p freebird-interface
 ```
 
 ---
@@ -74,7 +74,7 @@ cargo build --release
 
 ```bash
 # Terminal 1
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 **Expected output:**
@@ -89,14 +89,14 @@ cargo build --release
 
 ```bash
 # Terminal 2
-./target/release/verifier
+./target/release/freebird-verifier
 ```
 
 ### Step 4: Test with CLI
 
 ```bash
 # Terminal 3
-./target/release/interface
+./target/release/freebird-interface
 ```
 
 **Expected output:**
@@ -119,7 +119,7 @@ export SYBIL_RESISTANCE=invitation
 export SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
 export ADMIN_API_KEY=my-super-secure-admin-key-at-least-32-chars
 
-./target/release/issuer
+./target/release/freebird-issuer
 ```
 
 ### Step 2: Check Admin Stats
@@ -133,7 +133,7 @@ curl http://localhost:8081/admin/stats \
 ### Step 3: Attempt Issuance (Expected Failure)
 
 ```bash
-./target/release/interface
+./target/release/freebird-interface
 ```
 
 **Expected output:**
@@ -157,7 +157,7 @@ redis-server
 ### Step 2: Configure Environment
 
 ```bash
-cat > .env.production << 'ENVFILE'
+cat > .env.issuer << 'ENVFILE'
 # Issuer
 ISSUER_ID=issuer:production:v1
 BIND_ADDR=127.0.0.1:8081
@@ -166,24 +166,26 @@ SYBIL_RESISTANCE=invitation
 SYBIL_INVITE_PERSISTENCE_PATH=invitations.json
 SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
 ADMIN_API_KEY=generate-secure-key-with-openssl-rand-base64-48
+ENVFILE
 
+cat > .env.verifier << 'ENVFILE'
 # Verifier
 BIND_ADDR=127.0.0.1:8082
 REDIS_URL=redis://localhost:6379
 ISSUER_URL=http://localhost:8081/.well-known/issuer
 ENVFILE
-
-source .env.production
 ```
 
 ### Step 3: Start Services
 
 ```bash
 # Terminal 2
-./target/release/issuer
+source .env.issuer
+./target/release/freebird-issuer
 
 # Terminal 3
-./target/release/verifier
+source .env.verifier
+./target/release/freebird-verifier
 ```
 
 ---
@@ -203,5 +205,5 @@ source .env.production
 
 **Next Steps:**
 - [Configuration Reference](CONFIGURATION.md) - Tweak settings
-- [Invitation System](INVITATION_SYSTEM.md) - Manage users
+- [Sybil Resistance](SYBIL_RESISTANCE.md) - Configure invitation mode and policies
 - [Production Guide](PRODUCTION.md) - Security hardening
