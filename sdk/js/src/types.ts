@@ -29,6 +29,7 @@ export interface VouchProof {
   vouchee_id: string;
   timestamp: number;
   signature: string;
+  voucher_pubkey_b64: string;
 }
 
 /**
@@ -51,6 +52,10 @@ export type SybilProof =
       type: 'invitation';
       code: string;
       signature: string;
+    }
+  | {
+      type: 'registered_user';
+      user_id: string;
     }
   | {
       type: 'webauthn';
@@ -87,7 +92,12 @@ export type SybilProof =
       source_issuer_id: string;
       source_token_b64: string;
       token_exp: number;
+      token_issued_at?: number;
       trust_path: string[];
+    }
+  | {
+      type: 'multi';
+      proofs: SybilProof[];
     }
   | { type: 'none' };
 
@@ -115,6 +125,8 @@ export interface IssueResponse {
   kid: string;
   /** Expiration timestamp (Unix seconds) */
   exp: number;
+  /** Epoch used for verifier MAC key derivation */
+  epoch: number;
   /** Sybil verification details (optional) */
   sybil_info?: {
     required: boolean;
@@ -144,4 +156,6 @@ export interface FreebirdToken {
   expiration: number;
   /** The Issuer ID this token belongs to */
   issuerId: string;
+  /** Epoch used for verifier MAC key derivation */
+  epoch: number;
 }

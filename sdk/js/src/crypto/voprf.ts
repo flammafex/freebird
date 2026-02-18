@@ -1,8 +1,8 @@
 import { p256 } from '@noble/curves/p256';
 import { sha256 } from '@noble/hashes/sha256';
 import { concatBytes, bytesToHex, hexToBytes } from '@noble/hashes/utils';
-import * as P256 from './p256';
-import { BlindState } from '../types';
+import * as P256 from './p256.js';
+import { BlindState } from '../types.js';
 
 // Constants from Rust implementation
 const DLEQ_DST_PREFIX = new TextEncoder().encode('DLEQ-P256-v1');

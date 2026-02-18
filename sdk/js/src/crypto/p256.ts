@@ -5,7 +5,7 @@ import { bytesToHex, concatBytes } from '@noble/hashes/utils';
 // ============================================================================
 // Constants & Curve Parameters (P-256)
 // ============================================================================
-const P = p256.CURVE.p; // Field Size
+const P = p256.CURVE.Fp.ORDER; // Field Size
 const N = p256.CURVE.n; // Curve Order
 const A = p256.CURVE.a;
 const B = p256.CURVE.b;

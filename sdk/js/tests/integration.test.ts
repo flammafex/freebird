@@ -46,7 +46,8 @@ describe('Freebird Docker Integration', () => {
     const fakeToken = {
       tokenValue: 'invalid_base64_string_that_is_not_a_token',
       expiration: Math.floor(Date.now() / 1000) + 3600,
-      issuerId: 'issuer:docker:v1'
+      issuerId: 'issuer:docker:v1',
+      epoch: 0
     };
 
     const isValid = await client.verifyToken(fakeToken);

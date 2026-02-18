@@ -5,8 +5,8 @@ import {
   IssueResponse,
   FreebirdToken,
   SybilProof,
-} from './types';
-import * as voprf from './crypto/voprf';
+} from './types.js';
+import * as voprf from './crypto/voprf.js';
 
 export class FreebirdClient {
   private config: ClientConfig;
@@ -89,6 +89,7 @@ export class FreebirdClient {
       tokenValue: this.bytesToBase64Url(tokenBytes),
       expiration: resp.exp,
       issuerId: this.metadata!.issuer_id,
+      epoch: resp.epoch,
     };
   }
 
@@ -108,6 +109,7 @@ export class FreebirdClient {
         token_b64: token.tokenValue,
         issuer_id: token.issuerId,
         exp: token.expiration,
+        epoch: token.epoch,
       }),
     });
 
