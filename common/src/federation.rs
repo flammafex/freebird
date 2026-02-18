@@ -36,7 +36,8 @@ pub struct Vouch {
     pub trust_level: Option<u8>,
 
     /// ECDSA signature over the vouch data by the voucher
-    /// Signature covers: voucher_issuer_id || vouched_issuer_id || vouched_pubkey || expires_at || created_at
+    /// Signature covers:
+    /// voucher_issuer_id || vouched_issuer_id || vouched_pubkey || expires_at || created_at || trust_level
     #[serde(with = "base64_signature")]
     pub signature: [u8; 64],
 }
@@ -54,6 +55,11 @@ impl Vouch {
         msg.extend_from_slice(&self.expires_at.to_be_bytes());
         msg.extend_from_slice(b"|");
         msg.extend_from_slice(&self.created_at.to_be_bytes());
+        msg.extend_from_slice(b"|");
+        match self.trust_level {
+            Some(level) => msg.extend_from_slice(level.to_string().as_bytes()),
+            None => msg.extend_from_slice(b"none"),
+        }
         msg
     }
 
@@ -66,6 +72,11 @@ impl Vouch {
     pub fn is_valid_at(&self, now: i64, max_clock_skew_secs: i64) -> bool {
         let max_future = now + max_clock_skew_secs;
         let min_past = now - max_clock_skew_secs;
+
+        // Basic temporal consistency: a vouch cannot expire before it's created.
+        if self.created_at > self.expires_at {
+            return false;
+        }
 
         // Created time should not be too far in the future
         if self.created_at > max_future {
@@ -629,6 +640,47 @@ mod tests {
 
         // Should NOT verify after tampering
         assert!(!vouch.verify(&pk), "Tampered vouch should not verify");
+    }
+
+    #[test]
+    fn test_vouch_verify_tampered_trust_level() {
+        let sk = [0x42u8; 32];
+        let ctx = b"freebird:v1";
+        let server = freebird_crypto::Server::from_secret_key(sk, ctx).expect("server");
+        let pk = server.public_key_sec1_compressed();
+
+        let mut vouch = Vouch {
+            voucher_issuer_id: "issuer:a:v1".to_string(),
+            vouched_issuer_id: "issuer:b:v1".to_string(),
+            vouched_pubkey: vec![1, 2, 3],
+            expires_at: 9999999999,
+            created_at: 1234567890,
+            trust_level: Some(10),
+            signature: [0u8; 64],
+        };
+
+        vouch.signature = vouch.sign(&sk).expect("sign vouch");
+        assert!(vouch.verify(&pk), "Original vouch should verify");
+
+        // Escalating trust level must invalidate the signature.
+        vouch.trust_level = Some(100);
+        assert!(!vouch.verify(&pk), "Tampered trust level should not verify");
+    }
+
+    #[test]
+    fn test_vouch_invalid_when_created_after_expiry() {
+        let vouch = Vouch {
+            voucher_issuer_id: "issuer:a:v1".to_string(),
+            vouched_issuer_id: "issuer:b:v1".to_string(),
+            vouched_pubkey: vec![1, 2, 3],
+            created_at: 2000,
+            expires_at: 1000,
+            trust_level: Some(50),
+            signature: [0u8; 64],
+        };
+
+        assert!(!vouch.is_valid_at(900, 300));
+        assert!(!vouch.is_valid_at(1500, 300));
     }
 
     #[test]

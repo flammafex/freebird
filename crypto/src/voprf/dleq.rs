@@ -216,7 +216,7 @@ mod tests {
                 c_bytes[byte_idx] ^= 1 << bit_idx;
 
                 // Create modified proof
-                let c_modified = Scalar::reduce_bytes(&FieldBytes::clone_from_slice(&c_bytes));
+                let c_modified = Scalar::reduce_bytes(&FieldBytes::from(c_bytes));
                 let modified_proof = DleqProof {
                     c: c_modified,
                     s: proof.s,

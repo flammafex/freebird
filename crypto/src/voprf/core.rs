@@ -272,8 +272,6 @@ impl Verifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use elliptic_curve::scalar::FromUintUnchecked;
-    use elliptic_curve::bigint::U256;
 
     /// Test vectors from draft-irtf-cfrg-voprf-21
     /// VOPRF(P-256, SHA-256) Test Vectors
