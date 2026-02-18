@@ -15,6 +15,7 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::{Duration, Ins
 use tokio::{net::TcpListener, sync::RwLock, time::sleep};
 use tracing::{debug, error, info, warn};
 use freebird_common::api::{VerifyReq, VerifyResp, BatchVerifyReq, BatchVerifyResp, VerifyResult, TokenToVerify};
+use freebird_crypto::{TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN};
 
 // Import from the library crate
 use freebird_verifier::store::{SpendStore, StoreBackend};
@@ -309,7 +310,6 @@ async fn verify(
 
         // Also check for tokens with expiration too far in the future
         // (possible clock skew or forged timestamps)
-        let max_future_time = now + st.max_clock_skew_secs;
         if exp > now + issuer.exp_sec as i64 + st.max_clock_skew_secs {
             warn!(
                 "❌ Token expiration too far in future: exp={}, max_expected={}",
@@ -349,20 +349,28 @@ async fn verify(
         (StatusCode::BAD_REQUEST, "token must include expiration".to_string())
     })?;
 
-    // Decode token (195 bytes = 131 VOPRF + 64 ECDSA signature)
+    // Decode token (V2: token bytes + ECDSA signature)
     let token_with_sig = Base64UrlUnpadded::decode_vec(&req.token_b64).map_err(|e| {
         error!("❌ Failed to decode token: {:?}", e);
         (StatusCode::BAD_REQUEST, "invalid token encoding".to_string())
     })?;
 
-    // Validate token length (must be exactly 195 bytes)
-    if token_with_sig.len() != 195 {
-        error!("❌ Invalid token length: got {} bytes, expected 195", token_with_sig.len());
-        return Err((StatusCode::BAD_REQUEST, "invalid token length (expected 195 bytes)".to_string()));
+    // Validate token length (must match V2 layout)
+    if token_with_sig.len() != TOKEN_LEN_V2 {
+        error!(
+            "❌ Invalid token length: got {} bytes, expected {}",
+            token_with_sig.len(),
+            TOKEN_LEN_V2
+        );
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("invalid token length (expected {} bytes)", TOKEN_LEN_V2),
+        ));
     }
 
     // Split token and signature
-    let (token_data, sig_bytes) = token_with_sig.split_at(131);
+    let token_data_len = TOKEN_LEN_V2 - TOKEN_SIGNATURE_LEN;
+    let (token_data, sig_bytes) = token_with_sig.split_at(token_data_len);
     let received_signature: [u8; 64] = sig_bytes.try_into().expect("Signature is 64 bytes");
 
     // Verify signature using issuer's public key (federation mode!)
@@ -534,20 +542,28 @@ async fn check(
         (StatusCode::BAD_REQUEST, "token must include expiration".to_string())
     })?;
 
-    // Decode token (195 bytes = 131 VOPRF + 64 ECDSA signature)
+    // Decode token (V2: token bytes + ECDSA signature)
     let token_with_sig = Base64UrlUnpadded::decode_vec(&req.token_b64).map_err(|e| {
         error!("❌ Failed to decode token: {:?}", e);
         (StatusCode::BAD_REQUEST, "invalid token encoding".to_string())
     })?;
 
-    // Validate token length (must be exactly 195 bytes)
-    if token_with_sig.len() != 195 {
-        error!("❌ Invalid token length: got {} bytes, expected 195", token_with_sig.len());
-        return Err((StatusCode::BAD_REQUEST, "invalid token length (expected 195 bytes)".to_string()));
+    // Validate token length (must match V2 layout)
+    if token_with_sig.len() != TOKEN_LEN_V2 {
+        error!(
+            "❌ Invalid token length: got {} bytes, expected {}",
+            token_with_sig.len(),
+            TOKEN_LEN_V2
+        );
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("invalid token length (expected {} bytes)", TOKEN_LEN_V2),
+        ));
     }
 
     // Split token and signature
-    let (token_data, sig_bytes) = token_with_sig.split_at(131);
+    let token_data_len = TOKEN_LEN_V2 - TOKEN_SIGNATURE_LEN;
+    let (token_data, sig_bytes) = token_with_sig.split_at(token_data_len);
     let received_signature: [u8; 64] = sig_bytes.try_into().expect("Signature is 64 bytes");
 
     // Verify signature using issuer's public key
@@ -603,6 +619,14 @@ const MAX_BATCH_SIZE: usize = 10_000;
 /// Minimum batch size for parallel processing
 const MIN_PARALLEL_BATCH_SIZE: usize = 10;
 
+fn compute_throughput(successful: usize, total_time_ms: u64) -> f64 {
+    if total_time_ms == 0 {
+        0.0
+    } else {
+        (successful as f64 / total_time_ms as f64) * 1000.0
+    }
+}
+
 // ---------- Batch Verification Handler ----------
 async fn batch_verify(
     State(st): State<Arc<AppState>>,
@@ -644,6 +668,8 @@ async fn batch_verify(
 
     // --- PARALLEL VERIFICATION ---
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let runtime_handle = tokio::runtime::Handle::current();
+    let token_data_len = TOKEN_LEN_V2 - TOKEN_SIGNATURE_LEN;
 
     // Helper function to verify a single token
     let verify_one = |token_req: &TokenToVerify| -> VerifyResult {
@@ -679,7 +705,7 @@ async fn batch_verify(
 
         let exp_value = token_req.exp.unwrap();
 
-        // 3) Decode token (must be 195 bytes = 131 VOPRF + 64 ECDSA signature)
+        // 3) Decode token (must match V2 layout)
         let token_with_sig = match Base64UrlUnpadded::decode_vec(&token_req.token_b64) {
             Ok(t) => t,
             Err(_) => {
@@ -690,16 +716,20 @@ async fn batch_verify(
             }
         };
 
-        // Validate token length (must be exactly 195 bytes)
-        if token_with_sig.len() != 195 {
+        // Validate token length
+        if token_with_sig.len() != TOKEN_LEN_V2 {
             return VerifyResult::Error {
-                message: format!("invalid token length: got {} bytes, expected 195", token_with_sig.len()),
+                message: format!(
+                    "invalid token length: got {} bytes, expected {}",
+                    token_with_sig.len(),
+                    TOKEN_LEN_V2
+                ),
                 code: "invalid_length".to_string(),
             };
         }
 
         // Split token and signature
-        let (token_data, sig_bytes) = token_with_sig.split_at(131);
+        let (token_data, sig_bytes) = token_with_sig.split_at(token_data_len);
         let received_signature: [u8; 64] = match sig_bytes.try_into() {
             Ok(s) => s,
             Err(_) => {
@@ -745,9 +775,9 @@ async fn batch_verify(
         let null_key = freebird_crypto::nullifier_key(&issuer_id, &out_b64);
         let spend_key = format!("freebird:spent:{}:{}", issuer_id, null_key);
 
-        // Use tokio::runtime::Handle to bridge rayon and tokio
-        let handle = tokio::runtime::Handle::current();
-        let spent = handle.block_on(async {
+        // Use captured runtime handle to bridge rayon and tokio.
+        // Calling Handle::current() inside Rayon threads can panic.
+        let spent = runtime_handle.block_on(async {
             st.store
                 .mark_spent(&spend_key, Duration::from_secs(issuer_clone.exp_sec))
                 .await
@@ -785,7 +815,7 @@ async fn batch_verify(
     let failed = batch_size - successful;
 
     let total_time_ms = start.elapsed().as_millis() as u64;
-    let throughput = (successful as f64 / total_time_ms as f64) * 1000.0;
+    let throughput = compute_throughput(successful, total_time_ms);
 
     info!(
         "📊 Batch verify metrics: total={}ms, success={}/{}, throughput={:.0} tok/s",
@@ -826,4 +856,19 @@ async fn shutdown_signal() {
     }
 
     info!("shutdown signal received");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_throughput;
+
+    #[test]
+    fn test_compute_throughput_zero_time() {
+        assert_eq!(compute_throughput(100, 0), 0.0);
+    }
+
+    #[test]
+    fn test_compute_throughput_normal() {
+        assert_eq!(compute_throughput(500, 250), 2000.0);
+    }
 }

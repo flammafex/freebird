@@ -35,11 +35,11 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use rayon::prelude::*;
 use time::OffsetDateTime;
 use tracing::{debug, error, info, instrument, warn};
-use zeroize::Zeroizing;
 use crate::multi_key_voprf::MultiKeyVoprfCore;
 use freebird_common::api::{BatchIssueReq, BatchIssueResp, TokenResult, SybilInfo};
 use crate::routes::issue::extract_client_data;
 use crate::AppStateWithSybil;
+use freebird_crypto::{TOKEN_LEN_V1, TOKEN_LEN_V2};
 // / Maximum batch size to prevent memory exhaustion
 // /
 // / Rationale:
@@ -65,17 +65,27 @@ struct BatchMetrics {
     failed: usize,
 }
 
+fn compute_throughput(successful: usize, total_time_ms: u64) -> f64 {
+    if total_time_ms == 0 {
+        0.0
+    } else {
+        (successful as f64 / total_time_ms as f64) * 1000.0
+    }
+}
+
 impl BatchMetrics {
     fn log(&self, batch_size: usize) {
+        let throughput = compute_throughput(self.successful, self.total_time_ms);
         info!(
-            "📊 Batch metrics: total={}ms, validation={}ms, sybil={}ms, voprf={}ms, success={}/{}, throughput={:.0} tok/s",
+            "📊 Batch metrics: total={}ms, validation={}ms, sybil={}ms, voprf={}ms, success={}, failed={}, total={}, throughput={:.0} tok/s",
             self.total_time_ms,
             self.validation_time_ms,
             self.sybil_time_ms,
             self.voprf_time_ms,
             self.successful,
+            self.failed,
             batch_size,
-            (self.successful as f64 / self.total_time_ms as f64) * 1000.0
+            throughput
         );
     }
 }
@@ -308,7 +318,7 @@ pub async fn handle_batch(
         // Step 2: Process valid tokens
         // Note: We need to handle async evaluation in a blocking context
         // We use tokio::runtime::Handle to bridge rayon and tokio
-        let handle = tokio::runtime::Handle::current();
+        let runtime_handle = tokio::runtime::Handle::current();
 
         validated
             .into_par_iter()
@@ -317,7 +327,7 @@ pub async fn handle_batch(
                 match validation_result {
                     Ok(_) => {
                         // Use blocking task to await async evaluation
-                        handle.block_on(async {
+                        runtime_handle.block_on(async {
                             evaluate_token(&voprf, &req.blinded_elements[idx], exp, epoch).await
                         })
                     }
@@ -332,56 +342,80 @@ pub async fn handle_batch(
 
     let voprf_time_ms = voprf_start.elapsed().as_millis() as u64;
 
-    // --- APPEND MACs TO TOKENS ---
-    // Derive epoch-specific MAC key for metadata binding (epoch was calculated earlier)
-    // Wrap in Zeroizing to ensure the key is securely erased from memory after use
-    let mac_key = Zeroizing::new(voprf.derive_mac_key_for_epoch(&state.issuer_id, epoch).await);
+    // --- APPEND SIGNATUREs TO TOKENS ---
+    // Keep batch issuance output aligned with single issuance:
+    // [VOPRF token (131 bytes)] || [ECDSA signature (64 bytes)] = 195 bytes.
 
-    // Process each result and append MAC to successful tokens
-    let results: Vec<TokenResult> = results
-        .into_iter()
-        .map(|result| match result {
+    // Process each result and append signatures to successful tokens.
+    let mut signed_results = Vec::with_capacity(results.len());
+    for result in results {
+        let signed = match result {
             TokenResult::Success { token, proof, kid, exp, epoch: token_epoch } => {
-                // Decode token to get raw bytes
                 match Base64UrlUnpadded::decode_vec(&token) {
                     Ok(token_bytes) => {
-                        // Compute MAC over (token || kid || exp || issuer_id)
-                        let mac = freebird_crypto::compute_token_mac(
-                            &mac_key,
-                            &token_bytes,
-                            &kid,
-                            exp,
-                            &state.issuer_id,
-                        );
+                        if token_bytes.len() != TOKEN_LEN_V1 {
+                            TokenResult::Error {
+                                message: format!(
+                                    "unexpected VOPRF token length: got {}, expected {}",
+                                    token_bytes.len(),
+                                    TOKEN_LEN_V1
+                                ),
+                                code: "token_format_error".to_string(),
+                            }
+                        } else {
+                            let signature = match voprf
+                                .sign_token_metadata(&token_bytes, &kid, exp, &state.issuer_id)
+                                .await
+                            {
+                                Ok(sig) => sig,
+                                Err(e) => {
+                                    error!("failed to sign token metadata in batch: {:?}", e);
+                                    signed_results.push(TokenResult::Error {
+                                        message: "signature generation error".to_string(),
+                                        code: "signature_generation_failed".to_string(),
+                                    });
+                                    continue;
+                                }
+                            };
 
-                        // Append MAC: [VERSION||A||B||Proof||MAC]
-                        let mut token_with_mac = token_bytes;
-                        token_with_mac.extend_from_slice(&mac);
+                            let mut token_with_sig = token_bytes;
+                            token_with_sig.extend_from_slice(&signature);
 
-                        // Re-encode to base64url
-                        let final_token = Base64UrlUnpadded::encode_string(&token_with_mac);
-
-                        TokenResult::Success {
-                            token: final_token,
-                            proof,
-                            kid,
-                            exp,
-                            epoch: token_epoch,
+                            if token_with_sig.len() != TOKEN_LEN_V2 {
+                                TokenResult::Error {
+                                    message: format!(
+                                        "unexpected final token length: got {}, expected {}",
+                                        token_with_sig.len(),
+                                        TOKEN_LEN_V2
+                                    ),
+                                    code: "token_format_error".to_string(),
+                                }
+                            } else {
+                                let final_token = Base64UrlUnpadded::encode_string(&token_with_sig);
+                                TokenResult::Success {
+                                    token: final_token,
+                                    proof,
+                                    kid,
+                                    exp,
+                                    epoch: token_epoch,
+                                }
+                            }
                         }
                     }
                     Err(e) => {
-                        error!("failed to decode token for MAC: {:?}", e);
+                        error!("failed to decode token for signature: {:?}", e);
                         TokenResult::Error {
                             message: "token encoding error".to_string(),
-                            code: "mac_computation_failed".to_string(),
+                            code: "signature_generation_failed".to_string(),
                         }
                     }
                 }
             }
-            // Pass through errors unchanged
             err => err,
-        })
-        .collect();
+        };
+        signed_results.push(signed);
+    }
+    let results = signed_results;
 
     // --- AGGREGATE RESULTS ---
     let successful = results
@@ -391,7 +425,7 @@ pub async fn handle_batch(
     let failed = batch_size - successful;
 
     let total_time_ms = start.elapsed().as_millis() as u64;
-    let throughput = (successful as f64 / total_time_ms as f64) * 1000.0;
+    let throughput = compute_throughput(successful, total_time_ms);
 
     // Log metrics
     let metrics = BatchMetrics {
@@ -459,5 +493,15 @@ mod tests {
             MIN_PARALLEL_BATCH_SIZE >= 10,
             "parallel overhead threshold should be reasonable"
         );
+    }
+
+    #[test]
+    fn test_compute_throughput_zero_time() {
+        assert_eq!(compute_throughput(100, 0), 0.0);
+    }
+
+    #[test]
+    fn test_compute_throughput_normal() {
+        assert_eq!(compute_throughput(500, 250), 2000.0);
     }
 }

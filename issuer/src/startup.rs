@@ -21,7 +21,7 @@ use axum::{routing::{get, post}, Router};
 use axum::extract::DefaultBodyLimit;
 use p256::ecdsa::SigningKey;
 use rand::rngs::OsRng;
-use std::{sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
@@ -37,7 +37,7 @@ impl Application {
         // ... [Sybil setup code remains the same] ...
 
         // 1. Keys & VOPRF Setup
-        if config.key_config.sk_path.to_str().unwrap() != "issuer_sk.bin" {
+        if config.key_config.sk_path != Path::new("issuer_sk.bin") {
              std::env::set_var("ISSUER_SK_PATH", &config.key_config.sk_path);
         }
 
