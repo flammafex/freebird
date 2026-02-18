@@ -39,7 +39,7 @@ use crate::multi_key_voprf::MultiKeyVoprfCore;
 use freebird_common::api::{BatchIssueReq, BatchIssueResp, TokenResult, SybilInfo};
 use crate::routes::issue::extract_client_data;
 use crate::AppStateWithSybil;
-use freebird_crypto::{TOKEN_LEN_V1, TOKEN_LEN_V2};
+use freebird_crypto::{TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN};
 // / Maximum batch size to prevent memory exhaustion
 // /
 // / Rationale:
@@ -72,6 +72,8 @@ fn compute_throughput(successful: usize, total_time_ms: u64) -> f64 {
         (successful as f64 / total_time_ms as f64) * 1000.0
     }
 }
+
+const RAW_VOPRF_TOKEN_LEN: usize = TOKEN_LEN_V2 - TOKEN_SIGNATURE_LEN;
 
 impl BatchMetrics {
     fn log(&self, batch_size: usize) {
@@ -353,12 +355,12 @@ pub async fn handle_batch(
             TokenResult::Success { token, proof, kid, exp, epoch: token_epoch } => {
                 match Base64UrlUnpadded::decode_vec(&token) {
                     Ok(token_bytes) => {
-                        if token_bytes.len() != TOKEN_LEN_V1 {
+                        if token_bytes.len() != RAW_VOPRF_TOKEN_LEN {
                             TokenResult::Error {
                                 message: format!(
                                     "unexpected VOPRF token length: got {}, expected {}",
                                     token_bytes.len(),
-                                    TOKEN_LEN_V1
+                                    RAW_VOPRF_TOKEN_LEN
                                 ),
                                 code: "token_format_error".to_string(),
                             }

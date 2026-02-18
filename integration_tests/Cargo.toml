@@ -16,13 +16,17 @@ time = { version = "0.3", features = ["formatting"] }
 anyhow = "1"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
 
 # Async Runtime (Required for concurrency tests)
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
+axum = "0.7"
+async-trait = "0.1"
 
 # Project Crates
 freebird-crypto = { path = "../crypto" }
 freebird-common = { path = "../common" }
+freebird-issuer = { path = "../issuer" }
 
 freebird-verifier = { path = "../verifier" } # <--- Now accessible as a lib

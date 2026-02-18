@@ -16,7 +16,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use freebird_crypto::{Client, Server, Verifier, nullifier_key, compute_token_signature, verify_token_signature};
+use freebird_crypto::{
+    Client, Server, Verifier, TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN, compute_token_signature,
+    nullifier_key, verify_token_signature,
+};
 use freebird_verifier::store::{InMemoryStore, SpendStore};
 
 const CONTEXT: &[u8] = b"freebird:v1";
@@ -133,9 +136,18 @@ fn issue_token(key: &IssuerKey, user_input: &[u8; 32]) -> (String, String, i64) 
 
     let mut final_token = eval_bytes;
     final_token.extend_from_slice(&signature);
+    assert_eq!(final_token.len(), TOKEN_LEN_V2);
     let token_b64 = Base64UrlUnpadded::encode_string(&final_token);
 
     (token_b64, key.kid.clone(), exp)
+}
+
+fn assert_v2_envelope(token_b64: &str) {
+    let raw = Base64UrlUnpadded::decode_vec(token_b64).expect("decode token");
+    assert_eq!(raw.len(), TOKEN_LEN_V2, "token must use V2 envelope");
+    let token_data_len = TOKEN_LEN_V2 - TOKEN_SIGNATURE_LEN;
+    let (_token_data, sig_bytes) = raw.split_at(token_data_len);
+    let _sig: [u8; 64] = sig_bytes.try_into().expect("signature slice");
 }
 
 #[tokio::test]
@@ -326,7 +338,7 @@ async fn test_cross_key_verification_fails() -> Result<()> {
     let (token_a, _, exp_a) = issue_token(&key_a, &[0xAAu8; 32]);
 
     // Try to verify with key B (wrong key)
-    let mut verifier = MultiKeyVerifier::new(key_b);
+    let verifier = MultiKeyVerifier::new(key_b);
 
     // Attempting to verify with wrong kid should fail
     let result = verifier.verify_token(&token_a, &kid_b, exp_a).await;
@@ -389,5 +401,64 @@ async fn test_epoch_based_rotation_validity() -> Result<()> {
              current_epoch - 3, current_epoch + 1);
 
     println!("🎉 Epoch validity test passed");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_new_tokens_always_use_current_active_key() -> Result<()> {
+    println!("🧭 Testing new issuance always uses current active key");
+
+    let key_a = IssuerKey::new([0x11u8; 32]);
+    let key_b = IssuerKey::new([0x22u8; 32]);
+    let key_c = IssuerKey::new([0x33u8; 32]);
+    let kid_a = key_a.kid.clone();
+    let kid_b = key_b.kid.clone();
+    let kid_c = key_c.kid.clone();
+
+    let mut verifier = MultiKeyVerifier::new(key_a);
+
+    // Initial issuance should use key A.
+    let (token_a, used_kid_a, exp_a) = issue_token(verifier.keys.get(&verifier.active_kid).unwrap(), &[0xA1; 32]);
+    assert_eq!(used_kid_a, kid_a);
+    assert_v2_envelope(&token_a);
+    assert!(verifier.verify_token(&token_a, &used_kid_a, exp_a).await?);
+
+    // Rotate to B and verify new issuance uses B.
+    verifier.rotate_to(key_b);
+    let (token_b, used_kid_b, exp_b) = issue_token(verifier.keys.get(&verifier.active_kid).unwrap(), &[0xB2; 32]);
+    assert_eq!(used_kid_b, kid_b);
+    assert_v2_envelope(&token_b);
+    assert!(verifier.verify_token(&token_b, &used_kid_b, exp_b).await?);
+
+    // Rotate to C and verify new issuance uses C.
+    verifier.rotate_to(key_c);
+    let (token_c, used_kid_c, exp_c) = issue_token(verifier.keys.get(&verifier.active_kid).unwrap(), &[0xC3; 32]);
+    assert_eq!(used_kid_c, kid_c);
+    assert_v2_envelope(&token_c);
+    assert!(verifier.verify_token(&token_c, &used_kid_c, exp_c).await?);
+
+    println!("✅ Active key issuance invariant holds across rotations");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_cannot_remove_active_key() -> Result<()> {
+    println!("🛡️ Testing active key cannot be removed");
+
+    let key_a = IssuerKey::new([0x11u8; 32]);
+    let kid_a = key_a.kid.clone();
+    let mut verifier = MultiKeyVerifier::new(key_a);
+
+    // Active key removal must fail.
+    let removed = verifier.remove_key(&kid_a);
+    assert!(!removed, "active key removal should be blocked");
+
+    // Issuance/verification should still work.
+    let (token, used_kid, exp) = issue_token(verifier.keys.get(&verifier.active_kid).unwrap(), &[0x5A; 32]);
+    assert_eq!(used_kid, kid_a);
+    assert_v2_envelope(&token);
+    assert!(verifier.verify_token(&token, &used_kid, exp).await?);
+
+    println!("✅ Active key protection invariant holds");
     Ok(())
 }
