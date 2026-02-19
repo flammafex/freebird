@@ -150,7 +150,7 @@ export interface BlindState {
  * A complete, unblinded token ready for use.
  */
 export interface FreebirdToken {
-  /** The unblinded VOPRF output (H(x)^k) */
+  /** Base64url-encoded token bytes returned by issuer (131-byte VOPRF or 195-byte signed token) */
   tokenValue: string; // Base64url
   /** Token expiration time */
   expiration: number;

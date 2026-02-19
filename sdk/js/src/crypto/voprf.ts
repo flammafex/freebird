@@ -7,8 +7,13 @@ import { BlindState } from '../types.js';
 // Constants from Rust implementation
 const DLEQ_DST_PREFIX = new TextEncoder().encode('DLEQ-P256-v1');
 const COMPRESSED_POINT_LEN = 33;
+const TOKEN_VERSION_V1 = 0x01;
+const TOKEN_VERSION_LEN = 1;
+const TOKEN_SIGNATURE_LEN = 64;
 const PROOF_LEN = 64; // 32 bytes (c) + 32 bytes (s)
-const TOKEN_LEN = COMPRESSED_POINT_LEN * 2 + PROOF_LEN;
+const RAW_TOKEN_LEN_V0 = COMPRESSED_POINT_LEN * 2 + PROOF_LEN; // 130 (legacy, no version byte)
+const RAW_TOKEN_LEN_V1 = TOKEN_VERSION_LEN + COMPRESSED_POINT_LEN * 2 + PROOF_LEN; // 131
+const TOKEN_LEN_V2 = RAW_TOKEN_LEN_V1 + TOKEN_SIGNATURE_LEN; // 195 (VOPRF + signature)
 
 /**
  * Blinds the input for the VOPRF protocol.
@@ -48,17 +53,34 @@ export function finalize(
   context: Uint8Array
 ): Uint8Array {
   // 1. Decode inputs
-  const tokenBytes = base64UrlToBytes(tokenB64);
+  const fullTokenBytes = base64UrlToBytes(tokenB64);
   const pubkeyBytes = base64UrlToBytes(issuerPubkeyB64);
+  const tokenBytes =
+    fullTokenBytes.length === TOKEN_LEN_V2
+      ? fullTokenBytes.slice(0, RAW_TOKEN_LEN_V1)
+      : fullTokenBytes;
 
-  if (tokenBytes.length !== TOKEN_LEN) {
-    throw new Error(`Invalid token length: expected ${TOKEN_LEN}, got ${tokenBytes.length}`);
+  if (
+    tokenBytes.length !== RAW_TOKEN_LEN_V1 &&
+    tokenBytes.length !== RAW_TOKEN_LEN_V0
+  ) {
+    throw new Error(
+      `Invalid token length: expected one of ${RAW_TOKEN_LEN_V0}, ${RAW_TOKEN_LEN_V1}, ${TOKEN_LEN_V2}; got ${fullTokenBytes.length}`
+    );
   }
 
-  // 2. Parse Token Structure: [ A (33) | B (33) | Proof (64) ]
-  const A_bytes = tokenBytes.slice(0, COMPRESSED_POINT_LEN);
-  const B_bytes = tokenBytes.slice(COMPRESSED_POINT_LEN, COMPRESSED_POINT_LEN * 2);
-  const proofBytes = tokenBytes.slice(COMPRESSED_POINT_LEN * 2);
+  const offset = tokenBytes.length === RAW_TOKEN_LEN_V1 ? TOKEN_VERSION_LEN : 0;
+  if (offset === TOKEN_VERSION_LEN && tokenBytes[0] !== TOKEN_VERSION_V1) {
+    throw new Error(`Unsupported token version: ${tokenBytes[0]}`);
+  }
+
+  // 2. Parse Token Structure: [version? | A (33) | B (33) | Proof (64)]
+  const A_bytes = tokenBytes.slice(offset, offset + COMPRESSED_POINT_LEN);
+  const B_bytes = tokenBytes.slice(
+    offset + COMPRESSED_POINT_LEN,
+    offset + COMPRESSED_POINT_LEN * 2
+  );
+  const proofBytes = tokenBytes.slice(offset + COMPRESSED_POINT_LEN * 2);
 
   // 3. Decode Points
   const A = P256.decodePoint(A_bytes);
@@ -75,7 +97,7 @@ export function finalize(
   }
 
   // 5. Return the verified token bytes
-  return tokenBytes;
+  return fullTokenBytes;
 }
 
 /**
