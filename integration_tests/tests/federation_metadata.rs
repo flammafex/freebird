@@ -91,7 +91,10 @@ fn test_federation_metadata_with_vouches() {
     assert_eq!(decoded.vouches[0].trust_level, Some(80));
 
     // Verify the deserialized vouch signature still validates
-    assert!(decoded.vouches[0].verify(&pk), "Deserialized vouch should verify");
+    assert!(
+        decoded.vouches[0].verify(&pk),
+        "Deserialized vouch should verify"
+    );
 
     println!("✅ Federation metadata with vouches test passed");
 }
@@ -136,9 +139,9 @@ fn test_revocation_signature_validation_and_enforcement() {
         revocations: &[Revocation],
         revoker_pubkey: &[u8],
     ) -> bool {
-        revocations.iter().any(|r| {
-            r.revoked_issuer_id == target_issuer && r.verify(revoker_pubkey)
-        })
+        revocations
+            .iter()
+            .any(|r| r.revoked_issuer_id == target_issuer && r.verify(revoker_pubkey))
     }
 
     let ctx = b"freebird:v1";

@@ -197,7 +197,12 @@ pub enum CredentialStore {
 }
 
 impl CredentialStore {
-    pub async fn save(&self, cred_id: Vec<u8>, credential: Passkey, user_id_hash: String) -> Result<()> {
+    pub async fn save(
+        &self,
+        cred_id: Vec<u8>,
+        credential: Passkey,
+        user_id_hash: String,
+    ) -> Result<()> {
         match self {
             Self::Redis(s) => s.save(cred_id, credential, user_id_hash).await,
             Self::InMemory(s) => s.save(cred_id, credential, user_id_hash).await,
@@ -214,8 +219,14 @@ impl CredentialStore {
         options: CredentialCreateOptions,
     ) -> Result<()> {
         match self {
-            Self::Redis(s) => s.save_with_options(cred_id, credential, user_id_hash, username, options).await,
-            Self::InMemory(s) => s.save_with_options(cred_id, credential, user_id_hash, username, options).await,
+            Self::Redis(s) => {
+                s.save_with_options(cred_id, credential, user_id_hash, username, options)
+                    .await
+            }
+            Self::InMemory(s) => {
+                s.save_with_options(cred_id, credential, user_id_hash, username, options)
+                    .await
+            }
         }
     }
 
@@ -242,7 +253,10 @@ impl CredentialStore {
     }
 
     /// Load all discoverable credentials for a user handle
-    pub async fn load_discoverable_credentials(&self, user_handle: &str) -> Result<Vec<StoredCredential>> {
+    pub async fn load_discoverable_credentials(
+        &self,
+        user_handle: &str,
+    ) -> Result<Vec<StoredCredential>> {
         match self {
             Self::Redis(s) => s.load_discoverable_credentials(user_handle).await,
             Self::InMemory(s) => s.load_discoverable_credentials(user_handle).await,
@@ -306,12 +320,14 @@ pub struct RedisCredStore {
     credential_ttl: Option<u64>,
 }
 
-
 impl RedisCredStore {
     pub fn new(redis_url: &str, credential_ttl: Option<u64>) -> Result<Self> {
         let client = redis::Client::open(redis_url)
             .with_context(|| format!("Failed to connect to Redis at {}", redis_url))?;
-        Ok(Self { client, credential_ttl })
+        Ok(Self {
+            client,
+            credential_ttl,
+        })
     }
 
     /// Get async connection with retry logic
@@ -632,7 +648,10 @@ impl RedisCredStore {
     }
 
     /// Load all discoverable credentials for a user handle
-    pub async fn load_discoverable_credentials(&self, user_handle: &str) -> Result<Vec<StoredCredential>> {
+    pub async fn load_discoverable_credentials(
+        &self,
+        user_handle: &str,
+    ) -> Result<Vec<StoredCredential>> {
         let mut conn = self.get_connection().await?;
         let discoverable_key = Self::discoverable_creds_key(user_handle);
 
@@ -850,7 +869,10 @@ impl InMemoryCredStore {
         Ok(self.handle_mappings.read().await.get(user_handle).cloned())
     }
 
-    pub async fn load_discoverable_credentials(&self, user_handle: &str) -> Result<Vec<StoredCredential>> {
+    pub async fn load_discoverable_credentials(
+        &self,
+        user_handle: &str,
+    ) -> Result<Vec<StoredCredential>> {
         let creds = self.credentials.read().await;
         Ok(creds
             .values()

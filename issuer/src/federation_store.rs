@@ -49,7 +49,8 @@ impl FederationStore {
         let data_dir = data_dir.as_ref().to_path_buf();
 
         // Create directory if it doesn't exist
-        fs::create_dir_all(&data_dir).await
+        fs::create_dir_all(&data_dir)
+            .await
             .context("Failed to create federation data directory")?;
 
         let store = Self {
@@ -69,7 +70,10 @@ impl FederationStore {
         let mut vouches = self.vouches.write().await;
 
         // Check if vouch already exists (by vouched_issuer_id)
-        if vouches.iter().any(|v| v.vouched_issuer_id == vouch.vouched_issuer_id) {
+        if vouches
+            .iter()
+            .any(|v| v.vouched_issuer_id == vouch.vouched_issuer_id)
+        {
             return Err(anyhow::anyhow!(
                 "Vouch for {} already exists",
                 vouch.vouched_issuer_id
@@ -93,10 +97,7 @@ impl FederationStore {
         vouches.retain(|v| v.vouched_issuer_id != vouched_issuer_id);
 
         if vouches.len() == initial_len {
-            return Err(anyhow::anyhow!(
-                "No vouch found for {}",
-                vouched_issuer_id
-            ));
+            return Err(anyhow::anyhow!("No vouch found for {}", vouched_issuer_id));
         }
 
         drop(vouches);
@@ -168,11 +169,12 @@ impl FederationStore {
         // Load vouches
         let vouches_path = self.data_dir.join("vouches.json");
         if vouches_path.exists() {
-            let content = fs::read_to_string(&vouches_path).await
+            let content = fs::read_to_string(&vouches_path)
+                .await
                 .context("Failed to read vouches file")?;
 
-            let vouches_file: VouchesFile = serde_json::from_str(&content)
-                .context("Failed to parse vouches JSON")?;
+            let vouches_file: VouchesFile =
+                serde_json::from_str(&content).context("Failed to parse vouches JSON")?;
 
             let mut vouches = self.vouches.write().await;
             *vouches = vouches_file.vouches;
@@ -185,11 +187,12 @@ impl FederationStore {
         // Load revocations
         let revocations_path = self.data_dir.join("revocations.json");
         if revocations_path.exists() {
-            let content = fs::read_to_string(&revocations_path).await
+            let content = fs::read_to_string(&revocations_path)
+                .await
                 .context("Failed to read revocations file")?;
 
-            let revocations_file: RevocationsFile = serde_json::from_str(&content)
-                .context("Failed to parse revocations JSON")?;
+            let revocations_file: RevocationsFile =
+                serde_json::from_str(&content).context("Failed to parse revocations JSON")?;
 
             let mut revocations = self.revocations.write().await;
             *revocations = revocations_file.revocations;
@@ -209,11 +212,12 @@ impl FederationStore {
             vouches: vouches.clone(),
         };
 
-        let json = serde_json::to_string_pretty(&vouches_file)
-            .context("Failed to serialize vouches")?;
+        let json =
+            serde_json::to_string_pretty(&vouches_file).context("Failed to serialize vouches")?;
 
         let vouches_path = self.data_dir.join("vouches.json");
-        fs::write(&vouches_path, json).await
+        fs::write(&vouches_path, json)
+            .await
             .context("Failed to write vouches file")?;
 
         debug!("Saved {} vouches to disk", vouches.len());
@@ -231,7 +235,8 @@ impl FederationStore {
             .context("Failed to serialize revocations")?;
 
         let revocations_path = self.data_dir.join("revocations.json");
-        fs::write(&revocations_path, json).await
+        fs::write(&revocations_path, json)
+            .await
             .context("Failed to write revocations file")?;
 
         debug!("Saved {} revocations to disk", revocations.len());

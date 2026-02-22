@@ -20,27 +20,27 @@
 //! }
 //! ```
 use anyhow::{anyhow, Result};
-use std::sync::Arc;
 use freebird_common::api::SybilProof;
+use std::sync::Arc;
 
+pub mod federated_trust;
 pub mod invitation;
-pub mod proof_of_work;
-pub mod rate_limit;
+pub mod multi_party_vouching;
 pub mod progressive_trust;
 pub mod proof_of_diversity;
-pub mod multi_party_vouching;
-pub mod federated_trust;
+pub mod proof_of_work;
+pub mod rate_limit;
 
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
-pub use invitation::ClientData;
-pub use proof_of_work::ProofOfWork;
-pub use rate_limit::RateLimit;
-pub use progressive_trust::{ProgressiveTrustSystem, ProgressiveTrustConfig, TrustLevel};
-pub use proof_of_diversity::{ProofOfDiversitySystem, ProofOfDiversityConfig};
-pub use multi_party_vouching::{MultiPartyVouchingSystem, MultiPartyVouchingConfig};
-pub use federated_trust::{FederatedTrustSystem, FederatedTrustConfig};
 #[cfg(feature = "human-gate-webauthn")]
 pub use crate::webauthn::gate::WebAuthnGate;
+pub use federated_trust::{FederatedTrustConfig, FederatedTrustSystem};
+pub use invitation::ClientData;
+pub use multi_party_vouching::{MultiPartyVouchingConfig, MultiPartyVouchingSystem};
+pub use progressive_trust::{ProgressiveTrustConfig, ProgressiveTrustSystem, TrustLevel};
+pub use proof_of_diversity::{ProofOfDiversityConfig, ProofOfDiversitySystem};
+pub use proof_of_work::ProofOfWork;
+pub use rate_limit::RateLimit;
 
 pub trait SybilResistance: Send + Sync {
     fn verify(&self, proof: &SybilProof) -> Result<()>; // Keep as fn, not async fn
@@ -59,8 +59,12 @@ impl SybilResistance for NoSybilResistance {
             _ => Err(anyhow!("NoSybilResistance only accepts None proof")),
         }
     }
-    fn supports(&self, proof: &SybilProof) -> bool { matches!(proof, SybilProof::None) }
-    fn cost(&self) -> u64 { 0 }
+    fn supports(&self, proof: &SybilProof) -> bool {
+        matches!(proof, SybilProof::None)
+    }
+    fn cost(&self) -> u64 {
+        0
+    }
 }
 
 pub struct CombinedSybilResistance {
@@ -83,14 +87,18 @@ impl SybilResistance for CombinedSybilResistance {
             }
         }
         if supported_count == 0 {
-            return Err(anyhow!("proof type not supported by any configured mechanism"));
+            return Err(anyhow!(
+                "proof type not supported by any configured mechanism"
+            ));
         }
         Ok(())
     }
     fn supports(&self, proof: &SybilProof) -> bool {
         self.mechanisms.iter().any(|m| m.supports(proof))
     }
-    fn cost(&self) -> u64 { 0 }
+    fn cost(&self) -> u64 {
+        0
+    }
 }
 
 /// Combined OR: Client provides ONE proof, at least one mechanism must support it
@@ -115,7 +123,9 @@ impl SybilResistance for CombinedOr {
             }
         }
         if supported_count == 0 {
-            return Err(anyhow!("proof type not supported by any configured mechanism"));
+            return Err(anyhow!(
+                "proof type not supported by any configured mechanism"
+            ));
         }
         Ok(())
     }
@@ -170,7 +180,9 @@ impl SybilResistance for CombinedAnd {
                 }
                 Ok(())
             }
-            _ => Err(anyhow!("AND combination requires Multi proof with all mechanisms")),
+            _ => Err(anyhow!(
+                "AND combination requires Multi proof with all mechanisms"
+            )),
         }
     }
 
@@ -202,7 +214,10 @@ impl CombinedThreshold {
                 mechanisms.len()
             ));
         }
-        Ok(Self { mechanisms, threshold })
+        Ok(Self {
+            mechanisms,
+            threshold,
+        })
     }
 }
 
@@ -210,16 +225,16 @@ impl SybilResistance for CombinedThreshold {
     fn verify(&self, proof: &SybilProof) -> Result<()> {
         match proof {
             SybilProof::Multi { proofs } => {
-                let mut passed = 0;
+                let mut mechanism_passed = vec![false; self.mechanisms.len()];
                 let mut errors = Vec::new();
 
-                // Try to verify each proof with its corresponding mechanism
-                for proof in proofs {
-                    for mechanism in &self.mechanisms {
+                // Count at most one success per mechanism, even if multiple proofs match.
+                for (idx, mechanism) in self.mechanisms.iter().enumerate() {
+                    for proof in proofs {
                         if mechanism.supports(proof) {
                             match mechanism.verify(proof) {
                                 Ok(()) => {
-                                    passed += 1;
+                                    mechanism_passed[idx] = true;
                                     break;
                                 }
                                 Err(e) => {
@@ -228,15 +243,19 @@ impl SybilResistance for CombinedThreshold {
                             }
                         }
                     }
+                    if mechanism_passed[idx] {
+                        continue;
+                    }
                 }
 
+                let passed = mechanism_passed.iter().filter(|&&ok| ok).count();
                 if passed >= self.threshold {
                     Ok(())
                 } else {
                     Err(anyhow!(
                         "threshold not met: passed {}/{}, need {} (errors: {})",
                         passed,
-                        proofs.len(),
+                        self.mechanisms.len(),
                         self.threshold,
                         errors.join("; ")
                     ))
@@ -261,14 +280,21 @@ impl SybilResistance for CombinedThreshold {
 }
 
 pub fn current_timestamp() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
 pub fn verify_timestamp_recent(timestamp: u64, window_secs: u64) -> Result<()> {
     let now = current_timestamp();
     let age = now.saturating_sub(timestamp);
-    if age > window_secs { return Err(anyhow!("timestamp too old")); }
-    if timestamp > now + 300 { return Err(anyhow!("timestamp in future")); }
+    if age > window_secs {
+        return Err(anyhow!("timestamp too old"));
+    }
+    if timestamp > now + 300 {
+        return Err(anyhow!("timestamp in future"));
+    }
     Ok(())
 }
 
@@ -326,5 +352,47 @@ mod tests {
             timestamp: current_timestamp(),
         };
         assert!(combined.verify(&rate_proof).is_err());
+    }
+
+    #[test]
+    fn test_threshold_requires_distinct_mechanisms() {
+        let threshold = CombinedThreshold::new(
+            vec![
+                Arc::new(ProofOfWork::new(16)),
+                Arc::new(RateLimit::new(std::time::Duration::from_secs(60))),
+            ],
+            2,
+        )
+        .expect("threshold config");
+
+        let timestamp = current_timestamp();
+        let (nonce, _) = ProofOfWork::compute(16, "test-threshold", timestamp).expect("pow");
+        let pow_proof = SybilProof::ProofOfWork {
+            nonce,
+            input: "test-threshold".to_string(),
+            timestamp,
+        };
+
+        // Duplicate PoW proofs should only satisfy one mechanism.
+        let duplicate = SybilProof::Multi {
+            proofs: vec![pow_proof.clone(), pow_proof],
+        };
+        assert!(threshold.verify(&duplicate).is_err());
+
+        // Distinct proofs should satisfy both mechanisms.
+        let distinct = SybilProof::Multi {
+            proofs: vec![
+                SybilProof::ProofOfWork {
+                    nonce,
+                    input: "test-threshold".to_string(),
+                    timestamp,
+                },
+                SybilProof::RateLimit {
+                    client_id: "client-1".to_string(),
+                    timestamp,
+                },
+            ],
+        };
+        assert!(threshold.verify(&distinct).is_ok());
     }
 }

@@ -186,7 +186,7 @@ impl SessionData {
 // --- Router Factory ---
 
 pub fn router(state: Arc<WebAuthnState>) -> Router {
-    use super::discoverable::{discoverable_router, admin_router};
+    use super::discoverable::{admin_router, discoverable_router};
 
     let use_attestation = std::env::var("WEBAUTHN_REQUIRE_ATTESTATION")
         .unwrap_or_else(|_| "false".to_string())
@@ -196,7 +196,10 @@ pub fn router(state: Arc<WebAuthnState>) -> Router {
     let base_router = if use_attestation {
         Router::new()
             .route("/register/start", post(start_registration_extended))
-            .route("/register/finish", post(finish_registration_with_attestation))
+            .route(
+                "/register/finish",
+                post(finish_registration_with_attestation),
+            )
             .route("/authenticate/start", post(start_authentication))
             .route("/authenticate/finish", post(finish_authentication))
             .route("/info", get(webauthn_info))
@@ -244,13 +247,20 @@ pub async fn start_registration(
         .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
     // Check rate limit before processing
-    if let Err(e) = state.rate_limiter.check_registration_allowed(client_ip).await {
+    if let Err(e) = state
+        .rate_limiter
+        .check_registration_allowed(client_ip)
+        .await
+    {
         warn!(ip = %client_ip, error = %e, "Registration rate limited");
         return Err((e.status_code(), e.to_string()));
     }
 
     // Record the registration attempt
-    state.rate_limiter.record_registration_attempt(client_ip).await;
+    state
+        .rate_limiter
+        .record_registration_attempt(client_ip)
+        .await;
 
     // Check total session count for memory protection
     {
@@ -378,11 +388,17 @@ pub async fn finish_registration(
         let mut sessions = state.sessions.write().await;
         match sessions.remove(&req.session_id) {
             Some(SessionData::Registration {
-                state, username, client_ip, ..
+                state,
+                username,
+                client_ip,
+                ..
             }) => (state, username, client_ip),
             Some(session) => {
                 // Wrong session type - still record session ended
-                state.rate_limiter.record_session_ended(session.client_ip()).await;
+                state
+                    .rate_limiter
+                    .record_session_ended(session.client_ip())
+                    .await;
                 return Err((StatusCode::BAD_REQUEST, "Invalid session type".to_string()));
             }
             None => {
@@ -482,7 +498,10 @@ pub async fn start_authentication(
         // Ensure consistent timing even for rate limited requests
         let elapsed = start_time.elapsed().as_millis() as u64;
         if elapsed < MIN_RESPONSE_TIME_MS {
-            tokio::time::sleep(std::time::Duration::from_millis(MIN_RESPONSE_TIME_MS - elapsed)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(
+                MIN_RESPONSE_TIME_MS - elapsed,
+            ))
+            .await;
         }
         return Err((e.status_code(), e.to_string()));
     }
@@ -497,7 +516,10 @@ pub async fn start_authentication(
             warn!("Maximum session limit reached, rejecting authentication");
             let elapsed = start_time.elapsed().as_millis() as u64;
             if elapsed < MIN_RESPONSE_TIME_MS {
-                tokio::time::sleep(std::time::Duration::from_millis(MIN_RESPONSE_TIME_MS - elapsed)).await;
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    MIN_RESPONSE_TIME_MS - elapsed,
+                ))
+                .await;
             }
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -528,15 +550,15 @@ pub async fn start_authentication(
         // Ensure consistent response time
         let elapsed = start_time.elapsed().as_millis() as u64;
         if elapsed < MIN_RESPONSE_TIME_MS {
-            tokio::time::sleep(std::time::Duration::from_millis(MIN_RESPONSE_TIME_MS - elapsed)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(
+                MIN_RESPONSE_TIME_MS - elapsed,
+            ))
+            .await;
         }
 
         // Return generic error that doesn't reveal user existence
         // Same error message as other auth failures
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "Authentication failed".to_string(),
-        ));
+        return Err((StatusCode::BAD_REQUEST, "Authentication failed".to_string()));
     }
 
     let passkeys: Vec<Passkey> = stored_creds.into_iter().map(|c| c.credential).collect();
@@ -575,7 +597,10 @@ pub async fn start_authentication(
     // Ensure consistent response time for successful lookups too
     let elapsed = start_time.elapsed().as_millis() as u64;
     if elapsed < MIN_RESPONSE_TIME_MS {
-        tokio::time::sleep(std::time::Duration::from_millis(MIN_RESPONSE_TIME_MS - elapsed)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(
+            MIN_RESPONSE_TIME_MS - elapsed,
+        ))
+        .await;
     }
 
     info!(
@@ -615,11 +640,17 @@ pub async fn finish_authentication(
         let mut sessions = state.sessions.write().await;
         match sessions.remove(&req.session_id) {
             Some(SessionData::Authentication {
-                state, username, client_ip, ..
+                state,
+                username,
+                client_ip,
+                ..
             }) => (state, username, client_ip),
             Some(session) => {
                 // Wrong session type - still record session ended
-                state.rate_limiter.record_session_ended(session.client_ip()).await;
+                state
+                    .rate_limiter
+                    .record_session_ended(session.client_ip())
+                    .await;
                 return Err((StatusCode::BAD_REQUEST, "Invalid session type".to_string()));
             }
             None => {
@@ -709,12 +740,19 @@ pub async fn start_registration_extended(
         .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
     // Check rate limit
-    if let Err(e) = state.rate_limiter.check_registration_allowed(client_ip).await {
+    if let Err(e) = state
+        .rate_limiter
+        .check_registration_allowed(client_ip)
+        .await
+    {
         warn!(ip = %client_ip, error = %e, "Registration rate limited");
         return Err((e.status_code(), e.to_string()));
     }
 
-    state.rate_limiter.record_registration_attempt(client_ip).await;
+    state
+        .rate_limiter
+        .record_registration_attempt(client_ip)
+        .await;
 
     // Check max credentials per user
     let config = AttestationConfig::global();
@@ -814,7 +852,10 @@ pub async fn finish_registration_with_attestation(
     State(state): State<Arc<WebAuthnState>>,
     Json(req): Json<FinishRegistrationRequest>,
 ) -> Result<Json<FinishRegistrationResponse>, (StatusCode, String)> {
-    use super::attestation::{enforce_policy, parse_attestation_info, AttestationConfig, RegistrationAuditMetadata, store_audit_metadata};
+    use super::attestation::{
+        enforce_policy, parse_attestation_info, store_audit_metadata, AttestationConfig,
+        RegistrationAuditMetadata,
+    };
     use super::store::{CredentialCreateOptions, DeviceType};
 
     debug!(session_id = %req.session_id, "Finishing WebAuthn registration with full attestation check");
@@ -823,10 +864,16 @@ pub async fn finish_registration_with_attestation(
         let mut sessions = state.sessions.write().await;
         match sessions.remove(&req.session_id) {
             Some(SessionData::Registration {
-                state, username, client_ip, ..
+                state,
+                username,
+                client_ip,
+                ..
             }) => (state, username, client_ip),
             Some(session) => {
-                state.rate_limiter.record_session_ended(session.client_ip()).await;
+                state
+                    .rate_limiter
+                    .record_session_ended(session.client_ip())
+                    .await;
                 return Err((StatusCode::BAD_REQUEST, "Invalid session type".to_string()));
             }
             None => {

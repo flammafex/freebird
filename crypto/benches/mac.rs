@@ -147,7 +147,9 @@ fn bench_mac_throughput(c: &mut Criterion) {
             |b, batch_size| {
                 b.iter(|| {
                     for _ in 0..*batch_size {
-                        black_box(verify_token_mac(&mac_key, &token, &mac, kid, exp, issuer_id));
+                        black_box(verify_token_mac(
+                            &mac_key, &token, &mac, kid, exp, issuer_id,
+                        ));
                     }
                 });
             },

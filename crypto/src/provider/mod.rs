@@ -64,12 +64,7 @@ pub trait CryptoProvider: Send + Sync {
     /// - HSM implementations MAY perform HKDF in hardware if supported
     /// - Otherwise, use HSM for base key material and derive in software
     /// - Keys MUST be cryptographically independent across epochs
-    async fn derive_mac_key(
-        &self,
-        issuer_id: &str,
-        kid: &str,
-        epoch: u32,
-    ) -> Result<[u8; 32]>;
+    async fn derive_mac_key(&self, issuer_id: &str, kid: &str, epoch: u32) -> Result<[u8; 32]>;
 
     /// Sign token metadata using ECDSA (for federation support)
     ///
@@ -177,24 +172,32 @@ pub enum ProviderConfig {
 /// - Invalid key material
 pub async fn create_provider(config: ProviderConfig) -> Result<Box<dyn CryptoProvider>> {
     match config {
-        ProviderConfig::Software { secret_key, key_id, context } => {
-            Ok(Box::new(software::SoftwareCryptoProvider::new(
-                secret_key,
-                key_id,
-                context,
-            )?))
-        }
+        ProviderConfig::Software {
+            secret_key,
+            key_id,
+            context,
+        } => Ok(Box::new(software::SoftwareCryptoProvider::new(
+            secret_key, key_id, context,
+        )?)),
 
         #[cfg(feature = "pkcs11")]
-        ProviderConfig::Pkcs11 { module_path, slot, pin, key_label, key_id, context } => {
-            Ok(Box::new(pkcs11::Pkcs11CryptoProvider::new(
+        ProviderConfig::Pkcs11 {
+            module_path,
+            slot,
+            pin,
+            key_label,
+            key_id,
+            context,
+        } => Ok(Box::new(
+            pkcs11::Pkcs11CryptoProvider::new(
                 &module_path,
                 slot,
                 &pin,
                 &key_label,
                 key_id,
                 context,
-            ).await?))
-        }
+            )
+            .await?,
+        )),
     }
 }

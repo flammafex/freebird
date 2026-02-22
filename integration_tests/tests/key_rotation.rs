@@ -17,8 +17,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use freebird_crypto::{
-    Client, Server, Verifier, TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN, compute_token_signature,
-    nullifier_key, verify_token_signature,
+    compute_token_signature, nullifier_key, verify_token_signature, Client, Server, Verifier,
+    TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN,
 };
 use freebird_verifier::store::{InMemoryStore, SpendStore};
 
@@ -41,7 +41,12 @@ impl IssuerKey {
         let pk_b64 = Base64UrlUnpadded::encode_string(&pk);
         let kid = format!("kid:{}", &pk_b64[..8]);
 
-        Self { sk, server, pk, kid }
+        Self {
+            sk,
+            server,
+            pk,
+            kid,
+        }
     }
 }
 
@@ -88,7 +93,9 @@ impl MultiKeyVerifier {
 
     /// Verify a token with the specified key ID
     async fn verify_token(&self, token_b64: &str, kid: &str, exp: i64) -> Result<bool> {
-        let key = self.keys.get(kid)
+        let key = self
+            .keys
+            .get(kid)
             .ok_or_else(|| anyhow::anyhow!("unknown key ID: {}", kid))?;
 
         // Decode token (195 bytes = 131 VOPRF + 64 sig)
@@ -108,13 +115,18 @@ impl MultiKeyVerifier {
 
         // Verify VOPRF and check replay
         let token_data_b64 = Base64UrlUnpadded::encode_string(token_data);
-        let output_b64 = self.crypto.verify(&token_data_b64, &key.pk)
+        let output_b64 = self
+            .crypto
+            .verify(&token_data_b64, &key.pk)
             .map_err(|e| anyhow::anyhow!("VOPRF verify failed: {:?}", e))?;
 
         let null_key = nullifier_key(ISSUER_ID, &output_b64);
         let spend_key = format!("freebird:spent:{}:{}", ISSUER_ID, null_key);
 
-        let is_fresh = self.store.mark_spent(&spend_key, Duration::from_secs(EXP_SEC)).await?;
+        let is_fresh = self
+            .store
+            .mark_spent(&spend_key, Duration::from_secs(EXP_SEC))
+            .await?;
         Ok(is_fresh)
     }
 }
@@ -123,16 +135,20 @@ impl MultiKeyVerifier {
 fn issue_token(key: &IssuerKey, user_input: &[u8; 32]) -> (String, String, i64) {
     let mut client = Client::new(CONTEXT);
     let (blinded_b64, _) = client.blind(user_input).expect("blind");
-    let eval_b64 = key.server.evaluate_with_proof(&blinded_b64).expect("evaluate");
+    let eval_b64 = key
+        .server
+        .evaluate_with_proof(&blinded_b64)
+        .expect("evaluate");
     let eval_bytes = Base64UrlUnpadded::decode_vec(&eval_b64).expect("decode");
 
     let exp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs() as i64 + EXP_SEC as i64;
+        .as_secs() as i64
+        + EXP_SEC as i64;
 
-    let signature = compute_token_signature(&key.sk, &eval_bytes, &key.kid, exp, ISSUER_ID)
-        .expect("signature");
+    let signature =
+        compute_token_signature(&key.sk, &eval_bytes, &key.kid, exp, ISSUER_ID).expect("signature");
 
     let mut final_token = eval_bytes;
     final_token.extend_from_slice(&signature);
@@ -165,10 +181,8 @@ async fn test_verify_token_after_single_rotation() -> Result<()> {
     let mut verifier = MultiKeyVerifier::new(key_a);
 
     // Issue token with key A (before rotation)
-    let (token_a, kid_token_a, exp_a) = issue_token(
-        verifier.keys.get(&kid_a).unwrap(),
-        &[0xAAu8; 32],
-    );
+    let (token_a, kid_token_a, exp_a) =
+        issue_token(verifier.keys.get(&kid_a).unwrap(), &[0xAAu8; 32]);
     println!("✅ Issued token with key A: {}", kid_token_a);
 
     // Rotate to key B (key A becomes deprecated)
@@ -178,15 +192,16 @@ async fn test_verify_token_after_single_rotation() -> Result<()> {
     println!("🔄 Rotated to key B, key A deprecated");
 
     // Issue token with key B (after rotation)
-    let (token_b, kid_token_b, exp_b) = issue_token(
-        verifier.keys.get(&kid_b).unwrap(),
-        &[0xBBu8; 32],
-    );
+    let (token_b, kid_token_b, exp_b) =
+        issue_token(verifier.keys.get(&kid_b).unwrap(), &[0xBBu8; 32]);
     println!("✅ Issued token with key B: {}", kid_token_b);
 
     // Verify both tokens should succeed
     let result_a = verifier.verify_token(&token_a, &kid_token_a, exp_a).await?;
-    assert!(result_a, "Token from key A should still verify after rotation");
+    assert!(
+        result_a,
+        "Token from key A should still verify after rotation"
+    );
     println!("✅ Token A verified successfully (deprecated key)");
 
     let result_b = verifier.verify_token(&token_b, &kid_token_b, exp_b).await?;
@@ -214,10 +229,7 @@ async fn test_verify_token_after_multiple_rotations() -> Result<()> {
     let mut verifier = MultiKeyVerifier::new(key_a);
 
     // Issue token with key A
-    let (token_a, _, exp_a) = issue_token(
-        verifier.keys.get(&kid_a).unwrap(),
-        &[0x11u8; 32],
-    );
+    let (token_a, _, exp_a) = issue_token(verifier.keys.get(&kid_a).unwrap(), &[0x11u8; 32]);
 
     // Rotate A -> B
     let key_a_deprecated = IssuerKey::new([0x11u8; 32]);
@@ -225,10 +237,7 @@ async fn test_verify_token_after_multiple_rotations() -> Result<()> {
     verifier.add_deprecated_key(key_a_deprecated);
 
     // Issue token with key B
-    let (token_b, _, exp_b) = issue_token(
-        verifier.keys.get(&kid_b).unwrap(),
-        &[0x22u8; 32],
-    );
+    let (token_b, _, exp_b) = issue_token(verifier.keys.get(&kid_b).unwrap(), &[0x22u8; 32]);
 
     // Rotate B -> C
     let key_b_deprecated = IssuerKey::new([0x22u8; 32]);
@@ -236,25 +245,28 @@ async fn test_verify_token_after_multiple_rotations() -> Result<()> {
     verifier.add_deprecated_key(key_b_deprecated);
 
     // Issue token with key C
-    let (token_c, _, exp_c) = issue_token(
-        verifier.keys.get(&kid_c).unwrap(),
-        &[0x33u8; 32],
-    );
+    let (token_c, _, exp_c) = issue_token(verifier.keys.get(&kid_c).unwrap(), &[0x33u8; 32]);
 
     println!("📊 Keys status: A (deprecated), B (deprecated), C (active)");
     println!("📊 Total keys in verifier: {}", verifier.keys.len());
 
     // All three tokens should still verify
-    assert!(verifier.verify_token(&token_a, &kid_a, exp_a).await?,
-            "Token A should verify (2 rotations ago)");
+    assert!(
+        verifier.verify_token(&token_a, &kid_a, exp_a).await?,
+        "Token A should verify (2 rotations ago)"
+    );
     println!("✅ Token A verified");
 
-    assert!(verifier.verify_token(&token_b, &kid_b, exp_b).await?,
-            "Token B should verify (1 rotation ago)");
+    assert!(
+        verifier.verify_token(&token_b, &kid_b, exp_b).await?,
+        "Token B should verify (1 rotation ago)"
+    );
     println!("✅ Token B verified");
 
-    assert!(verifier.verify_token(&token_c, &kid_c, exp_c).await?,
-            "Token C should verify (current key)");
+    assert!(
+        verifier.verify_token(&token_c, &kid_c, exp_c).await?,
+        "Token C should verify (current key)"
+    );
     println!("✅ Token C verified");
 
     println!("🎉 Multiple rotation test passed");
@@ -275,10 +287,7 @@ async fn test_verify_fails_after_key_removal() -> Result<()> {
     let mut verifier = MultiKeyVerifier::new(key_a);
 
     // Issue token with key A
-    let (_token_a, _, _exp_a) = issue_token(
-        verifier.keys.get(&kid_a).unwrap(),
-        &[0xAAu8; 32],
-    );
+    let (_token_a, _, _exp_a) = issue_token(verifier.keys.get(&kid_a).unwrap(), &[0xAAu8; 32]);
 
     // Rotate to key B, keep A as deprecated
     let key_a_deprecated = IssuerKey::new([0x11u8; 32]);
@@ -292,8 +301,10 @@ async fn test_verify_fails_after_key_removal() -> Result<()> {
         issue_token(&key_a_for_issue, &[0xBBu8; 32])
     };
 
-    assert!(verifier.verify_token(&token_a2, &kid_a, exp_a2).await?,
-            "Token should verify while key A is present");
+    assert!(
+        verifier.verify_token(&token_a2, &kid_a, exp_a2).await?,
+        "Token should verify while key A is present"
+    );
     println!("✅ Token verified while key A present");
 
     // Simulate grace period expiration: remove key A
@@ -312,12 +323,11 @@ async fn test_verify_fails_after_key_removal() -> Result<()> {
     println!("✅ Token correctly rejected after key removal");
 
     // Token from key B should still work
-    let (token_b, _, exp_b) = issue_token(
-        verifier.keys.get(&kid_b).unwrap(),
-        &[0xDDu8; 32],
+    let (token_b, _, exp_b) = issue_token(verifier.keys.get(&kid_b).unwrap(), &[0xDDu8; 32]);
+    assert!(
+        verifier.verify_token(&token_b, &kid_b, exp_b).await?,
+        "Active key should still work"
     );
-    assert!(verifier.verify_token(&token_b, &kid_b, exp_b).await?,
-            "Active key should still work");
     println!("✅ Active key B still works");
 
     println!("🎉 Key removal test passed");
@@ -382,23 +392,40 @@ async fn test_epoch_based_rotation_validity() -> Result<()> {
     println!("📊 Current epoch: {}", current_epoch);
 
     // Test valid epochs
-    assert!(is_epoch_valid(current_epoch, current_epoch, retention),
-            "Current epoch should be valid");
-    assert!(is_epoch_valid(current_epoch - 1, current_epoch, retention),
-            "Previous epoch should be valid");
-    assert!(is_epoch_valid(current_epoch - 2, current_epoch, retention),
-            "Two epochs ago should be valid");
+    assert!(
+        is_epoch_valid(current_epoch, current_epoch, retention),
+        "Current epoch should be valid"
+    );
+    assert!(
+        is_epoch_valid(current_epoch - 1, current_epoch, retention),
+        "Previous epoch should be valid"
+    );
+    assert!(
+        is_epoch_valid(current_epoch - 2, current_epoch, retention),
+        "Two epochs ago should be valid"
+    );
 
     // Test invalid epochs
-    assert!(!is_epoch_valid(current_epoch - 3, current_epoch, retention),
-            "Three epochs ago should be invalid");
-    assert!(!is_epoch_valid(current_epoch + 1, current_epoch, retention),
-            "Future epoch should be invalid");
+    assert!(
+        !is_epoch_valid(current_epoch - 3, current_epoch, retention),
+        "Three epochs ago should be invalid"
+    );
+    assert!(
+        !is_epoch_valid(current_epoch + 1, current_epoch, retention),
+        "Future epoch should be invalid"
+    );
 
-    println!("✅ Valid epochs: [{}, {}, {}]",
-             current_epoch - 2, current_epoch - 1, current_epoch);
-    println!("❌ Invalid epochs: {} and earlier, {} and later",
-             current_epoch - 3, current_epoch + 1);
+    println!(
+        "✅ Valid epochs: [{}, {}, {}]",
+        current_epoch - 2,
+        current_epoch - 1,
+        current_epoch
+    );
+    println!(
+        "❌ Invalid epochs: {} and earlier, {} and later",
+        current_epoch - 3,
+        current_epoch + 1
+    );
 
     println!("🎉 Epoch validity test passed");
     Ok(())
@@ -418,21 +445,30 @@ async fn test_new_tokens_always_use_current_active_key() -> Result<()> {
     let mut verifier = MultiKeyVerifier::new(key_a);
 
     // Initial issuance should use key A.
-    let (token_a, used_kid_a, exp_a) = issue_token(verifier.keys.get(&verifier.active_kid).unwrap(), &[0xA1; 32]);
+    let (token_a, used_kid_a, exp_a) = issue_token(
+        verifier.keys.get(&verifier.active_kid).unwrap(),
+        &[0xA1; 32],
+    );
     assert_eq!(used_kid_a, kid_a);
     assert_v2_envelope(&token_a);
     assert!(verifier.verify_token(&token_a, &used_kid_a, exp_a).await?);
 
     // Rotate to B and verify new issuance uses B.
     verifier.rotate_to(key_b);
-    let (token_b, used_kid_b, exp_b) = issue_token(verifier.keys.get(&verifier.active_kid).unwrap(), &[0xB2; 32]);
+    let (token_b, used_kid_b, exp_b) = issue_token(
+        verifier.keys.get(&verifier.active_kid).unwrap(),
+        &[0xB2; 32],
+    );
     assert_eq!(used_kid_b, kid_b);
     assert_v2_envelope(&token_b);
     assert!(verifier.verify_token(&token_b, &used_kid_b, exp_b).await?);
 
     // Rotate to C and verify new issuance uses C.
     verifier.rotate_to(key_c);
-    let (token_c, used_kid_c, exp_c) = issue_token(verifier.keys.get(&verifier.active_kid).unwrap(), &[0xC3; 32]);
+    let (token_c, used_kid_c, exp_c) = issue_token(
+        verifier.keys.get(&verifier.active_kid).unwrap(),
+        &[0xC3; 32],
+    );
     assert_eq!(used_kid_c, kid_c);
     assert_v2_envelope(&token_c);
     assert!(verifier.verify_token(&token_c, &used_kid_c, exp_c).await?);
@@ -454,7 +490,10 @@ async fn test_cannot_remove_active_key() -> Result<()> {
     assert!(!removed, "active key removal should be blocked");
 
     // Issuance/verification should still work.
-    let (token, used_kid, exp) = issue_token(verifier.keys.get(&verifier.active_kid).unwrap(), &[0x5A; 32]);
+    let (token, used_kid, exp) = issue_token(
+        verifier.keys.get(&verifier.active_kid).unwrap(),
+        &[0x5A; 32],
+    );
     assert_eq!(used_kid, kid_a);
     assert_v2_envelope(&token);
     assert!(verifier.verify_token(&token, &used_kid, exp).await?);

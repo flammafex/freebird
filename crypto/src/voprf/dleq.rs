@@ -8,11 +8,7 @@
 /// without revealing 'k'.
 use core::fmt;
 use p256::{
-    elliptic_curve::{
-        ops::Reduce,
-        sec1::ToEncodedPoint,
-        Field,
-    },
+    elliptic_curve::{ops::Reduce, sec1::ToEncodedPoint, Field},
     AffinePoint, FieldBytes, ProjectivePoint, Scalar,
 };
 use rand_core::{CryptoRng, RngCore};

@@ -35,9 +35,9 @@
 //! ```
 
 use super::{current_timestamp, verify_timestamp_recent, SybilResistance}; // Remove SybilProof from here if unused in module logic
-use freebird_common::api::SybilProof; // Use shared type
 use anyhow::{anyhow, Result};
 use base64ct::Encoding;
+use freebird_common::api::SybilProof; // Use shared type
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;

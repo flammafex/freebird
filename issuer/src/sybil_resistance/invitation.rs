@@ -415,32 +415,36 @@ impl InvitationSystem {
         }
 
         let f = filter.unwrap();
-        state.invitations.values().filter(|invite| {
-            // Filter by redeemed status
-            if let Some(redeemed) = f.redeemed {
-                if invite.redeemed != redeemed {
-                    return false;
+        state
+            .invitations
+            .values()
+            .filter(|invite| {
+                // Filter by redeemed status
+                if let Some(redeemed) = f.redeemed {
+                    if invite.redeemed != redeemed {
+                        return false;
+                    }
                 }
-            }
-            // Filter by inviter ID
-            if let Some(ref inviter_id) = f.inviter_id {
-                if &invite.inviter_id != inviter_id {
-                    return false;
+                // Filter by inviter ID
+                if let Some(ref inviter_id) = f.inviter_id {
+                    if &invite.inviter_id != inviter_id {
+                        return false;
+                    }
                 }
-            }
-            // Filter by date range
-            if let Some(date_from) = f.date_from {
-                if invite.created_at < date_from {
-                    return false;
+                // Filter by date range
+                if let Some(date_from) = f.date_from {
+                    if invite.created_at < date_from {
+                        return false;
+                    }
                 }
-            }
-            if let Some(date_to) = f.date_to {
-                if invite.created_at > date_to {
-                    return false;
+                if let Some(date_to) = f.date_to {
+                    if invite.created_at > date_to {
+                        return false;
+                    }
                 }
-            }
-            true
-        }).count()
+                true
+            })
+            .count()
     }
 
     /// Get all invitations (for export - no pagination)
@@ -637,7 +641,11 @@ impl InvitationSystem {
     }
 
     /// Internal implementation for generating invitations
-    async fn generate_invite_internal(&self, inviter_id: &str, skip_rate_limits: bool) -> Result<(String, Vec<u8>, u64)> {
+    async fn generate_invite_internal(
+        &self,
+        inviter_id: &str,
+        skip_rate_limits: bool,
+    ) -> Result<(String, Vec<u8>, u64)> {
         // Check if user can invite
         self.can_invite(inviter_id, skip_rate_limits).await?;
 
@@ -1141,7 +1149,10 @@ impl SybilResistance for InvitationSystem {
     }
 
     fn supports(&self, proof: &SybilProof) -> bool {
-        matches!(proof, SybilProof::Invitation { .. } | SybilProof::RegisteredUser { .. })
+        matches!(
+            proof,
+            SybilProof::Invitation { .. } | SybilProof::RegisteredUser { .. }
+        )
     }
 
     fn cost(&self) -> u64 {
@@ -1302,7 +1313,10 @@ mod tests {
 
         // Verify that the invitation is NOT redeemed before calling verify
         let details_before = system.get_invitation_details(&code).await.unwrap();
-        assert!(!details_before.redeemed(), "invitation should not be redeemed yet");
+        assert!(
+            !details_before.redeemed(),
+            "invitation should not be redeemed yet"
+        );
 
         // Call SybilResistance::verify - this is what /v1/oprf/issue handler uses
         let result = system.verify(&proof);
@@ -1310,12 +1324,21 @@ mod tests {
 
         // Verify that the invitation IS redeemed after calling verify
         let details_after = system.get_invitation_details(&code).await.unwrap();
-        assert!(details_after.redeemed(), "invitation should be redeemed after verify");
-        assert!(details_after.invitee_id().is_some(), "invitee_id should be set");
+        assert!(
+            details_after.redeemed(),
+            "invitation should be redeemed after verify"
+        );
+        assert!(
+            details_after.invitee_id().is_some(),
+            "invitee_id should be set"
+        );
 
         // Calling verify again with the same invitation should fail
         let result2 = system.verify(&proof);
-        assert!(result2.is_err(), "second verify should fail - invitation already used");
+        assert!(
+            result2.is_err(),
+            "second verify should fail - invitation already used"
+        );
         let err_msg = result2.unwrap_err().to_string();
         assert!(
             err_msg.contains("already used") || err_msg.contains("already redeemed"),
@@ -1373,9 +1396,7 @@ mod tests {
 
         // Phase 2: Load from disk and verify redemption persisted
         {
-            let system = InvitationSystem::load_or_create(key, config)
-                .await
-                .unwrap();
+            let system = InvitationSystem::load_or_create(key, config).await.unwrap();
 
             // Verify the invitation is STILL redeemed after "restart"
             let details = system.get_invitation_details(&code).await.unwrap();

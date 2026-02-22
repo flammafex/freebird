@@ -57,7 +57,7 @@ pub struct SybilInfo {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BatchIssueReq {
     pub blinded_elements: Vec<String>,
-    
+
     #[serde(default)]
     pub ctx_b64: Option<String>,
 
@@ -113,10 +113,10 @@ pub struct VerifyReq {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VerifyResp {
     pub ok: bool,
-    
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
-    
+
     #[serde(default)]
     pub verified_at: i64,
 }
@@ -156,13 +156,8 @@ pub struct BatchVerifyResp {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "lowercase")]
 pub enum VerifyResult {
-    Success {
-        verified_at: i64,
-    },
-    Error {
-        message: String,
-        code: String,
-    },
+    Success { verified_at: i64 },
+    Error { message: String, code: String },
 }
 
 // ============================================================================
@@ -210,19 +205,19 @@ pub enum SybilProof {
         timestamp: i64,
     },
     ProgressiveTrust {
-        user_id_hash: String,   // Blake3(username + salt) - privacy preserving
-        first_seen: i64,        // Unix timestamp of first issuance
-        tokens_issued: u32,     // Lifetime token count
-        last_issuance: i64,     // Unix timestamp of last issuance
-        hmac_proof: String,     // HMAC(secret, all fields) - prevents forgery
+        user_id_hash: String, // Blake3(username + salt) - privacy preserving
+        first_seen: i64,      // Unix timestamp of first issuance
+        tokens_issued: u32,   // Lifetime token count
+        last_issuance: i64,   // Unix timestamp of last issuance
+        hmac_proof: String,   // HMAC(secret, all fields) - prevents forgery
     },
     ProofOfDiversity {
-        user_id_hash: String,   // Blake3(username + salt)
-        diversity_score: u8,    // 0-100 score
-        unique_networks: u32,   // Count of unique networks observed
-        unique_devices: u32,    // Count of unique devices observed
-        first_seen: i64,        // Unix timestamp of first observation
-        hmac_proof: String,     // HMAC(secret, all fields)
+        user_id_hash: String, // Blake3(username + salt)
+        diversity_score: u8,  // 0-100 score
+        unique_networks: u32, // Count of unique networks observed
+        unique_devices: u32,  // Count of unique devices observed
+        first_seen: i64,      // Unix timestamp of first observation
+        hmac_proof: String,   // HMAC(secret, all fields)
     },
     MultiPartyVouching {
         vouchee_id_hash: String,  // Blake3(username + salt)
@@ -231,11 +226,11 @@ pub enum SybilProof {
         timestamp: i64,           // Unix timestamp of proof generation
     },
     FederatedTrust {
-        source_issuer_id: String,  // ID of the issuer that issued the source token
-        source_token_b64: String,  // Base64url-encoded token from source issuer
-        token_exp: i64,            // Expiration timestamp of source token
+        source_issuer_id: String, // ID of the issuer that issued the source token
+        source_token_b64: String, // Base64url-encoded token from source issuer
+        token_exp: i64,           // Expiration timestamp of source token
         token_issued_at: Option<i64>, // When the source token was issued (for age validation)
-        trust_path: Vec<String>,   // Trust path from source to us (optional)
+        trust_path: Vec<String>,  // Trust path from source to us (optional)
     },
     /// Multiple proofs for AND/threshold combination modes
     Multi {

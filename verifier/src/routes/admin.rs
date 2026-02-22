@@ -18,7 +18,7 @@
 use crate::routes::admin_rate_limit::AdminRateLimiter;
 use crate::store::SpendStore;
 use axum::{
-    extract::{Path, State},
+    extract::{ConnectInfo, Path, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
     routing::{get, post},
@@ -27,7 +27,7 @@ use axum::{
 use base64ct::Encoding;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
 use subtle::ConstantTimeEq;
@@ -240,7 +240,11 @@ pub async fn admin_ui_handler() -> impl IntoResponse {
 // ============================================================================
 
 /// Extract client IP from headers or connection info
-fn extract_client_ip(headers: &HeaderMap, behind_proxy: bool) -> Option<IpAddr> {
+fn extract_client_ip(
+    headers: &HeaderMap,
+    behind_proxy: bool,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+) -> Option<IpAddr> {
     if behind_proxy {
         // Try X-Forwarded-For first (may contain comma-separated list)
         if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
@@ -258,7 +262,7 @@ fn extract_client_ip(headers: &HeaderMap, behind_proxy: bool) -> Option<IpAddr> 
             }
         }
     }
-    None
+    connect_info.map(|info| info.0.ip())
 }
 
 /// Verify API key using constant-time comparison with rate limiting
@@ -268,7 +272,32 @@ async fn verify_api_key(
     client_ip: Option<IpAddr>,
 ) -> Result<(), AdminError> {
     // Use a fallback IP for rate limiting if we can't determine the real one
-    let ip = client_ip.unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+    let Some(ip) = client_ip else {
+        warn!("Admin API request without client IP; skipping auth rate-limit");
+
+        let provided_key = headers
+            .get("x-admin-key")
+            .and_then(|v| v.to_str().ok())
+            .ok_or(AdminError::Unauthorized)?;
+
+        let expected_bytes = state.api_key.as_bytes();
+        let provided_bytes = provided_key.as_bytes();
+
+        let is_valid = if expected_bytes.len() == provided_bytes.len() {
+            expected_bytes.ct_eq(provided_bytes).into()
+        } else {
+            let dummy = vec![0u8; expected_bytes.len()];
+            let _ = expected_bytes.ct_eq(&dummy);
+            false
+        };
+
+        if !is_valid {
+            warn!("Invalid admin API key provided from unknown IP");
+            return Err(AdminError::Unauthorized);
+        }
+
+        return Ok(());
+    };
 
     // Check if IP is currently rate-limited
     if let Err(seconds_remaining) = state.rate_limiter.check_allowed(ip).await {
@@ -311,8 +340,9 @@ async fn verify_api_key(
 pub async fn health_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<HealthResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key(&headers, &state, client_ip).await?;
 
     let issuers = state.issuers.read().await;
@@ -331,8 +361,9 @@ pub async fn health_handler(
 pub async fn stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<StatsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key(&headers, &state, client_ip).await?;
 
     let issuers = state.issuers.read().await;
@@ -360,8 +391,9 @@ pub async fn stats_handler(
 pub async fn config_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<ConfigResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key(&headers, &state, client_ip).await?;
 
     info!("Admin: retrieved verifier config");
@@ -380,8 +412,9 @@ pub async fn config_handler(
 pub async fn list_issuers_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<ListIssuersResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key(&headers, &state, client_ip).await?;
 
     let issuers = state.issuers.read().await;
@@ -422,9 +455,10 @@ pub async fn list_issuers_handler(
 pub async fn get_issuer_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Path(issuer_id): Path<String>,
 ) -> Result<Json<IssuerDetailsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key(&headers, &state, client_ip).await?;
 
     let issuers = state.issuers.read().await;
@@ -454,9 +488,10 @@ pub async fn get_issuer_handler(
 pub async fn refresh_issuer_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Path(issuer_id): Path<String>,
 ) -> Result<Json<IssuerRefreshResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key(&headers, &state, client_ip).await?;
 
     // Check if issuer exists
@@ -481,8 +516,9 @@ pub async fn refresh_issuer_handler(
 pub async fn cache_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<CacheStatsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key(&headers, &state, client_ip).await?;
 
     info!("Admin: retrieved cache stats");
@@ -497,8 +533,9 @@ pub async fn cache_stats_handler(
 pub async fn cache_clear_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<CacheClearResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key(&headers, &state, client_ip).await?;
 
     // Note: The SpendStore trait doesn't have a clear method
@@ -507,6 +544,8 @@ pub async fn cache_clear_handler(
 
     Ok(Json(CacheClearResponse {
         ok: false,
-        message: "Cache clearing is disabled for safety. Restart the service to clear in-memory cache.".to_string(),
+        message:
+            "Cache clearing is disabled for safety. Restart the service to clear in-memory cache."
+                .to_string(),
     }))
 }

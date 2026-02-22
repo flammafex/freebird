@@ -41,8 +41,8 @@ use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use freebird_common::api::SybilProof;
 use crate::sybil_resistance::SybilResistance;
+use freebird_common::api::SybilProof;
 
 // ============================================================================
 // Configuration
@@ -242,12 +242,10 @@ impl ProofOfDiversitySystem {
             .as_secs() as i64;
 
         let mut records = self.records.write().await;
-        let record = records
-            .entry(user_id_hash.clone())
-            .or_insert_with(|| {
-                debug!(username, "Creating new diversity record");
-                DiversityRecord::new(user_id_hash, now)
-            });
+        let record = records.entry(user_id_hash.clone()).or_insert_with(|| {
+            debug!(username, "Creating new diversity record");
+            DiversityRecord::new(user_id_hash, now)
+        });
 
         // Update observations
         let network_is_new = record.unique_networks.insert(network_hash);
@@ -384,7 +382,8 @@ impl SybilResistance for ProofOfDiversitySystem {
                 hasher.update(&unique_devices.to_le_bytes());
                 hasher.update(b":");
                 hasher.update(&diversity_score.to_le_bytes());
-                let expected_hmac = base64ct::Base64UrlUnpadded::encode_string(hasher.finalize().as_bytes());
+                let expected_hmac =
+                    base64ct::Base64UrlUnpadded::encode_string(hasher.finalize().as_bytes());
 
                 // Constant-time comparison to prevent timing attacks
                 if !bool::from(hmac_proof.as_bytes().ct_eq(expected_hmac.as_bytes())) {

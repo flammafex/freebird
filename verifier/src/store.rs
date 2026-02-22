@@ -8,9 +8,9 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
-use subtle::ConstantTimeEq;
 
 //
 // ─── REDIS LUA SCRIPT ────────────────────────────────────────────────

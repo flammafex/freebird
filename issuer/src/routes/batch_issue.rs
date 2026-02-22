@@ -23,23 +23,23 @@
 //!           Verify      Verification   Batched Eval   Results
 //! ```
 
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Instant;
+use crate::multi_key_voprf::MultiKeyVoprfCore;
+use crate::routes::issue::extract_client_data;
+use crate::AppStateWithSybil;
 use axum::{
     extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
+use freebird_common::api::{BatchIssueReq, BatchIssueResp, SybilInfo, TokenResult};
+use freebird_crypto::{TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN};
 use rayon::prelude::*;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Instant;
 use time::OffsetDateTime;
 use tracing::{debug, error, info, instrument, warn};
-use crate::multi_key_voprf::MultiKeyVoprfCore;
-use freebird_common::api::{BatchIssueReq, BatchIssueResp, TokenResult, SybilInfo};
-use crate::routes::issue::extract_client_data;
-use crate::AppStateWithSybil;
-use freebird_crypto::{TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN};
 // / Maximum batch size to prevent memory exhaustion
 // /
 // / Rationale:
@@ -131,7 +131,12 @@ fn validate_blinded_element(blinded_b64: &str) -> Result<Vec<u8>, String> {
 // / 1. SIMD: Batch point operations (requires custom implementation)
 // / 2. GPU: Offload to GPU for large batches (>10k tokens)
 // / 3. Hardware crypto: Use CPU crypto extensions (AES-NI, SHA-NI)
-async fn evaluate_token(voprf: &MultiKeyVoprfCore, blinded_b64: &str, exp: i64, epoch: u32) -> TokenResult {
+async fn evaluate_token(
+    voprf: &MultiKeyVoprfCore,
+    blinded_b64: &str,
+    exp: i64,
+    epoch: u32,
+) -> TokenResult {
     match voprf.evaluate_b64(blinded_b64).await {
         Ok(eval_result) => TokenResult::Success {
             token: eval_result.token,
@@ -182,7 +187,7 @@ pub async fn handle_batch(
     connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: HeaderMap,
     Json(req): Json<BatchIssueReq>,
-) -> Result<Json<BatchIssueResp>, (StatusCode, String)> { 
+) -> Result<Json<BatchIssueResp>, (StatusCode, String)> {
     let start = Instant::now();
     let batch_size = req.blinded_elements.len();
 
@@ -352,67 +357,71 @@ pub async fn handle_batch(
     let mut signed_results = Vec::with_capacity(results.len());
     for result in results {
         let signed = match result {
-            TokenResult::Success { token, proof, kid, exp, epoch: token_epoch } => {
-                match Base64UrlUnpadded::decode_vec(&token) {
-                    Ok(token_bytes) => {
-                        if token_bytes.len() != RAW_VOPRF_TOKEN_LEN {
+            TokenResult::Success {
+                token,
+                proof,
+                kid,
+                exp,
+                epoch: token_epoch,
+            } => match Base64UrlUnpadded::decode_vec(&token) {
+                Ok(token_bytes) => {
+                    if token_bytes.len() != RAW_VOPRF_TOKEN_LEN {
+                        TokenResult::Error {
+                            message: format!(
+                                "unexpected VOPRF token length: got {}, expected {}",
+                                token_bytes.len(),
+                                RAW_VOPRF_TOKEN_LEN
+                            ),
+                            code: "token_format_error".to_string(),
+                        }
+                    } else {
+                        let signature = match voprf
+                            .sign_token_metadata(&token_bytes, &kid, exp, &state.issuer_id)
+                            .await
+                        {
+                            Ok(sig) => sig,
+                            Err(e) => {
+                                error!("failed to sign token metadata in batch: {:?}", e);
+                                signed_results.push(TokenResult::Error {
+                                    message: "signature generation error".to_string(),
+                                    code: "signature_generation_failed".to_string(),
+                                });
+                                continue;
+                            }
+                        };
+
+                        let mut token_with_sig = token_bytes;
+                        token_with_sig.extend_from_slice(&signature);
+
+                        if token_with_sig.len() != TOKEN_LEN_V2 {
                             TokenResult::Error {
                                 message: format!(
-                                    "unexpected VOPRF token length: got {}, expected {}",
-                                    token_bytes.len(),
-                                    RAW_VOPRF_TOKEN_LEN
+                                    "unexpected final token length: got {}, expected {}",
+                                    token_with_sig.len(),
+                                    TOKEN_LEN_V2
                                 ),
                                 code: "token_format_error".to_string(),
                             }
                         } else {
-                            let signature = match voprf
-                                .sign_token_metadata(&token_bytes, &kid, exp, &state.issuer_id)
-                                .await
-                            {
-                                Ok(sig) => sig,
-                                Err(e) => {
-                                    error!("failed to sign token metadata in batch: {:?}", e);
-                                    signed_results.push(TokenResult::Error {
-                                        message: "signature generation error".to_string(),
-                                        code: "signature_generation_failed".to_string(),
-                                    });
-                                    continue;
-                                }
-                            };
-
-                            let mut token_with_sig = token_bytes;
-                            token_with_sig.extend_from_slice(&signature);
-
-                            if token_with_sig.len() != TOKEN_LEN_V2 {
-                                TokenResult::Error {
-                                    message: format!(
-                                        "unexpected final token length: got {}, expected {}",
-                                        token_with_sig.len(),
-                                        TOKEN_LEN_V2
-                                    ),
-                                    code: "token_format_error".to_string(),
-                                }
-                            } else {
-                                let final_token = Base64UrlUnpadded::encode_string(&token_with_sig);
-                                TokenResult::Success {
-                                    token: final_token,
-                                    proof,
-                                    kid,
-                                    exp,
-                                    epoch: token_epoch,
-                                }
+                            let final_token = Base64UrlUnpadded::encode_string(&token_with_sig);
+                            TokenResult::Success {
+                                token: final_token,
+                                proof,
+                                kid,
+                                exp,
+                                epoch: token_epoch,
                             }
                         }
                     }
-                    Err(e) => {
-                        error!("failed to decode token for signature: {:?}", e);
-                        TokenResult::Error {
-                            message: "token encoding error".to_string(),
-                            code: "signature_generation_failed".to_string(),
-                        }
+                }
+                Err(e) => {
+                    error!("failed to decode token for signature: {:?}", e);
+                    TokenResult::Error {
+                        message: "token encoding error".to_string(),
+                        code: "signature_generation_failed".to_string(),
                     }
                 }
-            }
+            },
             err => err,
         };
         signed_results.push(signed);

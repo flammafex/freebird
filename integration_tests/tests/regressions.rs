@@ -9,8 +9,8 @@ use freebird_common::api::{BatchIssueReq, SybilProof, TokenResult};
 use freebird_common::federation::Vouch;
 use freebird_crypto::{Client, Server, TOKEN_LEN_V2};
 use freebird_issuer::{
-    AppStateWithSybil, federation_store::FederationStore, multi_key_voprf::MultiKeyVoprfCore,
-    routes::batch_issue, sybil_resistance::SybilResistance,
+    federation_store::FederationStore, multi_key_voprf::MultiKeyVoprfCore, routes::batch_issue,
+    sybil_resistance::SybilResistance, AppStateWithSybil,
 };
 use freebird_verifier::store::{InMemoryStore, SpendStore};
 use std::sync::Arc;
@@ -85,7 +85,12 @@ async fn build_issuer_state(
     let pubkey_b64 = Base64UrlUnpadded::encode_string(&pubkey);
     let kid = "kid-regression".to_string();
 
-    let voprf = Arc::new(MultiKeyVoprfCore::new(sk, pubkey_b64.clone(), kid.clone(), b"freebird:v1")?);
+    let voprf = Arc::new(MultiKeyVoprfCore::new(
+        sk,
+        pubkey_b64.clone(),
+        kid.clone(),
+        b"freebird:v1",
+    )?);
     let temp_dir = tempfile::tempdir()?;
     let federation_store = FederationStore::new(temp_dir.path()).await?;
 
@@ -125,14 +130,10 @@ async fn regression_batch_issuance_emits_v2_signature_envelope() -> Result<()> {
         sybil_proof: None,
     };
 
-    let Json(resp) = batch_issue::handle_batch(
-        State((state, voprf)),
-        None,
-        HeaderMap::new(),
-        Json(req),
-    )
-    .await
-    .map_err(|(s, m)| anyhow::anyhow!("batch issue failed: {} {}", s, m))?;
+    let Json(resp) =
+        batch_issue::handle_batch(State((state, voprf)), None, HeaderMap::new(), Json(req))
+            .await
+            .map_err(|(s, m)| anyhow::anyhow!("batch issue failed: {} {}", s, m))?;
 
     assert_eq!(resp.successful, 3);
     for r in resp.results {
@@ -159,14 +160,10 @@ async fn regression_batch_parallel_path_no_runtime_panic_under_load() -> Result<
         sybil_proof: Some(SybilProof::None),
     };
 
-    let Json(resp) = batch_issue::handle_batch(
-        State((state, voprf)),
-        None,
-        HeaderMap::new(),
-        Json(req),
-    )
-    .await
-    .map_err(|(s, m)| anyhow::anyhow!("batch issue failed: {} {}", s, m))?;
+    let Json(resp) =
+        batch_issue::handle_batch(State((state, voprf)), None, HeaderMap::new(), Json(req))
+            .await
+            .map_err(|(s, m)| anyhow::anyhow!("batch issue failed: {} {}", s, m))?;
 
     assert_eq!(resp.successful, 256);
     assert_eq!(resp.failed, 0);

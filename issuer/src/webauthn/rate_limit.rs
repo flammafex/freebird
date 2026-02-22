@@ -32,12 +32,12 @@ pub struct WebAuthnRateLimitConfig {
 impl Default for WebAuthnRateLimitConfig {
     fn default() -> Self {
         Self {
-            max_registration_attempts: 10,  // 10 registration attempts per window
-            max_auth_attempts: 20,          // 20 auth attempts per window
-            window_secs: 300,               // 5 minute window
-            block_duration_secs: 900,       // 15 minute block
-            max_total_sessions: 10000,      // Max 10k active sessions
-            max_sessions_per_ip: 50,        // Max 50 sessions per IP
+            max_registration_attempts: 10, // 10 registration attempts per window
+            max_auth_attempts: 20,         // 20 auth attempts per window
+            window_secs: 300,              // 5 minute window
+            block_duration_secs: 900,      // 15 minute block
+            max_total_sessions: 10000,     // Max 10k active sessions
+            max_sessions_per_ip: 50,       // Max 50 sessions per IP
         }
     }
 }
@@ -132,8 +132,11 @@ impl WebAuthnRateLimiter {
 
         // Check registration rate
         if ip_state.registration_attempts >= self.config.max_registration_attempts {
-            ip_state.blocked_until = Some(Instant::now() + Duration::from_secs(self.config.block_duration_secs));
-            return Err(RateLimitError::TooManyRegistrations(self.config.block_duration_secs));
+            ip_state.blocked_until =
+                Some(Instant::now() + Duration::from_secs(self.config.block_duration_secs));
+            return Err(RateLimitError::TooManyRegistrations(
+                self.config.block_duration_secs,
+            ));
         }
 
         // Check session limits
@@ -164,8 +167,11 @@ impl WebAuthnRateLimiter {
 
         // Check auth rate
         if ip_state.auth_attempts >= self.config.max_auth_attempts {
-            ip_state.blocked_until = Some(Instant::now() + Duration::from_secs(self.config.block_duration_secs));
-            return Err(RateLimitError::TooManyAuthAttempts(self.config.block_duration_secs));
+            ip_state.blocked_until =
+                Some(Instant::now() + Duration::from_secs(self.config.block_duration_secs));
+            return Err(RateLimitError::TooManyAuthAttempts(
+                self.config.block_duration_secs,
+            ));
         }
 
         // Check session limits
@@ -261,10 +267,18 @@ impl std::fmt::Display for RateLimitError {
                 write!(f, "Rate limited. Try again in {} seconds", secs)
             }
             RateLimitError::TooManyRegistrations(secs) => {
-                write!(f, "Too many registration attempts. Try again in {} seconds", secs)
+                write!(
+                    f,
+                    "Too many registration attempts. Try again in {} seconds",
+                    secs
+                )
             }
             RateLimitError::TooManyAuthAttempts(secs) => {
-                write!(f, "Too many authentication attempts. Try again in {} seconds", secs)
+                write!(
+                    f,
+                    "Too many authentication attempts. Try again in {} seconds",
+                    secs
+                )
             }
             RateLimitError::TooManySessions => {
                 write!(f, "Too many active sessions")
@@ -279,10 +293,10 @@ impl std::fmt::Display for RateLimitError {
 impl RateLimitError {
     pub fn status_code(&self) -> axum::http::StatusCode {
         match self {
-            RateLimitError::Blocked(_) |
-            RateLimitError::TooManyRegistrations(_) |
-            RateLimitError::TooManyAuthAttempts(_) |
-            RateLimitError::TooManySessions => axum::http::StatusCode::TOO_MANY_REQUESTS,
+            RateLimitError::Blocked(_)
+            | RateLimitError::TooManyRegistrations(_)
+            | RateLimitError::TooManyAuthAttempts(_)
+            | RateLimitError::TooManySessions => axum::http::StatusCode::TOO_MANY_REQUESTS,
             RateLimitError::SystemOverloaded => axum::http::StatusCode::SERVICE_UNAVAILABLE,
         }
     }

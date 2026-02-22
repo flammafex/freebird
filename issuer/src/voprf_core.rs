@@ -2,9 +2,9 @@
 
 use anyhow::{anyhow, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
+use std::sync::Arc;
 use tracing::{debug, error};
 use zeroize::{Zeroize, ZeroizeOnDrop};
-use std::sync::Arc;
 
 // Ensure IssuerSecret is defined if not imported
 #[derive(Zeroize, ZeroizeOnDrop)]
@@ -49,7 +49,10 @@ impl VoprfCore {
     /// Create a new VoprfCore from a crypto provider
     ///
     /// This allows using HSM-backed providers or custom implementations.
-    pub fn from_provider(provider: Arc<dyn freebird_crypto::provider::CryptoProvider>, pubkey_b64: String) -> Result<Self> {
+    pub fn from_provider(
+        provider: Arc<dyn freebird_crypto::provider::CryptoProvider>,
+        pubkey_b64: String,
+    ) -> Result<Self> {
         let kid = provider.key_id().to_string();
         let ctx = provider.context().to_vec();
 
@@ -63,22 +66,31 @@ impl VoprfCore {
 
     /// Derive MAC key for a specific epoch
     pub async fn derive_mac_key_for_epoch(&self, issuer_id: &str, epoch: u32) -> [u8; 32] {
-        self.provider.derive_mac_key(issuer_id, &self.kid, epoch)
+        self.provider
+            .derive_mac_key(issuer_id, &self.kid, epoch)
             .await
             .expect("MAC key derivation should not fail")
     }
 
     /// Sign token metadata using ECDSA (for federation support)
-    pub async fn sign_token_metadata(&self, token_bytes: &[u8], kid: &str, exp: i64, issuer_id: &str) -> Result<[u8; 64]> {
-        self.provider.sign_token_metadata(token_bytes, kid, exp, issuer_id).await
+    pub async fn sign_token_metadata(
+        &self,
+        token_bytes: &[u8],
+        kid: &str,
+        exp: i64,
+        issuer_id: &str,
+    ) -> Result<[u8; 64]> {
+        self.provider
+            .sign_token_metadata(token_bytes, kid, exp, issuer_id)
+            .await
     }
 
     pub async fn evaluate_b64(&self, blinded_b64: &str) -> Result<String> {
         debug!("🔍 evaluate_b64 called ({} chars)", blinded_b64.len());
 
         // 1. Decode the blinded element
-        let blinded = Base64UrlUnpadded::decode_vec(blinded_b64)
-            .context("invalid base64 encoding")?;
+        let blinded =
+            Base64UrlUnpadded::decode_vec(blinded_b64).context("invalid base64 encoding")?;
 
         // 2. Validate input length (P-256 compressed point = 33 bytes)
         if blinded.len() != 33 {

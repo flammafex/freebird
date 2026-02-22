@@ -136,11 +136,7 @@ impl MultiPartyVouchingSystem {
     }
 
     /// Add a new voucher (bootstrap or newly vouched user)
-    pub async fn add_voucher(
-        &self,
-        user_id: String,
-        public_key: VerifyingKey,
-    ) -> Result<()> {
+    pub async fn add_voucher(&self, user_id: String, public_key: VerifyingKey) -> Result<()> {
         let user_id_hash = self.hash_user_id(&user_id);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -424,7 +420,12 @@ impl SybilResistance for MultiPartyVouchingSystem {
                     let message = format!("vouch:{}:{}", vouch.vouchee_id, vouch.timestamp);
                     public_key
                         .verify(message.as_bytes(), &signature)
-                        .map_err(|_| anyhow!("Vouch signature verification failed for voucher {}", vouch.voucher_id))?;
+                        .map_err(|_| {
+                            anyhow!(
+                                "Vouch signature verification failed for voucher {}",
+                                vouch.voucher_id
+                            )
+                        })?;
 
                     // Check vouch expiration
                     let vouch_age = now - vouch.timestamp;
@@ -462,8 +463,8 @@ impl SybilResistance for MultiPartyVouchingSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use p256::ecdsa::SigningKey;
     use p256::ecdsa::signature::Signer;
+    use p256::ecdsa::SigningKey;
     use rand::rngs::OsRng;
 
     #[tokio::test]
@@ -501,11 +502,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        let message1 = format!(
-            "vouch:{}:{}",
-            system.hash_user_id("charlie"),
-            timestamp1
-        );
+        let message1 = format!("vouch:{}:{}", system.hash_user_id("charlie"), timestamp1);
         let sig1: Signature = voucher1_sk.sign(message1.as_bytes());
 
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -514,11 +511,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs() as i64;
-        let message2 = format!(
-            "vouch:{}:{}",
-            system.hash_user_id("charlie"),
-            timestamp2
-        );
+        let message2 = format!("vouch:{}:{}", system.hash_user_id("charlie"), timestamp2);
         let sig2: Signature = voucher2_sk.sign(message2.as_bytes());
 
         // Submit vouches
@@ -526,7 +519,10 @@ mod tests {
             .submit_vouch("alice", "charlie", sig1, timestamp1)
             .await
             .unwrap();
-        system.submit_vouch("bob", "charlie", sig2, timestamp2).await.unwrap();
+        system
+            .submit_vouch("bob", "charlie", sig2, timestamp2)
+            .await
+            .unwrap();
 
         // Check vouches
         let vouches = system.check_vouches("charlie").await.unwrap();

@@ -70,7 +70,7 @@ struct VoprfInfo {
     suite: String,
     #[allow(dead_code)]
     kid: String,
-    pubkey: String,  // Base64-encoded public key
+    pubkey: String, // Base64-encoded public key
     #[allow(dead_code)]
     exp_sec: u64,
 }
@@ -194,10 +194,7 @@ impl TrustGraph {
                 if vouch.vouched_issuer_id == issuer_id
                     && self.is_vouch_valid(vouch, issuer_pubkey, now).await
                 {
-                    debug!(
-                        "Found direct vouch from root {} for {}",
-                        root_id, issuer_id
-                    );
+                    debug!("Found direct vouch from root {} for {}", root_id, issuer_id);
                     return true;
                 }
             }
@@ -304,7 +301,15 @@ impl TrustGraph {
                 if request_count >= MAX_REQUESTS_PER_TRAVERSAL {
                     break;
                 }
-                if self.is_revoked_with_limit(&vouch.vouched_issuer_id, &metadata.revocations, now, &mut request_count).await {
+                if self
+                    .is_revoked_with_limit(
+                        &vouch.vouched_issuer_id,
+                        &metadata.revocations,
+                        now,
+                        &mut request_count,
+                    )
+                    .await
+                {
                     debug!(
                         "Issuer {} has been revoked by {}, skipping",
                         vouch.vouched_issuer_id, current_id
@@ -319,14 +324,14 @@ impl TrustGraph {
                     if request_count >= MAX_REQUESTS_PER_TRAVERSAL {
                         break;
                     }
-                    if self.is_vouch_valid_with_limit(vouch, target_pubkey, now, &mut request_count).await {
+                    if self
+                        .is_vouch_valid_with_limit(vouch, target_pubkey, now, &mut request_count)
+                        .await
+                    {
                         let mut final_path = path.clone();
                         final_path.push(target_issuer_id.to_string());
                         paths.push(final_path);
-                        debug!(
-                            "Found trust path: {:?}",
-                            paths.last().unwrap()
-                        );
+                        debug!("Found trust path: {:?}", paths.last().unwrap());
                     }
                 } else if depth < self.policy.max_trust_depth {
                     // Continue exploring if we haven't reached max depth
@@ -339,7 +344,15 @@ impl TrustGraph {
                     if request_count >= MAX_REQUESTS_PER_TRAVERSAL {
                         break;
                     }
-                    if !self.is_vouch_valid_with_limit(vouch, &vouch.vouched_pubkey, now, &mut request_count).await {
+                    if !self
+                        .is_vouch_valid_with_limit(
+                            vouch,
+                            &vouch.vouched_pubkey,
+                            now,
+                            &mut request_count,
+                        )
+                        .await
+                    {
                         debug!(
                             "Skipping invalid intermediate vouch from {} to {}",
                             current_id, vouch.vouched_issuer_id
@@ -349,11 +362,7 @@ impl TrustGraph {
 
                     let mut new_path = path.clone();
                     new_path.push(vouch.vouched_issuer_id.clone());
-                    queue.push_back((
-                        vouch.vouched_issuer_id.clone(),
-                        new_path,
-                        depth + 1,
-                    ));
+                    queue.push_back((vouch.vouched_issuer_id.clone(), new_path, depth + 1));
                 }
             }
         }
@@ -381,10 +390,7 @@ impl TrustGraph {
                 let ttl = Duration::from_secs(self.policy.refresh_interval_secs);
 
                 if age < ttl {
-                    debug!(
-                        "Using cached metadata for {} (age: {:?})",
-                        issuer_id, age
-                    );
+                    debug!("Using cached metadata for {} (age: {:?})", issuer_id, age);
                     return Ok(cached.metadata.clone());
                 }
             }
@@ -443,10 +449,7 @@ impl TrustGraph {
                 let ttl = Duration::from_secs(self.policy.refresh_interval_secs);
 
                 if age < ttl {
-                    debug!(
-                        "Using cached pubkey for {} (age: {:?})",
-                        issuer_id, age
-                    );
+                    debug!("Using cached pubkey for {} (age: {:?})", issuer_id, age);
                     return Ok(cached.pubkey.clone());
                 }
             }
@@ -525,10 +528,7 @@ impl TrustGraph {
         // Verify the vouch signature using the vouched issuer's public key
         // The vouch should contain the public key of the vouched issuer
         if vouch.vouched_pubkey != vouched_pubkey {
-            debug!(
-                "Vouch public key mismatch for {}",
-                vouch.vouched_issuer_id
-            );
+            debug!("Vouch public key mismatch for {}", vouch.vouched_issuer_id);
             return false;
         }
 
@@ -565,12 +565,7 @@ impl TrustGraph {
     /// Checks if the issuer appears in the revocations list.
     /// Revocations are considered valid regardless of timestamp (permanent).
     /// Verifies revocation signatures against the revoker's public key.
-    async fn is_revoked(
-        &self,
-        issuer_id: &str,
-        revocations: &[Revocation],
-        _now: i64,
-    ) -> bool {
+    async fn is_revoked(&self, issuer_id: &str, revocations: &[Revocation], _now: i64) -> bool {
         for revocation in revocations {
             if revocation.revoked_issuer_id == issuer_id {
                 // Fetch the revoker's public key to verify the signature
@@ -637,10 +632,7 @@ impl TrustGraph {
 
         // Verify the vouch signature using the vouched issuer's public key
         if vouch.vouched_pubkey != vouched_pubkey {
-            debug!(
-                "Vouch public key mismatch for {}",
-                vouch.vouched_issuer_id
-            );
+            debug!("Vouch public key mismatch for {}", vouch.vouched_issuer_id);
             return false;
         }
 

@@ -384,9 +384,7 @@ mod tests {
 
         // Log more entries than max
         for i in 0..5 {
-            audit
-                .log(AuditEntry::info(format!("action_{}", i)))
-                .await;
+            audit.log(AuditEntry::info(format!("action_{}", i))).await;
         }
 
         // Should only have max entries

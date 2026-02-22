@@ -8,19 +8,26 @@ use axum::{
     Json, Router,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
+use freebird_common::api::{
+    BatchVerifyReq, BatchVerifyResp, TokenToVerify, VerifyReq, VerifyResp, VerifyResult,
+};
 use freebird_common::logging;
+use freebird_crypto::{TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN};
 use rayon::prelude::*;
 use serde::Deserialize;
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use tokio::{net::TcpListener, sync::RwLock, time::sleep};
 use tracing::{debug, error, info, warn};
-use freebird_common::api::{VerifyReq, VerifyResp, BatchVerifyReq, BatchVerifyResp, VerifyResult, TokenToVerify};
-use freebird_crypto::{TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN};
 
 // Import from the library crate
-use freebird_verifier::store::{SpendStore, StoreBackend};
-use freebird_verifier::routes::admin::{self, AdminState, VerifierConfig, IssuerInfo};
+use freebird_verifier::routes::admin::{self, AdminState, IssuerInfo, VerifierConfig};
 use freebird_verifier::routes::admin_rate_limit::AdminRateLimiter;
+use freebird_verifier::store::{SpendStore, StoreBackend};
 
 #[derive(Clone)]
 struct AppState {
@@ -91,7 +98,10 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(2); // Default: accept 2 previous epochs
 
-    info!("🔐 Epoch configuration: duration={}s, retention={}", epoch_duration_sec, epoch_retention);
+    info!(
+        "🔐 Epoch configuration: duration={}s, retention={}",
+        epoch_duration_sec, epoch_retention
+    );
 
     // ---------- Backend selection ----------
     let (backend, store_backend_name) = if let Ok(url) = std::env::var("REDIS_URL") {
@@ -111,7 +121,11 @@ async fn main() -> anyhow::Result<()> {
         .filter(|s| !s.is_empty())
         .collect();
 
-    info!("📡 Configured {} issuer URL(s): {:?}", issuer_urls.len(), issuer_urls);
+    info!(
+        "📡 Configured {} issuer URL(s): {:?}",
+        issuer_urls.len(),
+        issuer_urls
+    );
 
     let refresh_interval_min: u64 = std::env::var("REFRESH_INTERVAL_MIN")
         .ok()
@@ -213,9 +227,12 @@ async fn main() -> anyhow::Result<()> {
         listener.local_addr()?
     );
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
     Ok(())
 }
 
@@ -346,13 +363,19 @@ async fn verify(
     // 4) Authenticate token metadata using ECDSA signature
     let exp_value = req.exp.ok_or_else(|| {
         error!("❌ Token missing expiration field");
-        (StatusCode::BAD_REQUEST, "token must include expiration".to_string())
+        (
+            StatusCode::BAD_REQUEST,
+            "token must include expiration".to_string(),
+        )
     })?;
 
     // Decode token (V2: token bytes + ECDSA signature)
     let token_with_sig = Base64UrlUnpadded::decode_vec(&req.token_b64).map_err(|e| {
         error!("❌ Failed to decode token: {:?}", e);
-        (StatusCode::BAD_REQUEST, "invalid token encoding".to_string())
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid token encoding".to_string(),
+        )
     })?;
 
     // Validate token length (must match V2 layout)
@@ -476,7 +499,10 @@ async fn check(
     State(st): State<Arc<AppState>>,
     Json(req): Json<VerifyReq>,
 ) -> Result<Json<VerifyResp>, (StatusCode, String)> {
-    info!("🔍 Starting check (no consumption) for issuer={}", req.issuer_id);
+    info!(
+        "🔍 Starting check (no consumption) for issuer={}",
+        req.issuer_id
+    );
 
     // 1) Lookup issuer
     let issuers = st.issuers.read().await;
@@ -539,13 +565,19 @@ async fn check(
     // 4) Authenticate token metadata using ECDSA signature
     let exp_value = req.exp.ok_or_else(|| {
         error!("❌ Token missing expiration field");
-        (StatusCode::BAD_REQUEST, "token must include expiration".to_string())
+        (
+            StatusCode::BAD_REQUEST,
+            "token must include expiration".to_string(),
+        )
     })?;
 
     // Decode token (V2: token bytes + ECDSA signature)
     let token_with_sig = Base64UrlUnpadded::decode_vec(&req.token_b64).map_err(|e| {
         error!("❌ Failed to decode token: {:?}", e);
-        (StatusCode::BAD_REQUEST, "invalid token encoding".to_string())
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid token encoding".to_string(),
+        )
     })?;
 
     // Validate token length (must match V2 layout)
@@ -602,8 +634,7 @@ async fn check(
 
     info!(
         "✅ Token check passed (not consumed): issuer={}, kid={}",
-        req.issuer_id,
-        issuer.kid
+        req.issuer_id, issuer.kid
     );
 
     Ok(Json(VerifyResp {
@@ -648,7 +679,10 @@ async fn batch_verify(
     if batch_size > MAX_BATCH_SIZE {
         return Err((
             StatusCode::BAD_REQUEST,
-            format!("batch size {} exceeds maximum {}", batch_size, MAX_BATCH_SIZE),
+            format!(
+                "batch size {} exceeds maximum {}",
+                batch_size, MAX_BATCH_SIZE
+            ),
         ));
     }
 
@@ -784,9 +818,7 @@ async fn batch_verify(
         });
 
         match spent {
-            Ok(true) => VerifyResult::Success {
-                verified_at: now,
-            },
+            Ok(true) => VerifyResult::Success { verified_at: now },
             Ok(false) => VerifyResult::Error {
                 message: "token already used".to_string(),
                 code: "replay_detected".to_string(),
@@ -800,7 +832,10 @@ async fn batch_verify(
 
     // Process tokens in parallel or sequentially based on batch size
     let results: Vec<VerifyResult> = if batch_size < MIN_PARALLEL_BATCH_SIZE {
-        debug!("using sequential processing for small batch (n={})", batch_size);
+        debug!(
+            "using sequential processing for small batch (n={})",
+            batch_size
+        );
         req.tokens.iter().map(verify_one).collect()
     } else {
         debug!("using parallel processing for batch (n={})", batch_size);

@@ -1,10 +1,10 @@
 // issuer/src/routes/metadata.rs
+use crate::multi_key_voprf::MultiKeyVoprfCore;
+use crate::AppStateWithSybil;
 use axum::{extract::State, Json};
 use freebird_common::api::{KeyDiscoveryResp, VoprfKeyInfo};
 use serde::Serialize;
 use std::sync::Arc;
-use crate::multi_key_voprf::MultiKeyVoprfCore;
-use crate::AppStateWithSybil;
 
 // Define the response structures (moved from old main.rs)
 #[derive(Serialize)]
@@ -23,15 +23,10 @@ struct VoprfInfo {
 
 // Define the type alias for the state we injected in startup.rs
 // It must match exactly: (Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>)
-type SharedState = (
-    Arc<AppStateWithSybil>,
-    Arc<MultiKeyVoprfCore>,
-);
+type SharedState = (Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>);
 
 // The handler function itself (moved from old main.rs)
-pub async fn well_known_handler(
-    State((state, voprf)): State<SharedState>
-) -> Json<WellKnown> {
+pub async fn well_known_handler(State((state, voprf)): State<SharedState>) -> Json<WellKnown> {
     let active_kid = voprf.active_kid().await;
     let active_pubkey = voprf.active_pubkey_b64().await;
 
@@ -55,9 +50,7 @@ pub async fn well_known_handler(
 /// - Verify token metadata binding without trusting the issuer
 /// - Detect if issuer tries to modify token metadata (kid, exp, issuer_id)
 /// - Validate epoch is within acceptable range during verification
-pub async fn keys_handler(
-    State((state, voprf)): State<SharedState>
-) -> Json<KeyDiscoveryResp> {
+pub async fn keys_handler(State((state, voprf)): State<SharedState>) -> Json<KeyDiscoveryResp> {
     let active_kid = voprf.active_kid().await;
     let active_pubkey = voprf.active_pubkey_b64().await;
 
@@ -81,7 +74,7 @@ pub async fn keys_handler(
 /// and which it has revoked. This enables ActivityPub-style federation
 /// where verifiers can traverse trust graphs to make authorization decisions.
 pub async fn federation_handler(
-    State((state, _voprf)): State<SharedState>
+    State((state, _voprf)): State<SharedState>,
 ) -> Json<freebird_common::federation::FederationMetadata> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

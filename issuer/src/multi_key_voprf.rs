@@ -234,9 +234,17 @@ impl MultiKeyVoprfCore {
     }
 
     /// Sign token metadata using the active key (for federation support)
-    pub async fn sign_token_metadata(&self, token_bytes: &[u8], kid: &str, exp: i64, issuer_id: &str) -> Result<[u8; 64]> {
+    pub async fn sign_token_metadata(
+        &self,
+        token_bytes: &[u8],
+        kid: &str,
+        exp: i64,
+        issuer_id: &str,
+    ) -> Result<[u8; 64]> {
         let active = self.active_key.read().await;
-        active.sign_token_metadata(token_bytes, kid, exp, issuer_id).await
+        active
+            .sign_token_metadata(token_bytes, kid, exp, issuer_id)
+            .await
     }
 
     /// Evaluate a blinded element using the active key
@@ -672,13 +680,9 @@ mod tests {
         let sk2 = [2u8; 32];
         let sk3 = [3u8; 32];
 
-        let core = MultiKeyVoprfCore::new(
-            sk1,
-            "pubkey1".to_string(),
-            "key-2024-01".to_string(),
-            ctx,
-        )
-        .unwrap();
+        let core =
+            MultiKeyVoprfCore::new(sk1, "pubkey1".to_string(), "key-2024-01".to_string(), ctx)
+                .unwrap();
 
         // Add multiple deprecated keys
         core.rotate_key(
@@ -713,10 +717,7 @@ mod tests {
         // Test with non-existent key
         let result = core.verify_with_kid("test-token", "key-2024-99").await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("unknown key ID"));
+        assert!(result.unwrap_err().to_string().contains("unknown key ID"));
 
         // Test with similar but different key IDs (constant-time should handle these)
         let result = core.verify_with_kid("test-token", "key-2024-0").await; // Missing last char
@@ -741,20 +742,24 @@ mod tests {
             ("key-001", "key-002", false),
             ("a", "a", true),
             ("a", "b", false),
-            ("very-long-key-identifier-12345", "very-long-key-identifier-12345", true),
-            ("very-long-key-identifier-12345", "very-long-key-identifier-12346", false),
+            (
+                "very-long-key-identifier-12345",
+                "very-long-key-identifier-12345",
+                true,
+            ),
+            (
+                "very-long-key-identifier-12345",
+                "very-long-key-identifier-12346",
+                false,
+            ),
             ("key", "key-", false), // Length mismatch
-            ("", "", true),          // Empty strings
+            ("", "", true),         // Empty strings
         ];
 
         for (kid1, kid2, expected) in test_cases {
-            let core = MultiKeyVoprfCore::new(
-                sk,
-                format!("pubkey-{}", kid1),
-                kid1.to_string(),
-                ctx,
-            )
-            .unwrap();
+            let core =
+                MultiKeyVoprfCore::new(sk, format!("pubkey-{}", kid1), kid1.to_string(), ctx)
+                    .unwrap();
 
             let result = core.verify_with_kid("token", kid2).await;
 

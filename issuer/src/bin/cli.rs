@@ -600,7 +600,11 @@ impl TableRow for UserSummary {
             self.created_at.clone(),
             self.last_seen.clone().unwrap_or_else(|| "-".to_string()),
             self.tokens_issued.to_string(),
-            if self.is_banned { "Yes".red().to_string() } else { "No".green().to_string() },
+            if self.is_banned {
+                "Yes".red().to_string()
+            } else {
+                "No".green().to_string()
+            },
         ]
     }
 }
@@ -622,7 +626,11 @@ impl TableRow for KeySummary {
             self.epoch.to_string(),
             self.kid.clone(),
             self.created_at.clone(),
-            if self.is_active { "Yes".green().to_string() } else { "No".dimmed().to_string() },
+            if self.is_active {
+                "Yes".green().to_string()
+            } else {
+                "No".dimmed().to_string()
+            },
         ]
     }
 }
@@ -664,10 +672,14 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     // Get URL and key from args or environment
-    let url = cli.url.or_else(|| env::var("FREEBIRD_ISSUER_URL").ok())
+    let url = cli
+        .url
+        .or_else(|| env::var("FREEBIRD_ISSUER_URL").ok())
         .unwrap_or_else(|| "http://localhost:8081".to_string());
 
-    let key = cli.key.or_else(|| env::var("FREEBIRD_ADMIN_KEY").ok())
+    let key = cli
+        .key
+        .or_else(|| env::var("FREEBIRD_ADMIN_KEY").ok())
         .context("Admin key required. Set FREEBIRD_ADMIN_KEY or use --key")?;
 
     let api = ApiClient::new(url, key);
@@ -702,8 +714,14 @@ async fn main() -> Result<()> {
                 println!("{:.<25} {}", "Active (24h)", stats.active_users_24h);
                 println!("{:.<25} {}", "Tokens Issued (24h)", stats.tokens_issued_24h);
                 println!("{:.<25} {}", "Current Epoch", stats.current_epoch);
-                println!("{:.<25} {}", "Pending Invitations", stats.invitations_pending);
-                println!("{:.<25} {}", "Redeemed Invitations", stats.invitations_redeemed);
+                println!(
+                    "{:.<25} {}",
+                    "Pending Invitations", stats.invitations_pending
+                );
+                println!(
+                    "{:.<25} {}",
+                    "Redeemed Invitations", stats.invitations_redeemed
+                );
             }
         }
 
@@ -717,9 +735,29 @@ async fn main() -> Result<()> {
                 println!("{:.<25} {}", "Issuer ID", config.issuer_id);
                 println!("{:.<25} {}", "Epoch Duration", config.epoch_duration);
                 println!("{:.<25} {}", "Epoch Retention", config.epoch_retention);
-                println!("{:.<25} {}", "Require TLS", if config.require_tls { "Yes".green() } else { "No".yellow() });
-                println!("{:.<25} {}", "Behind Proxy", if config.behind_proxy { "Yes" } else { "No" });
-                println!("{:.<25} {}", "WebAuthn", if config.webauthn_enabled { "Enabled".green() } else { "Disabled".dimmed() });
+                println!(
+                    "{:.<25} {}",
+                    "Require TLS",
+                    if config.require_tls {
+                        "Yes".green()
+                    } else {
+                        "No".yellow()
+                    }
+                );
+                println!(
+                    "{:.<25} {}",
+                    "Behind Proxy",
+                    if config.behind_proxy { "Yes" } else { "No" }
+                );
+                println!(
+                    "{:.<25} {}",
+                    "WebAuthn",
+                    if config.webauthn_enabled {
+                        "Enabled".green()
+                    } else {
+                        "Disabled".dimmed()
+                    }
+                );
                 println!();
                 println!("{}", "Sybil Resistance".bold());
                 println!("{:.<25} {}", "Mode", config.sybil.mode.cyan());
@@ -734,7 +772,8 @@ async fn main() -> Result<()> {
         Commands::Metrics => {
             // Metrics endpoint returns plain text, not JSON
             let url = format!("{}/admin/metrics", api.base_url);
-            let resp = api.client
+            let resp = api
+                .client
                 .get(&url)
                 .header("X-Admin-Key", &api.admin_key)
                 .send()
@@ -753,11 +792,14 @@ async fn main() -> Result<()> {
 
         Commands::Users(cmd) => match cmd {
             UsersCommands::List { limit, offset } => {
-                let users: UsersResponse = api.get(&format!("/users?limit={}&offset={}", limit, offset)).await?;
+                let users: UsersResponse = api
+                    .get(&format!("/users?limit={}&offset={}", limit, offset))
+                    .await?;
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&users)?);
                 } else {
-                    println!("{} (showing {}-{} of {})",
+                    println!(
+                        "{} (showing {}-{} of {})",
                         "Users".bold().underline(),
                         offset + 1,
                         (offset + users.users.len()).min(users.total as usize),
@@ -784,10 +826,26 @@ async fn main() -> Result<()> {
                     println!();
                     println!("{:.<25} {}", "User ID", user.user_id);
                     println!("{:.<25} {}", "Created", user.created_at);
-                    println!("{:.<25} {}", "Last Seen", user.last_seen.unwrap_or_else(|| "Never".to_string()));
+                    println!(
+                        "{:.<25} {}",
+                        "Last Seen",
+                        user.last_seen.unwrap_or_else(|| "Never".to_string())
+                    );
                     println!("{:.<25} {}", "Tokens Issued", user.tokens_issued);
-                    println!("{:.<25} {}", "Status", if user.is_banned { "Banned".red() } else { "Active".green() });
-                    println!("{:.<25} {}", "Invited By", user.invited_by.unwrap_or_else(|| "N/A".to_string()));
+                    println!(
+                        "{:.<25} {}",
+                        "Status",
+                        if user.is_banned {
+                            "Banned".red()
+                        } else {
+                            "Active".green()
+                        }
+                    );
+                    println!(
+                        "{:.<25} {}",
+                        "Invited By",
+                        user.invited_by.unwrap_or_else(|| "N/A".to_string())
+                    );
                     println!("{:.<25} {}", "Invites Remaining", user.invites_remaining);
                     println!("{:.<25} {}", "Invites Used", user.invites_used);
                     if let Some(level) = user.trust_level {
@@ -797,12 +855,16 @@ async fn main() -> Result<()> {
             }
 
             UsersCommands::Ban { user_id, tree } => {
-                let req = BanRequest { user_id: user_id.clone(), ban_tree: tree };
+                let req = BanRequest {
+                    user_id: user_id.clone(),
+                    ban_tree: tree,
+                };
                 let resp: Value = api.post("/users/ban", &req).await?;
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&resp)?);
                 } else {
-                    println!("{} User {} has been banned{}",
+                    println!(
+                        "{} User {} has been banned{}",
                         "✓".green(),
                         user_id.bold(),
                         if tree { " (including invite tree)" } else { "" }
@@ -811,7 +873,9 @@ async fn main() -> Result<()> {
             }
 
             UsersCommands::Unban { user_id } => {
-                let req = UnbanRequest { user_id: user_id.clone() };
+                let req = UnbanRequest {
+                    user_id: user_id.clone(),
+                };
                 let resp: Value = api.post("/users/unban", &req).await?;
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&resp)?);
@@ -823,11 +887,16 @@ async fn main() -> Result<()> {
 
         Commands::Invites(cmd) => match cmd {
             InvitesCommands::List { limit } => {
-                let invites: InvitationsResponse = api.get(&format!("/invitations?limit={}", limit)).await?;
+                let invites: InvitationsResponse =
+                    api.get(&format!("/invitations?limit={}", limit)).await?;
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&invites)?);
                 } else {
-                    println!("{} ({} total)", "Invitations".bold().underline(), invites.total);
+                    println!(
+                        "{} ({} total)",
+                        "Invitations".bold().underline(),
+                        invites.total
+                    );
                     println!();
                     if invites.invitations.is_empty() {
                         println!("{}", "No invitations found.".dimmed());
@@ -841,13 +910,20 @@ async fn main() -> Result<()> {
             }
 
             InvitesCommands::Create { inviter_id, count } => {
-                let req = CreateInvitationsRequest { inviter_id: inviter_id.clone(), count };
+                let req = CreateInvitationsRequest {
+                    inviter_id: inviter_id.clone(),
+                    count,
+                };
                 let resp: Value = api.post("/invitations/create", &req).await?;
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&resp)?);
                 } else {
-                    println!("{} Created {} invitation(s) for user {}",
-                        "✓".green(), count, inviter_id.bold());
+                    println!(
+                        "{} Created {} invitation(s) for user {}",
+                        "✓".green(),
+                        count,
+                        inviter_id.bold()
+                    );
                     if let Some(codes) = resp.get("codes").and_then(|c| c.as_array()) {
                         println!();
                         println!("{}", "Invitation Codes:".bold());
@@ -872,13 +948,20 @@ async fn main() -> Result<()> {
             }
 
             InvitesCommands::Grant { user_id, count } => {
-                let req = GrantInvitesRequest { user_id: user_id.clone(), count };
+                let req = GrantInvitesRequest {
+                    user_id: user_id.clone(),
+                    count,
+                };
                 let resp: Value = api.post("/invites/grant", &req).await?;
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&resp)?);
                 } else {
-                    println!("{} Granted {} invite slot(s) to user {}",
-                        "✓".green(), count, user_id.bold());
+                    println!(
+                        "{} Granted {} invite slot(s) to user {}",
+                        "✓".green(),
+                        count,
+                        user_id.bold()
+                    );
                 }
             }
         },
@@ -889,7 +972,8 @@ async fn main() -> Result<()> {
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&keys)?);
                 } else {
-                    println!("{} (current epoch: {})",
+                    println!(
+                        "{} (current epoch: {})",
                         "Signing Keys".bold().underline(),
                         keys.current_epoch.to_string().cyan()
                     );
@@ -897,10 +981,7 @@ async fn main() -> Result<()> {
                     if keys.keys.is_empty() {
                         println!("{}", "No keys found.".dimmed());
                     } else {
-                        print_table(
-                            &["Epoch", "Key ID", "Created", "Active"],
-                            &keys.keys,
-                        );
+                        print_table(&["Epoch", "Key ID", "Created", "Active"], &keys.keys);
                     }
                 }
             }
@@ -944,27 +1025,38 @@ async fn main() -> Result<()> {
                     if vouches.vouches.is_empty() {
                         println!("{}", "No vouches configured.".dimmed());
                     } else {
-                        print_table(
-                            &["Issuer ID", "Level", "Created", "Note"],
-                            &vouches.vouches,
-                        );
+                        print_table(&["Issuer ID", "Level", "Created", "Note"], &vouches.vouches);
                     }
                 }
             }
 
-            FederationCommands::Vouch { issuer_id, level, note } => {
-                let req = AddVouchRequest { issuer_id: issuer_id.clone(), trust_level: level, note };
+            FederationCommands::Vouch {
+                issuer_id,
+                level,
+                note,
+            } => {
+                let req = AddVouchRequest {
+                    issuer_id: issuer_id.clone(),
+                    trust_level: level,
+                    note,
+                };
                 let resp: Value = api.post("/federation/vouches", &req).await?;
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&resp)?);
                 } else {
-                    println!("{} Added vouch for {} (level {})",
-                        "✓".green(), issuer_id.bold(), level);
+                    println!(
+                        "{} Added vouch for {} (level {})",
+                        "✓".green(),
+                        issuer_id.bold(),
+                        level
+                    );
                 }
             }
 
             FederationCommands::Unvouch { issuer_id } => {
-                let resp: Value = api.delete(&format!("/federation/vouches/{}", issuer_id)).await?;
+                let resp: Value = api
+                    .delete(&format!("/federation/vouches/{}", issuer_id))
+                    .await?;
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&resp)?);
                 } else {
@@ -991,7 +1083,10 @@ async fn main() -> Result<()> {
             }
 
             FederationCommands::Revoke { issuer_id, reason } => {
-                let req = AddRevocationRequest { issuer_id: issuer_id.clone(), reason };
+                let req = AddRevocationRequest {
+                    issuer_id: issuer_id.clone(),
+                    reason,
+                };
                 let resp: Value = api.post("/federation/revocations", &req).await?;
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&resp)?);
@@ -1001,11 +1096,17 @@ async fn main() -> Result<()> {
             }
 
             FederationCommands::Unrevoke { issuer_id } => {
-                let resp: Value = api.delete(&format!("/federation/revocations/{}", issuer_id)).await?;
+                let resp: Value = api
+                    .delete(&format!("/federation/revocations/{}", issuer_id))
+                    .await?;
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&resp)?);
                 } else {
-                    println!("{} Removed revocation for {}", "✓".green(), issuer_id.bold());
+                    println!(
+                        "{} Removed revocation for {}",
+                        "✓".green(),
+                        issuer_id.bold()
+                    );
                 }
             }
         },
@@ -1026,15 +1127,16 @@ async fn main() -> Result<()> {
             if format == OutputFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&audit)?);
             } else {
-                println!("{} ({} total entries)", "Audit Log".bold().underline(), audit.total);
+                println!(
+                    "{} ({} total entries)",
+                    "Audit Log".bold().underline(),
+                    audit.total
+                );
                 println!();
                 if audit.entries.is_empty() {
                     println!("{}", "No audit entries found.".dimmed());
                 } else {
-                    print_table(
-                        &["Timestamp", "Action", "Actor", "Details"],
-                        &audit.entries,
-                    );
+                    print_table(&["Timestamp", "Action", "Actor", "Details"], &audit.entries);
                 }
             }
         }

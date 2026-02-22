@@ -16,8 +16,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::federation_store::FederationStore;
 use super::SybilResistance;
+use crate::federation_store::FederationStore;
 
 /// Validate that the returned issuer_id matches the expected domain
 ///
@@ -96,7 +96,12 @@ impl FederatedTrustSystem {
     /// Check if we directly trust an issuer
     async fn is_directly_trusted(&self, issuer_id: &str) -> Result<bool> {
         // Check if in trusted roots
-        if self.config.trust_policy.trusted_roots.contains(&issuer_id.to_string()) {
+        if self
+            .config
+            .trust_policy
+            .trusted_roots
+            .contains(&issuer_id.to_string())
+        {
             return Ok(true);
         }
 
@@ -135,7 +140,12 @@ impl FederatedTrustSystem {
     /// Check if we trust an issuer through a trust path
     async fn is_trusted(&self, issuer_id: &str, max_depth: u32) -> Result<bool> {
         // Check if explicitly blocked
-        if self.config.trust_policy.blocked_issuers.contains(&issuer_id.to_string()) {
+        if self
+            .config
+            .trust_policy
+            .blocked_issuers
+            .contains(&issuer_id.to_string())
+        {
             return Ok(false);
         }
 
@@ -178,7 +188,11 @@ impl FederatedTrustSystem {
         } else {
             // Extract hostname from issuer_id (e.g., "issuer:example.com:v1" -> "example.com")
             let parts: Vec<&str> = issuer_id.split(':').collect();
-            let hostname = if parts.len() >= 2 { parts[1] } else { issuer_id };
+            let hostname = if parts.len() >= 2 {
+                parts[1]
+            } else {
+                issuer_id
+            };
             format!("https://{}/.well-known/issuer", hostname)
         };
 
@@ -230,11 +244,7 @@ impl FederatedTrustSystem {
     }
 
     /// Cryptographically verify a federated token against the source issuer's public key
-    async fn verify_token_crypto(
-        &self,
-        token_b64: &str,
-        source_issuer_id: &str,
-    ) -> Result<()> {
+    async fn verify_token_crypto(&self, token_b64: &str, source_issuer_id: &str) -> Result<()> {
         // Decode the token
         let token_bytes = Base64UrlUnpadded::decode_vec(token_b64)
             .map_err(|_| anyhow!("Invalid base64 token"))?;
@@ -275,12 +285,12 @@ impl FederatedTrustSystem {
             ));
         }
 
-        verifier
-            .verify(&voprf_b64, &pubkey)
-            .map_err(|_| anyhow!(
+        verifier.verify(&voprf_b64, &pubkey).map_err(|_| {
+            anyhow!(
                 "VOPRF token verification failed - token was not issued by {}",
                 source_issuer_id
-            ))?;
+            )
+        })?;
 
         Ok(())
     }
@@ -345,16 +355,16 @@ impl SybilResistance for FederatedTrustSystem {
                 // This fetches their public key and verifies the VOPRF DLEQ proof
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
-                        self.verify_token_crypto(source_token_b64, source_issuer_id).await
+                        self.verify_token_crypto(source_token_b64, source_issuer_id)
+                            .await
                     })
                 })?;
 
                 // Verify we trust the source issuer
                 let max_depth = self.config.trust_policy.max_trust_depth;
                 let is_trusted = tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        self.is_trusted(source_issuer_id, max_depth).await
-                    })
+                    tokio::runtime::Handle::current()
+                        .block_on(async { self.is_trusted(source_issuer_id, max_depth).await })
                 })?;
 
                 if !is_trusted {

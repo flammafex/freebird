@@ -45,9 +45,7 @@ fn bench_evaluate(c: &mut Criterion) {
     let (blinded_b64, _state) = client.blind(b"test input").unwrap();
 
     group.bench_function("single", |b| {
-        b.iter(|| {
-            black_box(server.evaluate_with_proof(black_box(&blinded_b64)).unwrap())
-        });
+        b.iter(|| black_box(server.evaluate_with_proof(black_box(&blinded_b64)).unwrap()));
     });
 
     group.finish();
@@ -96,7 +94,11 @@ fn bench_verify(c: &mut Criterion) {
 
     group.bench_function("single", |b| {
         b.iter(|| {
-            black_box(verifier.verify(black_box(&token_b64), black_box(&pk)).unwrap())
+            black_box(
+                verifier
+                    .verify(black_box(&token_b64), black_box(&pk))
+                    .unwrap(),
+            )
         });
     });
 

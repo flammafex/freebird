@@ -312,7 +312,10 @@ fn contains_cbor_string(data: &[u8], needle: &str) -> bool {
     // Look for 1-byte length encoding
     if len < 256 {
         for i in 0..data.len().saturating_sub(len + 2) {
-            if data[i] == 0x78 && data[i + 1] == len as u8 && &data[i + 2..i + 2 + len] == needle_bytes {
+            if data[i] == 0x78
+                && data[i + 1] == len as u8
+                && &data[i + 2..i + 2 + len] == needle_bytes
+            {
                 return true;
             }
         }

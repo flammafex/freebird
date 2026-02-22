@@ -7,9 +7,11 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{BatchIssueReq, IssueReq, SybilProof, TokenResult};
 use freebird_crypto::{Client, Server, TOKEN_LEN_V2};
 use freebird_issuer::{
-    AppStateWithSybil, federation_store::FederationStore, multi_key_voprf::MultiKeyVoprfCore,
+    federation_store::FederationStore,
+    multi_key_voprf::MultiKeyVoprfCore,
     routes::{batch_issue, issue},
     sybil_resistance::SybilResistance,
+    AppStateWithSybil,
 };
 use std::sync::Arc;
 
@@ -50,7 +52,12 @@ async fn build_state(
     let pubkey_b64 = Base64UrlUnpadded::encode_string(&pubkey);
     let kid = "kid-sybil-matrix".to_string();
 
-    let voprf = Arc::new(MultiKeyVoprfCore::new(sk, pubkey_b64.clone(), kid.clone(), b"freebird:v1")?);
+    let voprf = Arc::new(MultiKeyVoprfCore::new(
+        sk,
+        pubkey_b64.clone(),
+        kid.clone(),
+        b"freebird:v1",
+    )?);
 
     let temp_dir = tempfile::tempdir()?;
     let federation_store = FederationStore::new(temp_dir.path()).await?;
@@ -91,13 +98,7 @@ async fn run_single(
         sybil_proof: proof,
     };
 
-    let result = issue::handle(
-        State((state, voprf)),
-        None,
-        HeaderMap::new(),
-        Json(req),
-    )
-    .await;
+    let result = issue::handle(State((state, voprf)), None, HeaderMap::new(), Json(req)).await;
 
     Ok(match result {
         Ok(Json(resp)) => {
@@ -119,13 +120,8 @@ async fn run_batch(
         sybil_proof: proof,
     };
 
-    let result = batch_issue::handle_batch(
-        State((state, voprf)),
-        None,
-        HeaderMap::new(),
-        Json(req),
-    )
-    .await;
+    let result =
+        batch_issue::handle_batch(State((state, voprf)), None, HeaderMap::new(), Json(req)).await;
 
     Ok(match result {
         Ok(Json(resp)) => match &resp.results[0] {
@@ -155,7 +151,8 @@ async fn sybil_none_mode_accepts_with_or_without_proof_on_both_endpoints() -> Re
         client_id: "ignored".to_string(),
         timestamp: 0,
     });
-    let single_with_proof = run_single(state.clone(), voprf.clone(), irrelevant_proof.clone()).await?;
+    let single_with_proof =
+        run_single(state.clone(), voprf.clone(), irrelevant_proof.clone()).await?;
     let batch_with_proof = run_batch(state, voprf, irrelevant_proof).await?;
     assert_eq!(single_with_proof, Ok(TOKEN_LEN_V2));
     assert_eq!(batch_with_proof, Ok(TOKEN_LEN_V2));

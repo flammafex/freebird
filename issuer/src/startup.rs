@@ -2,33 +2,83 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
 
+#[cfg(feature = "human-gate-webauthn")]
+use crate::webauthn;
 use crate::{
     audit::{AuditConfig, AuditLog},
     config::Config,
     keys, multi_key_voprf, routes,
     sybil_resistance::{
-        self, invitation::{InvitationConfig, InvitationSystem},
-        CombinedOr, CombinedAnd, CombinedThreshold,
-        ProofOfWork, RateLimit, SybilResistance,
+        self,
+        invitation::{InvitationConfig, InvitationSystem},
+        CombinedAnd, CombinedOr, CombinedThreshold, ProofOfWork, RateLimit, SybilResistance,
     },
     AppStateWithSybil,
 };
-#[cfg(feature = "human-gate-webauthn")]
-use crate::webauthn;
 
 use anyhow::{Context, Result};
-use axum::{routing::{get, post}, Router};
 use axum::extract::DefaultBodyLimit;
+use axum::{
+    routing::{get, post},
+    Router,
+};
 use p256::ecdsa::SigningKey;
 use rand::rngs::OsRng;
-use std::{path::Path, sync::Arc, time::Duration};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+use std::{fs, io::Write, path::Path, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 pub struct Application {
     port: u16,
-    server: axum::serve::Serve<Router, Router>,
+    listener: TcpListener,
+    app: Router,
+}
+
+fn load_or_generate_invitation_signing_key(path: &Path) -> Result<SigningKey> {
+    if let Ok(bytes) = fs::read(path) {
+        if bytes.len() != 32 {
+            anyhow::bail!(
+                "invalid invitation signing key size: got {} bytes, expected 32",
+                bytes.len()
+            );
+        }
+
+        let key_bytes: [u8; 32] = bytes
+            .as_slice()
+            .try_into()
+            .context("failed to parse invitation signing key bytes")?;
+        return SigningKey::from_bytes(&key_bytes.into())
+            .context("invalid invitation signing key material");
+    }
+
+    let signing_key = SigningKey::random(&mut OsRng);
+    let raw = signing_key.to_bytes();
+    let tmp_path = path.with_extension("tmp");
+
+    #[cfg(unix)]
+    {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp_path)?;
+        f.write_all(raw.as_ref())?;
+        f.sync_all()?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        let mut f = std::fs::File::create(&tmp_path)?;
+        f.write_all(raw.as_ref())?;
+        f.sync_all()?;
+    }
+
+    fs::rename(&tmp_path, path).context("failed to persist invitation signing key")?;
+    Ok(signing_key)
 }
 
 impl Application {
@@ -38,20 +88,25 @@ impl Application {
 
         // 1. Keys & VOPRF Setup
         if config.key_config.sk_path != Path::new("issuer_sk.bin") {
-             std::env::set_var("ISSUER_SK_PATH", &config.key_config.sk_path);
+            std::env::set_var("ISSUER_SK_PATH", &config.key_config.sk_path);
         }
 
         let (sk_bytes, pubkey_b64, kid_from_key) = keys::load_or_generate_keypair_b64()
             .context("Failed to load or generate issuer keypair")?;
 
-        let kid = config.key_config.kid_override.as_ref().map(|k| {
-            if !k.starts_with(&kid_from_key) {
-                warn!(provided=%k, derived=%kid_from_key, "KID mismatch; using derived prefix");
-                format!("{}-{}", kid_from_key, OffsetDateTime::now_utc().date())
-            } else {
-                k.clone()
-            }
-        }).unwrap_or_else(|| format!("{}-{}", kid_from_key, OffsetDateTime::now_utc().date()));
+        let kid = config
+            .key_config
+            .kid_override
+            .as_ref()
+            .map(|k| {
+                if !k.starts_with(&kid_from_key) {
+                    warn!(provided=%k, derived=%kid_from_key, "KID mismatch; using derived prefix");
+                    format!("{}-{}", kid_from_key, OffsetDateTime::now_utc().date())
+                } else {
+                    k.clone()
+                }
+            })
+            .unwrap_or_else(|| format!("{}-{}", kid_from_key, OffsetDateTime::now_utc().date()));
 
         let ctx = b"freebird:v1";
         let voprf = Arc::new(
@@ -75,41 +130,51 @@ impl Application {
                 }
             }
         });
-        
-        
 
         // 2. WebAuthn Setup
         #[cfg(feature = "human-gate-webauthn")]
         let webauthn_state = if let Some(wa_conf) = &config.webauthn_config {
-             info!("🔐 Initializing WebAuthn subsystem for RP: {}", wa_conf.rp_id);
-             
-             let ctx = webauthn::WebAuthnCtx::new(
-                 wa_conf.rp_id.clone(), 
-                 wa_conf.rp_name.clone(), 
-                 wa_conf.rp_origin.clone()
-             ).context("Failed to create WebAuthn context")?;
+            info!(
+                "🔐 Initializing WebAuthn subsystem for RP: {}",
+                wa_conf.rp_id
+            );
 
-             let store = if let Some(url) = &wa_conf.redis_url {
-                 info!("Using Redis for WebAuthn credentials");
-                 webauthn::CredentialStore::Redis(
-                     webauthn::RedisCredStore::new(url, wa_conf.cred_ttl)
-                         .context("Failed to connect to WebAuthn Redis")?
-                 )
-             } else {
-                 warn!("⚠️  Using in-memory WebAuthn credential storage");
-                 webauthn::CredentialStore::InMemory(webauthn::InMemoryCredStore::new())
-             };
+            let ctx = webauthn::WebAuthnCtx::new(
+                wa_conf.rp_id.clone(),
+                wa_conf.rp_name.clone(),
+                wa_conf.rp_origin.clone(),
+            )
+            .context("Failed to create WebAuthn context")?;
 
-             Some(webauthn::WebAuthnState::new(ctx, store, config.behind_proxy))
+            let store = if let Some(url) = &wa_conf.redis_url {
+                info!("Using Redis for WebAuthn credentials");
+                webauthn::CredentialStore::Redis(
+                    webauthn::RedisCredStore::new(url, wa_conf.cred_ttl)
+                        .context("Failed to connect to WebAuthn Redis")?,
+                )
+            } else {
+                warn!("⚠️  Using in-memory WebAuthn credential storage");
+                webauthn::CredentialStore::InMemory(webauthn::InMemoryCredStore::new())
+            };
+
+            Some(webauthn::WebAuthnState::new(
+                ctx,
+                store,
+                config.behind_proxy,
+            ))
         } else {
             None
         };
 
         // 3. Federation Store (needed before Sybil setup for Federated Trust)
-        let federation_store = crate::federation_store::FederationStore::new(&config.federation_data_path)
-            .await
-            .context("Failed to initialize federation store")?;
-        info!("✅ Federation store initialized at {:?}", config.federation_data_path);
+        let federation_store =
+            crate::federation_store::FederationStore::new(&config.federation_data_path)
+                .await
+                .context("Failed to initialize federation store")?;
+        info!(
+            "✅ Federation store initialized at {:?}",
+            config.federation_data_path
+        );
 
         // 3.5 Audit Log Setup
         let audit_config = AuditConfig {
@@ -120,15 +185,23 @@ impl Application {
         let audit_log = Arc::new(
             AuditLog::load_or_create(audit_config)
                 .await
-                .context("Failed to initialize audit log")?
+                .context("Failed to initialize audit log")?,
         );
         info!("✅ Audit log initialized");
 
         // 4. Sybil Resistance Setup
         let mut invitation_system: Option<Arc<InvitationSystem>> = None;
-        let sybil_checker: Option<Arc<dyn SybilResistance>> = match config.sybil_config.mode.as_str() {
-            "pow" | "proof_of_work" => Some(Arc::new(ProofOfWork::new(config.sybil_config.pow_difficulty))),
-            "rate_limit" => Some(Arc::new(RateLimit::new(Duration::from_secs(config.sybil_config.rate_limit_secs)))),
+        let sybil_checker: Option<Arc<dyn SybilResistance>> = match config
+            .sybil_config
+            .mode
+            .as_str()
+        {
+            "pow" | "proof_of_work" => Some(Arc::new(ProofOfWork::new(
+                config.sybil_config.pow_difficulty,
+            ))),
+            "rate_limit" => Some(Arc::new(RateLimit::new(Duration::from_secs(
+                config.sybil_config.rate_limit_secs,
+            )))),
             "invitation" => {
                 let inv_conf = InvitationConfig {
                     invites_per_user: config.sybil_config.invite_per_user,
@@ -138,11 +211,14 @@ impl Application {
                     persistence_path: config.sybil_config.invite_persistence_path.clone(),
                     autosave_interval_secs: config.sybil_config.invite_autosave_interval_secs,
                 };
-                let signing_key = SigningKey::random(&mut OsRng);
+                let signing_key = load_or_generate_invitation_signing_key(
+                    &config.sybil_config.invite_signing_key_path,
+                )
+                .context("Failed to load invitation signing key")?;
                 let sys = InvitationSystem::load_or_create(signing_key, inv_conf)
                     .await
                     .context("Failed to load invitation system")?;
-                
+
                 if let Some(bootstrap) = &config.sybil_config.bootstrap_users {
                     for entry in bootstrap.split(',') {
                         if let Some((uid, count_str)) = entry.split_once(':') {
@@ -158,21 +234,23 @@ impl Application {
             }
             #[cfg(feature = "human-gate-webauthn")]
             "webauthn" => {
-                 if let Some(wa) = &webauthn_state {
+                if let Some(wa) = &webauthn_state {
                     info!("✅ Sybil resistance: WebAuthn");
                     // Use the new path
                     Some(Arc::new(webauthn::WebAuthnGate::new(
                         wa.clone(),
-                        config.sybil_config.webauthn_max_proof_age
+                        config.sybil_config.webauthn_max_proof_age,
                     )))
-                 } else {
+                } else {
                     warn!("⚠️  WebAuthn Sybil resistance selected but not configured");
                     None
                 }
             }
             "progressive_trust" => {
                 // Parse trust levels from config
-                let levels: Vec<sybil_resistance::TrustLevel> = config.sybil_config.progressive_trust_levels
+                let levels: Vec<sybil_resistance::TrustLevel> = config
+                    .sybil_config
+                    .progressive_trust_levels
                     .iter()
                     .filter_map(|level_str| {
                         let parts: Vec<&str> = level_str.split(':').collect();
@@ -193,12 +271,20 @@ impl Application {
 
                 let pt_config = sybil_resistance::ProgressiveTrustConfig {
                     levels,
-                    persistence_path: config.sybil_config.progressive_trust_persistence_path.clone(),
+                    persistence_path: config
+                        .sybil_config
+                        .progressive_trust_persistence_path
+                        .clone(),
                     autosave_interval_secs: config.sybil_config.progressive_trust_autosave_interval,
                     hmac_secret: config.sybil_config.progressive_trust_hmac_secret.clone(),
-                    hmac_secret_path: config.sybil_config.progressive_trust_hmac_secret_path.clone(),
+                    hmac_secret_path: config
+                        .sybil_config
+                        .progressive_trust_hmac_secret_path
+                        .clone(),
                     user_id_salt: config.sybil_config.progressive_trust_salt.clone(),
-                    allow_insecure_deterministic: config.sybil_config.progressive_trust_allow_insecure,
+                    allow_insecure_deterministic: config
+                        .sybil_config
+                        .progressive_trust_allow_insecure,
                 };
 
                 let sys = sybil_resistance::ProgressiveTrustSystem::new(pt_config)
@@ -211,10 +297,18 @@ impl Application {
             "proof_of_diversity" => {
                 let pod_config = sybil_resistance::ProofOfDiversityConfig {
                     min_score: config.sybil_config.proof_of_diversity_min_score,
-                    persistence_path: config.sybil_config.proof_of_diversity_persistence_path.clone(),
-                    autosave_interval_secs: config.sybil_config.proof_of_diversity_autosave_interval,
+                    persistence_path: config
+                        .sybil_config
+                        .proof_of_diversity_persistence_path
+                        .clone(),
+                    autosave_interval_secs: config
+                        .sybil_config
+                        .proof_of_diversity_autosave_interval,
                     hmac_secret: config.sybil_config.proof_of_diversity_hmac_secret.clone(),
-                    fingerprint_salt: config.sybil_config.proof_of_diversity_fingerprint_salt.clone(),
+                    fingerprint_salt: config
+                        .sybil_config
+                        .proof_of_diversity_fingerprint_salt
+                        .clone(),
                 };
 
                 let sys = sybil_resistance::ProofOfDiversitySystem::new(pod_config)
@@ -229,9 +323,16 @@ impl Application {
                     required_vouchers: config.sybil_config.multi_party_vouching_required_vouchers,
                     voucher_cooldown_secs: config.sybil_config.multi_party_vouching_cooldown_secs,
                     vouch_expires_secs: config.sybil_config.multi_party_vouching_expires_secs,
-                    new_user_can_vouch_after_secs: config.sybil_config.multi_party_vouching_new_user_wait_secs,
-                    persistence_path: config.sybil_config.multi_party_vouching_persistence_path.clone(),
-                    autosave_interval_secs: config.sybil_config.multi_party_vouching_autosave_interval,
+                    new_user_can_vouch_after_secs: config
+                        .sybil_config
+                        .multi_party_vouching_new_user_wait_secs,
+                    persistence_path: config
+                        .sybil_config
+                        .multi_party_vouching_persistence_path
+                        .clone(),
+                    autosave_interval_secs: config
+                        .sybil_config
+                        .multi_party_vouching_autosave_interval,
                     hmac_secret: config.sybil_config.multi_party_vouching_hmac_secret.clone(),
                     user_id_salt: config.sybil_config.multi_party_vouching_salt.clone(),
                 };
@@ -271,7 +372,10 @@ impl Application {
                 Some(sys)
             }
             "combined" => {
-                info!("🔧 Building combined Sybil resistance with {} mode", config.sybil_config.combined_mode);
+                info!(
+                    "🔧 Building combined Sybil resistance with {} mode",
+                    config.sybil_config.combined_mode
+                );
 
                 // Build mechanisms from config list
                 let mut mechanisms: Vec<Arc<dyn SybilResistance>> = Vec::new();
@@ -282,21 +386,35 @@ impl Application {
 
                     match mechanism_name {
                         "pow" | "proof_of_work" => {
-                            mechanisms.push(Arc::new(ProofOfWork::new(config.sybil_config.pow_difficulty)));
+                            mechanisms.push(Arc::new(ProofOfWork::new(
+                                config.sybil_config.pow_difficulty,
+                            )));
                         }
                         "rate_limit" => {
-                            mechanisms.push(Arc::new(RateLimit::new(Duration::from_secs(config.sybil_config.rate_limit_secs))));
+                            mechanisms.push(Arc::new(RateLimit::new(Duration::from_secs(
+                                config.sybil_config.rate_limit_secs,
+                            ))));
                         }
                         "invitation" => {
                             let inv_conf = InvitationConfig {
                                 invites_per_user: config.sybil_config.invite_per_user,
                                 invite_cooldown_secs: config.sybil_config.invite_cooldown_secs,
                                 invite_expires_secs: config.sybil_config.invite_expires_secs,
-                                new_user_can_invite_after_secs: config.sybil_config.invite_new_user_wait_secs,
-                                persistence_path: config.sybil_config.invite_persistence_path.clone(),
-                                autosave_interval_secs: config.sybil_config.invite_autosave_interval_secs,
+                                new_user_can_invite_after_secs: config
+                                    .sybil_config
+                                    .invite_new_user_wait_secs,
+                                persistence_path: config
+                                    .sybil_config
+                                    .invite_persistence_path
+                                    .clone(),
+                                autosave_interval_secs: config
+                                    .sybil_config
+                                    .invite_autosave_interval_secs,
                             };
-                            let signing_key = SigningKey::random(&mut OsRng);
+                            let signing_key = load_or_generate_invitation_signing_key(
+                                &config.sybil_config.invite_signing_key_path,
+                            )
+                            .context("Failed to load invitation signing key for combined mode")?;
                             let sys = InvitationSystem::load_or_create(signing_key, inv_conf)
                                 .await
                                 .context("Failed to load invitation system for combined mode")?;
@@ -307,14 +425,16 @@ impl Application {
                             if let Some(wa) = &webauthn_state {
                                 mechanisms.push(Arc::new(webauthn::WebAuthnGate::new(
                                     wa.clone(),
-                                    config.sybil_config.webauthn_max_proof_age
+                                    config.sybil_config.webauthn_max_proof_age,
                                 )));
                             } else {
                                 warn!("⚠️  WebAuthn requested in combined mode but not configured, skipping");
                             }
                         }
                         "progressive_trust" => {
-                            let levels: Vec<sybil_resistance::TrustLevel> = config.sybil_config.progressive_trust_levels
+                            let levels: Vec<sybil_resistance::TrustLevel> = config
+                                .sybil_config
+                                .progressive_trust_levels
                                 .iter()
                                 .filter_map(|level_str| {
                                     let parts: Vec<&str> = level_str.split(':').collect();
@@ -335,48 +455,94 @@ impl Application {
 
                             let pt_config = sybil_resistance::ProgressiveTrustConfig {
                                 levels,
-                                persistence_path: config.sybil_config.progressive_trust_persistence_path.clone(),
-                                autosave_interval_secs: config.sybil_config.progressive_trust_autosave_interval,
-                                hmac_secret: config.sybil_config.progressive_trust_hmac_secret.clone(),
-                                hmac_secret_path: config.sybil_config.progressive_trust_hmac_secret_path.clone(),
+                                persistence_path: config
+                                    .sybil_config
+                                    .progressive_trust_persistence_path
+                                    .clone(),
+                                autosave_interval_secs: config
+                                    .sybil_config
+                                    .progressive_trust_autosave_interval,
+                                hmac_secret: config
+                                    .sybil_config
+                                    .progressive_trust_hmac_secret
+                                    .clone(),
+                                hmac_secret_path: config
+                                    .sybil_config
+                                    .progressive_trust_hmac_secret_path
+                                    .clone(),
                                 user_id_salt: config.sybil_config.progressive_trust_salt.clone(),
-                                allow_insecure_deterministic: config.sybil_config.progressive_trust_allow_insecure,
+                                allow_insecure_deterministic: config
+                                    .sybil_config
+                                    .progressive_trust_allow_insecure,
                             };
 
                             let sys = sybil_resistance::ProgressiveTrustSystem::new(pt_config)
                                 .await
-                                .context("Failed to initialize Progressive Trust for combined mode")?;
+                                .context(
+                                    "Failed to initialize Progressive Trust for combined mode",
+                                )?;
                             mechanisms.push(sys);
                         }
                         "proof_of_diversity" => {
                             let pod_config = sybil_resistance::ProofOfDiversityConfig {
                                 min_score: config.sybil_config.proof_of_diversity_min_score,
-                                persistence_path: config.sybil_config.proof_of_diversity_persistence_path.clone(),
-                                autosave_interval_secs: config.sybil_config.proof_of_diversity_autosave_interval,
-                                hmac_secret: config.sybil_config.proof_of_diversity_hmac_secret.clone(),
-                                fingerprint_salt: config.sybil_config.proof_of_diversity_fingerprint_salt.clone(),
+                                persistence_path: config
+                                    .sybil_config
+                                    .proof_of_diversity_persistence_path
+                                    .clone(),
+                                autosave_interval_secs: config
+                                    .sybil_config
+                                    .proof_of_diversity_autosave_interval,
+                                hmac_secret: config
+                                    .sybil_config
+                                    .proof_of_diversity_hmac_secret
+                                    .clone(),
+                                fingerprint_salt: config
+                                    .sybil_config
+                                    .proof_of_diversity_fingerprint_salt
+                                    .clone(),
                             };
 
                             let sys = sybil_resistance::ProofOfDiversitySystem::new(pod_config)
                                 .await
-                                .context("Failed to initialize Proof of Diversity for combined mode")?;
+                                .context(
+                                    "Failed to initialize Proof of Diversity for combined mode",
+                                )?;
                             mechanisms.push(sys);
                         }
                         "multi_party_vouching" => {
                             let mpv_config = sybil_resistance::MultiPartyVouchingConfig {
-                                required_vouchers: config.sybil_config.multi_party_vouching_required_vouchers,
-                                voucher_cooldown_secs: config.sybil_config.multi_party_vouching_cooldown_secs,
-                                vouch_expires_secs: config.sybil_config.multi_party_vouching_expires_secs,
-                                new_user_can_vouch_after_secs: config.sybil_config.multi_party_vouching_new_user_wait_secs,
-                                persistence_path: config.sybil_config.multi_party_vouching_persistence_path.clone(),
-                                autosave_interval_secs: config.sybil_config.multi_party_vouching_autosave_interval,
-                                hmac_secret: config.sybil_config.multi_party_vouching_hmac_secret.clone(),
+                                required_vouchers: config
+                                    .sybil_config
+                                    .multi_party_vouching_required_vouchers,
+                                voucher_cooldown_secs: config
+                                    .sybil_config
+                                    .multi_party_vouching_cooldown_secs,
+                                vouch_expires_secs: config
+                                    .sybil_config
+                                    .multi_party_vouching_expires_secs,
+                                new_user_can_vouch_after_secs: config
+                                    .sybil_config
+                                    .multi_party_vouching_new_user_wait_secs,
+                                persistence_path: config
+                                    .sybil_config
+                                    .multi_party_vouching_persistence_path
+                                    .clone(),
+                                autosave_interval_secs: config
+                                    .sybil_config
+                                    .multi_party_vouching_autosave_interval,
+                                hmac_secret: config
+                                    .sybil_config
+                                    .multi_party_vouching_hmac_secret
+                                    .clone(),
                                 user_id_salt: config.sybil_config.multi_party_vouching_salt.clone(),
                             };
 
                             let sys = sybil_resistance::MultiPartyVouchingSystem::new(mpv_config)
                                 .await
-                                .context("Failed to initialize Multi-Party Vouching for combined mode")?;
+                                .context(
+                                    "Failed to initialize Multi-Party Vouching for combined mode",
+                                )?;
                             mechanisms.push(sys);
                         }
                         "federated_trust" => {
@@ -384,11 +550,23 @@ impl Application {
                                 enabled: config.sybil_config.federated_trust_enabled,
                                 max_trust_depth: config.sybil_config.federated_trust_max_depth,
                                 min_trust_paths: config.sybil_config.federated_trust_min_paths,
-                                require_direct_trust: config.sybil_config.federated_trust_require_direct,
-                                trusted_roots: config.sybil_config.federated_trust_trusted_roots.clone(),
-                                blocked_issuers: config.sybil_config.federated_trust_blocked_issuers.clone(),
-                                refresh_interval_secs: config.sybil_config.federated_trust_cache_ttl_secs,
-                                min_trust_level: config.sybil_config.federated_trust_min_trust_level,
+                                require_direct_trust: config
+                                    .sybil_config
+                                    .federated_trust_require_direct,
+                                trusted_roots: config
+                                    .sybil_config
+                                    .federated_trust_trusted_roots
+                                    .clone(),
+                                blocked_issuers: config
+                                    .sybil_config
+                                    .federated_trust_blocked_issuers
+                                    .clone(),
+                                refresh_interval_secs: config
+                                    .sybil_config
+                                    .federated_trust_cache_ttl_secs,
+                                min_trust_level: config
+                                    .sybil_config
+                                    .federated_trust_min_trust_level,
                             };
 
                             let ft_config = sybil_resistance::FederatedTrustConfig {
@@ -396,16 +574,23 @@ impl Application {
                                 federation_store: Arc::new(federation_store.clone()),
                                 our_issuer_id: config.issuer_id.clone(),
                                 cache_ttl_secs: config.sybil_config.federated_trust_cache_ttl_secs,
-                                max_token_age_secs: config.sybil_config.federated_trust_max_token_age_secs,
+                                max_token_age_secs: config
+                                    .sybil_config
+                                    .federated_trust_max_token_age_secs,
                             };
 
                             let sys = sybil_resistance::FederatedTrustSystem::new(ft_config)
                                 .await
-                                .context("Failed to initialize Federated Trust for combined mode")?;
+                                .context(
+                                    "Failed to initialize Federated Trust for combined mode",
+                                )?;
                             mechanisms.push(sys);
                         }
                         unknown => {
-                            warn!("⚠️  Unknown mechanism '{}' in SYBIL_COMBINED_MECHANISMS, skipping", unknown);
+                            warn!(
+                                "⚠️  Unknown mechanism '{}' in SYBIL_COMBINED_MECHANISMS, skipping",
+                                unknown
+                            );
                         }
                     }
                 }
@@ -415,20 +600,37 @@ impl Application {
                     None
                 } else {
                     // Create the appropriate combiner based on mode
-                    let combiner: Arc<dyn SybilResistance> = match config.sybil_config.combined_mode.to_lowercase().as_str() {
+                    let combiner: Arc<dyn SybilResistance> = match config
+                        .sybil_config
+                        .combined_mode
+                        .to_lowercase()
+                        .as_str()
+                    {
                         "or" => {
-                            info!("✅ Sybil resistance: Combined OR mode with {} mechanisms", mechanisms.len());
+                            info!(
+                                "✅ Sybil resistance: Combined OR mode with {} mechanisms",
+                                mechanisms.len()
+                            );
                             Arc::new(CombinedOr::new(mechanisms))
                         }
                         "and" => {
-                            info!("✅ Sybil resistance: Combined AND mode with {} mechanisms", mechanisms.len());
+                            info!(
+                                "✅ Sybil resistance: Combined AND mode with {} mechanisms",
+                                mechanisms.len()
+                            );
                             Arc::new(CombinedAnd::new(mechanisms))
                         }
                         "threshold" => {
                             let threshold = config.sybil_config.combined_threshold as usize;
-                            info!("✅ Sybil resistance: Combined Threshold mode ({}/{} mechanisms)", threshold, mechanisms.len());
-                            Arc::new(CombinedThreshold::new(mechanisms, threshold)
-                                .context("Failed to create threshold combiner")?)
+                            info!(
+                                "✅ Sybil resistance: Combined Threshold mode ({}/{} mechanisms)",
+                                threshold,
+                                mechanisms.len()
+                            );
+                            Arc::new(
+                                CombinedThreshold::new(mechanisms, threshold)
+                                    .context("Failed to create threshold combiner")?,
+                            )
                         }
                         unknown => {
                             warn!("⚠️  Unknown combined mode '{}', defaulting to OR", unknown);
@@ -438,7 +640,7 @@ impl Application {
                     Some(combiner)
                 }
             }
-            _ => None
+            _ => None,
         };
 
         // 5. App State & Router
@@ -461,18 +663,27 @@ impl Application {
         // Initialize router
         // Note: routes::metadata::well_known_handler must exist!
         let app = Router::new()
-            .route("/.well-known/issuer", get(routes::metadata::well_known_handler))
+            .route(
+                "/.well-known/issuer",
+                get(routes::metadata::well_known_handler),
+            )
             .route("/.well-known/keys", get(routes::metadata::keys_handler))
-            .route("/.well-known/federation", get(routes::metadata::federation_handler))
+            .route(
+                "/.well-known/federation",
+                get(routes::metadata::federation_handler),
+            )
             .route("/v1/oprf/issue", post(routes::issue::handle))
-            .route("/v1/oprf/issue/batch", post(routes::batch_issue::handle_batch))
+            .route(
+                "/v1/oprf/issue/batch",
+                post(routes::batch_issue::handle_batch),
+            )
             .layer(DefaultBodyLimit::max(64 * 1024));
-        
+
         // --- CRITICAL FIX: SHADOWING ---
         // Use `let app` to shadow the variable, allowing the type change from Router<S> to Router<()>
         let mut app = app.with_state(app_state);
 
-       #[cfg(feature = "human-gate-webauthn")]
+        #[cfg(feature = "human-gate-webauthn")]
         if let Some(wa) = &webauthn_state {
             // Use the factory function we created in handlers.rs
             // Note: `webauthn::router` handles the attestation check logic internally now!
@@ -490,7 +701,9 @@ impl Application {
 
                     let config_summary = routes::admin::ConfigSummary {
                         issuer_id: config.issuer_id.clone(),
-                        sybil_config: routes::admin::SybilConfigSummary::from_config(&config.sybil_config),
+                        sybil_config: routes::admin::SybilConfigSummary::from_config(
+                            &config.sybil_config,
+                        ),
                         epoch_duration_secs: config.epoch_duration_sec,
                         epoch_retention: config.epoch_retention,
                         require_tls: config.require_tls,
@@ -524,22 +737,33 @@ impl Application {
             }
         }
 
-        let listener = TcpListener::bind(config.bind_addr).await
+        let listener = TcpListener::bind(config.bind_addr)
+            .await
             .context("Failed to bind TCP listener")?;
-        
+
         info!("🚀 Server ready at {}", config.bind_addr);
 
         Ok(Self {
             port: listener.local_addr()?.port(),
-            server: axum::serve(listener, app),
+            listener,
+            app,
         })
     }
 
     pub async fn run(self) -> Result<()> {
-        self.server.with_graceful_shutdown(shutdown_signal()).await.context("Server error")
+        axum::serve(
+            self.listener,
+            self.app
+                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .context("Server error")
     }
 }
 
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c().await.expect("Failed to install CTRL+C handler");
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Failed to install CTRL+C handler");
 }

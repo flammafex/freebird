@@ -14,7 +14,9 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use std::sync::Arc;
 use std::time::Duration;
 
-use freebird_crypto::{Client, Server, Verifier, nullifier_key, verify_token_signature, compute_token_signature};
+use freebird_crypto::{
+    compute_token_signature, nullifier_key, verify_token_signature, Client, Server, Verifier,
+};
 use freebird_verifier::store::{InMemoryStore, SpendStore};
 
 /// Context used by all participants (must match issuer/verifier configuration)
@@ -70,28 +72,32 @@ async fn test_e2e_issue_and_verify_token() -> Result<()> {
     // Calculate expiration
     let exp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs() as i64 + EXP_SEC as i64;
+        .as_secs() as i64
+        + EXP_SEC as i64;
 
     let epoch = current_epoch();
 
     // Sign token metadata (creates the 64-byte ECDSA signature)
-    let signature = compute_token_signature(
-        &issuer_sk,
-        &eval_bytes,
-        &kid,
-        exp,
-        ISSUER_ID,
-    ).expect("compute signature");
+    let signature = compute_token_signature(&issuer_sk, &eval_bytes, &kid, exp, ISSUER_ID)
+        .expect("compute signature");
 
     // Combine VOPRF token (131 bytes) + signature (64 bytes) = 195 bytes
     let mut final_token_bytes = eval_bytes.clone();
     final_token_bytes.extend_from_slice(&signature);
     let final_token_b64 = Base64UrlUnpadded::encode_string(&final_token_bytes);
 
-    println!("✅ Issuer evaluated: token={} bytes, epoch={}, exp={}",
-             final_token_bytes.len(), epoch, exp);
+    println!(
+        "✅ Issuer evaluated: token={} bytes, epoch={}, exp={}",
+        final_token_bytes.len(),
+        epoch,
+        exp
+    );
 
-    assert_eq!(final_token_bytes.len(), 195, "Token should be 195 bytes (131 VOPRF + 64 sig)");
+    assert_eq!(
+        final_token_bytes.len(),
+        195,
+        "Token should be 195 bytes (131 VOPRF + 64 sig)"
+    );
 
     // ========== STEP 3: Client finalizes token ==========
     // Note: For verification, we only need the VOPRF part to derive the output
@@ -99,14 +105,21 @@ async fn test_e2e_issue_and_verify_token() -> Result<()> {
         .finalize(client_state, &eval_b64, &issuer_pk)
         .expect("finalize");
 
-    println!("✅ Client finalized: output={} chars (b64)", client_output_b64.len());
+    println!(
+        "✅ Client finalized: output={} chars (b64)",
+        client_output_b64.len()
+    );
 
     // ========== STEP 4: Verification (simulating POST /v1/verify) ==========
     println!("🔍 Starting verification...");
 
     // 4a. Decode and validate token length
     let token_with_sig = Base64UrlUnpadded::decode_vec(&final_token_b64)?;
-    assert_eq!(token_with_sig.len(), 195, "Token with signature should be 195 bytes");
+    assert_eq!(
+        token_with_sig.len(),
+        195,
+        "Token with signature should be 195 bytes"
+    );
 
     // 4b. Split token and signature
     let (token_data, sig_bytes) = token_with_sig.split_at(131);
@@ -131,8 +144,10 @@ async fn test_e2e_issue_and_verify_token() -> Result<()> {
         .expect("verify");
 
     // Client and verifier outputs should match (this proves the VOPRF protocol works)
-    assert_eq!(client_output_b64, verifier_output_b64,
-               "Client and verifier should derive same output");
+    assert_eq!(
+        client_output_b64, verifier_output_b64,
+        "Client and verifier should derive same output"
+    );
     println!("✅ VOPRF outputs match");
 
     // 4e. Check replay protection
@@ -140,12 +155,16 @@ async fn test_e2e_issue_and_verify_token() -> Result<()> {
     let spend_key = format!("freebird:spent:{}:{}", ISSUER_ID, null_key);
 
     // First verification should succeed
-    let first_spend = spend_store.mark_spent(&spend_key, Duration::from_secs(EXP_SEC)).await?;
+    let first_spend = spend_store
+        .mark_spent(&spend_key, Duration::from_secs(EXP_SEC))
+        .await?;
     assert!(first_spend, "First spend should succeed");
     println!("✅ Token marked as spent (first use)");
 
     // Second verification should fail (replay detected)
-    let replay = spend_store.mark_spent(&spend_key, Duration::from_secs(EXP_SEC)).await?;
+    let replay = spend_store
+        .mark_spent(&spend_key, Duration::from_secs(EXP_SEC))
+        .await?;
     assert!(!replay, "Replay should be detected");
     println!("✅ Replay correctly detected");
 
@@ -174,11 +193,12 @@ async fn test_e2e_tampered_token_rejected() -> Result<()> {
 
     let exp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs() as i64 + EXP_SEC as i64;
+        .as_secs() as i64
+        + EXP_SEC as i64;
 
     // Sign the token
-    let signature = compute_token_signature(&issuer_sk, &eval_bytes, &kid, exp, ISSUER_ID)
-        .expect("signature");
+    let signature =
+        compute_token_signature(&issuer_sk, &eval_bytes, &kid, exp, ISSUER_ID).expect("signature");
 
     // Create tampered token (flip a bit in the VOPRF part)
     let mut tampered_bytes = eval_bytes.clone();
@@ -189,16 +209,12 @@ async fn test_e2e_tampered_token_rejected() -> Result<()> {
     let (tampered_token, tampered_sig) = tampered_bytes.split_at(131);
     let sig: [u8; 64] = tampered_sig.try_into()?;
 
-    let sig_valid = verify_token_signature(
-        &issuer_pk,
-        tampered_token,
-        &sig,
-        &kid,
-        exp,
-        ISSUER_ID,
-    );
+    let sig_valid = verify_token_signature(&issuer_pk, tampered_token, &sig, &kid, exp, ISSUER_ID);
 
-    assert!(!sig_valid, "Tampered token should fail signature verification");
+    assert!(
+        !sig_valid,
+        "Tampered token should fail signature verification"
+    );
     println!("✅ Tampered token correctly rejected");
 
     Ok(())
@@ -226,7 +242,8 @@ async fn test_e2e_expired_token_rejected() -> Result<()> {
     // Create token that expired 1 hour ago
     let exp_past = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs() as i64 - 3600; // 1 hour in the past
+        .as_secs() as i64
+        - 3600; // 1 hour in the past
 
     // Sign with the past expiration
     let signature = compute_token_signature(&issuer_sk, &eval_bytes, &kid, exp_past, ISSUER_ID)
@@ -252,7 +269,10 @@ async fn test_e2e_expired_token_rejected() -> Result<()> {
 
     let is_expired = now > exp_past + max_clock_skew;
     assert!(is_expired, "Token should be detected as expired");
-    println!("✅ Expired token correctly detected (expired by {}s)", now - exp_past);
+    println!(
+        "✅ Expired token correctly detected (expired by {}s)",
+        now - exp_past
+    );
 
     Ok(())
 }
@@ -273,7 +293,8 @@ async fn test_e2e_multiple_tokens_different_inputs() -> Result<()> {
 
     let exp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs() as i64 + EXP_SEC as i64;
+        .as_secs() as i64
+        + EXP_SEC as i64;
 
     // Create and verify 3 different tokens
     for i in 0..3u8 {
@@ -297,7 +318,9 @@ async fn test_e2e_multiple_tokens_different_inputs() -> Result<()> {
         let null_key = nullifier_key(ISSUER_ID, &verifier_output_b64);
         let spend_key = format!("freebird:spent:{}:{}", ISSUER_ID, null_key);
 
-        let spent = spend_store.mark_spent(&spend_key, Duration::from_secs(EXP_SEC)).await?;
+        let spent = spend_store
+            .mark_spent(&spend_key, Duration::from_secs(EXP_SEC))
+            .await?;
         assert!(spent, "Token {} should be accepted (first use)", i);
 
         println!("✅ Token {} verified successfully", i);

@@ -29,7 +29,7 @@ impl Default for AdminRateLimitConfig {
     fn default() -> Self {
         Self {
             max_failures: 5,
-            window_duration: Duration::from_secs(5 * 60),  // 5 minutes
+            window_duration: Duration::from_secs(5 * 60), // 5 minutes
             block_duration: Duration::from_secs(15 * 60), // 15 minutes
         }
     }
@@ -213,7 +213,7 @@ mod tests {
         // Record failures
         assert!(!limiter.record_failure(ip).await); // 1
         assert!(!limiter.record_failure(ip).await); // 2
-        assert!(limiter.record_failure(ip).await);  // 3 - should block
+        assert!(limiter.record_failure(ip).await); // 3 - should block
 
         // Should be blocked now
         assert!(limiter.check_allowed(ip).await.is_err());

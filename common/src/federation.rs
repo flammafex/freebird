@@ -373,11 +373,21 @@ impl TrustPolicy {
 }
 
 // Default value functions for serde
-fn default_true() -> bool { true }
-fn default_max_trust_depth() -> u32 { 2 }
-fn default_min_trust_paths() -> u32 { 1 }
-fn default_refresh_interval() -> u64 { 3600 }
-fn default_min_trust_level() -> u8 { 50 }
+fn default_true() -> bool {
+    true
+}
+fn default_max_trust_depth() -> u32 {
+    2
+}
+fn default_min_trust_paths() -> u32 {
+    1
+}
+fn default_refresh_interval() -> u64 {
+    3600
+}
+fn default_min_trust_level() -> u8 {
+    50
+}
 
 /// Helper module for base64 encoding of byte slices
 mod base64_bytes {
@@ -421,9 +431,9 @@ mod base64_signature {
         let s = String::deserialize(deserializer)?;
         let bytes = Base64UrlUnpadded::decode_vec(&s).map_err(serde::de::Error::custom)?;
         let len = bytes.len();
-        bytes.try_into().map_err(|_| {
-            serde::de::Error::custom(format!("expected 64 bytes, got {}", len))
-        })
+        bytes
+            .try_into()
+            .map_err(|_| serde::de::Error::custom(format!("expected 64 bytes, got {}", len)))
     }
 }
 
@@ -465,8 +475,8 @@ mod tests {
         };
 
         assert!(!vouch.is_expired(999)); // Not expired
-        assert!(vouch.is_expired(1000));  // Expired at exact time
-        assert!(vouch.is_expired(1001));  // Expired after
+        assert!(vouch.is_expired(1000)); // Expired at exact time
+        assert!(vouch.is_expired(1001)); // Expired after
     }
 
     #[test]
@@ -573,7 +583,10 @@ mod tests {
         vouch.signature = signature;
 
         // Verify the vouch with correct public key
-        assert!(vouch.verify(&pk), "Vouch should verify with correct public key");
+        assert!(
+            vouch.verify(&pk),
+            "Vouch should verify with correct public key"
+        );
     }
 
     #[test]
@@ -740,7 +753,10 @@ mod tests {
         assert!(revocation.verify(&pk_a), "Should verify with correct key");
 
         // Should NOT verify with different key
-        assert!(!revocation.verify(&pk_b), "Should not verify with wrong key");
+        assert!(
+            !revocation.verify(&pk_b),
+            "Should not verify with wrong key"
+        );
     }
 
     #[test]

@@ -2,11 +2,11 @@
 use anyhow::{anyhow, Context, Result};
 use base64ct::Encoding;
 use std::sync::Arc;
-use tracing::{info, debug, warn};
+use tracing::{debug, info, warn};
 
-use freebird_common::api::SybilProof;
-use crate::sybil_resistance::SybilResistance; // Trait still lives in common/sybil
 use super::handlers::WebAuthnState;
+use crate::sybil_resistance::SybilResistance; // Trait still lives in common/sybil
+use freebird_common::api::SybilProof;
 
 pub struct WebAuthnGate {
     max_proof_age: i64,
@@ -21,8 +21,14 @@ impl WebAuthnGate {
         // This creates a deterministic but secret key for HMAC verification
         let proof_key = Self::derive_proof_key(&state.webauthn.rp_id);
 
-        info!(max_proof_age_secs = max_proof_age, "Initialized WebAuthn Sybil resistance");
-        Self { max_proof_age, proof_key }
+        info!(
+            max_proof_age_secs = max_proof_age,
+            "Initialized WebAuthn Sybil resistance"
+        );
+        Self {
+            max_proof_age,
+            proof_key,
+        }
     }
 
     /// Derive a proof verification key from the RP ID and server secret
@@ -36,7 +42,8 @@ impl WebAuthnGate {
     /// - Unforgeable (requires server secret)
     fn derive_proof_key(rp_id: &str) -> [u8; 32] {
         // Check for configured secret
-        let (secret_bytes, has_secret) = if let Ok(secret) = std::env::var("WEBAUTHN_PROOF_SECRET") {
+        let (secret_bytes, has_secret) = if let Ok(secret) = std::env::var("WEBAUTHN_PROOF_SECRET")
+        {
             if secret.len() < 32 {
                 warn!(
                     "⚠️  WEBAUTHN_PROOF_SECRET is set but too short ({} chars). \
@@ -89,13 +96,21 @@ impl WebAuthnGate {
 impl SybilResistance for WebAuthnGate {
     fn verify(&self, proof: &SybilProof) -> Result<()> {
         match proof {
-            SybilProof::WebAuthn { username, auth_proof, timestamp } => {
+            SybilProof::WebAuthn {
+                username,
+                auth_proof,
+                timestamp,
+            } => {
                 let now = chrono::Utc::now().timestamp();
                 let age = now - timestamp;
 
                 // Validate timestamp
                 if age > self.max_proof_age {
-                    return Err(anyhow!("Authentication proof expired (age: {}s, max: {}s)", age, self.max_proof_age));
+                    return Err(anyhow!(
+                        "Authentication proof expired (age: {}s, max: {}s)",
+                        age,
+                        self.max_proof_age
+                    ));
                 }
                 if age < -60 {
                     return Err(anyhow!("Timestamp in future"));
@@ -106,7 +121,10 @@ impl SybilResistance for WebAuthnGate {
                     .context("Invalid proof encoding")?;
 
                 if proof_bytes.len() != 32 {
-                    return Err(anyhow!("Invalid proof length: expected 32 bytes, got {}", proof_bytes.len()));
+                    return Err(anyhow!(
+                        "Invalid proof length: expected 32 bytes, got {}",
+                        proof_bytes.len()
+                    ));
                 }
 
                 // CRITICAL: Verify the proof is cryptographically valid
@@ -139,5 +157,7 @@ impl SybilResistance for WebAuthnGate {
         matches!(proof, SybilProof::WebAuthn { .. })
     }
 
-    fn cost(&self) -> u64 { 0 }
+    fn cost(&self) -> u64 {
+        0
+    }
 }

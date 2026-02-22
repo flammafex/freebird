@@ -105,7 +105,12 @@ async fn normal_flow() -> Result<()> {
     // Issue token
     let (token_b64, issuer_id, exp, epoch) = issue_token(&http, issuer_url, ctx).await?;
 
-    println!("✅ Token issued: exp={} ({}s from now), epoch={}", exp, exp - now(), epoch);
+    println!(
+        "✅ Token issued: exp={} ({}s from now), epoch={}",
+        exp,
+        exp - now(),
+        epoch
+    );
 
     // Verify token
     let success = verify_token(&http, verifier_url, &token_b64, &issuer_id, exp, epoch).await?;
@@ -184,7 +189,8 @@ async fn test_expired_token() -> Result<()> {
     println!("\n⏰ Step 2: Attempting verification with expired timestamp...");
     println!("   Fake exp: {} (600s ago)", fake_exp);
 
-    let success = verify_token(&http, verifier_url, &token_b64, &issuer_id, fake_exp, epoch).await?;
+    let success =
+        verify_token(&http, verifier_url, &token_b64, &issuer_id, fake_exp, epoch).await?;
 
     if !success {
         println!("✅ EXPIRATION VALIDATION WORKING! Expired token was rejected.");
@@ -330,8 +336,8 @@ async fn issue_token(
         .post(format!("{issuer_url}/v1/oprf/issue"))
         .json(&IssueReq {
             blinded_element_b64: blinded_b64,
-            ctx_b64: None,      // <--- Initialize new field
-            sybil_proof: None,  // <--- Initialize new field
+            ctx_b64: None,     // <--- Initialize new field
+            sybil_proof: None, // <--- Initialize new field
         })
         .send()
         .await?

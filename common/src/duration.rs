@@ -41,11 +41,7 @@ pub struct ParseDurationError {
 
 impl fmt::Display for ParseDurationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "invalid duration '{}': {}",
-            self.input, self.reason
-        )
+        write!(f, "invalid duration '{}': {}", self.input, self.reason)
     }
 }
 
@@ -127,10 +123,10 @@ pub fn parse_duration(input: &str) -> Result<u64, ParseDurationError> {
             current_num.clear();
 
             let multiplier = match c.to_ascii_lowercase() {
-                'd' => 86400,  // days
-                'h' => 3600,   // hours
-                'm' => 60,     // minutes
-                's' => 1,      // seconds
+                'd' => 86400, // days
+                'h' => 3600,  // hours
+                'm' => 60,    // minutes
+                's' => 1,     // seconds
                 _ => {
                     return Err(ParseDurationError {
                         input: input.to_string(),
@@ -142,15 +138,18 @@ pub fn parse_duration(input: &str) -> Result<u64, ParseDurationError> {
                 }
             };
 
-            total_secs = total_secs.checked_add(num.checked_mul(multiplier).ok_or_else(|| {
-                ParseDurationError {
+            total_secs = total_secs
+                .checked_add(
+                    num.checked_mul(multiplier)
+                        .ok_or_else(|| ParseDurationError {
+                            input: input.to_string(),
+                            reason: "duration overflow".to_string(),
+                        })?,
+                )
+                .ok_or_else(|| ParseDurationError {
                     input: input.to_string(),
                     reason: "duration overflow".to_string(),
-                }
-            })?).ok_or_else(|| ParseDurationError {
-                input: input.to_string(),
-                reason: "duration overflow".to_string(),
-            })?;
+                })?;
         } else if !c.is_whitespace() {
             return Err(ParseDurationError {
                 input: input.to_string(),
@@ -363,8 +362,14 @@ mod tests {
     fn test_parse_combined() {
         assert_eq!(parse_duration("1d12h").unwrap(), 86400 + 12 * 3600);
         assert_eq!(parse_duration("1h30m").unwrap(), 3600 + 30 * 60);
-        assert_eq!(parse_duration("1d2h3m4s").unwrap(), 86400 + 2 * 3600 + 3 * 60 + 4);
-        assert_eq!(parse_duration("2d12h30m").unwrap(), 2 * 86400 + 12 * 3600 + 30 * 60);
+        assert_eq!(
+            parse_duration("1d2h3m4s").unwrap(),
+            86400 + 2 * 3600 + 3 * 60 + 4
+        );
+        assert_eq!(
+            parse_duration("2d12h30m").unwrap(),
+            2 * 86400 + 12 * 3600 + 30 * 60
+        );
     }
 
     #[test]
@@ -373,7 +378,10 @@ mod tests {
         assert_eq!(parse_duration("1H").unwrap(), 3600);
         assert_eq!(parse_duration("1M").unwrap(), 60);
         assert_eq!(parse_duration("1S").unwrap(), 1);
-        assert_eq!(parse_duration("1d2H3m4S").unwrap(), 86400 + 2 * 3600 + 3 * 60 + 4);
+        assert_eq!(
+            parse_duration("1d2H3m4S").unwrap(),
+            86400 + 2 * 3600 + 3 * 60 + 4
+        );
     }
 
     #[test]
@@ -419,7 +427,11 @@ mod tests {
         for &secs in &test_cases {
             let formatted = format_duration(secs);
             let parsed = parse_duration(&formatted).unwrap();
-            assert_eq!(secs, parsed, "roundtrip failed for {} -> {}", secs, formatted);
+            assert_eq!(
+                secs, parsed,
+                "roundtrip failed for {} -> {}",
+                secs, formatted
+            );
         }
     }
 

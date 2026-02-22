@@ -44,14 +44,9 @@ fn test_signature_based_token_generation() {
     let exp = 1234567890i64;
     let issuer_id = "issuer:freebird:v1";
 
-    let signature = freebird_crypto::compute_token_signature(
-        &issuer_sk,
-        &voprf_token,
-        kid,
-        exp,
-        issuer_id,
-    )
-    .expect("compute signature");
+    let signature =
+        freebird_crypto::compute_token_signature(&issuer_sk, &voprf_token, kid, exp, issuer_id)
+            .expect("compute signature");
 
     assert_eq!(signature.len(), 64, "ECDSA signature should be 64 bytes");
 
@@ -98,7 +93,9 @@ fn test_token_structure() {
     let input = [0xAAu8; 32];
     let (blinded_b64, state) = client.blind(&input).expect("blind");
     let eval_b64 = server.evaluate_with_proof(&blinded_b64).expect("evaluate");
-    let (token_b64, _) = client.finalize(state, &eval_b64, &pubkey).expect("finalize");
+    let (token_b64, _) = client
+        .finalize(state, &eval_b64, &pubkey)
+        .expect("finalize");
     let voprf_token = Base64UrlUnpadded::decode_vec(&token_b64).expect("decode");
 
     let kid = "key-001";
@@ -106,8 +103,9 @@ fn test_token_structure() {
     let issuer_id = "issuer:test";
 
     // Signature-based token (195 bytes)
-    let signature = freebird_crypto::compute_token_signature(&sk, &voprf_token, kid, exp, issuer_id)
-        .expect("signature");
+    let signature =
+        freebird_crypto::compute_token_signature(&sk, &voprf_token, kid, exp, issuer_id)
+            .expect("signature");
     let mut token = voprf_token.clone();
     token.extend_from_slice(&signature);
 
@@ -116,7 +114,10 @@ fn test_token_structure() {
     assert_eq!(token.len(), 195, "Total token = 131 + 64 = 195 bytes");
 
     println!("✅ Token structure:");
-    println!("   VOPRF token: {} bytes (VERSION + Point A + Point B + DLEQ proof)", voprf_token.len());
+    println!(
+        "   VOPRF token: {} bytes (VERSION + Point A + Point B + DLEQ proof)",
+        voprf_token.len()
+    );
     println!("   ECDSA signature: {} bytes (r + s)", signature.len());
     println!("   Total: {} bytes", token.len());
 }
@@ -133,7 +134,9 @@ fn test_signature_determinism() {
     let input = [0xBBu8; 32];
     let (blinded_b64, state) = client.blind(&input).expect("blind");
     let eval_b64 = server.evaluate_with_proof(&blinded_b64).expect("evaluate");
-    let (token_b64, _) = client.finalize(state, &eval_b64, &pubkey).expect("finalize");
+    let (token_b64, _) = client
+        .finalize(state, &eval_b64, &pubkey)
+        .expect("finalize");
     let token = Base64UrlUnpadded::decode_vec(&token_b64).expect("decode");
 
     let kid = "key-001";
@@ -141,14 +144,20 @@ fn test_signature_determinism() {
     let issuer_id = "issuer:test";
 
     // Sign twice with same inputs
-    let sig1 = freebird_crypto::compute_token_signature(&sk, &token, kid, exp, issuer_id).expect("sig1");
-    let sig2 = freebird_crypto::compute_token_signature(&sk, &token, kid, exp, issuer_id).expect("sig2");
+    let sig1 =
+        freebird_crypto::compute_token_signature(&sk, &token, kid, exp, issuer_id).expect("sig1");
+    let sig2 =
+        freebird_crypto::compute_token_signature(&sk, &token, kid, exp, issuer_id).expect("sig2");
 
     assert_eq!(sig1, sig2, "Signatures should be deterministic (RFC 6979)");
 
     // Both should verify
-    assert!(freebird_crypto::verify_token_signature(&pubkey, &token, &sig1, kid, exp, issuer_id));
-    assert!(freebird_crypto::verify_token_signature(&pubkey, &token, &sig2, kid, exp, issuer_id));
+    assert!(freebird_crypto::verify_token_signature(
+        &pubkey, &token, &sig1, kid, exp, issuer_id
+    ));
+    assert!(freebird_crypto::verify_token_signature(
+        &pubkey, &token, &sig2, kid, exp, issuer_id
+    ));
 
     println!("✅ Signature determinism test passed!");
 }
@@ -165,7 +174,9 @@ fn test_signature_tampering_detection() {
     let input = [0xCCu8; 32];
     let (blinded_b64, state) = client.blind(&input).expect("blind");
     let eval_b64 = server.evaluate_with_proof(&blinded_b64).expect("evaluate");
-    let (token_b64, _) = client.finalize(state, &eval_b64, &pubkey).expect("finalize");
+    let (token_b64, _) = client
+        .finalize(state, &eval_b64, &pubkey)
+        .expect("finalize");
     let mut token = Base64UrlUnpadded::decode_vec(&token_b64).expect("decode");
 
     let kid = "key-001";
@@ -173,10 +184,13 @@ fn test_signature_tampering_detection() {
     let issuer_id = "issuer:test";
 
     // Sign original token
-    let signature = freebird_crypto::compute_token_signature(&sk, &token, kid, exp, issuer_id).expect("sig");
+    let signature =
+        freebird_crypto::compute_token_signature(&sk, &token, kid, exp, issuer_id).expect("sig");
 
     // Verify original works
-    assert!(freebird_crypto::verify_token_signature(&pubkey, &token, &signature, kid, exp, issuer_id));
+    assert!(freebird_crypto::verify_token_signature(
+        &pubkey, &token, &signature, kid, exp, issuer_id
+    ));
 
     // Tamper with token
     token[0] ^= 0x01;
@@ -213,7 +227,9 @@ fn test_federation_scenario() {
     let input_a = [0xAAu8; 32];
     let (blinded_a, state_a) = client_a.blind(&input_a).expect("blind A");
     let eval_a = server_a.evaluate_with_proof(&blinded_a).expect("eval A");
-    let (token_a_b64, _) = client_a.finalize(state_a, &eval_a, &pubkey_a).expect("finalize A");
+    let (token_a_b64, _) = client_a
+        .finalize(state_a, &eval_a, &pubkey_a)
+        .expect("finalize A");
     let token_a = Base64UrlUnpadded::decode_vec(&token_a_b64).expect("decode A");
 
     // Client gets token from Issuer B
@@ -221,7 +237,9 @@ fn test_federation_scenario() {
     let input_b = [0xBBu8; 32];
     let (blinded_b, state_b) = client_b.blind(&input_b).expect("blind B");
     let eval_b = server_b.evaluate_with_proof(&blinded_b).expect("eval B");
-    let (token_b_b64, _) = client_b.finalize(state_b, &eval_b, &pubkey_b).expect("finalize B");
+    let (token_b_b64, _) = client_b
+        .finalize(state_b, &eval_b, &pubkey_b)
+        .expect("finalize B");
     let token_b = Base64UrlUnpadded::decode_vec(&token_b_b64).expect("decode B");
 
     // Both issuers sign their tokens
@@ -240,16 +258,46 @@ fn test_federation_scenario() {
     // No secret keys required!
 
     // Verify token from Issuer A
-    let valid_a = freebird_crypto::verify_token_signature(&pubkey_a, &token_a, &sig_a, kid_a, exp, issuer_id_a);
-    assert!(valid_a, "Token from Issuer A should verify with public key only");
+    let valid_a = freebird_crypto::verify_token_signature(
+        &pubkey_a,
+        &token_a,
+        &sig_a,
+        kid_a,
+        exp,
+        issuer_id_a,
+    );
+    assert!(
+        valid_a,
+        "Token from Issuer A should verify with public key only"
+    );
 
     // Verify token from Issuer B
-    let valid_b = freebird_crypto::verify_token_signature(&pubkey_b, &token_b, &sig_b, kid_b, exp, issuer_id_b);
-    assert!(valid_b, "Token from Issuer B should verify with public key only");
+    let valid_b = freebird_crypto::verify_token_signature(
+        &pubkey_b,
+        &token_b,
+        &sig_b,
+        kid_b,
+        exp,
+        issuer_id_b,
+    );
+    assert!(
+        valid_b,
+        "Token from Issuer B should verify with public key only"
+    );
 
     // Cross-verification should fail (wrong issuer's public key)
-    let invalid_cross = freebird_crypto::verify_token_signature(&pubkey_a, &token_b, &sig_b, kid_b, exp, issuer_id_b);
-    assert!(!invalid_cross, "Token from B should not verify with A's key");
+    let invalid_cross = freebird_crypto::verify_token_signature(
+        &pubkey_a,
+        &token_b,
+        &sig_b,
+        kid_b,
+        exp,
+        issuer_id_b,
+    );
+    assert!(
+        !invalid_cross,
+        "Token from B should not verify with A's key"
+    );
 
     println!("✅ Federation scenario test passed!");
     println!("   Verifier successfully authenticated tokens from 2 issuers");

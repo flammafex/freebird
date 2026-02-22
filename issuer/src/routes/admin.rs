@@ -21,7 +21,7 @@ use crate::multi_key_voprf::{KeyInfo, KeyStats, MultiKeyVoprfCore};
 use crate::routes::admin_rate_limit::AdminRateLimiter;
 use crate::sybil_resistance::invitation::{InvitationFilter, InvitationStats, InvitationSystem};
 use axum::{
-    extract::{Path, State, Query},
+    extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
     Json,
@@ -31,7 +31,7 @@ use p256::ecdsa::SigningKey;
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use tracing::{info, warn};
@@ -282,13 +282,19 @@ impl SybilConfigSummary {
                 SybilModeSettings::None {},
             ),
             "pow" | "proof_of_work" => (
-                format!("Proof of Work with {} leading zero bits required", config.pow_difficulty),
+                format!(
+                    "Proof of Work with {} leading zero bits required",
+                    config.pow_difficulty
+                ),
                 SybilModeSettings::ProofOfWork {
                     difficulty: config.pow_difficulty,
                 },
             ),
             "rate_limit" => (
-                format!("Rate limiting - one token per {}", format_duration(config.rate_limit_secs)),
+                format!(
+                    "Rate limiting - one token per {}",
+                    format_duration(config.rate_limit_secs)
+                ),
                 SybilModeSettings::RateLimit {
                     interval: format_duration(config.rate_limit_secs),
                     interval_secs: config.rate_limit_secs,
@@ -309,14 +315,17 @@ impl SybilConfigSummary {
                 },
             ),
             "progressive_trust" => {
-                let levels: Vec<TrustLevelSummary> = config.progressive_trust_levels
+                let levels: Vec<TrustLevelSummary> = config
+                    .progressive_trust_levels
                     .iter()
                     .filter_map(|s| {
                         let parts: Vec<&str> = s.split(':').collect();
                         if parts.len() >= 3 {
-                            let min_age_secs: u64 = freebird_common::duration::parse_duration(parts[0]).ok()?;
+                            let min_age_secs: u64 =
+                                freebird_common::duration::parse_duration(parts[0]).ok()?;
                             let max_tokens: u32 = parts[1].parse().ok()?;
-                            let cooldown_secs: u64 = freebird_common::duration::parse_duration(parts[2]).ok()?;
+                            let cooldown_secs: u64 =
+                                freebird_common::duration::parse_duration(parts[2]).ok()?;
                             Some(TrustLevelSummary {
                                 min_age: format_duration(min_age_secs),
                                 min_age_secs,
@@ -333,19 +342,31 @@ impl SybilConfigSummary {
                     format!("Progressive Trust with {} trust levels", levels.len()),
                     SybilModeSettings::ProgressiveTrust {
                         levels,
-                        persistence_path: config.progressive_trust_persistence_path.display().to_string(),
+                        persistence_path: config
+                            .progressive_trust_persistence_path
+                            .display()
+                            .to_string(),
                     },
                 )
             }
             "proof_of_diversity" => (
-                format!("Proof of Diversity - minimum score {} required", config.proof_of_diversity_min_score),
+                format!(
+                    "Proof of Diversity - minimum score {} required",
+                    config.proof_of_diversity_min_score
+                ),
                 SybilModeSettings::ProofOfDiversity {
                     min_score: config.proof_of_diversity_min_score,
-                    persistence_path: config.proof_of_diversity_persistence_path.display().to_string(),
+                    persistence_path: config
+                        .proof_of_diversity_persistence_path
+                        .display()
+                        .to_string(),
                 },
             ),
             "multi_party_vouching" => (
-                format!("Multi-Party Vouching - {} vouchers required", config.multi_party_vouching_required_vouchers),
+                format!(
+                    "Multi-Party Vouching - {} vouchers required",
+                    config.multi_party_vouching_required_vouchers
+                ),
                 SybilModeSettings::MultiPartyVouching {
                     required_vouchers: config.multi_party_vouching_required_vouchers,
                     cooldown: format_duration(config.multi_party_vouching_cooldown_secs),
@@ -354,7 +375,10 @@ impl SybilConfigSummary {
                     expires_secs: config.multi_party_vouching_expires_secs,
                     new_user_wait: format_duration(config.multi_party_vouching_new_user_wait_secs),
                     new_user_wait_secs: config.multi_party_vouching_new_user_wait_secs,
-                    persistence_path: config.multi_party_vouching_persistence_path.display().to_string(),
+                    persistence_path: config
+                        .multi_party_vouching_persistence_path
+                        .display()
+                        .to_string(),
                 },
             ),
             "federated_trust" => (
@@ -374,12 +398,18 @@ impl SybilConfigSummary {
             "webauthn" => (
                 "WebAuthn - hardware-backed authentication".to_string(),
                 SybilModeSettings::WebAuthn {
-                    max_proof_age: config.webauthn_max_proof_age.map(|s| format_duration(s as u64)),
+                    max_proof_age: config
+                        .webauthn_max_proof_age
+                        .map(|s| format_duration(s as u64)),
                     max_proof_age_secs: config.webauthn_max_proof_age,
                 },
             ),
             "combined" => (
-                format!("Combined mode ({}) with {} mechanisms", config.combined_mode, config.combined_mechanisms.len()),
+                format!(
+                    "Combined mode ({}) with {} mechanisms",
+                    config.combined_mode,
+                    config.combined_mechanisms.len()
+                ),
                 SybilModeSettings::None {}, // Settings will be in combined_* fields
             ),
             other => (
@@ -388,19 +418,20 @@ impl SybilConfigSummary {
             ),
         };
 
-        let (combined_mechanisms, combined_mode_type, combined_threshold) = if config.mode == "combined" {
-            (
-                Some(config.combined_mechanisms.clone()),
-                Some(config.combined_mode.clone()),
-                if config.combined_mode == "threshold" {
-                    Some(config.combined_threshold)
-                } else {
-                    None
-                },
-            )
-        } else {
-            (None, None, None)
-        };
+        let (combined_mechanisms, combined_mode_type, combined_threshold) =
+            if config.mode == "combined" {
+                (
+                    Some(config.combined_mechanisms.clone()),
+                    Some(config.combined_mode.clone()),
+                    if config.combined_mode == "threshold" {
+                        Some(config.combined_threshold)
+                    } else {
+                        None
+                    },
+                )
+            } else {
+                (None, None, None)
+            };
 
         Self {
             mode: config.mode.clone(),
@@ -534,7 +565,9 @@ pub struct ListInvitationsParams {
     pub date_to: Option<u64>,
 }
 
-fn default_limit() -> usize { 50 }
+fn default_limit() -> usize {
+    50
+}
 
 /// Paginated response for listing invitations
 #[derive(Debug, Serialize)]
@@ -607,7 +640,9 @@ pub struct ListAuditParams {
     pub level: Option<String>,
 }
 
-fn default_audit_limit() -> usize { 100 }
+fn default_audit_limit() -> usize {
+    100
+}
 
 /// Paginated response for listing audit logs
 #[derive(Debug, Serialize)]
@@ -654,7 +689,9 @@ impl AdminError {
     fn message(&self) -> String {
         match self {
             AdminError::Unauthorized => "unauthorized".to_string(),
-            AdminError::RateLimited(secs) => format!("too many failed attempts, try again in {} seconds", secs),
+            AdminError::RateLimited(secs) => {
+                format!("too many failed attempts, try again in {} seconds", secs)
+            }
             AdminError::UserNotFound(id) => format!("user not found: {}", id),
             AdminError::InvitationNotFound => "invitation not found".to_string(),
             AdminError::InvalidRequest(msg) => format!("invalid request: {}", msg),
@@ -698,7 +735,9 @@ const MAX_KID_LENGTH: usize = 128;
 /// Valid characters: alphanumeric, hyphens, underscores, colons, periods, and @
 fn validate_user_id(user_id: &str) -> Result<(), AdminError> {
     if user_id.is_empty() {
-        return Err(AdminError::InvalidRequest("user_id cannot be empty".to_string()));
+        return Err(AdminError::InvalidRequest(
+            "user_id cannot be empty".to_string(),
+        ));
     }
 
     if user_id.len() > MAX_USER_ID_LENGTH {
@@ -710,16 +749,19 @@ fn validate_user_id(user_id: &str) -> Result<(), AdminError> {
 
     // Check for valid characters (alphanumeric, hyphens, underscores, colons, periods, @)
     // This allows common formats like emails, DIDs, and UUIDs
-    if !user_id.chars().all(|c| c.is_alphanumeric() || "-_:.@".contains(c)) {
+    if !user_id
+        .chars()
+        .all(|c| c.is_alphanumeric() || "-_:.@".contains(c))
+    {
         return Err(AdminError::InvalidRequest(
-            "user_id contains invalid characters (allowed: alphanumeric, - _ : . @)".to_string()
+            "user_id contains invalid characters (allowed: alphanumeric, - _ : . @)".to_string(),
         ));
     }
 
     // Reject control characters and null bytes
     if user_id.chars().any(|c| c.is_control()) {
         return Err(AdminError::InvalidRequest(
-            "user_id cannot contain control characters".to_string()
+            "user_id cannot contain control characters".to_string(),
         ));
     }
 
@@ -729,7 +771,9 @@ fn validate_user_id(user_id: &str) -> Result<(), AdminError> {
 /// Validate a key ID (kid) input
 fn validate_kid(kid: &str) -> Result<(), AdminError> {
     if kid.is_empty() {
-        return Err(AdminError::InvalidRequest("kid cannot be empty".to_string()));
+        return Err(AdminError::InvalidRequest(
+            "kid cannot be empty".to_string(),
+        ));
     }
 
     if kid.len() > MAX_KID_LENGTH {
@@ -740,9 +784,12 @@ fn validate_kid(kid: &str) -> Result<(), AdminError> {
     }
 
     // Similar character restrictions as user_id
-    if !kid.chars().all(|c| c.is_alphanumeric() || "-_:.".contains(c)) {
+    if !kid
+        .chars()
+        .all(|c| c.is_alphanumeric() || "-_:.".contains(c))
+    {
         return Err(AdminError::InvalidRequest(
-            "kid contains invalid characters (allowed: alphanumeric, - _ : .)".to_string()
+            "kid contains invalid characters (allowed: alphanumeric, - _ : .)".to_string(),
         ));
     }
 
@@ -764,7 +811,11 @@ pub async fn admin_ui_handler() -> impl IntoResponse {
 // ============================================================================
 
 /// Extract client IP from headers or connection info
-fn extract_client_ip(headers: &HeaderMap, behind_proxy: bool) -> Option<IpAddr> {
+fn extract_client_ip(
+    headers: &HeaderMap,
+    behind_proxy: bool,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+) -> Option<IpAddr> {
     if behind_proxy {
         // Try X-Forwarded-For first (may contain comma-separated list)
         if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
@@ -782,7 +833,7 @@ fn extract_client_ip(headers: &HeaderMap, behind_proxy: bool) -> Option<IpAddr> 
             }
         }
     }
-    None
+    connect_info.map(|info| info.0.ip())
 }
 
 /// Verify API key using constant-time comparison with rate limiting
@@ -792,7 +843,32 @@ async fn verify_api_key_with_rate_limit(
     client_ip: Option<IpAddr>,
 ) -> Result<(), AdminError> {
     // Use a fallback IP for rate limiting if we can't determine the real one
-    let ip = client_ip.unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+    let Some(ip) = client_ip else {
+        warn!("Admin API request without client IP; skipping auth rate-limit");
+
+        let provided_key = headers
+            .get("x-admin-key")
+            .and_then(|v| v.to_str().ok())
+            .ok_or_else(|| AdminError::Unauthorized)?;
+
+        let expected_bytes = state.api_key.as_bytes();
+        let provided_bytes = provided_key.as_bytes();
+
+        let is_valid = if expected_bytes.len() == provided_bytes.len() {
+            expected_bytes.ct_eq(provided_bytes).into()
+        } else {
+            let dummy = vec![0u8; expected_bytes.len()];
+            let _ = expected_bytes.ct_eq(&dummy);
+            false
+        };
+
+        if !is_valid {
+            warn!("Invalid admin API key provided from unknown IP");
+            return Err(AdminError::Unauthorized);
+        }
+
+        return Ok(());
+    };
 
     // Check if IP is currently rate-limited
     if let Err(seconds_remaining) = state.rate_limiter.check_allowed(ip).await {
@@ -835,7 +911,6 @@ async fn verify_api_key_with_rate_limit(
     Ok(())
 }
 
-
 // ============================================================================
 // Invitation System Handlers
 // ============================================================================
@@ -843,8 +918,9 @@ async fn verify_api_key_with_rate_limit(
 pub async fn health_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<HealthResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     Ok(Json(HealthResponse {
@@ -858,8 +934,9 @@ pub async fn health_handler(
 pub async fn get_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<StatsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let stats = state.invitation_system.get_stats().await;
@@ -884,8 +961,9 @@ pub async fn get_stats_handler(
 pub async fn get_config_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<ConfigResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let summary = &state.config_summary;
@@ -909,8 +987,9 @@ pub async fn get_config_handler(
 pub async fn metrics_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<String, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let stats = state.invitation_system.get_stats().await;
@@ -1002,9 +1081,10 @@ pub async fn metrics_handler(
 pub async fn grant_invites_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(req): Json<GrantInvitesRequest>,
 ) -> Result<Json<GrantInvitesResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate inputs
@@ -1038,11 +1118,14 @@ pub async fn grant_invites_handler(
     );
 
     // Audit log
-    state.audit_log.log(
-        AuditEntry::success("invites_granted")
-            .with_user(&req.user_id)
-            .with_details(format!("Granted {} invite(s)", req.count))
-    ).await;
+    state
+        .audit_log
+        .log(
+            AuditEntry::success("invites_granted")
+                .with_user(&req.user_id)
+                .with_details(format!("Granted {} invite(s)", req.count)),
+        )
+        .await;
 
     Ok(Json(GrantInvitesResponse {
         ok: true,
@@ -1055,9 +1138,10 @@ pub async fn grant_invites_handler(
 pub async fn ban_user_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(req): Json<BanUserRequest>,
 ) -> Result<Json<BanUserResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate inputs
@@ -1081,15 +1165,18 @@ pub async fn ban_user_handler(
     );
 
     // Audit log
-    state.audit_log.log(
-        AuditEntry::warning("user_banned")
-            .with_user(&req.user_id)
-            .with_details(format!(
-                "Banned {} user(s){}",
-                banned_count,
-                if req.ban_tree { " (tree ban)" } else { "" }
-            ))
-    ).await;
+    state
+        .audit_log
+        .log(
+            AuditEntry::warning("user_banned")
+                .with_user(&req.user_id)
+                .with_details(format!(
+                    "Banned {} user(s){}",
+                    banned_count,
+                    if req.ban_tree { " (tree ban)" } else { "" }
+                )),
+        )
+        .await;
 
     Ok(Json(BanUserResponse {
         ok: true,
@@ -1101,9 +1188,10 @@ pub async fn ban_user_handler(
 pub async fn add_bootstrap_user_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(req): Json<AddBootstrapUserRequest>,
 ) -> Result<Json<AddBootstrapUserResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate inputs
@@ -1121,11 +1209,14 @@ pub async fn add_bootstrap_user_handler(
     );
 
     // Audit log
-    state.audit_log.log(
-        AuditEntry::success("bootstrap_user_added")
-            .with_user(&req.user_id)
-            .with_details(format!("Granted {} invites", req.invite_count))
-    ).await;
+    state
+        .audit_log
+        .log(
+            AuditEntry::success("bootstrap_user_added")
+                .with_user(&req.user_id)
+                .with_details(format!("Granted {} invites", req.invite_count)),
+        )
+        .await;
 
     Ok(Json(AddBootstrapUserResponse {
         ok: true,
@@ -1143,9 +1234,10 @@ pub async fn add_bootstrap_user_handler(
 pub async fn register_owner_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(req): Json<RegisterOwnerRequest>,
 ) -> Result<Json<RegisterOwnerResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate inputs
@@ -1170,11 +1262,14 @@ pub async fn register_owner_handler(
     );
 
     // Audit log
-    state.audit_log.log(
-        AuditEntry::success("owner_registered")
-            .with_user(&req.user_id)
-            .with_details("Instance owner registered")
-    ).await;
+    state
+        .audit_log
+        .log(
+            AuditEntry::success("owner_registered")
+                .with_user(&req.user_id)
+                .with_details("Instance owner registered"),
+        )
+        .await;
 
     Ok(Json(RegisterOwnerResponse {
         success: true,
@@ -1185,9 +1280,10 @@ pub async fn register_owner_handler(
 pub async fn create_invitations_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(req): Json<CreateInvitationsRequest>,
 ) -> Result<Json<CreateInvitationsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate inputs
@@ -1209,7 +1305,11 @@ pub async fn create_invitations_handler(
 
     for _ in 0..req.count {
         // Use admin version to bypass rate limits (cooldown, waiting period)
-        match state.invitation_system.generate_invite_admin(&req.inviter_id).await {
+        match state
+            .invitation_system
+            .generate_invite_admin(&req.inviter_id)
+            .await
+        {
             Ok((code, signature, expires_at)) => {
                 invitations.push(InvitationCode {
                     code,
@@ -1250,11 +1350,14 @@ pub async fn create_invitations_handler(
     );
 
     // Audit log
-    state.audit_log.log(
-        AuditEntry::success("invitations_created")
-            .with_user(&req.inviter_id)
-            .with_details(format!("Created {} invitation(s)", req.count))
-    ).await;
+    state
+        .audit_log
+        .log(
+            AuditEntry::success("invitations_created")
+                .with_user(&req.inviter_id)
+                .with_details(format!("Created {} invitation(s)", req.count)),
+        )
+        .await;
 
     Ok(Json(CreateInvitationsResponse {
         ok: true,
@@ -1266,8 +1369,9 @@ pub async fn create_invitations_handler(
 pub async fn save_state_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<serde_json::Value>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     state
@@ -1287,9 +1391,10 @@ pub async fn save_state_handler(
 pub async fn list_users_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Query(params): Query<ListUsersParams>,
 ) -> Result<Json<ListUsersResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Clamp limit to reasonable bounds (1-100)
@@ -1331,9 +1436,10 @@ pub async fn list_users_handler(
 pub async fn get_user_details_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Path(user_id): Path<String>,
 ) -> Result<Json<UserDetailsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate path parameter
@@ -1368,9 +1474,10 @@ pub async fn get_user_details_handler(
 pub async fn list_invitations_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Query(params): Query<ListInvitationsParams>,
 ) -> Result<Json<ListInvitationsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Clamp limit to reasonable bounds (1-100)
@@ -1378,8 +1485,10 @@ pub async fn list_invitations_handler(
     let offset = params.offset;
 
     // Build filter from params
-    let filter = if params.status.is_some() || params.inviter_id.is_some()
-        || params.date_from.is_some() || params.date_to.is_some()
+    let filter = if params.status.is_some()
+        || params.inviter_id.is_some()
+        || params.date_from.is_some()
+        || params.date_to.is_some()
     {
         let redeemed = match params.status.as_deref() {
             Some("redeemed") => Some(true),
@@ -1397,10 +1506,16 @@ pub async fn list_invitations_handler(
     };
 
     // Get total count for pagination info (with filter)
-    let total = state.invitation_system.count_invitations_filtered(filter.clone()).await;
+    let total = state
+        .invitation_system
+        .count_invitations_filtered(filter.clone())
+        .await;
 
     // Get paginated invitations with filter
-    let invitations = state.invitation_system.list_invitations_filtered(limit, offset, filter).await;
+    let invitations = state
+        .invitation_system
+        .list_invitations_filtered(limit, offset, filter)
+        .await;
     let returned_count = invitations.len();
 
     // Calculate if there are more items
@@ -1427,9 +1542,10 @@ pub async fn list_invitations_handler(
 pub async fn get_invitation_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Path(code): Path<String>,
 ) -> Result<Json<GetInvitationResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let invitation = state
@@ -1464,9 +1580,10 @@ pub async fn get_invitation_handler(
 pub async fn list_audit_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Query(params): Query<ListAuditParams>,
 ) -> Result<Json<ListAuditResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Clamp limit to reasonable bounds (1-500)
@@ -1478,7 +1595,10 @@ pub async fn list_audit_handler(
 
     // Get entries (optionally filtered by level)
     let entries = if let Some(ref level) = params.level {
-        state.audit_log.get_entries_by_level(level, limit, offset).await
+        state
+            .audit_log
+            .get_entries_by_level(level, limit, offset)
+            .await
     } else {
         state.audit_log.get_entries(limit, offset).await
     };
@@ -1508,8 +1628,9 @@ pub async fn list_audit_handler(
 pub async fn list_keys_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<ListKeysResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let keys = state.multi_key_voprf.list_keys().await;
@@ -1557,13 +1678,13 @@ pub async fn rotate_key_handler(
     info!(old_kid = %old_kid, new_kid = %req.new_kid, "Admin: rotated key");
 
     // Audit log
-    state.audit_log.log(
-        AuditEntry::info("key_rotated")
-            .with_details(format!(
-                "Rotated from {} to {}, grace period {} seconds",
-                old_kid, req.new_kid, grace_period
-            ))
-    ).await;
+    state
+        .audit_log
+        .log(AuditEntry::info("key_rotated").with_details(format!(
+            "Rotated from {} to {}, grace period {} seconds",
+            old_kid, req.new_kid, grace_period
+        )))
+        .await;
 
     Ok(Json(RotateKeyResponse {
         ok: true,
@@ -1577,8 +1698,9 @@ pub async fn rotate_key_handler(
 pub async fn cleanup_keys_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<CleanupKeysResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let keys_before = state.multi_key_voprf.list_keys().await;
@@ -1613,9 +1735,10 @@ pub async fn cleanup_keys_handler(
 pub async fn force_remove_key_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Path(kid): Path<String>,
 ) -> Result<Json<ForceRemoveKeyResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate path parameter
@@ -1658,9 +1781,10 @@ pub async fn force_remove_key_handler(
 async fn add_vouch_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(req): Json<AddVouchRequest>,
 ) -> Result<Json<VouchResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     state
@@ -1673,7 +1797,10 @@ async fn add_vouch_handler(
 
     Ok(Json(VouchResponse {
         ok: true,
-        message: format!("Vouch for {} added successfully", req.vouch.vouched_issuer_id),
+        message: format!(
+            "Vouch for {} added successfully",
+            req.vouch.vouched_issuer_id
+        ),
     }))
 }
 
@@ -1681,9 +1808,10 @@ async fn add_vouch_handler(
 async fn remove_vouch_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Path(issuer_id): Path<String>,
 ) -> Result<Json<VouchResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     state
@@ -1704,8 +1832,9 @@ async fn remove_vouch_handler(
 async fn list_vouches_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<Vec<freebird_common::federation::Vouch>>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let vouches = state.federation_store.get_vouches().await;
@@ -1717,9 +1846,10 @@ async fn list_vouches_handler(
 async fn add_revocation_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(req): Json<AddRevocationRequest>,
 ) -> Result<Json<RevocationResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     state
@@ -1728,11 +1858,17 @@ async fn add_revocation_handler(
         .await
         .map_err(|e| AdminError::InvalidRequest(e.to_string()))?;
 
-    info!("Admin: added revocation for {}", req.revocation.revoked_issuer_id);
+    info!(
+        "Admin: added revocation for {}",
+        req.revocation.revoked_issuer_id
+    );
 
     Ok(Json(RevocationResponse {
         ok: true,
-        message: format!("Revocation for {} added successfully", req.revocation.revoked_issuer_id),
+        message: format!(
+            "Revocation for {} added successfully",
+            req.revocation.revoked_issuer_id
+        ),
     }))
 }
 
@@ -1740,9 +1876,10 @@ async fn add_revocation_handler(
 async fn remove_revocation_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Path(issuer_id): Path<String>,
 ) -> Result<Json<RevocationResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     state
@@ -1763,8 +1900,9 @@ async fn remove_revocation_handler(
 async fn list_revocations_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<Vec<freebird_common::federation::Revocation>>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let revocations = state.federation_store.get_revocations().await;
@@ -1784,7 +1922,9 @@ pub struct ExportParams {
     pub format: String,
 }
 
-fn default_format() -> String { "json".to_string() }
+fn default_format() -> String {
+    "json".to_string()
+}
 
 /// User export record for CSV/JSON
 #[derive(Debug, Serialize)]
@@ -1822,24 +1962,30 @@ pub struct AuditExport {
 pub async fn export_invitations_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Query(params): Query<ExportParams>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let invitations = state.invitation_system.get_all_invitations().await;
-    let exports: Vec<InvitationExport> = invitations.iter().map(|inv| {
-        InvitationExport {
+    let exports: Vec<InvitationExport> = invitations
+        .iter()
+        .map(|inv| InvitationExport {
             code: inv.code().to_string(),
             inviter_id: inv.inviter_id().to_string(),
             invitee_id: inv.invitee_id().map(|s| s.to_string()),
             created_at: inv.created_at(),
             expires_at: inv.expires_at(),
             redeemed: inv.redeemed(),
-        }
-    }).collect();
+        })
+        .collect();
 
-    info!("Admin: exported {} invitations as {}", exports.len(), params.format);
+    info!(
+        "Admin: exported {} invitations as {}",
+        exports.len(),
+        params.format
+    );
 
     if params.format == "csv" {
         let mut csv = String::from("code,inviter_id,invitee_id,created_at,expires_at,redeemed\n");
@@ -1855,10 +2001,16 @@ pub async fn export_invitations_handler(
             ));
         }
         Ok((
-            [(axum::http::header::CONTENT_TYPE, "text/csv"),
-             (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"invitations.csv\"")],
-            csv
-        ).into_response())
+            [
+                (axum::http::header::CONTENT_TYPE, "text/csv"),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"invitations.csv\"",
+                ),
+            ],
+            csv,
+        )
+            .into_response())
     } else {
         Ok(Json(exports).into_response())
     }
@@ -1868,41 +2020,51 @@ pub async fn export_invitations_handler(
 pub async fn export_users_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Query(params): Query<ExportParams>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let users = state.invitation_system.get_all_users().await;
-    let exports: Vec<UserExport> = users.into_iter().map(|(user_id, invites_remaining, banned, joined_at, reputation)| {
-        UserExport {
-            user_id,
-            invites_remaining,
-            banned,
-            joined_at,
-            reputation,
-        }
-    }).collect();
+    let exports: Vec<UserExport> = users
+        .into_iter()
+        .map(
+            |(user_id, invites_remaining, banned, joined_at, reputation)| UserExport {
+                user_id,
+                invites_remaining,
+                banned,
+                joined_at,
+                reputation,
+            },
+        )
+        .collect();
 
-    info!("Admin: exported {} users as {}", exports.len(), params.format);
+    info!(
+        "Admin: exported {} users as {}",
+        exports.len(),
+        params.format
+    );
 
     if params.format == "csv" {
         let mut csv = String::from("user_id,invites_remaining,banned,joined_at,reputation\n");
         for user in &exports {
             csv.push_str(&format!(
                 "{},{},{},{},{:.2}\n",
-                user.user_id,
-                user.invites_remaining,
-                user.banned,
-                user.joined_at,
-                user.reputation
+                user.user_id, user.invites_remaining, user.banned, user.joined_at, user.reputation
             ));
         }
         Ok((
-            [(axum::http::header::CONTENT_TYPE, "text/csv"),
-             (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"users.csv\"")],
-            csv
-        ).into_response())
+            [
+                (axum::http::header::CONTENT_TYPE, "text/csv"),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"users.csv\"",
+                ),
+            ],
+            csv,
+        )
+            .into_response())
     } else {
         Ok(Json(exports).into_response())
     }
@@ -1912,25 +2074,31 @@ pub async fn export_users_handler(
 pub async fn export_audit_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Query(params): Query<ExportParams>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Get all audit entries (no pagination for export)
     let entries = state.audit_log.get_entries(100000, 0).await;
-    let exports: Vec<AuditExport> = entries.into_iter().map(|entry| {
-        AuditExport {
+    let exports: Vec<AuditExport> = entries
+        .into_iter()
+        .map(|entry| AuditExport {
             timestamp: entry.timestamp,
             level: entry.level,
             action: entry.action,
             user_id: entry.user_id,
             details: entry.details,
             admin_id: entry.admin_id,
-        }
-    }).collect();
+        })
+        .collect();
 
-    info!("Admin: exported {} audit entries as {}", exports.len(), params.format);
+    info!(
+        "Admin: exported {} audit entries as {}",
+        exports.len(),
+        params.format
+    );
 
     if params.format == "csv" {
         let mut csv = String::from("timestamp,level,action,user_id,details,admin_id\n");
@@ -1948,10 +2116,16 @@ pub async fn export_audit_handler(
             ));
         }
         Ok((
-            [(axum::http::header::CONTENT_TYPE, "text/csv"),
-             (axum::http::header::CONTENT_DISPOSITION, "attachment; filename=\"audit_log.csv\"")],
-            csv
-        ).into_response())
+            [
+                (axum::http::header::CONTENT_TYPE, "text/csv"),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"audit_log.csv\"",
+                ),
+            ],
+            csv,
+        )
+            .into_response())
     } else {
         Ok(Json(exports).into_response())
     }
@@ -1995,26 +2169,30 @@ pub struct DeleteWebAuthnCredentialResponse {
 pub async fn list_webauthn_credentials_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<ListWebAuthnCredentialsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
-    let store = state.webauthn_store.as_ref().ok_or_else(|| {
-        AdminError::Internal("WebAuthn not configured".to_string())
-    })?;
+    let store = state
+        .webauthn_store
+        .as_ref()
+        .ok_or_else(|| AdminError::Internal("WebAuthn not configured".to_string()))?;
 
-    let credentials = store.list_all().await.map_err(|e| {
-        AdminError::Internal(format!("Failed to list credentials: {}", e))
-    })?;
+    let credentials = store
+        .list_all()
+        .await
+        .map_err(|e| AdminError::Internal(format!("Failed to list credentials: {}", e)))?;
 
-    let summaries: Vec<WebAuthnCredentialSummary> = credentials.iter().map(|cred| {
-        WebAuthnCredentialSummary {
+    let summaries: Vec<WebAuthnCredentialSummary> = credentials
+        .iter()
+        .map(|cred| WebAuthnCredentialSummary {
             credential_id: base64ct::Base64UrlUnpadded::encode_string(&cred.cred_id),
             user_id_hash: cred.user_id_hash.clone(),
             registered_at: cred.registered_at,
             last_used_at: cred.last_used_at,
-        }
-    }).collect();
+        })
+        .collect();
 
     let total = summaries.len();
 
@@ -2031,23 +2209,25 @@ pub async fn list_webauthn_credentials_handler(
 pub async fn delete_webauthn_credential_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Path(cred_id_b64): Path<String>,
 ) -> Result<Json<DeleteWebAuthnCredentialResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
-    let store = state.webauthn_store.as_ref().ok_or_else(|| {
-        AdminError::Internal("WebAuthn not configured".to_string())
-    })?;
+    let store = state
+        .webauthn_store
+        .as_ref()
+        .ok_or_else(|| AdminError::Internal("WebAuthn not configured".to_string()))?;
 
     // Decode the credential ID from base64url
-    let cred_id = base64ct::Base64UrlUnpadded::decode_vec(&cred_id_b64).map_err(|e| {
-        AdminError::Internal(format!("Invalid credential ID format: {}", e))
-    })?;
+    let cred_id = base64ct::Base64UrlUnpadded::decode_vec(&cred_id_b64)
+        .map_err(|e| AdminError::Internal(format!("Invalid credential ID format: {}", e)))?;
 
-    let deleted = store.delete(&cred_id).await.map_err(|e| {
-        AdminError::Internal(format!("Failed to delete credential: {}", e))
-    })?;
+    let deleted = store
+        .delete(&cred_id)
+        .await
+        .map_err(|e| AdminError::Internal(format!("Failed to delete credential: {}", e)))?;
 
     if deleted {
         info!("Admin: deleted WebAuthn credential {}", cred_id_b64);
@@ -2056,7 +2236,10 @@ pub async fn delete_webauthn_credential_handler(
             message: format!("Credential {} deleted successfully", cred_id_b64),
         }))
     } else {
-        Err(AdminError::UserNotFound(format!("Credential {} not found", cred_id_b64)))
+        Err(AdminError::UserNotFound(format!(
+            "Credential {} not found",
+            cred_id_b64
+        )))
     }
 }
 
@@ -2065,17 +2248,20 @@ pub async fn delete_webauthn_credential_handler(
 pub async fn webauthn_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<serde_json::Value>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
-    let store = state.webauthn_store.as_ref().ok_or_else(|| {
-        AdminError::Internal("WebAuthn not configured".to_string())
-    })?;
+    let store = state
+        .webauthn_store
+        .as_ref()
+        .ok_or_else(|| AdminError::Internal("WebAuthn not configured".to_string()))?;
 
-    let count = store.count_credentials().await.map_err(|e| {
-        AdminError::Internal(format!("Failed to count credentials: {}", e))
-    })?;
+    let count = store
+        .count_credentials()
+        .await
+        .map_err(|e| AdminError::Internal(format!("Failed to count credentials: {}", e)))?;
 
     Ok(Json(serde_json::json!({
         "total_credentials": count,
@@ -2088,8 +2274,9 @@ pub async fn webauthn_stats_handler(
 pub async fn list_webauthn_credentials_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<ListWebAuthnCredentialsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     Ok(Json(ListWebAuthnCredentialsResponse {
         credentials: vec![],
@@ -2101,19 +2288,23 @@ pub async fn list_webauthn_credentials_handler(
 pub async fn delete_webauthn_credential_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Path(_cred_id_b64): Path<String>,
 ) -> Result<Json<DeleteWebAuthnCredentialResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
-    Err(AdminError::Internal("WebAuthn feature not enabled".to_string()))
+    Err(AdminError::Internal(
+        "WebAuthn feature not enabled".to_string(),
+    ))
 }
 
 #[cfg(not(feature = "human-gate-webauthn"))]
 pub async fn webauthn_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
 ) -> Result<Json<serde_json::Value>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     Ok(Json(serde_json::json!({
         "total_credentials": 0,
@@ -2183,11 +2374,20 @@ fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
         .route("/config", axum::routing::get(get_config_handler))
         .route("/metrics", axum::routing::get(metrics_handler))
         .route("/users", axum::routing::get(list_users_handler))
-        .route("/users/:user_id", axum::routing::get(get_user_details_handler))
+        .route(
+            "/users/:user_id",
+            axum::routing::get(get_user_details_handler),
+        )
         .route("/invites/grant", axum::routing::post(grant_invites_handler))
         .route("/invitations", axum::routing::get(list_invitations_handler))
-        .route("/invitations/create", axum::routing::post(create_invitations_handler))
-        .route("/invitations/:code", axum::routing::get(get_invitation_handler))
+        .route(
+            "/invitations/create",
+            axum::routing::post(create_invitations_handler),
+        )
+        .route(
+            "/invitations/:code",
+            axum::routing::get(get_invitation_handler),
+        )
         .route("/users/ban", axum::routing::post(ban_user_handler))
         .route(
             "/bootstrap/add",
@@ -2208,19 +2408,49 @@ fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
         // Audit log route
         .route("/audit", axum::routing::get(list_audit_handler))
         // Export routes
-        .route("/export/invitations", axum::routing::get(export_invitations_handler))
+        .route(
+            "/export/invitations",
+            axum::routing::get(export_invitations_handler),
+        )
         .route("/export/users", axum::routing::get(export_users_handler))
         .route("/export/audit", axum::routing::get(export_audit_handler))
         // Federation management routes
-        .route("/federation/vouches", axum::routing::get(list_vouches_handler))
-        .route("/federation/vouches", axum::routing::post(add_vouch_handler))
-        .route("/federation/vouches/:issuer_id", axum::routing::delete(remove_vouch_handler))
-        .route("/federation/revocations", axum::routing::get(list_revocations_handler))
-        .route("/federation/revocations", axum::routing::post(add_revocation_handler))
-        .route("/federation/revocations/:issuer_id", axum::routing::delete(remove_revocation_handler))
+        .route(
+            "/federation/vouches",
+            axum::routing::get(list_vouches_handler),
+        )
+        .route(
+            "/federation/vouches",
+            axum::routing::post(add_vouch_handler),
+        )
+        .route(
+            "/federation/vouches/:issuer_id",
+            axum::routing::delete(remove_vouch_handler),
+        )
+        .route(
+            "/federation/revocations",
+            axum::routing::get(list_revocations_handler),
+        )
+        .route(
+            "/federation/revocations",
+            axum::routing::post(add_revocation_handler),
+        )
+        .route(
+            "/federation/revocations/:issuer_id",
+            axum::routing::delete(remove_revocation_handler),
+        )
         // WebAuthn admin routes
-        .route("/webauthn/credentials", axum::routing::get(list_webauthn_credentials_handler))
-        .route("/webauthn/credentials/:cred_id", axum::routing::delete(delete_webauthn_credential_handler))
-        .route("/webauthn/stats", axum::routing::get(webauthn_stats_handler))
+        .route(
+            "/webauthn/credentials",
+            axum::routing::get(list_webauthn_credentials_handler),
+        )
+        .route(
+            "/webauthn/credentials/:cred_id",
+            axum::routing::delete(delete_webauthn_credential_handler),
+        )
+        .route(
+            "/webauthn/stats",
+            axum::routing::get(webauthn_stats_handler),
+        )
         .with_state(state)
 }

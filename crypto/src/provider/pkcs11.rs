@@ -31,11 +31,11 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use cryptoki::context::{CInitializeArgs, Pkcs11};
+use cryptoki::mechanism::Mechanism;
 use cryptoki::object::{Attribute, AttributeType, ObjectHandle};
 use cryptoki::session::{Session, UserType};
-use cryptoki::mechanism::Mechanism;
-use cryptoki::types::AuthPin;
 use cryptoki::slot::Slot;
+use cryptoki::types::AuthPin;
 use std::sync::Arc;
 use zeroize::Zeroize;
 
@@ -107,24 +107,25 @@ impl Pkcs11CryptoProvider {
         context: Vec<u8>,
     ) -> Result<Self> {
         // Initialize PKCS#11 context
-        let pkcs11 = Pkcs11::new(module_path)
-            .context("Failed to load PKCS#11 module")?;
+        let pkcs11 = Pkcs11::new(module_path).context("Failed to load PKCS#11 module")?;
 
-        pkcs11.initialize(CInitializeArgs::OsThreads)
+        pkcs11
+            .initialize(CInitializeArgs::OsThreads)
             .context("Failed to initialize PKCS#11")?;
 
         let pkcs11 = Arc::new(pkcs11);
 
         // Open session
-        let slot_id = Slot::try_from(slot)
-            .context("Invalid slot number")?;
+        let slot_id = Slot::try_from(slot).context("Invalid slot number")?;
 
-        let session = pkcs11.open_rw_session(slot_id)
+        let session = pkcs11
+            .open_rw_session(slot_id)
             .context("Failed to open HSM session")?;
 
         // Login
         let auth_pin = AuthPin::new(pin.to_string());
-        session.login(UserType::User, Some(&auth_pin))
+        session
+            .login(UserType::User, Some(&auth_pin))
             .context("Failed to authenticate with HSM")?;
 
         // Find private key by label
@@ -164,20 +165,19 @@ impl Pkcs11CryptoProvider {
 
     /// Open and authenticate a fresh RW session.
     fn open_authenticated_session(&self) -> Result<Session> {
-        let session = self.pkcs11.open_rw_session(self.slot)
+        let session = self
+            .pkcs11
+            .open_rw_session(self.slot)
             .context("Failed to open HSM session")?;
         let auth_pin = AuthPin::new(self.pin.clone());
-        session.login(UserType::User, Some(&auth_pin))
+        session
+            .login(UserType::User, Some(&auth_pin))
             .context("Failed to authenticate with HSM")?;
         Ok(session)
     }
 
     /// Find a key object by label
-    fn find_key_by_label(
-        session: &Session,
-        label: &str,
-        is_private: bool,
-    ) -> Result<ObjectHandle> {
+    fn find_key_by_label(session: &Session, label: &str, is_private: bool) -> Result<ObjectHandle> {
         let class = if is_private {
             cryptoki::object::ObjectClass::PRIVATE_KEY
         } else {
@@ -189,26 +189,25 @@ impl Pkcs11CryptoProvider {
             Attribute::Label(label.as_bytes().to_vec()),
         ];
 
-        let objects = session.find_objects(&template)
+        let objects = session
+            .find_objects(&template)
             .context("HSM key search failed")?;
 
-        objects.first()
+        objects
+            .first()
             .copied()
             .ok_or_else(|| anyhow::anyhow!("Key '{}' not found in HSM", label))
     }
 
     /// Extract public key in SEC1 compressed format from HSM
-    fn extract_public_key(
-        session: &Session,
-        public_key_handle: ObjectHandle,
-    ) -> Result<Vec<u8>> {
+    fn extract_public_key(session: &Session, public_key_handle: ObjectHandle) -> Result<Vec<u8>> {
         // Get EC_POINT attribute (contains the public key)
-        let attributes = session.get_attributes(
-            public_key_handle,
-            &[AttributeType::EcPoint],
-        ).context("Failed to read public key from HSM")?;
+        let attributes = session
+            .get_attributes(public_key_handle, &[AttributeType::EcPoint])
+            .context("Failed to read public key from HSM")?;
 
-        let ec_point = attributes.first()
+        let ec_point = attributes
+            .first()
             .and_then(|attr| {
                 if let Attribute::EcPoint(point) = attr {
                     Some(point.clone())
@@ -229,7 +228,7 @@ impl Pkcs11CryptoProvider {
 
         // Skip DER encoding (0x04 + length byte)
         let point_data = if ec_point[0] == 0x04 && ec_point[1] == 0x41 {
-            &ec_point[2..]  // DER: 0x04 0x41 <65 bytes>
+            &ec_point[2..] // DER: 0x04 0x41 <65 bytes>
         } else {
             &ec_point[..]
         };
@@ -271,14 +270,15 @@ impl Pkcs11CryptoProvider {
         let message = b"freebird-mac-base-key-derivation-v1";
 
         // Hash the message (ECDSA expects a digest)
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(message);
         let digest = hasher.finalize();
 
         // Sign with ECDSA
         let mechanism = Mechanism::Ecdsa;
-        let signature = session.sign(&mechanism, private_key_handle, &digest)
+        let signature = session
+            .sign(&mechanism, private_key_handle, &digest)
             .context("Failed to sign with HSM for MAC derivation")?;
 
         // Normalize raw/DER outputs so key derivation is stable across HSMs.
@@ -297,7 +297,9 @@ impl Pkcs11CryptoProvider {
 
     /// Parse ASN.1 DER length at `idx`, returning (length, next_idx).
     fn parse_der_len(data: &[u8], idx: usize) -> Result<(usize, usize)> {
-        let first = *data.get(idx).ok_or_else(|| anyhow::anyhow!("invalid DER length"))?;
+        let first = *data
+            .get(idx)
+            .ok_or_else(|| anyhow::anyhow!("invalid DER length"))?;
         if first & 0x80 == 0 {
             return Ok((first as usize, idx + 1));
         }
@@ -310,7 +312,9 @@ impl Pkcs11CryptoProvider {
         let mut len = 0usize;
         let mut pos = idx + 1;
         for _ in 0..count {
-            let b = *data.get(pos).ok_or_else(|| anyhow::anyhow!("truncated DER length"))?;
+            let b = *data
+                .get(pos)
+                .ok_or_else(|| anyhow::anyhow!("truncated DER length"))?;
             len = (len << 8) | (b as usize);
             pos += 1;
         }
@@ -359,7 +363,8 @@ impl Pkcs11CryptoProvider {
         idx = next;
         let r_end = idx + r_len;
         let r = Self::asn1_int_to_32(
-            sig.get(idx..r_end).ok_or_else(|| anyhow::anyhow!("truncated DER r"))?
+            sig.get(idx..r_end)
+                .ok_or_else(|| anyhow::anyhow!("truncated DER r"))?,
         )?;
         idx = r_end;
 
@@ -371,7 +376,8 @@ impl Pkcs11CryptoProvider {
         idx = next;
         let s_end = idx + s_len;
         let s = Self::asn1_int_to_32(
-            sig.get(idx..s_end).ok_or_else(|| anyhow::anyhow!("truncated DER s"))?
+            sig.get(idx..s_end)
+                .ok_or_else(|| anyhow::anyhow!("truncated DER s"))?,
         )?;
         idx = s_end;
 
@@ -388,10 +394,7 @@ impl Pkcs11CryptoProvider {
     /// Perform VOPRF evaluation using HSM
     ///
     /// This multiplies the blinded element by the secret scalar in the HSM.
-    fn voprf_evaluate_internal(
-        &self,
-        _blinded: &[u8],
-    ) -> Result<Vec<u8>> {
+    fn voprf_evaluate_internal(&self, _blinded: &[u8]) -> Result<Vec<u8>> {
         // For VOPRF evaluation, we need to perform scalar multiplication: B = k * A
         // where k is the secret key and A is the blinded element.
 
@@ -422,12 +425,7 @@ impl CryptoProvider for Pkcs11CryptoProvider {
         self.voprf_evaluate_internal(blinded)
     }
 
-    async fn derive_mac_key(
-        &self,
-        issuer_id: &str,
-        kid: &str,
-        epoch: u32,
-    ) -> Result<[u8; 32]> {
+    async fn derive_mac_key(&self, issuer_id: &str, kid: &str, epoch: u32) -> Result<[u8; 32]> {
         // Derive MAC key using HKDF in software
         // Base key material comes from HSM but derivation happens in software
         Ok(crate::derive_mac_key_v2(
@@ -457,7 +455,8 @@ impl CryptoProvider for Pkcs11CryptoProvider {
         let session = self.open_authenticated_session()?;
         let private_key_handle = Self::find_key_by_label(&session, &self.key_label, true)
             .context("Failed to find private key in HSM")?;
-        let sig = session.sign(&Mechanism::Ecdsa, private_key_handle, &msg_hash)
+        let sig = session
+            .sign(&Mechanism::Ecdsa, private_key_handle, &msg_hash)
             .context("Failed to sign token metadata with HSM")?;
         let _ = session.logout();
 
@@ -498,7 +497,7 @@ mod tests {
     // cargo test --features pkcs11 -- --ignored
 
     #[tokio::test]
-    #[ignore]  // Requires HSM hardware/SoftHSM
+    #[ignore] // Requires HSM hardware/SoftHSM
     async fn test_pkcs11_provider_creation() {
         // This test requires SoftHSM to be installed and configured
         // Initialize with: softhsm2-util --init-token --slot 0 --label "test"
@@ -510,7 +509,8 @@ mod tests {
             "test-key",
             "key-001".to_string(),
             b"test-context".to_vec(),
-        ).await;
+        )
+        .await;
 
         // This will fail if SoftHSM is not configured, which is expected
         // Real test would require proper HSM setup
@@ -531,16 +531,14 @@ mod tests {
     #[test]
     fn test_normalize_ecdsa_signature_der_standard() {
         let r: [u8; 32] = [
-            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88,
-            0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x10,
-            0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90,
-            0xa0, 0xb0, 0xc0, 0xd0, 0xe0, 0xf0, 0x01, 0x02,
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
+            0xff, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0, 0xc0, 0xd0,
+            0xe0, 0xf0, 0x01, 0x02,
         ];
         let s: [u8; 32] = [
-            0xfe, 0xed, 0xdc, 0xcb, 0xba, 0xa9, 0x98, 0x87,
-            0x76, 0x65, 0x54, 0x43, 0x32, 0x21, 0x10, 0x0f,
-            0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78, 0x87,
-            0x96, 0xa5, 0xb4, 0xc3, 0xd2, 0xe1, 0xf0, 0x00,
+            0xfe, 0xed, 0xdc, 0xcb, 0xba, 0xa9, 0x98, 0x87, 0x76, 0x65, 0x54, 0x43, 0x32, 0x21,
+            0x10, 0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78, 0x87, 0x96, 0xa5, 0xb4, 0xc3,
+            0xd2, 0xe1, 0xf0, 0x00,
         ];
 
         let mut der = Vec::new();

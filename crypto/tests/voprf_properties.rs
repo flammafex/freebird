@@ -97,7 +97,7 @@ proptest! {
 
         let server1 = match Server::from_secret_key(sk1_bytes, CTX) { Ok(s) => s, Err(_) => return Ok(()) };
         let server2 = match Server::from_secret_key(sk2_bytes, CTX) { Ok(s) => s, Err(_) => return Ok(()) };
-        
+
         let pk2 = server2.public_key_sec1_compressed();
 
         // Client blinds

@@ -12,7 +12,9 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use std::sync::Arc;
 use std::time::Duration;
 
-use freebird_crypto::{Client, Server, Verifier, nullifier_key, compute_token_signature, verify_token_signature};
+use freebird_crypto::{
+    compute_token_signature, nullifier_key, verify_token_signature, Client, Server, Verifier,
+};
 use freebird_verifier::store::{InMemoryStore, SpendStore};
 
 const CONTEXT: &[u8] = b"freebird:v1";
@@ -122,7 +124,11 @@ impl BatchVerifier {
         let null_key = nullifier_key(ISSUER_ID, &output_b64);
         let spend_key = format!("freebird:spent:{}:{}", ISSUER_ID, null_key);
 
-        match self.store.mark_spent(&spend_key, Duration::from_secs(EXP_SEC)).await {
+        match self
+            .store
+            .mark_spent(&spend_key, Duration::from_secs(EXP_SEC))
+            .await
+        {
             Ok(true) => VerifyResult::Success,
             Ok(false) => VerifyResult::Replay,
             Err(_) => VerifyResult::InvalidToken,
@@ -138,7 +144,10 @@ impl BatchVerifier {
             results.push(self.verify_one(token).await);
         }
 
-        let successful = results.iter().filter(|r| **r == VerifyResult::Success).count();
+        let successful = results
+            .iter()
+            .filter(|r| **r == VerifyResult::Success)
+            .count();
         let failed = results.len() - successful;
 
         BatchResult {
@@ -159,14 +168,17 @@ fn issue_token(server: &Server, sk: &[u8; 32], kid: &str, user_input: &[u8; 32])
     let exp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs() as i64 + EXP_SEC as i64;
+        .as_secs() as i64
+        + EXP_SEC as i64;
 
     let epoch = (std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs() / 86400) as u32;
+        .as_secs()
+        / 86400) as u32;
 
-    let signature = compute_token_signature(sk, &eval_bytes, kid, exp, ISSUER_ID).expect("signature");
+    let signature =
+        compute_token_signature(sk, &eval_bytes, kid, exp, ISSUER_ID).expect("signature");
 
     let mut final_token = eval_bytes;
     final_token.extend_from_slice(&signature);
@@ -213,7 +225,10 @@ async fn test_batch_all_unique_tokens() -> Result<()> {
         assert_eq!(*r, VerifyResult::Success, "Token {} should succeed", i);
     }
 
-    println!("✅ All {} unique tokens verified successfully", tokens.len());
+    println!(
+        "✅ All {} unique tokens verified successfully",
+        tokens.len()
+    );
     Ok(())
 }
 
@@ -245,9 +260,18 @@ async fn test_batch_with_duplicates() -> Result<()> {
     assert_eq!(result.successful, 1, "Only first token should succeed");
     assert_eq!(result.failed, 4, "4 duplicates should fail");
 
-    assert_eq!(result.results[0], VerifyResult::Success, "First should succeed");
+    assert_eq!(
+        result.results[0],
+        VerifyResult::Success,
+        "First should succeed"
+    );
     for i in 1..5 {
-        assert_eq!(result.results[i], VerifyResult::Replay, "Token {} should be replay", i);
+        assert_eq!(
+            result.results[i],
+            VerifyResult::Replay,
+            "Token {} should be replay",
+            i
+        );
     }
 
     println!("✅ Duplicate detection working: 1 success, 4 replays");
@@ -295,13 +319,41 @@ async fn test_batch_mixed_unique_and_duplicates() -> Result<()> {
     assert_eq!(result.failed, 3, "3 duplicates should fail");
 
     // Check specific positions
-    assert_eq!(result.results[0], VerifyResult::Success, "A@0 should succeed");
-    assert_eq!(result.results[1], VerifyResult::Success, "B@1 should succeed");
-    assert_eq!(result.results[2], VerifyResult::Replay, "A@2 should be replay");
-    assert_eq!(result.results[3], VerifyResult::Success, "C@3 should succeed");
-    assert_eq!(result.results[4], VerifyResult::Replay, "B@4 should be replay");
-    assert_eq!(result.results[5], VerifyResult::Success, "D@5 should succeed");
-    assert_eq!(result.results[6], VerifyResult::Replay, "A@6 should be replay");
+    assert_eq!(
+        result.results[0],
+        VerifyResult::Success,
+        "A@0 should succeed"
+    );
+    assert_eq!(
+        result.results[1],
+        VerifyResult::Success,
+        "B@1 should succeed"
+    );
+    assert_eq!(
+        result.results[2],
+        VerifyResult::Replay,
+        "A@2 should be replay"
+    );
+    assert_eq!(
+        result.results[3],
+        VerifyResult::Success,
+        "C@3 should succeed"
+    );
+    assert_eq!(
+        result.results[4],
+        VerifyResult::Replay,
+        "B@4 should be replay"
+    );
+    assert_eq!(
+        result.results[5],
+        VerifyResult::Success,
+        "D@5 should succeed"
+    );
+    assert_eq!(
+        result.results[6],
+        VerifyResult::Replay,
+        "A@6 should be replay"
+    );
 
     println!("✅ Mixed batch handled correctly: 4 successes, 3 replays");
     Ok(())
@@ -337,8 +389,16 @@ async fn test_batch_previously_used_tokens() -> Result<()> {
 
     assert_eq!(result2.successful, 1, "Only C should succeed");
     assert_eq!(result2.failed, 1, "A should fail (previously used)");
-    assert_eq!(result2.results[0], VerifyResult::Replay, "A should be replay");
-    assert_eq!(result2.results[1], VerifyResult::Success, "C should succeed");
+    assert_eq!(
+        result2.results[0],
+        VerifyResult::Replay,
+        "A should be replay"
+    );
+    assert_eq!(
+        result2.results[1],
+        VerifyResult::Success,
+        "C should succeed"
+    );
 
     println!("✅ Batch 2: A rejected (replay), C accepted");
     println!("✅ Cross-batch replay detection working");
@@ -380,7 +440,10 @@ async fn test_batch_size_limits() -> Result<()> {
         .collect();
 
     let result = verifier.verify_batch(&large).await;
-    assert_eq!(result.successful, 100, "All 100 unique tokens should succeed");
+    assert_eq!(
+        result.successful, 100,
+        "All 100 unique tokens should succeed"
+    );
     println!("✅ Large batch (100 tokens) handled");
 
     Ok(())

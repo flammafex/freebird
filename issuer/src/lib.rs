@@ -15,9 +15,9 @@ pub use main_state::AppStateWithSybil;
 // We need to move AppStateWithSybil out of main.rs to a shared place.
 // Let's create a small internal module for it or put it in lib.rs directly.
 pub mod main_state {
-    use std::sync::Arc;
     use crate::federation_store::FederationStore;
     use crate::sybil_resistance::{invitation::InvitationSystem, SybilResistance};
+    use std::sync::Arc;
 
     #[derive(Clone)]
     pub struct AppStateWithSybil {

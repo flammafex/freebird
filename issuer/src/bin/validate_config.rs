@@ -146,7 +146,10 @@ fn validate_core_config() -> ValidationSection {
             token_ttl
         )));
     } else {
-        section.add(CheckResult::Ok(format!("TOKEN_TTL_MIN = {} minutes", token_ttl)));
+        section.add(CheckResult::Ok(format!(
+            "TOKEN_TTL_MIN = {} minutes",
+            token_ttl
+        )));
     }
 
     // EPOCH_DURATION
@@ -225,14 +228,18 @@ fn validate_key_config() -> ValidationSection {
                 } else {
                     section.add(CheckResult::Ok(format!(
                         "ISSUER_SK_PATH = {} (exists, permissions {:o})",
-                        sk_path, mode & 0o777
+                        sk_path,
+                        mode & 0o777
                     )));
                 }
             }
         }
         #[cfg(not(unix))]
         {
-            section.add(CheckResult::Ok(format!("ISSUER_SK_PATH = {} (exists)", sk_path)));
+            section.add(CheckResult::Ok(format!(
+                "ISSUER_SK_PATH = {} (exists)",
+                sk_path
+            )));
         }
     } else {
         // Check if parent directory exists and is writable
@@ -396,7 +403,11 @@ fn validate_progressive_trust_config(section: &mut ValidationSection) {
 
     let persistence_path = env::var("SYBIL_PROGRESSIVE_TRUST_PERSISTENCE_PATH")
         .unwrap_or_else(|_| "progressive_trust.json".to_string());
-    validate_persistence_path(section, "SYBIL_PROGRESSIVE_TRUST_PERSISTENCE_PATH", &persistence_path);
+    validate_persistence_path(
+        section,
+        "SYBIL_PROGRESSIVE_TRUST_PERSISTENCE_PATH",
+        &persistence_path,
+    );
 
     // Check for insecure default salt
     let salt = env::var("SYBIL_PROGRESSIVE_TRUST_SALT")
@@ -406,7 +417,9 @@ fn validate_progressive_trust_config(section: &mut ValidationSection) {
             "SYBIL_PROGRESSIVE_TRUST_SALT uses default value - change in production".to_string(),
         ));
     } else {
-        section.add(CheckResult::Ok("SYBIL_PROGRESSIVE_TRUST_SALT = [custom]".to_string()));
+        section.add(CheckResult::Ok(
+            "SYBIL_PROGRESSIVE_TRUST_SALT = [custom]".to_string(),
+        ));
     }
 }
 
@@ -543,8 +556,8 @@ fn validate_hsm_config() -> Option<ValidationSection> {
 fn validate_federation_config() -> ValidationSection {
     let mut section = ValidationSection::new("Federation Configuration");
 
-    let federation_path = env::var("FEDERATION_DATA_PATH")
-        .unwrap_or_else(|_| "/data/federation".to_string());
+    let federation_path =
+        env::var("FEDERATION_DATA_PATH").unwrap_or_else(|_| "/data/federation".to_string());
     let federation_path_obj = Path::new(&federation_path);
 
     if federation_path_obj.exists() {
@@ -572,7 +585,9 @@ fn validate_federation_config() -> ValidationSection {
         .unwrap_or(false);
 
     if federated_enabled {
-        section.add(CheckResult::Ok("SYBIL_FEDERATED_TRUST_ENABLED = true".to_string()));
+        section.add(CheckResult::Ok(
+            "SYBIL_FEDERATED_TRUST_ENABLED = true".to_string(),
+        ));
 
         if let Ok(roots) = env::var("SYBIL_FEDERATED_TRUST_TRUSTED_ROOTS") {
             let count = roots.split(',').filter(|s| !s.trim().is_empty()).count();

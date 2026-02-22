@@ -9,8 +9,7 @@
 use anyhow::Result;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_crypto::{
-    Client, Server, Verifier, TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN,
-    verify_token_signature,
+    verify_token_signature, Client, Server, Verifier, TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN,
 };
 use freebird_issuer::multi_key_voprf::MultiKeyVoprfCore;
 
@@ -204,6 +203,9 @@ async fn contract_rejects_non_v2_token_envelope() -> Result<()> {
     };
 
     let parsed = parse_v2_token(&malformed.token_b64);
-    assert!(parsed.is_err(), "non-V2 token must be rejected by contract parser");
+    assert!(
+        parsed.is_err(),
+        "non-V2 token must be rejected by contract parser"
+    );
     Ok(())
 }

@@ -25,7 +25,9 @@ use webauthn_rs::prelude::*;
 
 use super::attestation::{parse_attestation_info, AttestationConfig};
 use super::handlers::{SessionData, WebAuthnState};
-use super::store::{AuthenticatorTransport, CredentialCreateOptions, CredentialSummary, DeviceType};
+use super::store::{
+    AuthenticatorTransport, CredentialCreateOptions, CredentialSummary, DeviceType,
+};
 
 // --- Constants ---
 
@@ -103,12 +105,19 @@ pub async fn start_resident_registration(
         .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
     // Check rate limit
-    if let Err(e) = state.rate_limiter.check_registration_allowed(client_ip).await {
+    if let Err(e) = state
+        .rate_limiter
+        .check_registration_allowed(client_ip)
+        .await
+    {
         warn!(ip = %client_ip, error = %e, "Registration rate limited");
         return Err((e.status_code(), e.to_string()));
     }
 
-    state.rate_limiter.record_registration_attempt(client_ip).await;
+    state
+        .rate_limiter
+        .record_registration_attempt(client_ip)
+        .await;
 
     // Check max credentials per user
     let config = AttestationConfig::global();
@@ -255,7 +264,10 @@ pub async fn finish_resident_registration(
                 ..
             }) => (state, username, client_ip),
             Some(session) => {
-                state.rate_limiter.record_session_ended(session.client_ip()).await;
+                state
+                    .rate_limiter
+                    .record_session_ended(session.client_ip())
+                    .await;
                 return Err((StatusCode::BAD_REQUEST, "Invalid session type".to_string()));
             }
             None => {
@@ -427,14 +439,13 @@ pub async fn start_discoverable_authentication(
     info!(session_id = %session_id, "Started discoverable authentication");
 
     // Convert to the expected response type
-    let options: RequestChallengeResponse =
-        serde_json::from_value(options).map_err(|e| {
-            warn!(error = %e, "Failed to serialize discoverable auth options");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to create auth options".to_string(),
-            )
-        })?;
+    let options: RequestChallengeResponse = serde_json::from_value(options).map_err(|e| {
+        warn!(error = %e, "Failed to serialize discoverable auth options");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to create auth options".to_string(),
+        )
+    })?;
 
     Ok(Json(StartDiscoverableAuthResponse {
         options,
@@ -510,10 +521,7 @@ pub async fn finish_discoverable_authentication(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if stored_creds.is_empty() {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            "No credentials found".to_string(),
-        ));
+        return Err((StatusCode::UNAUTHORIZED, "No credentials found".to_string()));
     }
 
     let passkeys: Vec<Passkey> = stored_creds.into_iter().map(|c| c.credential).collect();
@@ -526,7 +534,10 @@ pub async fn finish_discoverable_authentication(
     let cred_id = req.credential.id.as_ref();
 
     // Find the matching credential
-    let _cred = state.cred_store.load(cred_id).await
+    let _cred = state
+        .cred_store
+        .load(cred_id)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| {
             warn!("Credential not found");
@@ -550,7 +561,10 @@ pub async fn finish_discoverable_authentication(
         .finish_passkey_authentication(&req.credential, &auth_state)
         .map_err(|e| {
             warn!(error = %e, "Authentication failed");
-            (StatusCode::UNAUTHORIZED, "Authentication failed".to_string())
+            (
+                StatusCode::UNAUTHORIZED,
+                "Authentication failed".to_string(),
+            )
         })?;
 
     // Clean up session
@@ -653,7 +667,8 @@ pub async fn admin_list_all_credentials(
     let total = summaries.len();
 
     // Compute statistics
-    let mut by_device_type: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut by_device_type: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut backup_eligible = 0;
     let mut backed_up = 0;
     let mut hardware_bound = 0;
@@ -741,10 +756,22 @@ pub async fn revoke_credential(
 /// Create router for discoverable credential endpoints
 pub fn discoverable_router(state: Arc<WebAuthnState>) -> Router {
     Router::new()
-        .route("/register/resident/start", post(start_resident_registration))
-        .route("/register/resident/finish", post(finish_resident_registration))
-        .route("/authenticate/discoverable/start", post(start_discoverable_authentication))
-        .route("/authenticate/discoverable/finish", post(finish_discoverable_authentication))
+        .route(
+            "/register/resident/start",
+            post(start_resident_registration),
+        )
+        .route(
+            "/register/resident/finish",
+            post(finish_resident_registration),
+        )
+        .route(
+            "/authenticate/discoverable/start",
+            post(start_discoverable_authentication),
+        )
+        .route(
+            "/authenticate/discoverable/finish",
+            post(finish_discoverable_authentication),
+        )
         .with_state(state)
 }
 
@@ -838,7 +865,11 @@ fn create_dummy_auth_state() -> Result<PasskeyAuthentication, (StatusCode, Strin
 }
 
 /// Store the discoverable auth challenge for later verification
-async fn store_discoverable_challenge(_state: &WebAuthnState, _session_id: &str, _challenge: &[u8]) {
+async fn store_discoverable_challenge(
+    _state: &WebAuthnState,
+    _session_id: &str,
+    _challenge: &[u8],
+) {
     // In a production implementation, this would store the challenge
     // in Redis or the sessions map for later verification
     // For now, we rely on webauthn-rs to handle challenge verification

@@ -66,6 +66,7 @@ pub struct SybilConfig {
     pub invite_new_user_wait_secs: u64,
     pub invite_persistence_path: PathBuf,
     pub invite_autosave_interval_secs: u64,
+    pub invite_signing_key_path: PathBuf,
     pub bootstrap_users: Option<String>,
     pub webauthn_max_proof_age: Option<i64>,
     // Progressive Trust configuration
@@ -119,13 +120,17 @@ pub struct WebAuthnConfig {
 impl Config {
     pub fn from_env() -> Result<Self> {
         let issuer_id = env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v1".to_string());
-        
+
         let bind_str = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8081".to_string());
-        let bind_addr: SocketAddr = bind_str.parse()
+        let bind_addr: SocketAddr = bind_str
+            .parse()
             .context(format!("Invalid BIND_ADDR: {}", bind_str))?;
 
         let token_ttl_min = env::var("TOKEN_TTL_MIN")
-            .ok().and_then(|s| s.parse().ok()).unwrap_or(10).clamp(1, 24 * 60);
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(10)
+            .clamp(1, 24 * 60);
 
         let require_tls = env_bool("REQUIRE_TLS");
         let behind_proxy = env_bool("BEHIND_PROXY");
@@ -160,8 +165,12 @@ impl Config {
 impl KeyConfig {
     fn from_env() -> Self {
         Self {
-            sk_path: env::var("ISSUER_SK_PATH").map(PathBuf::from).unwrap_or_else(|_| "issuer_sk.bin".into()),
-            rotation_state_path: env::var("KEY_ROTATION_STATE_PATH").map(PathBuf::from).unwrap_or_else(|_| "key_rotation_state.json".into()),
+            sk_path: env::var("ISSUER_SK_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "issuer_sk.bin".into()),
+            rotation_state_path: env::var("KEY_ROTATION_STATE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "key_rotation_state.json".into()),
             kid_override: env::var("KID").ok(),
             hsm: HsmConfig::from_env(),
         }
@@ -183,19 +192,18 @@ impl HsmConfig {
         };
 
         // Get required HSM configuration
-        let module_path = env::var("HSM_MODULE_PATH")
-            .expect("HSM_MODULE_PATH required when HSM_ENABLE=true");
+        let module_path =
+            env::var("HSM_MODULE_PATH").expect("HSM_MODULE_PATH required when HSM_ENABLE=true");
 
         let slot = env::var("HSM_SLOT")
             .expect("HSM_SLOT required when HSM_ENABLE=true")
             .parse()
             .expect("HSM_SLOT must be a valid u64");
 
-        let pin = env::var("HSM_PIN")
-            .expect("HSM_PIN required when HSM_ENABLE=true");
+        let pin = env::var("HSM_PIN").expect("HSM_PIN required when HSM_ENABLE=true");
 
-        let key_label = env::var("HSM_KEY_LABEL")
-            .expect("HSM_KEY_LABEL required when HSM_ENABLE=true");
+        let key_label =
+            env::var("HSM_KEY_LABEL").expect("HSM_KEY_LABEL required when HSM_ENABLE=true");
 
         Some(Self {
             module_path,
@@ -221,13 +229,18 @@ impl SybilConfig {
             mode: env::var("SYBIL_RESISTANCE").unwrap_or_else(|_| "none".to_string()),
             pow_difficulty: env_u32("SYBIL_POW_DIFFICULTY", 20),
             // Duration fields now support human-readable formats: "1h", "30m", "1d", etc.
-            rate_limit_secs: env_duration("SYBIL_RATE_LIMIT", 3600),  // Default: 1h
+            rate_limit_secs: env_duration("SYBIL_RATE_LIMIT", 3600), // Default: 1h
             invite_per_user: env_u32("SYBIL_INVITE_PER_USER", 5),
-            invite_cooldown_secs: env_duration("SYBIL_INVITE_COOLDOWN", 3600),  // Default: 1h
-            invite_expires_secs: env_duration("SYBIL_INVITE_EXPIRES", 30 * 24 * 3600),  // Default: 30d
-            invite_new_user_wait_secs: env_duration("SYBIL_INVITE_NEW_USER_WAIT", 30 * 24 * 3600),  // Default: 30d
-            invite_persistence_path: env::var("SYBIL_INVITE_PERSISTENCE_PATH").map(PathBuf::from).unwrap_or_else(|_| "invitations.json".into()),
-            invite_autosave_interval_secs: env_duration("SYBIL_INVITE_AUTOSAVE_INTERVAL", 300),  // Default: 5m
+            invite_cooldown_secs: env_duration("SYBIL_INVITE_COOLDOWN", 3600), // Default: 1h
+            invite_expires_secs: env_duration("SYBIL_INVITE_EXPIRES", 30 * 24 * 3600), // Default: 30d
+            invite_new_user_wait_secs: env_duration("SYBIL_INVITE_NEW_USER_WAIT", 30 * 24 * 3600), // Default: 30d
+            invite_persistence_path: env::var("SYBIL_INVITE_PERSISTENCE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "invitations.json".into()),
+            invite_autosave_interval_secs: env_duration("SYBIL_INVITE_AUTOSAVE_INTERVAL", 300), // Default: 5m
+            invite_signing_key_path: env::var("SYBIL_INVITE_SIGNING_KEY_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "invitation_signing_key.bin".into()),
             bootstrap_users: env::var("SYBIL_INVITE_BOOTSTRAP_USERS").ok(),
             webauthn_max_proof_age: env::var("WEBAUTHN_MAX_PROOF_AGE")
                 .ok()
@@ -235,10 +248,15 @@ impl SybilConfig {
                 .map(|d| d as i64),
             // Progressive Trust
             progressive_trust_levels,
-            progressive_trust_persistence_path: env::var("SYBIL_PROGRESSIVE_TRUST_PERSISTENCE_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| "progressive_trust.json".into()),
-            progressive_trust_autosave_interval: env_duration("SYBIL_PROGRESSIVE_TRUST_AUTOSAVE", 300),  // Default: 5m
+            progressive_trust_persistence_path: env::var(
+                "SYBIL_PROGRESSIVE_TRUST_PERSISTENCE_PATH",
+            )
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| "progressive_trust.json".into()),
+            progressive_trust_autosave_interval: env_duration(
+                "SYBIL_PROGRESSIVE_TRUST_AUTOSAVE",
+                300,
+            ), // Default: 5m
             progressive_trust_hmac_secret: env::var("SYBIL_PROGRESSIVE_TRUST_SECRET").ok(),
             progressive_trust_hmac_secret_path: env::var("SYBIL_PROGRESSIVE_TRUST_SECRET_PATH")
                 .map(PathBuf::from)
@@ -248,22 +266,44 @@ impl SybilConfig {
             progressive_trust_allow_insecure: env_bool("SYBIL_PROGRESSIVE_TRUST_ALLOW_INSECURE"),
             // Proof of Diversity
             proof_of_diversity_min_score: env_u32("SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE", 40) as u8,
-            proof_of_diversity_persistence_path: env::var("SYBIL_PROOF_OF_DIVERSITY_PERSISTENCE_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| "proof_of_diversity.json".into()),
-            proof_of_diversity_autosave_interval: env_duration("SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE", 300),  // Default: 5m
+            proof_of_diversity_persistence_path: env::var(
+                "SYBIL_PROOF_OF_DIVERSITY_PERSISTENCE_PATH",
+            )
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| "proof_of_diversity.json".into()),
+            proof_of_diversity_autosave_interval: env_duration(
+                "SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE",
+                300,
+            ), // Default: 5m
             proof_of_diversity_hmac_secret: env::var("SYBIL_PROOF_OF_DIVERSITY_SECRET").ok(),
             proof_of_diversity_fingerprint_salt: env::var("SYBIL_PROOF_OF_DIVERSITY_SALT")
                 .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
             // Multi-Party Vouching
-            multi_party_vouching_required_vouchers: env_u32("SYBIL_MULTI_PARTY_VOUCHING_REQUIRED", 3),
-            multi_party_vouching_cooldown_secs: env_duration("SYBIL_MULTI_PARTY_VOUCHING_COOLDOWN", 3600),  // Default: 1h
-            multi_party_vouching_expires_secs: env_duration("SYBIL_MULTI_PARTY_VOUCHING_EXPIRES", 2592000),  // Default: 30d
-            multi_party_vouching_new_user_wait_secs: env_duration("SYBIL_MULTI_PARTY_VOUCHING_NEW_USER_WAIT", 2592000),  // Default: 30d
-            multi_party_vouching_persistence_path: env::var("SYBIL_MULTI_PARTY_VOUCHING_PERSISTENCE_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| "multi_party_vouching.json".into()),
-            multi_party_vouching_autosave_interval: env_duration("SYBIL_MULTI_PARTY_VOUCHING_AUTOSAVE", 300),  // Default: 5m
+            multi_party_vouching_required_vouchers: env_u32(
+                "SYBIL_MULTI_PARTY_VOUCHING_REQUIRED",
+                3,
+            ),
+            multi_party_vouching_cooldown_secs: env_duration(
+                "SYBIL_MULTI_PARTY_VOUCHING_COOLDOWN",
+                3600,
+            ), // Default: 1h
+            multi_party_vouching_expires_secs: env_duration(
+                "SYBIL_MULTI_PARTY_VOUCHING_EXPIRES",
+                2592000,
+            ), // Default: 30d
+            multi_party_vouching_new_user_wait_secs: env_duration(
+                "SYBIL_MULTI_PARTY_VOUCHING_NEW_USER_WAIT",
+                2592000,
+            ), // Default: 30d
+            multi_party_vouching_persistence_path: env::var(
+                "SYBIL_MULTI_PARTY_VOUCHING_PERSISTENCE_PATH",
+            )
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| "multi_party_vouching.json".into()),
+            multi_party_vouching_autosave_interval: env_duration(
+                "SYBIL_MULTI_PARTY_VOUCHING_AUTOSAVE",
+                300,
+            ), // Default: 5m
             multi_party_vouching_hmac_secret: env::var("SYBIL_MULTI_PARTY_VOUCHING_SECRET").ok(),
             multi_party_vouching_salt: env::var("SYBIL_MULTI_PARTY_VOUCHING_SALT")
                 .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
@@ -272,9 +312,13 @@ impl SybilConfig {
             federated_trust_max_depth: env_u32("SYBIL_FEDERATED_TRUST_MAX_DEPTH", 2),
             federated_trust_min_paths: env_u32("SYBIL_FEDERATED_TRUST_MIN_PATHS", 1),
             federated_trust_require_direct: env_bool("SYBIL_FEDERATED_TRUST_REQUIRE_DIRECT"),
-            federated_trust_min_trust_level: env_u32("SYBIL_FEDERATED_TRUST_MIN_TRUST_LEVEL", 50) as u8,
-            federated_trust_cache_ttl_secs: env_duration("SYBIL_FEDERATED_TRUST_CACHE_TTL", 3600),  // Default: 1h
-            federated_trust_max_token_age_secs: env_duration("SYBIL_FEDERATED_TRUST_MAX_TOKEN_AGE", 600) as i64,  // Default: 10m
+            federated_trust_min_trust_level: env_u32("SYBIL_FEDERATED_TRUST_MIN_TRUST_LEVEL", 50)
+                as u8,
+            federated_trust_cache_ttl_secs: env_duration("SYBIL_FEDERATED_TRUST_CACHE_TTL", 3600), // Default: 1h
+            federated_trust_max_token_age_secs: env_duration(
+                "SYBIL_FEDERATED_TRUST_MAX_TOKEN_AGE",
+                600,
+            ) as i64, // Default: 10m
             federated_trust_trusted_roots: env::var("SYBIL_FEDERATED_TRUST_TRUSTED_ROOTS")
                 .ok()
                 .map(|s| s.split(',').map(|s| s.to_string()).collect())
@@ -288,8 +332,7 @@ impl SybilConfig {
                 .ok()
                 .map(|s| s.split(',').map(|s| s.trim().to_string()).collect())
                 .unwrap_or_else(|| vec!["pow".to_string(), "rate_limit".to_string()]),
-            combined_mode: env::var("SYBIL_COMBINED_MODE")
-                .unwrap_or_else(|_| "or".to_string()),
+            combined_mode: env::var("SYBIL_COMBINED_MODE").unwrap_or_else(|_| "or".to_string()),
             combined_threshold: env_u32("SYBIL_COMBINED_THRESHOLD", 2),
         }
     }
@@ -298,7 +341,9 @@ impl SybilConfig {
 impl WebAuthnConfig {
     fn from_env() -> Option<Self> {
         // Only return config if RP_ID and ORIGIN are set
-        if let (Ok(rp_id), Ok(rp_origin)) = (env::var("WEBAUTHN_RP_ID"), env::var("WEBAUTHN_RP_ORIGIN")) {
+        if let (Ok(rp_id), Ok(rp_origin)) =
+            (env::var("WEBAUTHN_RP_ID"), env::var("WEBAUTHN_RP_ORIGIN"))
+        {
             Some(Self {
                 rp_id,
                 rp_origin,
@@ -317,11 +362,16 @@ impl WebAuthnConfig {
 
 // Helpers
 fn env_bool(key: &str) -> bool {
-    env::var(key).map(|v| v.eq_ignore_ascii_case("true")).unwrap_or(false)
+    env::var(key)
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 fn env_u32(key: &str, default: u32) -> u32 {
-    env::var(key).ok().and_then(|s| s.parse().ok()).unwrap_or(default)
+    env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 #[cfg(test)]
@@ -414,7 +464,11 @@ mod tests {
         env::set_var("HSM_KEY_LABEL", "test");
 
         let hsm_config = HsmConfig::from_env().expect("Should parse HSM config");
-        assert_eq!(hsm_config.mode, HsmMode::Storage, "Should default to Storage mode");
+        assert_eq!(
+            hsm_config.mode,
+            HsmMode::Storage,
+            "Should default to Storage mode"
+        );
 
         // Cleanup
         env::remove_var("HSM_ENABLE");

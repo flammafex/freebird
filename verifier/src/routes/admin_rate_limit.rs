@@ -29,7 +29,7 @@ impl Default for AdminRateLimitConfig {
     fn default() -> Self {
         Self {
             max_failures: 5,
-            window_duration: Duration::from_secs(5 * 60),  // 5 minutes
+            window_duration: Duration::from_secs(5 * 60), // 5 minutes
             block_duration: Duration::from_secs(15 * 60), // 15 minutes
         }
     }

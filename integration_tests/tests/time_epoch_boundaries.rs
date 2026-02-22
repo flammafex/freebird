@@ -64,13 +64,33 @@ fn epoch_retention_window_boundaries() {
 
     // Valid set: [current-retention, current]
     assert!(is_epoch_valid(current, now_ts, epoch_duration, retention));
-    assert!(is_epoch_valid(current - 1, now_ts, epoch_duration, retention));
-    assert!(is_epoch_valid(current - 2, now_ts, epoch_duration, retention));
+    assert!(is_epoch_valid(
+        current - 1,
+        now_ts,
+        epoch_duration,
+        retention
+    ));
+    assert!(is_epoch_valid(
+        current - 2,
+        now_ts,
+        epoch_duration,
+        retention
+    ));
 
     // Below retention floor should be rejected.
-    assert!(!is_epoch_valid(current - 3, now_ts, epoch_duration, retention));
+    assert!(!is_epoch_valid(
+        current - 3,
+        now_ts,
+        epoch_duration,
+        retention
+    ));
     // Future epochs should be rejected.
-    assert!(!is_epoch_valid(current + 1, now_ts, epoch_duration, retention));
+    assert!(!is_epoch_valid(
+        current + 1,
+        now_ts,
+        epoch_duration,
+        retention
+    ));
 }
 
 #[test]
@@ -81,6 +101,16 @@ fn epoch_saturating_sub_behavior_at_zero() {
     let current = current_epoch_from_ts(now_ts, DEFAULT_EPOCH_DURATION_SECS);
     assert_eq!(current, 0);
 
-    assert!(is_epoch_valid(0, now_ts, DEFAULT_EPOCH_DURATION_SECS, retention));
-    assert!(!is_epoch_valid(1, now_ts, DEFAULT_EPOCH_DURATION_SECS, retention));
+    assert!(is_epoch_valid(
+        0,
+        now_ts,
+        DEFAULT_EPOCH_DURATION_SECS,
+        retention
+    ));
+    assert!(!is_epoch_valid(
+        1,
+        now_ts,
+        DEFAULT_EPOCH_DURATION_SECS,
+        retention
+    ));
 }

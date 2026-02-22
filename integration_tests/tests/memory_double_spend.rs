@@ -12,8 +12,8 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc,
 };
-use tokio::sync::{Barrier, Mutex};
 use std::time::Duration;
+use tokio::sync::{Barrier, Mutex};
 
 use freebird_verifier::store::{InMemoryStore, SpendStore};
 
@@ -240,9 +240,17 @@ async fn test_memory_transient_failure_handling_path() -> Result<()> {
     let second = verify_once(&flaky, &key, ttl).await;
     let third = verify_once(&flaky, &key, ttl).await;
 
-    assert_eq!(first, VerifyCode::StoreError, "first call should surface transient store error");
+    assert_eq!(
+        first,
+        VerifyCode::StoreError,
+        "first call should surface transient store error"
+    );
     assert_eq!(second, VerifyCode::Success, "retry should succeed");
-    assert_eq!(third, VerifyCode::ReplayDetected, "subsequent duplicate should be replay");
+    assert_eq!(
+        third,
+        VerifyCode::ReplayDetected,
+        "subsequent duplicate should be replay"
+    );
     Ok(())
 }
 

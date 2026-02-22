@@ -38,8 +38,8 @@ use tracing::{debug, error, info, warn};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 
-use freebird_common::api::SybilProof;
 use crate::sybil_resistance::SybilResistance;
+use freebird_common::api::SybilProof;
 
 // ============================================================================
 // Configuration
@@ -301,14 +301,16 @@ impl ProgressiveTrustSystem {
                 .mode(0o600)
                 .open(&tmp)
                 .context("Failed to create temp file for secret")?;
-            f.write_all(data).context("Failed to write secret to temp file")?;
+            f.write_all(data)
+                .context("Failed to write secret to temp file")?;
             f.sync_all().context("Failed to sync secret file")?;
         }
 
         #[cfg(not(unix))]
         {
             let mut f = fs::File::create(&tmp).context("Failed to create temp file for secret")?;
-            f.write_all(data).context("Failed to write secret to temp file")?;
+            f.write_all(data)
+                .context("Failed to write secret to temp file")?;
             f.sync_all().context("Failed to sync secret file")?;
         }
 
@@ -575,7 +577,10 @@ mod tests {
         let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
         ProgressiveTrustConfig {
             persistence_path: PathBuf::from(format!("/tmp/progressive_trust_test_{}.json", id)),
-            hmac_secret_path: PathBuf::from(format!("/tmp/progressive_trust_secret_test_{}.bin", id)),
+            hmac_secret_path: PathBuf::from(format!(
+                "/tmp/progressive_trust_secret_test_{}.bin",
+                id
+            )),
             ..Default::default()
         }
     }
@@ -653,13 +658,19 @@ mod tests {
         let proof1 = system1.generate_proof("bob").await.unwrap();
 
         // Verify secret file was created
-        assert!(config.hmac_secret_path.exists(), "Secret file should be created");
+        assert!(
+            config.hmac_secret_path.exists(),
+            "Secret file should be created"
+        );
 
         // Create second system with same config - should load same secret
         let system2 = ProgressiveTrustSystem::new(config.clone()).await.unwrap();
 
         // Proofs should be verifiable by both systems (same HMAC key)
-        assert!(system2.verify(&proof1).is_ok(), "Proof from system1 should verify on system2");
+        assert!(
+            system2.verify(&proof1).is_ok(),
+            "Proof from system1 should verify on system2"
+        );
 
         cleanup_test_files(&config);
     }
@@ -676,7 +687,10 @@ mod tests {
         let proof1 = system1.generate_proof("testuser").await.unwrap();
 
         // Proof from system1 should NOT verify on system2 (different secrets)
-        assert!(system2.verify(&proof1).is_err(), "Proof should not verify with different secret");
+        assert!(
+            system2.verify(&proof1).is_err(),
+            "Proof should not verify with different secret"
+        );
 
         cleanup_test_files(&config1);
         cleanup_test_files(&config2);
@@ -692,7 +706,10 @@ mod tests {
         assert!(system.verify(&proof).is_ok());
 
         // Secret file should NOT be created when secret is provided directly
-        assert!(!config.hmac_secret_path.exists(), "Secret file should not be created when secret is provided");
+        assert!(
+            !config.hmac_secret_path.exists(),
+            "Secret file should not be created when secret is provided"
+        );
 
         cleanup_test_files(&config);
     }

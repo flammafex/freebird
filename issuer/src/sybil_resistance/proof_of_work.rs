@@ -26,8 +26,8 @@
 //! ```
 
 use super::{verify_timestamp_recent, SybilResistance};
-use freebird_common::api::SybilProof; // Use shared type
 use anyhow::{anyhow, Result};
+use freebird_common::api::SybilProof; // Use shared type
 use sha2::{Digest, Sha256};
 
 /// Proof-of-Work Sybil resistance mechanism

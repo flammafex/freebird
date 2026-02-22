@@ -165,11 +165,11 @@ pub const TOKEN_SIGNATURE_LEN: usize = 64; // ECDSA signature (r: 32 bytes, s: 3
 ///
 /// These distinguish between different token authentication schemes to enable
 /// backward-compatible migration from MAC-based to signature-based auth.
-pub const TOKEN_FORMAT_V1_MAC: u8 = 0x01;       // VOPRF (131) + MAC (32) = 163 bytes
+pub const TOKEN_FORMAT_V1_MAC: u8 = 0x01; // VOPRF (131) + MAC (32) = 163 bytes
 pub const TOKEN_FORMAT_V2_SIGNATURE: u8 = 0x02; // VOPRF (131) + ECDSA (64) = 195 bytes
 
 /// Total token lengths including authentication
-pub const TOKEN_LEN_V1: usize = 131 + TOKEN_MAC_LEN;       // 163 bytes
+pub const TOKEN_LEN_V1: usize = 131 + TOKEN_MAC_LEN; // 163 bytes
 pub const TOKEN_LEN_V2: usize = 131 + TOKEN_SIGNATURE_LEN; // 195 bytes
 
 /// Compute HMAC-SHA256 over token and metadata to prevent tampering
@@ -192,8 +192,7 @@ pub fn compute_token_mac(
     exp: i64,
     issuer_id: &str,
 ) -> [u8; 32] {
-    let mut mac = HmacSha256::new_from_slice(mac_key)
-        .expect("HMAC can take key of any size");
+    let mut mac = HmacSha256::new_from_slice(mac_key).expect("HMAC can take key of any size");
 
     // MAC over: token || kid || exp || issuer_id
     mac.update(token_bytes);
@@ -269,7 +268,7 @@ pub fn compute_token_signature(
     exp: i64,
     issuer_id: &str,
 ) -> Result<[u8; 64], Error> {
-    use p256::ecdsa::{SigningKey, signature::Signer};
+    use p256::ecdsa::{signature::Signer, SigningKey};
 
     // Construct message to sign (same as MAC scheme)
     let mut msg = Vec::new();
@@ -282,8 +281,7 @@ pub fn compute_token_signature(
     let msg_hash = Sha256::digest(&msg);
 
     // Create signing key from secret key bytes
-    let signing_key = SigningKey::from_bytes(issuer_sk.into())
-        .map_err(|_| Error::Internal)?;
+    let signing_key = SigningKey::from_bytes(issuer_sk.into()).map_err(|_| Error::Internal)?;
 
     // Sign (uses deterministic ECDSA by default in p256 crate)
     let signature: p256::ecdsa::Signature = signing_key.sign(&msg_hash);
@@ -315,7 +313,7 @@ pub fn verify_token_signature(
     exp: i64,
     issuer_id: &str,
 ) -> bool {
-    use p256::ecdsa::{VerifyingKey, signature::Verifier};
+    use p256::ecdsa::{signature::Verifier, VerifyingKey};
 
     // Construct message (same as signing)
     let mut msg = Vec::new();
@@ -402,18 +400,14 @@ pub fn derive_mac_key_v2(
 ///
 /// # Returns
 /// 64-byte ECDSA signature (r || s) or error
-pub fn sign_message(
-    secret_key: &[u8; 32],
-    message: &[u8],
-) -> Result<[u8; 64], Error> {
-    use p256::ecdsa::{SigningKey, signature::Signer};
+pub fn sign_message(secret_key: &[u8; 32], message: &[u8]) -> Result<[u8; 64], Error> {
+    use p256::ecdsa::{signature::Signer, SigningKey};
 
     // Hash the message first
     let msg_hash = Sha256::digest(message);
 
     // Create signing key from secret
-    let signing_key = SigningKey::from_bytes(secret_key.into())
-        .map_err(|_| Error::Internal)?;
+    let signing_key = SigningKey::from_bytes(secret_key.into()).map_err(|_| Error::Internal)?;
 
     // Sign (deterministic, using RFC 6979)
     let signature: p256::ecdsa::Signature = signing_key.sign(&msg_hash);
@@ -432,12 +426,8 @@ pub fn sign_message(
 ///
 /// # Returns
 /// true if signature is valid, false otherwise
-pub fn verify_message_signature(
-    public_key: &[u8],
-    message: &[u8],
-    signature: &[u8; 64],
-) -> bool {
-    use p256::ecdsa::{VerifyingKey, signature::Verifier};
+pub fn verify_message_signature(public_key: &[u8], message: &[u8], signature: &[u8; 64]) -> bool {
+    use p256::ecdsa::{signature::Verifier, VerifyingKey};
 
     // Hash the message
     let msg_hash = Sha256::digest(message);
@@ -527,25 +517,52 @@ mod tests {
         assert_eq!(mac.len(), 32);
 
         // Verify MAC succeeds
-        assert!(verify_token_mac(&mac_key, &token, &mac, kid, exp, issuer_id));
+        assert!(verify_token_mac(
+            &mac_key, &token, &mac, kid, exp, issuer_id
+        ));
 
         // Tampered token fails
         let mut bad_token = token.clone();
         bad_token[0] ^= 1;
-        assert!(!verify_token_mac(&mac_key, &bad_token, &mac, kid, exp, issuer_id));
+        assert!(!verify_token_mac(
+            &mac_key, &bad_token, &mac, kid, exp, issuer_id
+        ));
 
         // Tampered kid fails
-        assert!(!verify_token_mac(&mac_key, &token, &mac, "wrong-kid", exp, issuer_id));
+        assert!(!verify_token_mac(
+            &mac_key,
+            &token,
+            &mac,
+            "wrong-kid",
+            exp,
+            issuer_id
+        ));
 
         // Tampered exp fails
-        assert!(!verify_token_mac(&mac_key, &token, &mac, kid, exp + 1, issuer_id));
+        assert!(!verify_token_mac(
+            &mac_key,
+            &token,
+            &mac,
+            kid,
+            exp + 1,
+            issuer_id
+        ));
 
         // Tampered issuer_id fails
-        assert!(!verify_token_mac(&mac_key, &token, &mac, kid, exp, "wrong-issuer"));
+        assert!(!verify_token_mac(
+            &mac_key,
+            &token,
+            &mac,
+            kid,
+            exp,
+            "wrong-issuer"
+        ));
 
         // Wrong MAC fails
         let wrong_mac = [0u8; 32];
-        assert!(!verify_token_mac(&mac_key, &token, &wrong_mac, kid, exp, issuer_id));
+        assert!(!verify_token_mac(
+            &mac_key, &token, &wrong_mac, kid, exp, issuer_id
+        ));
     }
 
     #[test]
@@ -612,7 +629,9 @@ mod tests {
             for bit_idx in 0..8 {
                 let mut wrong_mac = correct_mac;
                 wrong_mac[byte_idx] ^= 1 << bit_idx;
-                assert!(!verify_token_mac(&mac_key, &token, &wrong_mac, kid, exp, issuer));
+                assert!(!verify_token_mac(
+                    &mac_key, &token, &wrong_mac, kid, exp, issuer
+                ));
             }
         }
     }
@@ -640,30 +659,69 @@ mod tests {
         assert_eq!(signature.len(), 64);
 
         // Verify signature succeeds
-        assert!(verify_token_signature(&pubkey, &token, &signature, kid, exp, issuer_id));
+        assert!(verify_token_signature(
+            &pubkey, &token, &signature, kid, exp, issuer_id
+        ));
 
         // Tampered token fails
         let mut bad_token = token.clone();
         bad_token[0] ^= 1;
-        assert!(!verify_token_signature(&pubkey, &bad_token, &signature, kid, exp, issuer_id));
+        assert!(!verify_token_signature(
+            &pubkey, &bad_token, &signature, kid, exp, issuer_id
+        ));
 
         // Tampered kid fails
-        assert!(!verify_token_signature(&pubkey, &token, &signature, "wrong-kid", exp, issuer_id));
+        assert!(!verify_token_signature(
+            &pubkey,
+            &token,
+            &signature,
+            "wrong-kid",
+            exp,
+            issuer_id
+        ));
 
         // Tampered exp fails
-        assert!(!verify_token_signature(&pubkey, &token, &signature, kid, exp + 1, issuer_id));
+        assert!(!verify_token_signature(
+            &pubkey,
+            &token,
+            &signature,
+            kid,
+            exp + 1,
+            issuer_id
+        ));
 
         // Tampered issuer_id fails
-        assert!(!verify_token_signature(&pubkey, &token, &signature, kid, exp, "wrong-issuer"));
+        assert!(!verify_token_signature(
+            &pubkey,
+            &token,
+            &signature,
+            kid,
+            exp,
+            "wrong-issuer"
+        ));
 
         // Wrong signature fails
         let wrong_signature = [0u8; 64];
-        assert!(!verify_token_signature(&pubkey, &token, &wrong_signature, kid, exp, issuer_id));
+        assert!(!verify_token_signature(
+            &pubkey,
+            &token,
+            &wrong_signature,
+            kid,
+            exp,
+            issuer_id
+        ));
 
         // Tampered signature fails
         let mut bad_signature = signature;
         bad_signature[0] ^= 1;
-        assert!(!verify_token_signature(&pubkey, &token, &bad_signature, kid, exp, issuer_id));
+        assert!(!verify_token_signature(
+            &pubkey,
+            &token,
+            &bad_signature,
+            kid,
+            exp,
+            issuer_id
+        ));
     }
 
     #[test]
@@ -684,8 +742,12 @@ mod tests {
         assert_eq!(sig1, sig2);
 
         // Both should verify
-        assert!(verify_token_signature(&pubkey, &token, &sig1, kid, exp, issuer_id));
-        assert!(verify_token_signature(&pubkey, &token, &sig2, kid, exp, issuer_id));
+        assert!(verify_token_signature(
+            &pubkey, &token, &sig1, kid, exp, issuer_id
+        ));
+        assert!(verify_token_signature(
+            &pubkey, &token, &sig2, kid, exp, issuer_id
+        ));
     }
 
     #[test]
@@ -708,10 +770,14 @@ mod tests {
         let sig1 = compute_token_signature(&sk1, &token, kid, exp, issuer_id).unwrap();
 
         // Verify with key 1's public key succeeds
-        assert!(verify_token_signature(&pubkey1, &token, &sig1, kid, exp, issuer_id));
+        assert!(verify_token_signature(
+            &pubkey1, &token, &sig1, kid, exp, issuer_id
+        ));
 
         // Verify with key 2's public key fails
-        assert!(!verify_token_signature(&pubkey2, &token, &sig1, kid, exp, issuer_id));
+        assert!(!verify_token_signature(
+            &pubkey2, &token, &sig1, kid, exp, issuer_id
+        ));
     }
 
     #[test]
@@ -726,11 +792,25 @@ mod tests {
 
         // Invalid public key (not a valid SEC1 compressed point)
         let bad_pubkey = [0xFFu8; 33];
-        assert!(!verify_token_signature(&bad_pubkey, &token, &signature, kid, exp, issuer_id));
+        assert!(!verify_token_signature(
+            &bad_pubkey,
+            &token,
+            &signature,
+            kid,
+            exp,
+            issuer_id
+        ));
 
         // Wrong length public key
         let short_pubkey = [0x02u8; 32];
-        assert!(!verify_token_signature(&short_pubkey, &token, &signature, kid, exp, issuer_id));
+        assert!(!verify_token_signature(
+            &short_pubkey,
+            &token,
+            &signature,
+            kid,
+            exp,
+            issuer_id
+        ));
     }
 
     #[test]
@@ -760,12 +840,21 @@ mod tests {
         let signature = compute_token_signature(&sk, &token_bytes, kid, exp, issuer_id).unwrap();
 
         // Verify signature
-        assert!(verify_token_signature(&pk, &token_bytes, &signature, kid, exp, issuer_id));
+        assert!(verify_token_signature(
+            &pk,
+            &token_bytes,
+            &signature,
+            kid,
+            exp,
+            issuer_id
+        ));
 
         // Tampered token should fail
         let mut bad_token = token_bytes.clone();
         bad_token[0] ^= 1;
-        assert!(!verify_token_signature(&pk, &bad_token, &signature, kid, exp, issuer_id));
+        assert!(!verify_token_signature(
+            &pk, &bad_token, &signature, kid, exp, issuer_id
+        ));
     }
 
     // Generic message signing tests (for Layer 2 Federation)
@@ -788,7 +877,11 @@ mod tests {
 
         // Wrong message should fail
         let wrong_message = b"Wrong message";
-        assert!(!verify_message_signature(&pubkey, wrong_message, &signature));
+        assert!(!verify_message_signature(
+            &pubkey,
+            wrong_message,
+            &signature
+        ));
 
         // Wrong public key should fail
         let sk2 = [43u8; 32];

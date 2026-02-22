@@ -1,10 +1,13 @@
 use anyhow::Result;
 use async_trait::async_trait;
+use freebird_verifier::store::{RedisStore, SpendStore};
 use futures::future::join_all;
-use std::sync::{atomic::{AtomicUsize, Ordering}, Arc};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use std::time::Duration;
 use tokio::sync::{Barrier, Mutex};
-use freebird_verifier::store::{RedisStore, SpendStore};
 
 const CONCURRENCY: usize = 50;
 
@@ -67,12 +70,16 @@ async fn test_redis_atomic_double_spend_protection() -> Result<()> {
     // 1. Setup Redis Store
     // We use a distinct prefix or DB in real apps, but for this test
     // we'll just generate a random nullifier key to avoid collisions.
-    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+
     let store = match RedisStore::new(&redis_url) {
         Ok(s) => Arc::new(s),
         Err(e) => {
-            eprintln!("⚠️ Skipping Redis test: could not connect to {}: {}", redis_url, e);
+            eprintln!(
+                "⚠️ Skipping Redis test: could not connect to {}: {}",
+                redis_url, e
+            );
             return Ok(());
         }
     };
@@ -83,7 +90,10 @@ async fn test_redis_atomic_double_spend_protection() -> Result<()> {
     let spend_key = format!("test:double_spend:{}", nullifier);
     let ttl = Duration::from_secs(60);
 
-    println!("🚀 Launching {} concurrent spend requests for key: {}", CONCURRENCY, spend_key);
+    println!(
+        "🚀 Launching {} concurrent spend requests for key: {}",
+        CONCURRENCY, spend_key
+    );
 
     // 3. Launch concurrent tasks
     // We use a Barrier (conceptually) or just spawn them all at once.
@@ -118,10 +128,16 @@ async fn test_redis_atomic_double_spend_protection() -> Result<()> {
 
     // 5. Assertions
     let successes = success_count.load(Ordering::SeqCst);
-    println!("📊 Results: {} successes out of {} attempts", successes, CONCURRENCY);
+    println!(
+        "📊 Results: {} successes out of {} attempts",
+        successes, CONCURRENCY
+    );
 
-    assert_eq!(successes, 1, "CRITICAL: Double spend detected! More than one request succeeded.");
-    
+    assert_eq!(
+        successes, 1,
+        "CRITICAL: Double spend detected! More than one request succeeded."
+    );
+
     // Verify the key is actually in Redis (ttl check)
     // We can't easily verify TTL without raw redis client, but mark_spent returning true implies it was set.
 
@@ -131,11 +147,15 @@ async fn test_redis_atomic_double_spend_protection() -> Result<()> {
 #[tokio::test]
 async fn test_redis_n_way_race_duplicate_submissions() -> Result<()> {
     const N_WAY: usize = 200;
-    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     let store = match RedisStore::new(&redis_url) {
         Ok(s) => Arc::new(s),
         Err(e) => {
-            eprintln!("⚠️ Skipping Redis test: could not connect to {}: {}", redis_url, e);
+            eprintln!(
+                "⚠️ Skipping Redis test: could not connect to {}: {}",
+                redis_url, e
+            );
             return Ok(());
         }
     };
@@ -159,9 +179,15 @@ async fn test_redis_n_way_race_duplicate_submissions() -> Result<()> {
         handles.push(tokio::spawn(async move {
             barrier.wait().await;
             match verify_once(store.as_ref(), &key, ttl).await {
-                VerifyCode::Success => { success_count.fetch_add(1, Ordering::SeqCst); }
-                VerifyCode::ReplayDetected => { replay_count.fetch_add(1, Ordering::SeqCst); }
-                VerifyCode::StoreError => { error_count.fetch_add(1, Ordering::SeqCst); }
+                VerifyCode::Success => {
+                    success_count.fetch_add(1, Ordering::SeqCst);
+                }
+                VerifyCode::ReplayDetected => {
+                    replay_count.fetch_add(1, Ordering::SeqCst);
+                }
+                VerifyCode::StoreError => {
+                    error_count.fetch_add(1, Ordering::SeqCst);
+                }
             }
         }));
     }
@@ -176,11 +202,15 @@ async fn test_redis_n_way_race_duplicate_submissions() -> Result<()> {
 
 #[tokio::test]
 async fn test_redis_transient_failure_handling_path() -> Result<()> {
-    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     let base = match RedisStore::new(&redis_url) {
         Ok(s) => Arc::new(s),
         Err(e) => {
-            eprintln!("⚠️ Skipping Redis test: could not connect to {}: {}", redis_url, e);
+            eprintln!(
+                "⚠️ Skipping Redis test: could not connect to {}: {}",
+                redis_url, e
+            );
             return Ok(());
         }
     };
@@ -201,11 +231,15 @@ async fn test_redis_transient_failure_handling_path() -> Result<()> {
 
 #[tokio::test]
 async fn test_redis_batch_duplicate_error_code_stability() -> Result<()> {
-    let redis_url = std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
+    let redis_url =
+        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
     let store = match RedisStore::new(&redis_url) {
         Ok(s) => Arc::new(s),
         Err(e) => {
-            eprintln!("⚠️ Skipping Redis test: could not connect to {}: {}", redis_url, e);
+            eprintln!(
+                "⚠️ Skipping Redis test: could not connect to {}: {}",
+                redis_url, e
+            );
             return Ok(());
         }
     };

@@ -19,10 +19,9 @@ use time::OffsetDateTime;
 use tracing::{debug, error, info, warn};
 
 use crate::multi_key_voprf::MultiKeyVoprfCore;
-use freebird_common::api::{IssueReq, IssueResp, SybilInfo};
 use crate::sybil_resistance::ClientData; // Keep ClientData local to issuer/sybil if not in common
 use crate::AppStateWithSybil;
-
+use freebird_common::api::{IssueReq, IssueResp, SybilInfo};
 
 // / Extract client information from HTTP request
 // /
@@ -232,15 +231,22 @@ pub async fn handle(
     // Decode token to get raw bytes
     let token_bytes = Base64UrlUnpadded::decode_vec(&token_b64).map_err(|e| {
         error!("failed to decode token for signature: {e:?}");
-        (StatusCode::INTERNAL_SERVER_ERROR, "token encoding error".into())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "token encoding error".into(),
+        )
     })?;
 
     // Sign token metadata with issuer's secret key (195 bytes = 131 VOPRF + 64 ECDSA)
-    let signature = voprf.sign_token_metadata(&token_bytes, &kid_used, exp, &state.issuer_id)
+    let signature = voprf
+        .sign_token_metadata(&token_bytes, &kid_used, exp, &state.issuer_id)
         .await
         .map_err(|e| {
             error!("failed to sign token metadata: {e:?}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "signature generation error".into())
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "signature generation error".into(),
+            )
         })?;
 
     // Append signature to token: [VOPRF_Token||Signature]

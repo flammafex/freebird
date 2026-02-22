@@ -16,8 +16,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use zeroize::Zeroize;
 
-use crate::voprf::core::Server as VoprfServer;
 use super::CryptoProvider;
+use crate::voprf::core::Server as VoprfServer;
 
 /// Software crypto provider with in-memory key storage
 ///
@@ -56,11 +56,7 @@ impl SoftwareCryptoProvider {
     /// # Errors
     ///
     /// Returns error if the secret key is invalid (e.g., zero scalar)
-    pub fn new(
-        secret_key: [u8; 32],
-        key_id: String,
-        context: Vec<u8>,
-    ) -> Result<Self> {
+    pub fn new(secret_key: [u8; 32], key_id: String, context: Vec<u8>) -> Result<Self> {
         // Initialize VOPRF server
         let server = VoprfServer::from_secret_key(secret_key, &context)
             .map_err(|_| anyhow::anyhow!("invalid secret key for VOPRF"))?;
@@ -87,12 +83,7 @@ impl CryptoProvider for SoftwareCryptoProvider {
             .map_err(|e| anyhow::anyhow!("VOPRF evaluation failed: {:?}", e))
     }
 
-    async fn derive_mac_key(
-        &self,
-        issuer_id: &str,
-        kid: &str,
-        epoch: u32,
-    ) -> Result<[u8; 32]> {
+    async fn derive_mac_key(&self, issuer_id: &str, kid: &str, epoch: u32) -> Result<[u8; 32]> {
         // Use the existing HKDF-based MAC key derivation
         Ok(crate::derive_mac_key_v2(
             &self.secret_key,
@@ -110,14 +101,8 @@ impl CryptoProvider for SoftwareCryptoProvider {
         issuer_id: &str,
     ) -> Result<[u8; 64]> {
         // Use the existing ECDSA signature function
-        crate::compute_token_signature(
-            &self.secret_key,
-            token_bytes,
-            kid,
-            exp,
-            issuer_id,
-        )
-        .map_err(|e| anyhow::anyhow!("signature generation failed: {:?}", e))
+        crate::compute_token_signature(&self.secret_key, token_bytes, kid, exp, issuer_id)
+            .map_err(|e| anyhow::anyhow!("signature generation failed: {:?}", e))
     }
 
     fn public_key(&self) -> &[u8] {
@@ -230,13 +215,15 @@ mod tests {
 
         // Verify signature using public key
         let pubkey = provider.public_key();
-        let valid = crate::verify_token_signature(pubkey, &token, &signature, kid_str, exp, issuer_id);
+        let valid =
+            crate::verify_token_signature(pubkey, &token, &signature, kid_str, exp, issuer_id);
         assert!(valid);
 
         // Tampering should fail verification
         let mut bad_token = token.clone();
         bad_token[0] ^= 1;
-        let invalid = crate::verify_token_signature(pubkey, &bad_token, &signature, kid_str, exp, issuer_id);
+        let invalid =
+            crate::verify_token_signature(pubkey, &bad_token, &signature, kid_str, exp, issuer_id);
         assert!(!invalid);
     }
 
@@ -254,8 +241,14 @@ mod tests {
         let issuer_id = "issuer";
 
         // Signatures should be deterministic (RFC 6979)
-        let sig1 = provider.sign_token_metadata(&token, kid_str, exp, issuer_id).await.unwrap();
-        let sig2 = provider.sign_token_metadata(&token, kid_str, exp, issuer_id).await.unwrap();
+        let sig1 = provider
+            .sign_token_metadata(&token, kid_str, exp, issuer_id)
+            .await
+            .unwrap();
+        let sig2 = provider
+            .sign_token_metadata(&token, kid_str, exp, issuer_id)
+            .await
+            .unwrap();
         assert_eq!(sig1, sig2);
     }
 
