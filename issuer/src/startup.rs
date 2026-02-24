@@ -16,7 +16,7 @@ use crate::{
     AppStateWithSybil,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use axum::extract::DefaultBodyLimit;
 use axum::{
     routing::{get, post},
@@ -79,6 +79,63 @@ fn load_or_generate_invitation_signing_key(path: &Path) -> Result<SigningKey> {
 
     fs::rename(&tmp_path, path).context("failed to persist invitation signing key")?;
     Ok(signing_key)
+}
+
+fn parse_progressive_trust_levels(levels: &[String]) -> Result<Vec<sybil_resistance::TrustLevel>> {
+    let mut parsed = Vec::with_capacity(levels.len());
+
+    for level_str in levels {
+        let parts: Vec<&str> = level_str.split(':').collect();
+        if parts.len() != 3 {
+            bail!(
+                "invalid progressive trust level '{}': expected format age:tokens:cooldown",
+                level_str
+            );
+        }
+
+        let min_age_secs =
+            freebird_common::duration::parse_duration(parts[0]).with_context(|| {
+                format!(
+                    "invalid progressive trust min age '{}' in '{}'",
+                    parts[0], level_str
+                )
+            })?;
+        let max_tokens_per_period = parts[1].parse::<u32>().with_context(|| {
+            format!(
+                "invalid progressive trust max token count '{}' in '{}'",
+                parts[1], level_str
+            )
+        })?;
+        let cooldown_secs =
+            freebird_common::duration::parse_duration(parts[2]).with_context(|| {
+                format!(
+                    "invalid progressive trust cooldown '{}' in '{}'",
+                    parts[2], level_str
+                )
+            })?;
+
+        parsed.push(sybil_resistance::TrustLevel {
+            min_age_secs,
+            max_tokens_per_period,
+            cooldown_secs,
+        });
+    }
+
+    if parsed.is_empty() {
+        bail!("progressive trust requires at least one configured level");
+    }
+
+    for window in parsed.windows(2) {
+        if window[0].min_age_secs > window[1].min_age_secs {
+            bail!(
+                "progressive trust levels must be sorted by min age ascending (got {} before {})",
+                window[0].min_age_secs,
+                window[1].min_age_secs
+            );
+        }
+    }
+
+    Ok(parsed)
 }
 
 impl Application {
@@ -247,27 +304,9 @@ impl Application {
                 }
             }
             "progressive_trust" => {
-                // Parse trust levels from config
-                let levels: Vec<sybil_resistance::TrustLevel> = config
-                    .sybil_config
-                    .progressive_trust_levels
-                    .iter()
-                    .filter_map(|level_str| {
-                        let parts: Vec<&str> = level_str.split(':').collect();
-                        if parts.len() == 3 {
-                            let min_age_secs = parts[0].parse().ok()?;
-                            let max_tokens_per_period = parts[1].parse().ok()?;
-                            let cooldown_secs = parts[2].parse().ok()?;
-                            Some(sybil_resistance::TrustLevel {
-                                min_age_secs,
-                                max_tokens_per_period,
-                                cooldown_secs,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
+                let levels =
+                    parse_progressive_trust_levels(&config.sybil_config.progressive_trust_levels)
+                        .context("Invalid progressive trust level configuration")?;
 
                 let pt_config = sybil_resistance::ProgressiveTrustConfig {
                     levels,
@@ -305,10 +344,17 @@ impl Application {
                         .sybil_config
                         .proof_of_diversity_autosave_interval,
                     hmac_secret: config.sybil_config.proof_of_diversity_hmac_secret.clone(),
+                    hmac_secret_path: config
+                        .sybil_config
+                        .proof_of_diversity_hmac_secret_path
+                        .clone(),
                     fingerprint_salt: config
                         .sybil_config
                         .proof_of_diversity_fingerprint_salt
                         .clone(),
+                    allow_insecure_deterministic: config
+                        .sybil_config
+                        .proof_of_diversity_allow_insecure,
                 };
 
                 let sys = sybil_resistance::ProofOfDiversitySystem::new(pod_config)
@@ -334,7 +380,14 @@ impl Application {
                         .sybil_config
                         .multi_party_vouching_autosave_interval,
                     hmac_secret: config.sybil_config.multi_party_vouching_hmac_secret.clone(),
+                    hmac_secret_path: config
+                        .sybil_config
+                        .multi_party_vouching_hmac_secret_path
+                        .clone(),
                     user_id_salt: config.sybil_config.multi_party_vouching_salt.clone(),
+                    allow_insecure_deterministic: config
+                        .sybil_config
+                        .multi_party_vouching_allow_insecure,
                 };
 
                 let sys = sybil_resistance::MultiPartyVouchingSystem::new(mpv_config)
@@ -432,26 +485,12 @@ impl Application {
                             }
                         }
                         "progressive_trust" => {
-                            let levels: Vec<sybil_resistance::TrustLevel> = config
-                                .sybil_config
-                                .progressive_trust_levels
-                                .iter()
-                                .filter_map(|level_str| {
-                                    let parts: Vec<&str> = level_str.split(':').collect();
-                                    if parts.len() == 3 {
-                                        let min_age_secs = parts[0].parse().ok()?;
-                                        let max_tokens_per_period = parts[1].parse().ok()?;
-                                        let cooldown_secs = parts[2].parse().ok()?;
-                                        Some(sybil_resistance::TrustLevel {
-                                            min_age_secs,
-                                            max_tokens_per_period,
-                                            cooldown_secs,
-                                        })
-                                    } else {
-                                        None
-                                    }
-                                })
-                                .collect();
+                            let levels = parse_progressive_trust_levels(
+                                &config.sybil_config.progressive_trust_levels,
+                            )
+                            .context(
+                                "Invalid progressive trust level configuration for combined mode",
+                            )?;
 
                             let pt_config = sybil_resistance::ProgressiveTrustConfig {
                                 levels,
@@ -497,10 +536,17 @@ impl Application {
                                     .sybil_config
                                     .proof_of_diversity_hmac_secret
                                     .clone(),
+                                hmac_secret_path: config
+                                    .sybil_config
+                                    .proof_of_diversity_hmac_secret_path
+                                    .clone(),
                                 fingerprint_salt: config
                                     .sybil_config
                                     .proof_of_diversity_fingerprint_salt
                                     .clone(),
+                                allow_insecure_deterministic: config
+                                    .sybil_config
+                                    .proof_of_diversity_allow_insecure,
                             };
 
                             let sys = sybil_resistance::ProofOfDiversitySystem::new(pod_config)
@@ -535,7 +581,14 @@ impl Application {
                                     .sybil_config
                                     .multi_party_vouching_hmac_secret
                                     .clone(),
+                                hmac_secret_path: config
+                                    .sybil_config
+                                    .multi_party_vouching_hmac_secret_path
+                                    .clone(),
                                 user_id_salt: config.sybil_config.multi_party_vouching_salt.clone(),
+                                allow_insecure_deterministic: config
+                                    .sybil_config
+                                    .multi_party_vouching_allow_insecure,
                             };
 
                             let sys = sybil_resistance::MultiPartyVouchingSystem::new(mpv_config)
@@ -600,43 +653,39 @@ impl Application {
                     None
                 } else {
                     // Create the appropriate combiner based on mode
-                    let combiner: Arc<dyn SybilResistance> = match config
-                        .sybil_config
-                        .combined_mode
-                        .to_lowercase()
-                        .as_str()
-                    {
-                        "or" => {
-                            info!(
-                                "✅ Sybil resistance: Combined OR mode with {} mechanisms",
-                                mechanisms.len()
-                            );
-                            Arc::new(CombinedOr::new(mechanisms))
-                        }
-                        "and" => {
-                            info!(
-                                "✅ Sybil resistance: Combined AND mode with {} mechanisms",
-                                mechanisms.len()
-                            );
-                            Arc::new(CombinedAnd::new(mechanisms))
-                        }
-                        "threshold" => {
-                            let threshold = config.sybil_config.combined_threshold as usize;
-                            info!(
+                    let combiner: Arc<dyn SybilResistance> =
+                        match config.sybil_config.combined_mode.to_lowercase().as_str() {
+                            "or" => {
+                                info!(
+                                    "✅ Sybil resistance: Combined OR mode with {} mechanisms",
+                                    mechanisms.len()
+                                );
+                                Arc::new(CombinedOr::new(mechanisms))
+                            }
+                            "and" => {
+                                info!(
+                                    "✅ Sybil resistance: Combined AND mode with {} mechanisms",
+                                    mechanisms.len()
+                                );
+                                Arc::new(CombinedAnd::new(mechanisms))
+                            }
+                            "threshold" => {
+                                let threshold = config.sybil_config.combined_threshold as usize;
+                                info!(
                                 "✅ Sybil resistance: Combined Threshold mode ({}/{} mechanisms)",
                                 threshold,
                                 mechanisms.len()
                             );
-                            Arc::new(
-                                CombinedThreshold::new(mechanisms, threshold)
-                                    .context("Failed to create threshold combiner")?,
-                            )
-                        }
-                        unknown => {
-                            warn!("⚠️  Unknown combined mode '{}', defaulting to OR", unknown);
-                            Arc::new(CombinedOr::new(mechanisms))
-                        }
-                    };
+                                Arc::new(
+                                    CombinedThreshold::new(mechanisms, threshold)
+                                        .context("Failed to create threshold combiner")?,
+                                )
+                            }
+                            unknown => {
+                                warn!("⚠️  Unknown combined mode '{}', defaulting to OR", unknown);
+                                Arc::new(CombinedOr::new(mechanisms))
+                            }
+                        };
                     Some(combiner)
                 }
             }
@@ -766,4 +815,31 @@ async fn shutdown_signal() {
     tokio::signal::ctrl_c()
         .await
         .expect("Failed to install CTRL+C handler");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_progressive_trust_levels;
+
+    #[test]
+    fn parses_human_readable_progressive_trust_levels() {
+        let levels = vec![
+            "0:1:1d".to_string(),
+            "30d:10:1h".to_string(),
+            "90d:100:1m".to_string(),
+        ];
+        let parsed = parse_progressive_trust_levels(&levels).expect("levels should parse");
+
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(parsed[0].min_age_secs, 0);
+        assert_eq!(parsed[1].min_age_secs, 30 * 24 * 3600);
+        assert_eq!(parsed[2].cooldown_secs, 60);
+    }
+
+    #[test]
+    fn rejects_invalid_or_empty_progressive_trust_levels() {
+        assert!(parse_progressive_trust_levels(&[]).is_err());
+        assert!(parse_progressive_trust_levels(&["bad".to_string()]).is_err());
+        assert!(parse_progressive_trust_levels(&["10x:1:1m".to_string()]).is_err());
+    }
 }

@@ -11,13 +11,17 @@ use anyhow::{anyhow, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{SybilProof, VouchProof};
 use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
-use tokio::fs;
+use tokio::fs as tokio_fs;
 use tokio::sync::RwLock;
 
 use super::SybilResistance;
@@ -39,8 +43,12 @@ pub struct MultiPartyVouchingConfig {
     pub autosave_interval_secs: u64,
     /// HMAC secret for proof verification (optional)
     pub hmac_secret: Option<String>,
+    /// Path to persist generated HMAC secret
+    pub hmac_secret_path: PathBuf,
     /// Salt for hashing user IDs
     pub user_id_salt: String,
+    /// Allow deterministic key derivation for local/dev use (INSECURE)
+    pub allow_insecure_deterministic: bool,
 }
 
 /// Record of a voucher's activity and reputation
@@ -74,8 +82,9 @@ pub struct MultiPartyVouchingSystem {
 impl MultiPartyVouchingSystem {
     /// Create a new Multi-Party Vouching system
     pub async fn new(config: MultiPartyVouchingConfig) -> Result<Arc<Self>> {
-        // Derive HMAC key for proof verification
-        let hmac_key = Self::derive_hmac_key(&config);
+        // Load or create a per-deployment secret, then derive HMAC key from it.
+        let secret = Self::load_or_generate_secret(&config)?;
+        let hmac_key = Self::derive_hmac_key(&secret, &config);
 
         let system = Arc::new(Self {
             config: config.clone(),
@@ -113,15 +122,84 @@ impl MultiPartyVouchingSystem {
         Ok(system)
     }
 
-    /// Derive HMAC key from configuration
-    fn derive_hmac_key(config: &MultiPartyVouchingConfig) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new_keyed(&[0u8; 32]);
-        hasher.update(b"multi_party_vouching:hmac_key:v1:");
+    /// Load an HMAC secret from config/file or generate and persist one.
+    fn load_or_generate_secret(config: &MultiPartyVouchingConfig) -> Result<[u8; 32]> {
         if let Some(secret) = &config.hmac_secret {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(b"multi_party_vouching:secret:v1:");
             hasher.update(secret.as_bytes());
-        } else {
-            hasher.update(b":deterministic");
+            return Ok(*hasher.finalize().as_bytes());
         }
+
+        if config.hmac_secret_path.exists() {
+            if let Ok(bytes) = fs::read(&config.hmac_secret_path) {
+                if bytes.len() == 32 {
+                    let mut secret = [0u8; 32];
+                    secret.copy_from_slice(&bytes);
+                    return Ok(secret);
+                }
+            }
+        }
+
+        let mut secret = [0u8; 32];
+        OsRng.fill_bytes(&mut secret);
+
+        if let Err(e) = Self::atomic_write_secure(&config.hmac_secret_path, &secret) {
+            if config.allow_insecure_deterministic {
+                tracing::warn!(
+                    error = %e,
+                    "SECURITY WARNING: falling back to deterministic multi-party-vouching key derivation (insecure)"
+                );
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(b"multi_party_vouching:insecure:v1:");
+                hasher.update(config.user_id_salt.as_bytes());
+                return Ok(*hasher.finalize().as_bytes());
+            }
+
+            return Err(anyhow!(
+                "failed to persist multi-party-vouching secret (set SYBIL_MULTI_PARTY_VOUCHING_SECRET, make secret path writable, or explicitly set SYBIL_MULTI_PARTY_VOUCHING_ALLOW_INSECURE=true for local testing): {}",
+                e
+            ));
+        }
+
+        Ok(secret)
+    }
+
+    /// Atomic write with restrictive permissions where possible.
+    fn atomic_write_secure(path: &Path, data: &[u8]) -> Result<()> {
+        let tmp = path.with_extension("tmp");
+
+        #[cfg(unix)]
+        {
+            use std::fs::OpenOptions;
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let mut f = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            f.write_all(data)?;
+            f.sync_all()?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(data)?;
+            f.sync_all()?;
+        }
+
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
+    /// Derive HMAC key from deployment secret.
+    fn derive_hmac_key(secret: &[u8; 32], config: &MultiPartyVouchingConfig) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_keyed(secret);
+        hasher.update(b"multi_party_vouching:hmac_key:v1:");
+        hasher.update(config.user_id_salt.as_bytes());
         *hasher.finalize().as_bytes()
     }
 
@@ -351,13 +429,13 @@ impl MultiPartyVouchingSystem {
         let state = MultiPartyVouchingState { vouchers, pending };
 
         let json = serde_json::to_string_pretty(&state)?;
-        fs::write(&self.config.persistence_path, json).await?;
+        tokio_fs::write(&self.config.persistence_path, json).await?;
         Ok(())
     }
 
     /// Load state from disk
     async fn load_state(&self) -> Result<()> {
-        let json = fs::read_to_string(&self.config.persistence_path).await?;
+        let json = tokio_fs::read_to_string(&self.config.persistence_path).await?;
         let state: MultiPartyVouchingState = serde_json::from_str(&json)?;
 
         *self.vouchers.write().await = state.vouchers;
@@ -388,19 +466,38 @@ impl SybilResistance for MultiPartyVouchingSystem {
 
                 // Check proof age
                 let age = now - timestamp;
-                if age > 300 {
-                    // 5 minute proof validity
-                    return Err(anyhow!("Proof too old"));
+                if !(0..=300).contains(&age) {
+                    return Err(anyhow!("Proof timestamp is outside allowed window"));
                 }
 
-                // Verify we have enough vouches
                 if vouches.len() < self.config.required_vouchers as usize {
                     return Err(anyhow!("Insufficient vouches"));
                 }
 
-                // Verify each vouch signature using the embedded public key
+                let known_vouchers = self
+                    .vouchers
+                    .try_read()
+                    .map_err(|_| anyhow!("Vouching state is busy"))?;
+                let mut seen_vouchers = HashSet::new();
+
                 for vouch in vouches {
-                    // Decode and parse the signature
+                    if !seen_vouchers.insert(&vouch.voucher_id) {
+                        return Err(anyhow!("Duplicate voucher in proof"));
+                    }
+
+                    let registered = known_vouchers
+                        .get(&vouch.voucher_id)
+                        .ok_or_else(|| anyhow!("Unknown voucher: {}", vouch.voucher_id))?;
+
+                    if !bool::from(
+                        registered
+                            .public_key_b64
+                            .as_bytes()
+                            .ct_eq(vouch.voucher_pubkey_b64.as_bytes()),
+                    ) {
+                        return Err(anyhow!("Voucher public key does not match server registry"));
+                    }
+
                     let signature_bytes = Base64UrlUnpadded::decode_vec(&vouch.signature)
                         .map_err(|_| anyhow!("Invalid signature encoding"))?;
                     let signature_array: [u8; 64] = signature_bytes
@@ -410,13 +507,11 @@ impl SybilResistance for MultiPartyVouchingSystem {
                     let signature = Signature::from_bytes((&signature_array).into())
                         .map_err(|_| anyhow!("Invalid signature format"))?;
 
-                    // Decode and parse the voucher's public key
                     let pubkey_bytes = Base64UrlUnpadded::decode_vec(&vouch.voucher_pubkey_b64)
                         .map_err(|_| anyhow!("Invalid voucher public key encoding"))?;
                     let public_key = VerifyingKey::from_sec1_bytes(&pubkey_bytes)
                         .map_err(|_| anyhow!("Invalid voucher public key format"))?;
 
-                    // Reconstruct the signed message and VERIFY THE SIGNATURE
                     let message = format!("vouch:{}:{}", vouch.vouchee_id, vouch.timestamp);
                     public_key
                         .verify(message.as_bytes(), &signature)
@@ -427,19 +522,16 @@ impl SybilResistance for MultiPartyVouchingSystem {
                             )
                         })?;
 
-                    // Check vouch expiration
                     let vouch_age = now - vouch.timestamp;
-                    if vouch_age > self.config.vouch_expires_secs as i64 {
-                        return Err(anyhow!("Vouch expired"));
+                    if !(0..=(self.config.vouch_expires_secs as i64)).contains(&vouch_age) {
+                        return Err(anyhow!("Vouch expired or timestamp is in the future"));
                     }
 
-                    // Verify vouchee_id matches
                     if vouch.vouchee_id != *vouchee_id_hash {
                         return Err(anyhow!("Vouch vouchee_id mismatch"));
                     }
                 }
 
-                // Verify HMAC proof (constant-time comparison to prevent timing attacks)
                 let expected_hmac = self.compute_hmac_proof(vouchee_id_hash, vouches, *timestamp);
                 if !bool::from(hmac_proof.as_bytes().ct_eq(expected_hmac.as_bytes())) {
                     return Err(anyhow!("Invalid HMAC proof"));
@@ -477,7 +569,9 @@ mod tests {
             persistence_path: PathBuf::from("/tmp/test_mpv.json"),
             autosave_interval_secs: 3600,
             hmac_secret: Some("test-secret".to_string()),
+            hmac_secret_path: PathBuf::from("/tmp/test_mpv_secret.bin"),
             user_id_salt: "test-salt".to_string(),
+            allow_insecure_deterministic: false,
         };
 
         let system = MultiPartyVouchingSystem::new(config).await.unwrap();
@@ -533,5 +627,58 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_file("/tmp/test_mpv.json");
+        let _ = std::fs::remove_file("/tmp/test_mpv_secret.bin");
+    }
+
+    #[tokio::test]
+    async fn test_rejects_unknown_voucher_in_proof() {
+        let config = MultiPartyVouchingConfig {
+            required_vouchers: 1,
+            voucher_cooldown_secs: 0,
+            vouch_expires_secs: 86400,
+            new_user_can_vouch_after_secs: 0,
+            persistence_path: PathBuf::from("/tmp/test_mpv_unknown.json"),
+            autosave_interval_secs: 3600,
+            hmac_secret: Some("test-secret".to_string()),
+            hmac_secret_path: PathBuf::from("/tmp/test_mpv_unknown_secret.bin"),
+            user_id_salt: "test-salt".to_string(),
+            allow_insecure_deterministic: false,
+        };
+
+        let system = MultiPartyVouchingSystem::new(config).await.unwrap();
+
+        let voucher_sk = SigningKey::random(&mut OsRng);
+        let voucher_pk = VerifyingKey::from(&voucher_sk);
+        system
+            .add_voucher("alice".to_string(), voucher_pk)
+            .await
+            .unwrap();
+
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let message = format!("vouch:{}:{}", system.hash_user_id("bob"), timestamp);
+        let sig: Signature = voucher_sk.sign(message.as_bytes());
+        system
+            .submit_vouch("alice", "bob", sig, timestamp)
+            .await
+            .unwrap();
+
+        let (vouchee_id_hash, mut vouches, hmac_proof) =
+            system.generate_proof("bob").await.unwrap();
+        vouches[0].voucher_id = "unknown-voucher".to_string();
+
+        let proof = SybilProof::MultiPartyVouching {
+            vouchee_id_hash,
+            vouches,
+            hmac_proof,
+            timestamp,
+        };
+
+        assert!(system.verify(&proof).is_err());
+
+        let _ = std::fs::remove_file("/tmp/test_mpv_unknown.json");
+        let _ = std::fs::remove_file("/tmp/test_mpv_unknown_secret.bin");
     }
 }

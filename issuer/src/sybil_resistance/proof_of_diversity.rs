@@ -31,11 +31,14 @@
 //!
 //! Botnets fail on all three dimensions.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use base64ct::Encoding;
+use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
@@ -58,8 +61,12 @@ pub struct ProofOfDiversityConfig {
     pub autosave_interval_secs: u64,
     /// Server secret for HMAC
     pub hmac_secret: Option<String>,
+    /// Path to persist generated HMAC secret
+    pub hmac_secret_path: PathBuf,
     /// Salt for fingerprint hashing
     pub fingerprint_salt: String,
+    /// Allow deterministic secret derivation for local/dev use (INSECURE)
+    pub allow_insecure_deterministic: bool,
 }
 
 impl Default for ProofOfDiversityConfig {
@@ -69,7 +76,9 @@ impl Default for ProofOfDiversityConfig {
             persistence_path: PathBuf::from("proof_of_diversity.json"),
             autosave_interval_secs: 300,
             hmac_secret: None,
+            hmac_secret_path: PathBuf::from("proof_of_diversity_secret.bin"),
             fingerprint_salt: String::from("default-salt-change-in-production"),
+            allow_insecure_deterministic: false,
         }
     }
 }
@@ -137,8 +146,9 @@ pub struct ProofOfDiversitySystem {
 impl ProofOfDiversitySystem {
     /// Create a new proof of diversity system
     pub async fn new(config: ProofOfDiversityConfig) -> Result<Arc<Self>> {
-        // Derive HMAC key
-        let hmac_key = Self::derive_hmac_key(&config);
+        // Load or create a per-deployment secret, then derive HMAC key from it.
+        let secret = Self::load_or_generate_secret(&config)?;
+        let hmac_key = Self::derive_hmac_key(&secret, &config);
 
         // Load existing state
         let records = Self::load_state(&config.persistence_path).await?;
@@ -165,17 +175,84 @@ impl ProofOfDiversitySystem {
         Ok(system)
     }
 
-    /// Derive HMAC key
-    fn derive_hmac_key(config: &ProofOfDiversityConfig) -> [u8; 32] {
-        let mut hasher = blake3::Hasher::new_keyed(&[0u8; 32]);
+    /// Load an HMAC secret from config/file or generate and persist one.
+    fn load_or_generate_secret(config: &ProofOfDiversityConfig) -> Result<[u8; 32]> {
+        if let Some(secret) = &config.hmac_secret {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(b"proof_of_diversity:secret:v1:");
+            hasher.update(secret.as_bytes());
+            return Ok(*hasher.finalize().as_bytes());
+        }
+
+        if config.hmac_secret_path.exists() {
+            if let Ok(bytes) = fs::read(&config.hmac_secret_path) {
+                if bytes.len() == 32 {
+                    let mut secret = [0u8; 32];
+                    secret.copy_from_slice(&bytes);
+                    return Ok(secret);
+                }
+            }
+        }
+
+        let mut secret = [0u8; 32];
+        OsRng.fill_bytes(&mut secret);
+
+        if let Err(e) = Self::atomic_write_secure(&config.hmac_secret_path, &secret) {
+            if config.allow_insecure_deterministic {
+                warn!(
+                    error = %e,
+                    "SECURITY WARNING: falling back to deterministic proof-of-diversity key derivation (insecure)"
+                );
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(b"proof_of_diversity:insecure:v1:");
+                hasher.update(config.fingerprint_salt.as_bytes());
+                return Ok(*hasher.finalize().as_bytes());
+            }
+
+            return Err(anyhow!(
+                "failed to persist proof-of-diversity secret (set SYBIL_PROOF_OF_DIVERSITY_SECRET, make secret path writable, or explicitly set SYBIL_PROOF_OF_DIVERSITY_ALLOW_INSECURE=true for local testing): {}",
+                e
+            ));
+        }
+
+        Ok(secret)
+    }
+
+    /// Atomic write with restrictive permissions where possible.
+    fn atomic_write_secure(path: &Path, data: &[u8]) -> Result<()> {
+        let tmp = path.with_extension("tmp");
+
+        #[cfg(unix)]
+        {
+            use std::fs::OpenOptions;
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let mut f = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            f.write_all(data)?;
+            f.sync_all()?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            let mut f = fs::File::create(&tmp)?;
+            f.write_all(data)?;
+            f.sync_all()?;
+        }
+
+        fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
+    /// Derive HMAC key from deployment secret.
+    fn derive_hmac_key(secret: &[u8; 32], config: &ProofOfDiversityConfig) -> [u8; 32] {
+        let mut hasher = blake3::Hasher::new_keyed(secret);
         hasher.update(b"proof_of_diversity:hmac:v1:");
         hasher.update(config.fingerprint_salt.as_bytes());
-
-        if let Some(secret) = &config.hmac_secret {
-            hasher.update(secret.as_bytes());
-        } else {
-            hasher.update(b":deterministic");
-        }
 
         *hasher.finalize().as_bytes()
     }
@@ -359,54 +436,44 @@ impl SybilResistance for ProofOfDiversitySystem {
                 first_seen,
                 hmac_proof,
             } => {
-                let _now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs() as i64;
+                let records = self
+                    .records
+                    .try_read()
+                    .map_err(|_| anyhow!("Diversity state is busy"))?;
+                let stored = records
+                    .get(user_id_hash)
+                    .ok_or_else(|| anyhow!("Unknown user diversity record"))?;
 
-                // Reconstruct record for HMAC verification
-                let mut record = DiversityRecord::new(user_id_hash.clone(), *first_seen);
-                // We can't reconstruct the actual sets, but we can verify the counts and score
-                record.score = *diversity_score;
+                // Proof fields must match server-side state exactly.
+                if stored.first_seen != *first_seen
+                    || stored.score != *diversity_score
+                    || stored.unique_networks.len() as u32 != *unique_networks
+                    || stored.unique_devices.len() as u32 != *unique_devices
+                {
+                    return Err(anyhow!(
+                        "Proof of diversity fields do not match server state"
+                    ));
+                }
 
-                // Verify HMAC
-                // Note: We're verifying the score and counts, not the actual network/device sets
-                let mut hasher = blake3::Hasher::new_keyed(&self.hmac_key);
-                hasher.update(b"proof_of_diversity:proof:");
-                hasher.update(user_id_hash.as_bytes());
-                hasher.update(b":");
-                hasher.update(&first_seen.to_le_bytes());
-                hasher.update(b":");
-                hasher.update(&unique_networks.to_le_bytes());
-                hasher.update(b":");
-                hasher.update(&unique_devices.to_le_bytes());
-                hasher.update(b":");
-                hasher.update(&diversity_score.to_le_bytes());
-                let expected_hmac =
-                    base64ct::Base64UrlUnpadded::encode_string(hasher.finalize().as_bytes());
-
-                // Constant-time comparison to prevent timing attacks
+                let expected_hmac = self.compute_hmac_proof(stored);
                 if !bool::from(hmac_proof.as_bytes().ct_eq(expected_hmac.as_bytes())) {
                     debug!("Diversity proof verification failed: HMAC mismatch");
                     return Err(anyhow!("Invalid proof of diversity"));
                 }
 
-                // Check minimum score
-                if diversity_score < &self.config.min_score {
+                if stored.score < self.config.min_score {
                     return Err(anyhow!(
-                        "Insufficient diversity score: {} < {} (networks: {}, devices: {})",
-                        diversity_score,
-                        self.config.min_score,
-                        unique_networks,
-                        unique_devices
+                        "Insufficient diversity score: {} < {}",
+                        stored.score,
+                        self.config.min_score
                     ));
                 }
 
                 debug!(
                     user_id_hash = %user_id_hash,
-                    score = diversity_score,
-                    networks = unique_networks,
-                    devices = unique_devices,
+                    score = stored.score,
+                    networks = stored.unique_networks.len(),
+                    devices = stored.unique_devices.len(),
                     "Diversity verification successful"
                 );
 
@@ -425,16 +492,34 @@ impl SybilResistance for ProofOfDiversitySystem {
     }
 }
 
-use anyhow::Context;
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn test_config() -> ProofOfDiversityConfig {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        ProofOfDiversityConfig {
+            persistence_path: PathBuf::from(format!("/tmp/proof_of_diversity_test_{}.json", id)),
+            hmac_secret_path: PathBuf::from(format!(
+                "/tmp/proof_of_diversity_secret_test_{}.bin",
+                id
+            )),
+            ..Default::default()
+        }
+    }
+
+    fn cleanup_test_files(config: &ProofOfDiversityConfig) {
+        let _ = std::fs::remove_file(&config.persistence_path);
+        let _ = std::fs::remove_file(&config.hmac_secret_path);
+    }
 
     #[tokio::test]
     async fn test_diversity_scoring() {
-        let config = ProofOfDiversityConfig::default();
-        let system = ProofOfDiversitySystem::new(config).await.unwrap();
+        let config = test_config();
+        let system = ProofOfDiversitySystem::new(config.clone()).await.unwrap();
 
         // Single network, single device
         let record1 = system
@@ -462,12 +547,14 @@ mod tests {
         assert_eq!(record3.unique_networks.len(), 2);
         assert_eq!(record3.unique_devices.len(), 2);
         assert_eq!(record3.score, 100); // 60 + 40 + 0
+
+        cleanup_test_files(&config);
     }
 
     #[tokio::test]
     async fn test_hmac_verification() {
-        let config = ProofOfDiversityConfig::default();
-        let system = ProofOfDiversitySystem::new(config).await.unwrap();
+        let config = test_config();
+        let system = ProofOfDiversitySystem::new(config.clone()).await.unwrap();
 
         system
             .observe_access("bob", "192.168.1.1", "Safari/16")
@@ -476,13 +563,15 @@ mod tests {
 
         let proof = system.generate_proof("bob").await.unwrap();
         assert!(system.verify(&proof).is_ok());
+
+        cleanup_test_files(&config);
     }
 
     #[tokio::test]
     async fn test_min_score_enforcement() {
-        let mut config = ProofOfDiversityConfig::default();
+        let mut config = test_config();
         config.min_score = 80; // High requirement
-        let system = ProofOfDiversitySystem::new(config).await.unwrap();
+        let system = ProofOfDiversitySystem::new(config.clone()).await.unwrap();
 
         // Single network/device = score 50, fails
         system
@@ -492,5 +581,48 @@ mod tests {
 
         let proof = system.generate_proof("charlie").await.unwrap();
         assert!(system.verify(&proof).is_err());
+
+        cleanup_test_files(&config);
+    }
+
+    #[tokio::test]
+    async fn test_tampered_counts_rejected() {
+        let config = test_config();
+        let system = ProofOfDiversitySystem::new(config.clone()).await.unwrap();
+
+        system
+            .observe_access("diana", "192.168.1.1", "Firefox/120")
+            .await
+            .unwrap();
+
+        let mut proof = system.generate_proof("diana").await.unwrap();
+        if let SybilProof::ProofOfDiversity {
+            unique_networks, ..
+        } = &mut proof
+        {
+            *unique_networks += 1;
+        }
+
+        assert!(system.verify(&proof).is_err());
+        cleanup_test_files(&config);
+    }
+
+    #[tokio::test]
+    async fn test_unknown_user_hash_rejected() {
+        let config = test_config();
+        let system = ProofOfDiversitySystem::new(config.clone()).await.unwrap();
+
+        system
+            .observe_access("eve", "10.0.0.2", "Safari/17")
+            .await
+            .unwrap();
+
+        let mut proof = system.generate_proof("eve").await.unwrap();
+        if let SybilProof::ProofOfDiversity { user_id_hash, .. } = &mut proof {
+            *user_id_hash = "unknown-user-hash".to_string();
+        }
+
+        assert!(system.verify(&proof).is_err());
+        cleanup_test_files(&config);
     }
 }

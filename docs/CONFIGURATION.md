@@ -293,7 +293,12 @@ export SYBIL_RESISTANCE=proof_of_diversity
 export SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE=40
 export SYBIL_PROOF_OF_DIVERSITY_PERSISTENCE_PATH=/data/state/proof_of_diversity.json
 export SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE=5m
+export SYBIL_PROOF_OF_DIVERSITY_SECRET_PATH=/data/state/proof_of_diversity_secret.bin
+# Optional alternative to *_SECRET_PATH:
+# export SYBIL_PROOF_OF_DIVERSITY_SECRET="$(openssl rand -base64 32)"
 export SYBIL_PROOF_OF_DIVERSITY_SALT=change-in-production
+# Local testing only (insecure deterministic fallback):
+# export SYBIL_PROOF_OF_DIVERSITY_ALLOW_INSECURE=true
 ```
 
 ### Multi-Party Vouching
@@ -309,7 +314,12 @@ export SYBIL_MULTI_PARTY_VOUCHING_EXPIRES=30d
 export SYBIL_MULTI_PARTY_VOUCHING_NEW_USER_WAIT=30d
 export SYBIL_MULTI_PARTY_VOUCHING_PERSISTENCE_PATH=/data/state/multi_party_vouching.json
 export SYBIL_MULTI_PARTY_VOUCHING_AUTOSAVE=5m
+export SYBIL_MULTI_PARTY_VOUCHING_SECRET_PATH=/data/state/multi_party_vouching_secret.bin
+# Optional alternative to *_SECRET_PATH:
+# export SYBIL_MULTI_PARTY_VOUCHING_SECRET="$(openssl rand -base64 32)"
 export SYBIL_MULTI_PARTY_VOUCHING_SALT=change-in-production
+# Local testing only (insecure deterministic fallback):
+# export SYBIL_MULTI_PARTY_VOUCHING_ALLOW_INSECURE=true
 ```
 
 ### Federated Trust

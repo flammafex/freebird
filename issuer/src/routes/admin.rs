@@ -1642,10 +1642,14 @@ pub async fn list_keys_handler(
 }
 
 pub async fn rotate_key_handler(
-    // <-- MUST have 'async' keyword
     State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
     Json(req): Json<RotateKeyRequest>,
 ) -> Result<Json<RotateKeyResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
     // Validate inputs
     validate_kid(&req.new_kid)?;
 

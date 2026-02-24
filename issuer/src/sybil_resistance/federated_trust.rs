@@ -13,6 +13,7 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{KeyDiscoveryResp, SybilProof};
 use freebird_common::federation::{TrustPolicy, Vouch};
 use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -46,6 +47,62 @@ fn validate_issuer_domain(expected_domain: &str, returned_issuer_id: &str) -> bo
 
     // Compare expected domain with extracted hostname
     expected_domain == returned_hostname
+}
+
+fn hostname_from_issuer_id(issuer_id: &str) -> Result<&str> {
+    if issuer_id.starts_with("http://") || issuer_id.starts_with("https://") {
+        return Err(anyhow!(
+            "source_issuer_id must be an issuer identifier, not a URL"
+        ));
+    }
+
+    if issuer_id.contains('/') || issuer_id.contains('?') || issuer_id.contains('#') {
+        return Err(anyhow!("source_issuer_id contains invalid URL characters"));
+    }
+
+    let hostname = if issuer_id.contains(':') {
+        let parts: Vec<&str> = issuer_id.split(':').collect();
+        if parts.len() < 2 {
+            return Err(anyhow!("invalid issuer_id format"));
+        }
+        parts[1]
+    } else {
+        issuer_id
+    };
+
+    if hostname.is_empty()
+        || !hostname
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return Err(anyhow!("issuer hostname contains invalid characters"));
+    }
+
+    Ok(hostname)
+}
+
+fn is_disallowed_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let o = v4.octets();
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_multicast()
+                || v4.is_broadcast()
+                || v4.is_unspecified()
+                || o[0] == 0
+                || o == Ipv4Addr::new(255, 255, 255, 255).octets()
+                || (o[0] == 100 && (64..=127).contains(&o[1])) // CGNAT
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || v6.is_unique_local()
+                || v6.is_unicast_link_local()
+        }
+    }
 }
 
 /// Configuration for Federated Trust system
@@ -181,24 +238,35 @@ impl FederatedTrustSystem {
             }
         }
 
-        // Construct the issuer's metadata URL
-        // issuer_id format is typically "issuer:hostname:version" or just a hostname
-        let url = if issuer_id.starts_with("http://") || issuer_id.starts_with("https://") {
-            format!("{}/.well-known/issuer", issuer_id)
-        } else {
-            // Extract hostname from issuer_id (e.g., "issuer:example.com:v1" -> "example.com")
-            let parts: Vec<&str> = issuer_id.split(':').collect();
-            let hostname = if parts.len() >= 2 {
-                parts[1]
-            } else {
-                issuer_id
-            };
-            format!("https://{}/.well-known/issuer", hostname)
-        };
+        let hostname = hostname_from_issuer_id(issuer_id)?;
+
+        // Resolve and block local/private targets to prevent SSRF.
+        let resolved = tokio::net::lookup_host((hostname, 443))
+            .await
+            .map_err(|e| anyhow!("failed to resolve issuer host '{}': {}", hostname, e))?;
+        let mut saw_addr = false;
+        for addr in resolved {
+            saw_addr = true;
+            if is_disallowed_ip(addr.ip()) {
+                return Err(anyhow!(
+                    "refusing to fetch issuer metadata from disallowed IP address {}",
+                    addr.ip()
+                ));
+            }
+        }
+        if !saw_addr {
+            return Err(anyhow!(
+                "failed to resolve any addresses for issuer host '{}'",
+                hostname
+            ));
+        }
+
+        let url = format!("https://{}/.well-known/issuer", hostname);
 
         // Fetch metadata
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| anyhow!("Failed to create HTTP client: {}", e))?;
 
@@ -352,15 +420,7 @@ impl SybilResistance for FederatedTrustSystem {
                 }
 
                 // Cryptographically verify the token against the source issuer's public key
-                // This fetches their public key and verifies the VOPRF DLEQ proof
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        self.verify_token_crypto(source_token_b64, source_issuer_id)
-                            .await
-                    })
-                })?;
-
-                // Verify we trust the source issuer
+                // Verify we trust the source issuer before performing outbound network fetches.
                 let max_depth = self.config.trust_policy.max_trust_depth;
                 let is_trusted = tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current()
@@ -373,6 +433,15 @@ impl SybilResistance for FederatedTrustSystem {
                         source_issuer_id
                     ));
                 }
+
+                // Cryptographically verify the token against the source issuer's public key.
+                // This fetches their public key and verifies the VOPRF DLEQ proof.
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        self.verify_token_crypto(source_token_b64, source_issuer_id)
+                            .await
+                    })
+                })?;
 
                 // Verify trust path if provided
                 if !trust_path.is_empty() {
@@ -410,6 +479,7 @@ impl SybilResistance for FederatedTrustSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     async fn create_test_federation_store() -> Arc<FederationStore> {
         let store = FederationStore::new("/tmp/federated_trust_test")
@@ -449,6 +519,26 @@ mod tests {
 
         // Cleanup
         let _ = std::fs::remove_dir_all("/tmp/federated_trust_test");
+    }
+
+    #[test]
+    fn test_hostname_parser_rejects_urls_and_paths() {
+        assert!(hostname_from_issuer_id("https://example.com").is_err());
+        assert!(hostname_from_issuer_id("issuer:example.com/v1:prod").is_err());
+        assert!(hostname_from_issuer_id("issuer:example.com:v1").is_ok());
+        assert_eq!(
+            hostname_from_issuer_id("issuer:example.com:v1").unwrap(),
+            "example.com"
+        );
+    }
+
+    #[test]
+    fn test_disallowed_ip_blocks_private_and_loopback() {
+        assert!(is_disallowed_ip(IpAddr::from_str("127.0.0.1").unwrap()));
+        assert!(is_disallowed_ip(IpAddr::from_str("10.1.2.3").unwrap()));
+        assert!(is_disallowed_ip(IpAddr::from_str("169.254.1.1").unwrap()));
+        assert!(is_disallowed_ip(IpAddr::from_str("::1").unwrap()));
+        assert!(!is_disallowed_ip(IpAddr::from_str("8.8.8.8").unwrap()));
     }
 
     // Note: verify_token_crypto requires network access to fetch issuer pubkeys,

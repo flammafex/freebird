@@ -82,7 +82,9 @@ pub struct SybilConfig {
     pub proof_of_diversity_persistence_path: PathBuf,
     pub proof_of_diversity_autosave_interval: u64,
     pub proof_of_diversity_hmac_secret: Option<String>,
+    pub proof_of_diversity_hmac_secret_path: PathBuf,
     pub proof_of_diversity_fingerprint_salt: String,
+    pub proof_of_diversity_allow_insecure: bool,
     // Multi-Party Vouching configuration
     pub multi_party_vouching_required_vouchers: u32,
     pub multi_party_vouching_cooldown_secs: u64,
@@ -91,7 +93,9 @@ pub struct SybilConfig {
     pub multi_party_vouching_persistence_path: PathBuf,
     pub multi_party_vouching_autosave_interval: u64,
     pub multi_party_vouching_hmac_secret: Option<String>,
+    pub multi_party_vouching_hmac_secret_path: PathBuf,
     pub multi_party_vouching_salt: String,
+    pub multi_party_vouching_allow_insecure: bool,
     // Federated Trust configuration
     pub federated_trust_enabled: bool,
     pub federated_trust_max_depth: u32,
@@ -276,8 +280,12 @@ impl SybilConfig {
                 300,
             ), // Default: 5m
             proof_of_diversity_hmac_secret: env::var("SYBIL_PROOF_OF_DIVERSITY_SECRET").ok(),
+            proof_of_diversity_hmac_secret_path: env::var("SYBIL_PROOF_OF_DIVERSITY_SECRET_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "proof_of_diversity_secret.bin".into()),
             proof_of_diversity_fingerprint_salt: env::var("SYBIL_PROOF_OF_DIVERSITY_SALT")
                 .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
+            proof_of_diversity_allow_insecure: env_bool("SYBIL_PROOF_OF_DIVERSITY_ALLOW_INSECURE"),
             // Multi-Party Vouching
             multi_party_vouching_required_vouchers: env_u32(
                 "SYBIL_MULTI_PARTY_VOUCHING_REQUIRED",
@@ -305,8 +313,16 @@ impl SybilConfig {
                 300,
             ), // Default: 5m
             multi_party_vouching_hmac_secret: env::var("SYBIL_MULTI_PARTY_VOUCHING_SECRET").ok(),
+            multi_party_vouching_hmac_secret_path: env::var(
+                "SYBIL_MULTI_PARTY_VOUCHING_SECRET_PATH",
+            )
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| "multi_party_vouching_secret.bin".into()),
             multi_party_vouching_salt: env::var("SYBIL_MULTI_PARTY_VOUCHING_SALT")
                 .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
+            multi_party_vouching_allow_insecure: env_bool(
+                "SYBIL_MULTI_PARTY_VOUCHING_ALLOW_INSECURE",
+            ),
             // Federated Trust
             federated_trust_enabled: env_bool("SYBIL_FEDERATED_TRUST_ENABLED"),
             federated_trust_max_depth: env_u32("SYBIL_FEDERATED_TRUST_MAX_DEPTH", 2),

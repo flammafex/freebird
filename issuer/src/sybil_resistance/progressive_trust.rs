@@ -526,6 +526,10 @@ impl SybilResistance for ProgressiveTrustSystem {
                     return Err(anyhow!("Invalid progressive trust proof"));
                 }
 
+                if self.config.levels.is_empty() {
+                    return Err(anyhow!("Progressive trust has no configured levels"));
+                }
+
                 // Determine current trust level
                 let trust_level = self.determine_trust_level(&record, now);
                 let level_config = &self.config.levels[trust_level];
