@@ -332,6 +332,12 @@ fn validate_sybil_config() -> ValidationSection {
         "progressive_trust" => {
             validate_progressive_trust_config(&mut section);
         }
+        "proof_of_diversity" => {
+            validate_proof_of_diversity_config(&mut section);
+        }
+        "multi_party_vouching" => {
+            validate_multi_party_vouching_config(&mut section);
+        }
         "combined" => {
             let mechanisms = env::var("SYBIL_COMBINED_MECHANISMS")
                 .unwrap_or_else(|_| "pow,rate_limit".to_string());
@@ -341,6 +347,17 @@ fn validate_sybil_config() -> ValidationSection {
                 mechanisms
             )));
             section.add(CheckResult::Ok(format!("SYBIL_COMBINED_MODE = {}", mode)));
+
+            // Validate salts for any combined mechanisms that use them
+            if mechanisms.contains("progressive_trust") {
+                validate_progressive_trust_config(&mut section);
+            }
+            if mechanisms.contains("proof_of_diversity") {
+                validate_proof_of_diversity_config(&mut section);
+            }
+            if mechanisms.contains("multi_party_vouching") {
+                validate_multi_party_vouching_config(&mut section);
+            }
         }
         other => {
             section.add(CheckResult::Error(format!(
@@ -413,12 +430,40 @@ fn validate_progressive_trust_config(section: &mut ValidationSection) {
     let salt = env::var("SYBIL_PROGRESSIVE_TRUST_SALT")
         .unwrap_or_else(|_| "default-salt-change-in-production".to_string());
     if salt.contains("default") || salt.contains("change") {
-        section.add(CheckResult::Warning(
-            "SYBIL_PROGRESSIVE_TRUST_SALT uses default value - change in production".to_string(),
+        section.add(CheckResult::Error(
+            "SYBIL_PROGRESSIVE_TRUST_SALT uses insecure default value - must be changed for production".to_string(),
         ));
     } else {
         section.add(CheckResult::Ok(
             "SYBIL_PROGRESSIVE_TRUST_SALT = [custom]".to_string(),
+        ));
+    }
+}
+
+fn validate_proof_of_diversity_config(section: &mut ValidationSection) {
+    let salt = env::var("SYBIL_PROOF_OF_DIVERSITY_SALT")
+        .unwrap_or_else(|_| "default-salt-change-in-production".to_string());
+    if salt.contains("default") || salt.contains("change") {
+        section.add(CheckResult::Error(
+            "SYBIL_PROOF_OF_DIVERSITY_SALT uses insecure default value - must be changed for production".to_string(),
+        ));
+    } else {
+        section.add(CheckResult::Ok(
+            "SYBIL_PROOF_OF_DIVERSITY_SALT = [custom]".to_string(),
+        ));
+    }
+}
+
+fn validate_multi_party_vouching_config(section: &mut ValidationSection) {
+    let salt = env::var("SYBIL_MULTI_PARTY_VOUCHING_SALT")
+        .unwrap_or_else(|_| "default-salt-change-in-production".to_string());
+    if salt.contains("default") || salt.contains("change") {
+        section.add(CheckResult::Error(
+            "SYBIL_MULTI_PARTY_VOUCHING_SALT uses insecure default value - must be changed for production".to_string(),
+        ));
+    } else {
+        section.add(CheckResult::Ok(
+            "SYBIL_MULTI_PARTY_VOUCHING_SALT = [custom]".to_string(),
         ));
     }
 }

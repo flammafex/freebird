@@ -521,6 +521,9 @@ impl SybilResistance for ProgressiveTrustSystem {
 
                 // Verify HMAC (constant-time comparison to prevent timing attacks)
                 let expected_hmac = self.compute_hmac_proof(&record);
+                if hmac_proof.len() != expected_hmac.len() {
+                    return Err(anyhow!("Invalid progressive trust proof format"));
+                }
                 if !bool::from(hmac_proof.as_bytes().ct_eq(expected_hmac.as_bytes())) {
                     debug!("Progressive trust proof verification failed: HMAC mismatch");
                     return Err(anyhow!("Invalid progressive trust proof"));

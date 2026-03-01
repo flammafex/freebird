@@ -50,6 +50,8 @@ sha2 = "0.10"
 blake3 = "1"
 hex = "0.4"  # For invitation signature serialization
 subtle = "2"  # For constant-time comparisons
+hmac = "0.12"  # For constant-time API key verification
+hkdf = "0.12"  # For session key derivation
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tower_governor = "0.5"

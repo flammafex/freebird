@@ -4,6 +4,7 @@
 use anyhow::{Context, Result};
 use freebird_common::duration::env_duration;
 use std::env;
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -31,7 +32,7 @@ pub struct KeyConfig {
     pub hsm: Option<HsmConfig>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct HsmConfig {
     /// Path to PKCS#11 module (e.g., /usr/lib/softhsm/libsofthsm2.so)
     pub module_path: String,
@@ -43,6 +44,18 @@ pub struct HsmConfig {
     pub key_label: String,
     /// Mode: "storage" (key in HSM, ops in software) or "full" (all ops in HSM, not yet supported)
     pub mode: HsmMode,
+}
+
+impl fmt::Debug for HsmConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HsmConfig")
+            .field("module_path", &self.module_path)
+            .field("slot", &self.slot)
+            .field("pin", &"[REDACTED]")
+            .field("key_label", &self.key_label)
+            .field("mode", &self.mode)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

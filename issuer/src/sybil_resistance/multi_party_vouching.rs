@@ -533,6 +533,9 @@ impl SybilResistance for MultiPartyVouchingSystem {
                 }
 
                 let expected_hmac = self.compute_hmac_proof(vouchee_id_hash, vouches, *timestamp);
+                if hmac_proof.len() != expected_hmac.len() {
+                    return Err(anyhow!("Invalid HMAC proof format"));
+                }
                 if !bool::from(hmac_proof.as_bytes().ct_eq(expected_hmac.as_bytes())) {
                     return Err(anyhow!("Invalid HMAC proof"));
                 }

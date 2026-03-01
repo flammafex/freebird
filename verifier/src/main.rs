@@ -191,12 +191,18 @@ async fn main() -> anyhow::Result<()> {
     // ---------- Admin Router (optional) ----------
     if let Some(api_key) = admin_api_key {
         if api_key.len() >= 32 {
+            let require_tls = std::env::var("REQUIRE_TLS")
+                .map(|v| v == "true" || v == "1")
+                .unwrap_or(false);
+            let session_key = admin::derive_session_key(&api_key);
             let admin_state = Arc::new(AdminState {
                 issuers: Arc::clone(&issuers),
                 store: Arc::clone(&store),
                 api_key,
+                session_key,
                 rate_limiter: AdminRateLimiter::new(),
                 behind_proxy,
+                require_tls,
                 start_time,
                 config: VerifierConfig {
                     max_clock_skew_secs,

@@ -168,7 +168,7 @@ impl Application {
         let ctx = b"freebird:v1";
         let voprf = Arc::new(
             multi_key_voprf::MultiKeyVoprfCore::load_or_create(
-                sk_bytes,
+                *sk_bytes,
                 pubkey_b64.clone(),
                 kid.clone(),
                 ctx,
@@ -768,6 +768,7 @@ impl Application {
                         audit_log.clone(),
                         key,
                         config.behind_proxy,
+                        config.require_tls,
                         webauthn_state.as_ref().map(|ws| ws.cred_store.clone()),
                         config_summary,
                     );
@@ -779,6 +780,7 @@ impl Application {
                         audit_log.clone(),
                         key,
                         config.behind_proxy,
+                        config.require_tls,
                         config_summary,
                     );
                     app = app.nest("/admin", admin);

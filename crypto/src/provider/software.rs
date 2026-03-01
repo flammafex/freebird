@@ -14,7 +14,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use super::CryptoProvider;
 use crate::voprf::core::Server as VoprfServer;
@@ -27,8 +27,8 @@ pub struct SoftwareCryptoProvider {
     /// VOPRF server instance for evaluations
     server: VoprfServer,
 
-    /// Secret key (stored for MAC key derivation)
-    secret_key: [u8; 32],
+    /// Secret key (stored for MAC key derivation, auto-zeroized on drop)
+    secret_key: Zeroizing<[u8; 32]>,
 
     /// Public key (SEC1 compressed format, 33 bytes)
     public_key: [u8; 33],
@@ -66,7 +66,7 @@ impl SoftwareCryptoProvider {
 
         Ok(Self {
             server,
-            secret_key,
+            secret_key: Zeroizing::new(secret_key),
             public_key,
             key_id,
             context,
@@ -118,12 +118,7 @@ impl CryptoProvider for SoftwareCryptoProvider {
     }
 }
 
-impl Drop for SoftwareCryptoProvider {
-    fn drop(&mut self) {
-        // Zeroize secret key on drop
-        self.secret_key.zeroize();
-    }
-}
+// Drop is handled automatically by Zeroizing<[u8; 32]> on the secret_key field.
 
 #[cfg(test)]
 mod tests {

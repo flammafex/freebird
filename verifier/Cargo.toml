@@ -35,6 +35,11 @@ redis = { version = "0.24", features = ["tokio-comp"] }
 async-trait = "0.1.89"
 anyhow = "1"
 
+# --- Security / crypto ---
+hmac = "0.12"
+sha2 = "0.10"
+hkdf = "0.12"
+
 # --- Security / ops ---
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }

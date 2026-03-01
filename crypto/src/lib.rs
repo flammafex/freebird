@@ -78,6 +78,7 @@ pub struct BlindState {
 pub fn nullifier_key(issuer_id: &str, token_output_b64: &str) -> String {
     let mut h = Sha256::new();
     h.update(issuer_id.as_bytes());
+    h.update(b"|"); // domain separator to prevent preimage confusion
     h.update(token_output_b64.as_bytes());
     Base64UrlUnpadded::encode_string(&h.finalize())
 }
@@ -268,7 +269,7 @@ pub fn compute_token_signature(
     exp: i64,
     issuer_id: &str,
 ) -> Result<[u8; 64], Error> {
-    use p256::ecdsa::{signature::Signer, SigningKey};
+    use p256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
 
     // Construct message to sign (same as MAC scheme)
     let mut msg = Vec::new();
@@ -277,14 +278,16 @@ pub fn compute_token_signature(
     msg.extend_from_slice(&exp.to_be_bytes());
     msg.extend_from_slice(issuer_id.as_bytes());
 
-    // Hash the message (ECDSA signs the hash, not raw message)
+    // Hash the message (we use sign_prehash to avoid double-hashing)
     let msg_hash = Sha256::digest(&msg);
 
     // Create signing key from secret key bytes
     let signing_key = SigningKey::from_bytes(issuer_sk.into()).map_err(|_| Error::Internal)?;
 
-    // Sign (uses deterministic ECDSA by default in p256 crate)
-    let signature: p256::ecdsa::Signature = signing_key.sign(&msg_hash);
+    // Sign the prehashed message (deterministic ECDSA, RFC 6979)
+    let signature: p256::ecdsa::Signature = signing_key
+        .sign_prehash(&msg_hash)
+        .map_err(|_| Error::Internal)?;
 
     // Convert to raw 64-byte format (r || s)
     Ok(signature.to_bytes().into())
@@ -313,7 +316,7 @@ pub fn verify_token_signature(
     exp: i64,
     issuer_id: &str,
 ) -> bool {
-    use p256::ecdsa::{signature::Verifier, VerifyingKey};
+    use p256::ecdsa::{signature::hazmat::PrehashVerifier, VerifyingKey};
 
     // Construct message (same as signing)
     let mut msg = Vec::new();
@@ -337,8 +340,8 @@ pub fn verify_token_signature(
         Err(_) => return false,
     };
 
-    // Verify signature (constant-time in the underlying implementation)
-    verifying_key.verify(&msg_hash, &signature).is_ok()
+    // Verify prehashed signature (constant-time in the underlying implementation)
+    verifying_key.verify_prehash(&msg_hash, &signature).is_ok()
 }
 
 /// Derive MAC key from server secret key using HKDF with domain separation
@@ -401,7 +404,7 @@ pub fn derive_mac_key_v2(
 /// # Returns
 /// 64-byte ECDSA signature (r || s) or error
 pub fn sign_message(secret_key: &[u8; 32], message: &[u8]) -> Result<[u8; 64], Error> {
-    use p256::ecdsa::{signature::Signer, SigningKey};
+    use p256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
 
     // Hash the message first
     let msg_hash = Sha256::digest(message);
@@ -409,8 +412,10 @@ pub fn sign_message(secret_key: &[u8; 32], message: &[u8]) -> Result<[u8; 64], E
     // Create signing key from secret
     let signing_key = SigningKey::from_bytes(secret_key.into()).map_err(|_| Error::Internal)?;
 
-    // Sign (deterministic, using RFC 6979)
-    let signature: p256::ecdsa::Signature = signing_key.sign(&msg_hash);
+    // Sign prehashed message (deterministic, using RFC 6979)
+    let signature: p256::ecdsa::Signature = signing_key
+        .sign_prehash(&msg_hash)
+        .map_err(|_| Error::Internal)?;
 
     Ok(signature.to_bytes().into())
 }
@@ -427,7 +432,7 @@ pub fn sign_message(secret_key: &[u8; 32], message: &[u8]) -> Result<[u8; 64], E
 /// # Returns
 /// true if signature is valid, false otherwise
 pub fn verify_message_signature(public_key: &[u8], message: &[u8], signature: &[u8; 64]) -> bool {
-    use p256::ecdsa::{signature::Verifier, VerifyingKey};
+    use p256::ecdsa::{signature::hazmat::PrehashVerifier, VerifyingKey};
 
     // Hash the message
     let msg_hash = Sha256::digest(message);
@@ -444,8 +449,8 @@ pub fn verify_message_signature(public_key: &[u8], message: &[u8], signature: &[
         Err(_) => return false,
     };
 
-    // Verify signature
-    verifying_key.verify(&msg_hash, &sig).is_ok()
+    // Verify prehashed signature
+    verifying_key.verify_prehash(&msg_hash, &sig).is_ok()
 }
 
 /// Derive MAC key from server secret key using HKDF (legacy, simple version)

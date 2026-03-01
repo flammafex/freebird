@@ -456,6 +456,9 @@ impl SybilResistance for ProofOfDiversitySystem {
                 }
 
                 let expected_hmac = self.compute_hmac_proof(stored);
+                if hmac_proof.len() != expected_hmac.len() {
+                    return Err(anyhow!("Invalid proof of diversity format"));
+                }
                 if !bool::from(hmac_proof.as_bytes().ct_eq(expected_hmac.as_bytes())) {
                     debug!("Diversity proof verification failed: HMAC mismatch");
                     return Err(anyhow!("Invalid proof of diversity"));

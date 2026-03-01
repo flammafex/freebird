@@ -4,10 +4,1697 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>🕊️ Freebird Admin</title>
-    <link
-      rel="stylesheet"
-      href="https://cdn.jsdelivr.net/npm/water.css@2/out/water.css"
-    />
+    <style>/* water.css v2 - inlined for security */
+/**
+ * Automatic version:
+ * Uses light theme by default but switches to dark theme
+ * if a system-wide theme preference is set on the user's device.
+ */
+
+:root {
+  --background-body: #fff;
+  --background: #efefef;
+  --background-alt: #f7f7f7;
+  --selection: #9e9e9e;
+  --text-main: #363636;
+  --text-bright: #000;
+  --text-muted: #70777f;
+  --links: #0076d1;
+  --focus: #0096bfab;
+  --border: #dbdbdb;
+  --code: #000;
+  --animation-duration: 0.1s;
+  --button-base: #d0cfcf;
+  --button-hover: #9b9b9b;
+  --scrollbar-thumb: rgb(170, 170, 170);
+  --scrollbar-thumb-hover: var(--button-hover);
+  --form-placeholder: #949494;
+  --form-text: #1d1d1d;
+  --variable: #39a33c;
+  --highlight: #ff0;
+  --select-arrow: url("data:image/svg+xml;charset=utf-8,%3C?xml version='1.0' encoding='utf-8'?%3E %3Csvg version='1.1' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' height='62.5' width='116.9' fill='%23161f27'%3E %3Cpath d='M115.3,1.6 C113.7,0 111.1,0 109.5,1.6 L58.5,52.7 L7.4,1.6 C5.8,0 3.2,0 1.6,1.6 C0,3.2 0,5.8 1.6,7.4 L55.5,61.3 C56.3,62.1 57.3,62.5 58.4,62.5 C59.4,62.5 60.5,62.1 61.3,61.3 L115.2,7.4 C116.9,5.8 116.9,3.2 115.3,1.6Z'/%3E %3C/svg%3E");
+}
+
+@media (prefers-color-scheme: dark) {
+:root {
+  --background-body: #202b38;
+  --background: #161f27;
+  --background-alt: #1a242f;
+  --selection: #1c76c5;
+  --text-main: #dbdbdb;
+  --text-bright: #fff;
+  --text-muted: #a9b1ba;
+  --links: #41adff;
+  --focus: #0096bfab;
+  --border: #526980;
+  --code: #ffbe85;
+  --animation-duration: 0.1s;
+  --button-base: #0c151c;
+  --button-hover: #040a0f;
+  --scrollbar-thumb: var(--button-hover);
+  --scrollbar-thumb-hover: rgb(0, 0, 0);
+  --form-placeholder: #a9a9a9;
+  --form-text: #fff;
+  --variable: #d941e2;
+  --highlight: #efdb43;
+  --select-arrow: url("data:image/svg+xml;charset=utf-8,%3C?xml version='1.0' encoding='utf-8'?%3E %3Csvg version='1.1' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' height='62.5' width='116.9' fill='%23efefef'%3E %3Cpath d='M115.3,1.6 C113.7,0 111.1,0 109.5,1.6 L58.5,52.7 L7.4,1.6 C5.8,0 3.2,0 1.6,1.6 C0,3.2 0,5.8 1.6,7.4 L55.5,61.3 C56.3,62.1 57.3,62.5 58.4,62.5 C59.4,62.5 60.5,62.1 61.3,61.3 L115.2,7.4 C116.9,5.8 116.9,3.2 115.3,1.6Z'/%3E %3C/svg%3E");
+}
+}
+
+html {
+  scrollbar-color: rgb(170, 170, 170) #fff;
+  scrollbar-color: var(--scrollbar-thumb) var(--background-body);
+  scrollbar-width: thin;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  html {
+  scrollbar-color: #040a0f #202b38;
+  scrollbar-color: var(--scrollbar-thumb) var(--background-body);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  html {
+  scrollbar-color: #040a0f #202b38;
+  scrollbar-color: var(--scrollbar-thumb) var(--background-body);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  html {
+  scrollbar-color: #040a0f #202b38;
+  scrollbar-color: var(--scrollbar-thumb) var(--background-body);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  html {
+  scrollbar-color: #040a0f #202b38;
+  scrollbar-color: var(--scrollbar-thumb) var(--background-body);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  html {
+  scrollbar-color: #040a0f #202b38;
+  scrollbar-color: var(--scrollbar-thumb) var(--background-body);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  html {
+  scrollbar-color: #040a0f #202b38;
+  scrollbar-color: var(--scrollbar-thumb) var(--background-body);
+  }
+}
+
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', 'Segoe UI Emoji', 'Apple Color Emoji', 'Noto Color Emoji', sans-serif;
+  line-height: 1.4;
+  max-width: 800px;
+  margin: 20px auto;
+  padding: 0 10px;
+  word-wrap: break-word;
+  color: #363636;
+  color: var(--text-main);
+  background: #fff;
+  background: var(--background-body);
+  text-rendering: optimizeLegibility;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  body {
+  background: #202b38;
+  background: var(--background-body);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  body {
+  color: #dbdbdb;
+  color: var(--text-main);
+  }
+}
+
+button {
+  transition:
+    background-color 0.1s linear,
+    border-color 0.1s linear,
+    color 0.1s linear,
+    box-shadow 0.1s linear,
+    transform 0.1s ease;
+  transition:
+    background-color var(--animation-duration) linear,
+    border-color var(--animation-duration) linear,
+    color var(--animation-duration) linear,
+    box-shadow var(--animation-duration) linear,
+    transform var(--animation-duration) ease;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  button {
+  transition:
+    background-color 0.1s linear,
+    border-color 0.1s linear,
+    color 0.1s linear,
+    box-shadow 0.1s linear,
+    transform 0.1s ease;
+  transition:
+    background-color var(--animation-duration) linear,
+    border-color var(--animation-duration) linear,
+    color var(--animation-duration) linear,
+    box-shadow var(--animation-duration) linear,
+    transform var(--animation-duration) ease;
+  }
+}
+
+input {
+  transition:
+    background-color 0.1s linear,
+    border-color 0.1s linear,
+    color 0.1s linear,
+    box-shadow 0.1s linear,
+    transform 0.1s ease;
+  transition:
+    background-color var(--animation-duration) linear,
+    border-color var(--animation-duration) linear,
+    color var(--animation-duration) linear,
+    box-shadow var(--animation-duration) linear,
+    transform var(--animation-duration) ease;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input {
+  transition:
+    background-color 0.1s linear,
+    border-color 0.1s linear,
+    color 0.1s linear,
+    box-shadow 0.1s linear,
+    transform 0.1s ease;
+  transition:
+    background-color var(--animation-duration) linear,
+    border-color var(--animation-duration) linear,
+    color var(--animation-duration) linear,
+    box-shadow var(--animation-duration) linear,
+    transform var(--animation-duration) ease;
+  }
+}
+
+textarea {
+  transition:
+    background-color 0.1s linear,
+    border-color 0.1s linear,
+    color 0.1s linear,
+    box-shadow 0.1s linear,
+    transform 0.1s ease;
+  transition:
+    background-color var(--animation-duration) linear,
+    border-color var(--animation-duration) linear,
+    color var(--animation-duration) linear,
+    box-shadow var(--animation-duration) linear,
+    transform var(--animation-duration) ease;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  textarea {
+  transition:
+    background-color 0.1s linear,
+    border-color 0.1s linear,
+    color 0.1s linear,
+    box-shadow 0.1s linear,
+    transform 0.1s ease;
+  transition:
+    background-color var(--animation-duration) linear,
+    border-color var(--animation-duration) linear,
+    color var(--animation-duration) linear,
+    box-shadow var(--animation-duration) linear,
+    transform var(--animation-duration) ease;
+  }
+}
+
+h1 {
+  font-size: 2.2em;
+  margin-top: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  margin-bottom: 12px;
+  margin-top: 24px;
+}
+
+h1 {
+  color: #000;
+  color: var(--text-bright);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  h1 {
+  color: #fff;
+  color: var(--text-bright);
+  }
+}
+
+h2 {
+  color: #000;
+  color: var(--text-bright);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  h2 {
+  color: #fff;
+  color: var(--text-bright);
+  }
+}
+
+h3 {
+  color: #000;
+  color: var(--text-bright);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  h3 {
+  color: #fff;
+  color: var(--text-bright);
+  }
+}
+
+h4 {
+  color: #000;
+  color: var(--text-bright);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  h4 {
+  color: #fff;
+  color: var(--text-bright);
+  }
+}
+
+h5 {
+  color: #000;
+  color: var(--text-bright);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  h5 {
+  color: #fff;
+  color: var(--text-bright);
+  }
+}
+
+h6 {
+  color: #000;
+  color: var(--text-bright);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  h6 {
+  color: #fff;
+  color: var(--text-bright);
+  }
+}
+
+strong {
+  color: #000;
+  color: var(--text-bright);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  strong {
+  color: #fff;
+  color: var(--text-bright);
+  }
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6,
+b,
+strong,
+th {
+  font-weight: 600;
+}
+
+q::before {
+  content: none;
+}
+
+q::after {
+  content: none;
+}
+
+blockquote {
+  border-left: 4px solid #0096bfab;
+  border-left: 4px solid var(--focus);
+  margin: 1.5em 0;
+  padding: 0.5em 1em;
+  font-style: italic;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  blockquote {
+  border-left: 4px solid #0096bfab;
+  border-left: 4px solid var(--focus);
+  }
+}
+
+q {
+  border-left: 4px solid #0096bfab;
+  border-left: 4px solid var(--focus);
+  margin: 1.5em 0;
+  padding: 0.5em 1em;
+  font-style: italic;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  q {
+  border-left: 4px solid #0096bfab;
+  border-left: 4px solid var(--focus);
+  }
+}
+
+blockquote > footer {
+  font-style: normal;
+  border: 0;
+}
+
+blockquote cite {
+  font-style: normal;
+}
+
+address {
+  font-style: normal;
+}
+
+a[href^='mailto\:']::before {
+  content: '\01f4e7 ';
+}
+
+a[href^='tel\:']::before {
+  content: '\01f4de ';
+}
+
+a[href^='sms\:']::before {
+  content: '\01f4ac ';
+}
+
+mark {
+  background-color: #ff0;
+  background-color: var(--highlight);
+  border-radius: 2px;
+  padding: 0 2px 0 2px;
+  color: #000;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  mark {
+  background-color: #efdb43;
+  background-color: var(--highlight);
+  }
+}
+
+a > code,
+a > strong {
+  color: inherit;
+}
+
+button,
+select,
+input[type='submit'],
+input[type='reset'],
+input[type='button'],
+input[type='checkbox'],
+input[type='range'],
+input[type='radio'] {
+  cursor: pointer;
+}
+
+input,
+select {
+  display: block;
+}
+
+[type='checkbox'],
+[type='radio'] {
+  display: initial;
+}
+
+input {
+  color: #1d1d1d;
+  color: var(--form-text);
+  background-color: #efefef;
+  background-color: var(--background);
+  font-family: inherit;
+  font-size: inherit;
+  margin-right: 6px;
+  margin-bottom: 6px;
+  padding: 10px;
+  border: none;
+  border-radius: 6px;
+  outline: none;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input {
+  background-color: #161f27;
+  background-color: var(--background);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input {
+  color: #fff;
+  color: var(--form-text);
+  }
+}
+
+button {
+  color: #1d1d1d;
+  color: var(--form-text);
+  background-color: #efefef;
+  background-color: var(--background);
+  font-family: inherit;
+  font-size: inherit;
+  margin-right: 6px;
+  margin-bottom: 6px;
+  padding: 10px;
+  border: none;
+  border-radius: 6px;
+  outline: none;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  button {
+  background-color: #161f27;
+  background-color: var(--background);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  button {
+  color: #fff;
+  color: var(--form-text);
+  }
+}
+
+textarea {
+  color: #1d1d1d;
+  color: var(--form-text);
+  background-color: #efefef;
+  background-color: var(--background);
+  font-family: inherit;
+  font-size: inherit;
+  margin-right: 6px;
+  margin-bottom: 6px;
+  padding: 10px;
+  border: none;
+  border-radius: 6px;
+  outline: none;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  textarea {
+  background-color: #161f27;
+  background-color: var(--background);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  textarea {
+  color: #fff;
+  color: var(--form-text);
+  }
+}
+
+select {
+  color: #1d1d1d;
+  color: var(--form-text);
+  background-color: #efefef;
+  background-color: var(--background);
+  font-family: inherit;
+  font-size: inherit;
+  margin-right: 6px;
+  margin-bottom: 6px;
+  padding: 10px;
+  border: none;
+  border-radius: 6px;
+  outline: none;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  select {
+  background-color: #161f27;
+  background-color: var(--background);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  select {
+  color: #fff;
+  color: var(--form-text);
+  }
+}
+
+button {
+  background-color: #d0cfcf;
+  background-color: var(--button-base);
+  padding-right: 30px;
+  padding-left: 30px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  button {
+  background-color: #0c151c;
+  background-color: var(--button-base);
+  }
+}
+
+input[type='submit'] {
+  background-color: #d0cfcf;
+  background-color: var(--button-base);
+  padding-right: 30px;
+  padding-left: 30px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='submit'] {
+  background-color: #0c151c;
+  background-color: var(--button-base);
+  }
+}
+
+input[type='reset'] {
+  background-color: #d0cfcf;
+  background-color: var(--button-base);
+  padding-right: 30px;
+  padding-left: 30px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='reset'] {
+  background-color: #0c151c;
+  background-color: var(--button-base);
+  }
+}
+
+input[type='button'] {
+  background-color: #d0cfcf;
+  background-color: var(--button-base);
+  padding-right: 30px;
+  padding-left: 30px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='button'] {
+  background-color: #0c151c;
+  background-color: var(--button-base);
+  }
+}
+
+button:hover {
+  background: #9b9b9b;
+  background: var(--button-hover);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  button:hover {
+  background: #040a0f;
+  background: var(--button-hover);
+  }
+}
+
+input[type='submit']:hover {
+  background: #9b9b9b;
+  background: var(--button-hover);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='submit']:hover {
+  background: #040a0f;
+  background: var(--button-hover);
+  }
+}
+
+input[type='reset']:hover {
+  background: #9b9b9b;
+  background: var(--button-hover);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='reset']:hover {
+  background: #040a0f;
+  background: var(--button-hover);
+  }
+}
+
+input[type='button']:hover {
+  background: #9b9b9b;
+  background: var(--button-hover);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='button']:hover {
+  background: #040a0f;
+  background: var(--button-hover);
+  }
+}
+
+input[type='color'] {
+  min-height: 2rem;
+  padding: 8px;
+  cursor: pointer;
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  height: 1em;
+  width: 1em;
+}
+
+input[type='radio'] {
+  border-radius: 100%;
+}
+
+input {
+  vertical-align: top;
+}
+
+label {
+  vertical-align: middle;
+  margin-bottom: 4px;
+  display: inline-block;
+}
+
+input:not([type='checkbox']):not([type='radio']),
+input[type='range'],
+select,
+button,
+textarea {
+  -webkit-appearance: none;
+}
+
+textarea {
+  display: block;
+  margin-right: 0;
+  box-sizing: border-box;
+  resize: vertical;
+}
+
+textarea:not([cols]) {
+  width: 100%;
+}
+
+textarea:not([rows]) {
+  min-height: 40px;
+  height: 140px;
+}
+
+select {
+  background: #efefef url("data:image/svg+xml;charset=utf-8,%3C?xml version='1.0' encoding='utf-8'?%3E %3Csvg version='1.1' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' height='62.5' width='116.9' fill='%23161f27'%3E %3Cpath d='M115.3,1.6 C113.7,0 111.1,0 109.5,1.6 L58.5,52.7 L7.4,1.6 C5.8,0 3.2,0 1.6,1.6 C0,3.2 0,5.8 1.6,7.4 L55.5,61.3 C56.3,62.1 57.3,62.5 58.4,62.5 C59.4,62.5 60.5,62.1 61.3,61.3 L115.2,7.4 C116.9,5.8 116.9,3.2 115.3,1.6Z'/%3E %3C/svg%3E") calc(100% - 12px) 50% / 12px no-repeat;
+  background: var(--background) var(--select-arrow) calc(100% - 12px) 50% / 12px no-repeat;
+  padding-right: 35px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  select {
+  background: #161f27 url("data:image/svg+xml;charset=utf-8,%3C?xml version='1.0' encoding='utf-8'?%3E %3Csvg version='1.1' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' height='62.5' width='116.9' fill='%23efefef'%3E %3Cpath d='M115.3,1.6 C113.7,0 111.1,0 109.5,1.6 L58.5,52.7 L7.4,1.6 C5.8,0 3.2,0 1.6,1.6 C0,3.2 0,5.8 1.6,7.4 L55.5,61.3 C56.3,62.1 57.3,62.5 58.4,62.5 C59.4,62.5 60.5,62.1 61.3,61.3 L115.2,7.4 C116.9,5.8 116.9,3.2 115.3,1.6Z'/%3E %3C/svg%3E") calc(100% - 12px) 50% / 12px no-repeat;
+  background: var(--background) var(--select-arrow) calc(100% - 12px) 50% / 12px no-repeat;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  select {
+  background: #161f27 url("data:image/svg+xml;charset=utf-8,%3C?xml version='1.0' encoding='utf-8'?%3E %3Csvg version='1.1' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' height='62.5' width='116.9' fill='%23efefef'%3E %3Cpath d='M115.3,1.6 C113.7,0 111.1,0 109.5,1.6 L58.5,52.7 L7.4,1.6 C5.8,0 3.2,0 1.6,1.6 C0,3.2 0,5.8 1.6,7.4 L55.5,61.3 C56.3,62.1 57.3,62.5 58.4,62.5 C59.4,62.5 60.5,62.1 61.3,61.3 L115.2,7.4 C116.9,5.8 116.9,3.2 115.3,1.6Z'/%3E %3C/svg%3E") calc(100% - 12px) 50% / 12px no-repeat;
+  background: var(--background) var(--select-arrow) calc(100% - 12px) 50% / 12px no-repeat;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  select {
+  background: #161f27 url("data:image/svg+xml;charset=utf-8,%3C?xml version='1.0' encoding='utf-8'?%3E %3Csvg version='1.1' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' height='62.5' width='116.9' fill='%23efefef'%3E %3Cpath d='M115.3,1.6 C113.7,0 111.1,0 109.5,1.6 L58.5,52.7 L7.4,1.6 C5.8,0 3.2,0 1.6,1.6 C0,3.2 0,5.8 1.6,7.4 L55.5,61.3 C56.3,62.1 57.3,62.5 58.4,62.5 C59.4,62.5 60.5,62.1 61.3,61.3 L115.2,7.4 C116.9,5.8 116.9,3.2 115.3,1.6Z'/%3E %3C/svg%3E") calc(100% - 12px) 50% / 12px no-repeat;
+  background: var(--background) var(--select-arrow) calc(100% - 12px) 50% / 12px no-repeat;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  select {
+  background: #161f27 url("data:image/svg+xml;charset=utf-8,%3C?xml version='1.0' encoding='utf-8'?%3E %3Csvg version='1.1' xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' height='62.5' width='116.9' fill='%23efefef'%3E %3Cpath d='M115.3,1.6 C113.7,0 111.1,0 109.5,1.6 L58.5,52.7 L7.4,1.6 C5.8,0 3.2,0 1.6,1.6 C0,3.2 0,5.8 1.6,7.4 L55.5,61.3 C56.3,62.1 57.3,62.5 58.4,62.5 C59.4,62.5 60.5,62.1 61.3,61.3 L115.2,7.4 C116.9,5.8 116.9,3.2 115.3,1.6Z'/%3E %3C/svg%3E") calc(100% - 12px) 50% / 12px no-repeat;
+  background: var(--background) var(--select-arrow) calc(100% - 12px) 50% / 12px no-repeat;
+  }
+}
+
+select::-ms-expand {
+  display: none;
+}
+
+select[multiple] {
+  padding-right: 10px;
+  background-image: none;
+  overflow-y: auto;
+}
+
+input:focus {
+  box-shadow: 0 0 0 2px #0096bfab;
+  box-shadow: 0 0 0 2px var(--focus);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input:focus {
+  box-shadow: 0 0 0 2px #0096bfab;
+  box-shadow: 0 0 0 2px var(--focus);
+  }
+}
+
+select:focus {
+  box-shadow: 0 0 0 2px #0096bfab;
+  box-shadow: 0 0 0 2px var(--focus);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  select:focus {
+  box-shadow: 0 0 0 2px #0096bfab;
+  box-shadow: 0 0 0 2px var(--focus);
+  }
+}
+
+button:focus {
+  box-shadow: 0 0 0 2px #0096bfab;
+  box-shadow: 0 0 0 2px var(--focus);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  button:focus {
+  box-shadow: 0 0 0 2px #0096bfab;
+  box-shadow: 0 0 0 2px var(--focus);
+  }
+}
+
+textarea:focus {
+  box-shadow: 0 0 0 2px #0096bfab;
+  box-shadow: 0 0 0 2px var(--focus);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  textarea:focus {
+  box-shadow: 0 0 0 2px #0096bfab;
+  box-shadow: 0 0 0 2px var(--focus);
+  }
+}
+
+input[type='checkbox']:active,
+input[type='radio']:active,
+input[type='submit']:active,
+input[type='reset']:active,
+input[type='button']:active,
+input[type='range']:active,
+button:active {
+  transform: translateY(2px);
+}
+
+input:disabled,
+select:disabled,
+button:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+::-moz-placeholder {
+  color: #949494;
+  color: var(--form-placeholder);
+}
+
+:-ms-input-placeholder {
+  color: #949494;
+  color: var(--form-placeholder);
+}
+
+::-ms-input-placeholder {
+  color: #949494;
+  color: var(--form-placeholder);
+}
+
+::placeholder {
+  color: #949494;
+  color: var(--form-placeholder);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  ::-moz-placeholder {
+  color: #a9a9a9;
+  color: var(--form-placeholder);
+  }
+
+  :-ms-input-placeholder {
+  color: #a9a9a9;
+  color: var(--form-placeholder);
+  }
+
+  ::-ms-input-placeholder {
+  color: #a9a9a9;
+  color: var(--form-placeholder);
+  }
+
+  ::placeholder {
+  color: #a9a9a9;
+  color: var(--form-placeholder);
+  }
+}
+
+fieldset {
+  border: 1px #0096bfab solid;
+  border: 1px var(--focus) solid;
+  border-radius: 6px;
+  margin: 0;
+  margin-bottom: 12px;
+  padding: 10px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  fieldset {
+  border: 1px #0096bfab solid;
+  border: 1px var(--focus) solid;
+  }
+}
+
+legend {
+  font-size: 0.9em;
+  font-weight: 600;
+}
+
+input[type='range'] {
+  margin: 10px 0;
+  padding: 10px 0;
+  background: transparent;
+}
+
+input[type='range']:focus {
+  outline: none;
+}
+
+input[type='range']::-webkit-slider-runnable-track {
+  width: 100%;
+  height: 9.5px;
+  -webkit-transition: 0.2s;
+  transition: 0.2s;
+  background: #efefef;
+  background: var(--background);
+  border-radius: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='range']::-webkit-slider-runnable-track {
+  background: #161f27;
+  background: var(--background);
+  }
+}
+
+input[type='range']::-webkit-slider-thumb {
+  box-shadow: 0 1px 1px #000, 0 0 1px #0d0d0d;
+  height: 20px;
+  width: 20px;
+  border-radius: 50%;
+  background: #dbdbdb;
+  background: var(--border);
+  -webkit-appearance: none;
+  margin-top: -7px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='range']::-webkit-slider-thumb {
+  background: #526980;
+  background: var(--border);
+  }
+}
+
+input[type='range']:focus::-webkit-slider-runnable-track {
+  background: #efefef;
+  background: var(--background);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='range']:focus::-webkit-slider-runnable-track {
+  background: #161f27;
+  background: var(--background);
+  }
+}
+
+input[type='range']::-moz-range-track {
+  width: 100%;
+  height: 9.5px;
+  -moz-transition: 0.2s;
+  transition: 0.2s;
+  background: #efefef;
+  background: var(--background);
+  border-radius: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='range']::-moz-range-track {
+  background: #161f27;
+  background: var(--background);
+  }
+}
+
+input[type='range']::-moz-range-thumb {
+  box-shadow: 1px 1px 1px #000, 0 0 1px #0d0d0d;
+  height: 20px;
+  width: 20px;
+  border-radius: 50%;
+  background: #dbdbdb;
+  background: var(--border);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='range']::-moz-range-thumb {
+  background: #526980;
+  background: var(--border);
+  }
+}
+
+input[type='range']::-ms-track {
+  width: 100%;
+  height: 9.5px;
+  background: transparent;
+  border-color: transparent;
+  border-width: 16px 0;
+  color: transparent;
+}
+
+input[type='range']::-ms-fill-lower {
+  background: #efefef;
+  background: var(--background);
+  border: 0.2px solid #010101;
+  border-radius: 3px;
+  box-shadow: 1px 1px 1px #000, 0 0 1px #0d0d0d;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='range']::-ms-fill-lower {
+  background: #161f27;
+  background: var(--background);
+  }
+}
+
+input[type='range']::-ms-fill-upper {
+  background: #efefef;
+  background: var(--background);
+  border: 0.2px solid #010101;
+  border-radius: 3px;
+  box-shadow: 1px 1px 1px #000, 0 0 1px #0d0d0d;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='range']::-ms-fill-upper {
+  background: #161f27;
+  background: var(--background);
+  }
+}
+
+input[type='range']::-ms-thumb {
+  box-shadow: 1px 1px 1px #000, 0 0 1px #0d0d0d;
+  border: 1px solid #000;
+  height: 20px;
+  width: 20px;
+  border-radius: 50%;
+  background: #dbdbdb;
+  background: var(--border);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='range']::-ms-thumb {
+  background: #526980;
+  background: var(--border);
+  }
+}
+
+input[type='range']:focus::-ms-fill-lower {
+  background: #efefef;
+  background: var(--background);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='range']:focus::-ms-fill-lower {
+  background: #161f27;
+  background: var(--background);
+  }
+}
+
+input[type='range']:focus::-ms-fill-upper {
+  background: #efefef;
+  background: var(--background);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  input[type='range']:focus::-ms-fill-upper {
+  background: #161f27;
+  background: var(--background);
+  }
+}
+
+a {
+  text-decoration: none;
+  color: #0076d1;
+  color: var(--links);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  a {
+  color: #41adff;
+  color: var(--links);
+  }
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+code {
+  background: #efefef;
+  background: var(--background);
+  color: #000;
+  color: var(--code);
+  padding: 2.5px 5px;
+  border-radius: 6px;
+  font-size: 1em;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  code {
+  color: #ffbe85;
+  color: var(--code);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  code {
+  background: #161f27;
+  background: var(--background);
+  }
+}
+
+samp {
+  background: #efefef;
+  background: var(--background);
+  color: #000;
+  color: var(--code);
+  padding: 2.5px 5px;
+  border-radius: 6px;
+  font-size: 1em;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  samp {
+  color: #ffbe85;
+  color: var(--code);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  samp {
+  background: #161f27;
+  background: var(--background);
+  }
+}
+
+time {
+  background: #efefef;
+  background: var(--background);
+  color: #000;
+  color: var(--code);
+  padding: 2.5px 5px;
+  border-radius: 6px;
+  font-size: 1em;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  time {
+  color: #ffbe85;
+  color: var(--code);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  time {
+  background: #161f27;
+  background: var(--background);
+  }
+}
+
+pre > code {
+  padding: 10px;
+  display: block;
+  overflow-x: auto;
+}
+
+var {
+  color: #39a33c;
+  color: var(--variable);
+  font-style: normal;
+  font-family: monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  var {
+  color: #d941e2;
+  color: var(--variable);
+  }
+}
+
+kbd {
+  background: #efefef;
+  background: var(--background);
+  border: 1px solid #dbdbdb;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: #363636;
+  color: var(--text-main);
+  padding: 2px 4px 2px 4px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  kbd {
+  color: #dbdbdb;
+  color: var(--text-main);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  kbd {
+  border: 1px solid #526980;
+  border: 1px solid var(--border);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  kbd {
+  background: #161f27;
+  background: var(--background);
+  }
+}
+
+img,
+video {
+  max-width: 100%;
+  height: auto;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid #dbdbdb;
+  border-top: 1px solid var(--border);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  hr {
+  border-top: 1px solid #526980;
+  border-top: 1px solid var(--border);
+  }
+}
+
+table {
+  border-collapse: collapse;
+  margin-bottom: 10px;
+  width: 100%;
+  table-layout: fixed;
+}
+
+table caption {
+  text-align: left;
+}
+
+td,
+th {
+  padding: 6px;
+  text-align: left;
+  vertical-align: top;
+  word-wrap: break-word;
+}
+
+thead {
+  border-bottom: 1px solid #dbdbdb;
+  border-bottom: 1px solid var(--border);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  thead {
+  border-bottom: 1px solid #526980;
+  border-bottom: 1px solid var(--border);
+  }
+}
+
+tfoot {
+  border-top: 1px solid #dbdbdb;
+  border-top: 1px solid var(--border);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  tfoot {
+  border-top: 1px solid #526980;
+  border-top: 1px solid var(--border);
+  }
+}
+
+tbody tr:nth-child(even) {
+  background-color: #efefef;
+  background-color: var(--background);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  tbody tr:nth-child(even) {
+  background-color: #161f27;
+  background-color: var(--background);
+  }
+}
+
+tbody tr:nth-child(even) button {
+  background-color: #f7f7f7;
+  background-color: var(--background-alt);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  tbody tr:nth-child(even) button {
+  background-color: #1a242f;
+  background-color: var(--background-alt);
+  }
+}
+
+tbody tr:nth-child(even) button:hover {
+  background-color: #fff;
+  background-color: var(--background-body);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  tbody tr:nth-child(even) button:hover {
+  background-color: #202b38;
+  background-color: var(--background-body);
+  }
+}
+
+::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #efefef;
+  background: var(--background);
+  border-radius: 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  ::-webkit-scrollbar-track {
+  background: #161f27;
+  background: var(--background);
+  }
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgb(170, 170, 170);
+  background: var(--scrollbar-thumb);
+  border-radius: 6px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  ::-webkit-scrollbar-thumb {
+  background: #040a0f;
+  background: var(--scrollbar-thumb);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  ::-webkit-scrollbar-thumb {
+  background: #040a0f;
+  background: var(--scrollbar-thumb);
+  }
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9b9b9b;
+  background: var(--scrollbar-thumb-hover);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  ::-webkit-scrollbar-thumb:hover {
+  background: rgb(0, 0, 0);
+  background: var(--scrollbar-thumb-hover);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  ::-webkit-scrollbar-thumb:hover {
+  background: rgb(0, 0, 0);
+  background: var(--scrollbar-thumb-hover);
+  }
+}
+
+::-moz-selection {
+  background-color: #9e9e9e;
+  background-color: var(--selection);
+  color: #000;
+  color: var(--text-bright);
+}
+
+::selection {
+  background-color: #9e9e9e;
+  background-color: var(--selection);
+  color: #000;
+  color: var(--text-bright);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  ::-moz-selection {
+  color: #fff;
+  color: var(--text-bright);
+  }
+
+  ::selection {
+  color: #fff;
+  color: var(--text-bright);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  ::-moz-selection {
+  background-color: #1c76c5;
+  background-color: var(--selection);
+  }
+
+  ::selection {
+  background-color: #1c76c5;
+  background-color: var(--selection);
+  }
+}
+
+details {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  background-color: #f7f7f7;
+  background-color: var(--background-alt);
+  padding: 10px 10px 0;
+  margin: 1em 0;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  details {
+  background-color: #1a242f;
+  background-color: var(--background-alt);
+  }
+}
+
+details[open] {
+  padding: 10px;
+}
+
+details > :last-child {
+  margin-bottom: 0;
+}
+
+details[open] summary {
+  margin-bottom: 10px;
+}
+
+summary {
+  display: list-item;
+  background-color: #efefef;
+  background-color: var(--background);
+  padding: 10px;
+  margin: -10px -10px 0;
+  cursor: pointer;
+  outline: none;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  summary {
+  background-color: #161f27;
+  background-color: var(--background);
+  }
+}
+
+summary:hover,
+summary:focus {
+  text-decoration: underline;
+}
+
+details > :not(summary) {
+  margin-top: 0;
+}
+
+summary::-webkit-details-marker {
+  color: #363636;
+  color: var(--text-main);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  summary::-webkit-details-marker {
+  color: #dbdbdb;
+  color: var(--text-main);
+  }
+}
+
+dialog {
+  background-color: #f7f7f7;
+  background-color: var(--background-alt);
+  color: #363636;
+  color: var(--text-main);
+  border: none;
+  border-radius: 6px;
+  border-color: #dbdbdb;
+  border-color: var(--border);
+  padding: 10px 30px;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  dialog {
+  border-color: #526980;
+  border-color: var(--border);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  dialog {
+  color: #dbdbdb;
+  color: var(--text-main);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  dialog {
+  background-color: #1a242f;
+  background-color: var(--background-alt);
+  }
+}
+
+dialog > header:first-child {
+  background-color: #efefef;
+  background-color: var(--background);
+  border-radius: 6px 6px 0 0;
+  margin: -10px -30px 10px;
+  padding: 10px;
+  text-align: center;
+}
+
+@media (prefers-color-scheme: dark) {
+
+  dialog > header:first-child {
+  background-color: #161f27;
+  background-color: var(--background);
+  }
+}
+
+dialog::-webkit-backdrop {
+  background: #0000009c;
+  -webkit-backdrop-filter: blur(4px);
+          backdrop-filter: blur(4px);
+}
+
+dialog::backdrop {
+  background: #0000009c;
+  -webkit-backdrop-filter: blur(4px);
+          backdrop-filter: blur(4px);
+}
+
+footer {
+  border-top: 1px solid #dbdbdb;
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  color: #70777f;
+  color: var(--text-muted);
+}
+
+@media (prefers-color-scheme: dark) {
+
+  footer {
+  color: #a9b1ba;
+  color: var(--text-muted);
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+
+  footer {
+  border-top: 1px solid #526980;
+  border-top: 1px solid var(--border);
+  }
+}
+
+body > footer {
+  margin-top: 40px;
+}
+
+@media print {
+  body,
+  pre,
+  code,
+  summary,
+  details,
+  button,
+  input,
+  textarea {
+    background-color: #fff;
+  }
+
+  button,
+  input,
+  textarea {
+    border: 1px solid #000;
+  }
+
+  body,
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  pre,
+  code,
+  button,
+  input,
+  textarea,
+  footer,
+  summary,
+  strong {
+    color: #000;
+  }
+
+  summary::marker {
+    color: #000;
+  }
+
+  summary::-webkit-details-marker {
+    color: #000;
+  }
+
+  tbody tr:nth-child(even) {
+    background-color: #f2f2f2;
+  }
+
+  a {
+    color: #00f;
+    text-decoration: underline;
+  }
+}
+</style>
     <style>
       :root {
         --tab-active-color: #0076d1;
@@ -1035,8 +2722,8 @@
             autocomplete="off"
           />
         </div>
-        <button type="button" onclick="saveApiKey()">Save &amp; Test</button>
-        <button type="button" onclick="clearApiKey()">Clear</button>
+        <button type="button" onclick="login()">Login</button>
+        <button type="button" onclick="logout()">Logout</button>
       </div>
       <div id="apiKeyStatus" class="api-key-status"></div>
     </div>
@@ -1644,6 +3331,12 @@
     </div>
 
     <script>
+      function escapeHtml(str) {
+          if (str == null) return '';
+          return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      }
+
       // ============================================================================
       // Configuration & State
       // ============================================================================
@@ -1657,7 +3350,7 @@
       };
 
       let state = {
-        apiKey: localStorage.getItem("freebirdAdminKey") || "",
+        authenticated: false,
         serviceType: null, // 'issuer' or 'verifier' - detected from /health response
         currentTab: "dashboard",
         users: [],
@@ -1704,15 +3397,13 @@
       // ============================================================================
 
       class FreebirdAdminAPI {
-        constructor(baseUrl, apiKey) {
+        constructor(baseUrl) {
           this.baseUrl = baseUrl;
-          this.apiKey = apiKey;
         }
 
         async request(endpoint, options = {}) {
           const url = `${this.baseUrl}${CONFIG.adminPath}${endpoint}`;
           const headers = {
-            "X-Admin-Key": this.apiKey,
             "Content-Type": "application/json",
             ...options.headers,
           };
@@ -1721,6 +3412,7 @@
             const response = await fetch(url, {
               ...options,
               headers,
+              credentials: 'same-origin',
             });
 
             const data = await response.json().catch(() => null);
@@ -1953,7 +3645,7 @@
 
       function showMessage(containerId, type, message) {
         const container = document.getElementById(containerId);
-        container.innerHTML = `<div class="message ${type}">${message}</div>`;
+        container.innerHTML = `<div class="message ${escapeHtml(type)}">${escapeHtml(message)}</div>`;
 
         if (type === "success") {
           setTimeout(() => {
@@ -2015,46 +3707,60 @@
       // API Key Management
       // ============================================================================
 
-      async function saveApiKey() {
+      async function login() {
         const apiKey = document.getElementById("apiKey").value.trim();
         const statusEl = document.getElementById("apiKeyStatus");
 
         if (!apiKey) {
           statusEl.className = "api-key-status error";
-          statusEl.textContent = "❌ API key cannot be empty";
+          statusEl.textContent = "API key cannot be empty";
           return;
         }
 
         if (apiKey.length < 32) {
           statusEl.className = "api-key-status error";
-          statusEl.textContent = "❌ API key must be at least 32 characters";
+          statusEl.textContent = "API key must be at least 32 characters";
           return;
         }
 
-        // Test the API key
+        // Attempt login - POST to login endpoint to set HttpOnly cookie
         statusEl.className = "api-key-status";
-        statusEl.innerHTML = '<span class="spinner"></span> Testing API key...';
+        statusEl.innerHTML = '<span class="spinner"></span> Logging in...';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, apiKey);
+          const response = await fetch(`${CONFIG.issuerUrl}${CONFIG.adminPath}/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: 'same-origin',
+            body: JSON.stringify({ api_key: apiKey }),
+          });
+
+          if (!response.ok) {
+            const data = await response.json().catch(() => null);
+            throw new Error(data?.message || data?.error || `HTTP ${response.status}: ${response.statusText}`);
+          }
+
+          // Clear input field
+          document.getElementById("apiKey").value = "";
+
+          // Mark state as authenticated
+          state.authenticated = true;
+
+          // Detect service type from health endpoint
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const health = await api.getHealth();
-
-          // Save to localStorage
-          localStorage.setItem("freebirdAdminKey", apiKey);
-          state.apiKey = apiKey;
-
-          // Detect service type from health response
-          state.serviceType = health.service || "issuer"; // Default to issuer for backward compat
+          state.serviceType = health.service || "issuer";
           updateUIForServiceType();
 
           statusEl.className = "api-key-status success";
-          statusEl.textContent = `✓ API key saved and verified (${state.serviceType})`;
+          statusEl.textContent = `Authenticated (${escapeHtml(state.serviceType)})`;
 
-          // Update health badge
+          // Update health badge and load initial data
           updateHealthBadge();
+          loadStats();
         } catch (error) {
           statusEl.className = "api-key-status error";
-          statusEl.textContent = `❌ Invalid API key: ${error.message}`;
+          statusEl.textContent = `Login failed: ${error.message}`;
 
           // Update health badge to show error
           updateHealthBadge();
@@ -2109,14 +3815,17 @@
         }
       }
 
-      function clearApiKey() {
-        localStorage.removeItem("freebirdAdminKey");
-        state.apiKey = "";
-        document.getElementById("apiKey").value = "";
-        document.getElementById("apiKeyStatus").textContent = "";
-
-        // Update health badge
-        updateHealthBadge();
+      async function logout() {
+        try {
+          await fetch(`${CONFIG.issuerUrl}${CONFIG.adminPath}/logout`, {
+            method: "POST",
+            credentials: 'same-origin',
+          });
+        } catch (e) {
+          // Ignore errors during logout
+        }
+        state.authenticated = false;
+        window.location.reload();
       }
 
       // ============================================================================
@@ -2124,7 +3833,7 @@
       // ============================================================================
 
       async function loadStats() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "statsContainer",
             "warning",
@@ -2136,7 +3845,7 @@
         container.innerHTML =
           '<p><span class="spinner"></span> Loading statistics...</p>';
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const data = await api.getStats();
 
           // Check if this is verifier stats (has current_epoch) or issuer stats (has stats.total_users)
@@ -2152,22 +3861,22 @@
                         <div class="stats-grid">
                             <div class="stat-card">
                                 <h3>Current Epoch</h3>
-                                <p class="value">${data.current_epoch || 0}</p>
+                                <p class="value">${escapeHtml(data.current_epoch || 0)}</p>
                             </div>
                             <div class="stat-card">
                                 <h3>Valid Epoch Range</h3>
-                                <p class="value" style="font-size: 1.2em;">${minEpoch} - ${maxEpoch}</p>
+                                <p class="value" style="font-size: 1.2em;">${escapeHtml(minEpoch)} - ${escapeHtml(maxEpoch)}</p>
                             </div>
                             <div class="stat-card">
                                 <h3>Issuers Loaded</h3>
-                                <p class="value">${data.issuers_loaded || 0}</p>
+                                <p class="value">${escapeHtml(data.issuers_loaded || 0)}</p>
                             </div>
                             <div class="stat-card">
                                 <h3>Store Backend</h3>
-                                <p class="value" style="font-size: 1.2em;">${data.store_backend || "unknown"}</p>
+                                <p class="value" style="font-size: 1.2em;">${escapeHtml(data.store_backend || "unknown")}</p>
                             </div>
                         </div>
-                        <p class="text-small" style="opacity: 0.6;">Last updated: ${timestamp}</p>
+                        <p class="text-small" style="opacity: 0.6;">Last updated: ${escapeHtml(timestamp)}</p>
                     `;
           } else {
             // Issuer stats
@@ -2191,41 +3900,41 @@
 
             container.innerHTML = `
                         <div class="form-section" style="margin-bottom: 20px; border-left: 4px solid ${owner ? "var(--success-color)" : "var(--warning-color)"};">
-                            <h3>👤 Instance Owner</h3>
-                            <p class="text-mono" style="font-size: 1.1em;">${ownerDisplay}</p>
-                            ${owner ? `<p class="text-small" style="opacity: 0.6;">Full key: <code style="word-break: break-all;">${owner}</code></p>` : '<p class="text-small" style="opacity: 0.6;">Use POST /admin/register-owner to set the owner</p>'}
+                            <h3>Instance Owner</h3>
+                            <p class="text-mono" style="font-size: 1.1em;">${escapeHtml(ownerDisplay)}</p>
+                            ${owner ? `<p class="text-small" style="opacity: 0.6;">Full key: <code style="word-break: break-all;">${escapeHtml(owner)}</code></p>` : '<p class="text-small" style="opacity: 0.6;">Use POST /admin/register-owner to set the owner</p>'}
                         </div>
                         <div class="stats-grid">
                             <div class="stat-card">
                                 <h3>Total Users</h3>
-                                <p class="value">${stats.total_users || 0}</p>
+                                <p class="value">${escapeHtml(stats.total_users || 0)}</p>
                             </div>
                             <div class="stat-card">
                                 <h3>Redeemed Users</h3>
-                                <p class="value">${userCount}</p>
+                                <p class="value">${escapeHtml(userCount)}</p>
                             </div>
                             <div class="stat-card">
                                 <h3>Total Invitations</h3>
-                                <p class="value">${stats.total_invitations || 0}</p>
+                                <p class="value">${escapeHtml(stats.total_invitations || 0)}</p>
                             </div>
                             <div class="stat-card">
                                 <h3>Redeemed</h3>
-                                <p class="value">${stats.redeemed_invitations || 0}</p>
+                                <p class="value">${escapeHtml(stats.redeemed_invitations || 0)}</p>
                             </div>
                             <div class="stat-card">
                                 <h3>Pending</h3>
-                                <p class="value">${stats.pending_invitations || 0}</p>
+                                <p class="value">${escapeHtml(stats.pending_invitations || 0)}</p>
                             </div>
                             <div class="stat-card">
                                 <h3>Banned Users</h3>
-                                <p class="value">${stats.banned_users || 0}</p>
+                                <p class="value">${escapeHtml(stats.banned_users || 0)}</p>
                             </div>
                         </div>
-                        <p class="text-small" style="opacity: 0.6;">Last updated: ${timestamp}</p>
+                        <p class="text-small" style="opacity: 0.6;">Last updated: ${escapeHtml(timestamp)}</p>
                     `;
           }
         } catch (error) {
-          container.innerHTML = `<div class="message error">❌ Failed to load stats: ${error.message}</div>`;
+          container.innerHTML = `<div class="message error">Failed to load stats: ${escapeHtml(error.message)}</div>`;
         }
       }
 
@@ -2236,7 +3945,7 @@
       // ============================================================================
 
       async function loadSybilConfig() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "sybilConfigContainer",
             "warning",
@@ -2248,32 +3957,32 @@
         container.innerHTML =
           '<p><span class="spinner"></span> Loading configuration...</p>';
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const data = await api.getConfig();
 
           let html = `
             <div class="stats-grid">
               <div class="stat-card">
                 <h3>Sybil Mode</h3>
-                <p class="value" style="font-size: 1.4em;">${data.sybil.mode}</p>
+                <p class="value" style="font-size: 1.4em;">${escapeHtml(data.sybil.mode)}</p>
               </div>
               <div class="stat-card">
                 <h3>Issuer ID</h3>
-                <p class="value" style="font-size: 0.9em; word-break: break-all;">${data.issuer_id}</p>
+                <p class="value" style="font-size: 0.9em; word-break: break-all;">${escapeHtml(data.issuer_id)}</p>
               </div>
               <div class="stat-card">
                 <h3>Epoch Duration</h3>
-                <p class="value">${data.epoch_duration}</p>
+                <p class="value">${escapeHtml(data.epoch_duration)}</p>
               </div>
               <div class="stat-card">
                 <h3>Epoch Retention</h3>
-                <p class="value">${data.epoch_retention}</p>
+                <p class="value">${escapeHtml(data.epoch_retention)}</p>
               </div>
             </div>
 
             <div class="form-section" style="margin-top: 20px;">
               <h3>Mode Description</h3>
-              <p>${data.sybil.mode_description}</p>
+              <p>${escapeHtml(data.sybil.mode_description)}</p>
             </div>
           `;
 
@@ -2299,19 +4008,19 @@
                   displayValue = '<ul style="margin: 0; padding-left: 20px;">';
                   for (const level of value) {
                     displayValue += '<li style="margin: 5px 0;">';
-                    displayValue += `Age: ${level.min_age}, Tokens: ${level.max_tokens}, Cooldown: ${level.cooldown}`;
+                    displayValue += `Age: ${escapeHtml(level.min_age)}, Tokens: ${escapeHtml(level.max_tokens)}, Cooldown: ${escapeHtml(level.cooldown)}`;
                     displayValue += '</li>';
                   }
                   displayValue += '</ul>';
                 } else {
-                  displayValue = value.join(', ');
+                  displayValue = escapeHtml(value.join(', '));
                 }
               } else if (typeof value === 'boolean') {
                 displayValue = value ? '✅ Yes' : '❌ No';
               } else if (typeof value === 'object' && value !== null) {
-                displayValue = JSON.stringify(value, null, 2);
+                displayValue = escapeHtml(JSON.stringify(value, null, 2));
               }
-              html += `<tr><td><strong>${displayKey}</strong></td><td>${displayValue}</td></tr>`;
+              html += `<tr><td><strong>${escapeHtml(displayKey)}</strong></td><td>${displayValue}</td></tr>`;
             }
 
             html += `
@@ -2331,9 +4040,9 @@
                     <tr><th>Setting</th><th>Value</th></tr>
                   </thead>
                   <tbody>
-                    <tr><td><strong>Mode Type</strong></td><td>${data.sybil.combined_mode_type || 'or'}</td></tr>
-                    <tr><td><strong>Mechanisms</strong></td><td>${data.sybil.combined_mechanisms.join(', ')}</td></tr>
-                    ${data.sybil.combined_threshold ? `<tr><td><strong>Threshold</strong></td><td>${data.sybil.combined_threshold} required</td></tr>` : ''}
+                    <tr><td><strong>Mode Type</strong></td><td>${escapeHtml(data.sybil.combined_mode_type || 'or')}</td></tr>
+                    <tr><td><strong>Mechanisms</strong></td><td>${escapeHtml(data.sybil.combined_mechanisms.join(', '))}</td></tr>
+                    ${data.sybil.combined_threshold ? `<tr><td><strong>Threshold</strong></td><td>${escapeHtml(data.sybil.combined_threshold)} required</td></tr>` : ''}
                   </tbody>
                 </table>
               </div>
@@ -2359,7 +4068,7 @@
 
           container.innerHTML = html;
         } catch (error) {
-          container.innerHTML = `<div class="message error">Failed to load configuration: ${error.message}</div>`;
+          container.innerHTML = `<div class="message error">Failed to load configuration: ${escapeHtml(error.message)}</div>`;
         }
       }
 
@@ -2368,7 +4077,7 @@
       // ============================================================================
 
       async function loadUsers(page = null) {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "usersContainer",
             "warning",
@@ -2387,7 +4096,7 @@
           '<p><span class="spinner"></span> Loading users...</p>';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const { pageSize, currentPage } = state.usersPagination;
           const offset = (currentPage - 1) * pageSize;
 
@@ -2400,7 +4109,7 @@
           state.users = response.users; // Cache for filtering
           renderUsersTable(response.users, response.total);
         } catch (error) {
-          container.innerHTML = `<div class="message error">❌ Failed to load users: ${error.message}</div>`;
+          container.innerHTML = `<div class="message error">Failed to load users: ${escapeHtml(error.message)}</div>`;
         }
       }
 
@@ -2446,12 +4155,12 @@
 
           html += `
                     <tr>
-                        <td class="text-mono">${user.user_id}</td>
-                        <td>${user.invites_remaining}</td>
+                        <td class="text-mono">${escapeHtml(user.user_id)}</td>
+                        <td>${escapeHtml(user.invites_remaining)}</td>
                         <td class="${statusClass}">${statusText}</td>
                         <td>
-                            <button type="button" class="action-btn" onclick="showUserDetails('${user.user_id}')">Details</button>
-                            ${!user.banned ? `<button class="action-btn" style="background: var(--error-color); color: white;" onclick="confirmBan('${user.user_id}')">Ban</button>` : ""}
+                            <button type="button" class="action-btn" onclick="showUserDetails('${escapeHtml(user.user_id)}')">Details</button>
+                            ${!user.banned ? `<button class="action-btn" style="background: var(--error-color); color: white;" onclick="confirmBan('${escapeHtml(user.user_id)}')">Ban</button>` : ""}
                         </td>
                     </tr>
                 `;
@@ -2557,7 +4266,7 @@
         modal.showModal();
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const details = await api.getUserDetails(userId);
 
           const joined = new Date(details.joined_at * 1000).toLocaleString();
@@ -2570,14 +4279,14 @@
             inviteesHtml =
               '<ul style="margin: 0; padding-left: 20px;">' +
               details.invitees
-                .map((i) => `<li class="text-mono">${i}</li>`)
+                .map((i) => `<li class="text-mono">${escapeHtml(i)}</li>`)
                 .join("") +
               "</ul>";
           }
 
           let html = `
-                    <h2>User: <span class="text-mono">${details.user_id}</span></h2>
-                    
+                    <h2>User: <span class="text-mono">${escapeHtml(details.user_id)}</span></h2>
+
                     <div class="detail-row">
                         <strong>Status:</strong>
                         <span class="${details.banned ? "status-banned" : "status-active"}">
@@ -2586,25 +4295,25 @@
                     </div>
                     <div class="detail-row">
                         <strong>Joined:</strong>
-                        <span>${joined}</span>
+                        <span>${escapeHtml(joined)}</span>
                     </div>
                     <div class="detail-row">
                         <strong>Reputation:</strong>
-                        <span>${(details.reputation * 100).toFixed(0)}%</span>
+                        <span>${escapeHtml((details.reputation * 100).toFixed(0))}%</span>
                     </div>
                     <div class="detail-row">
                         <strong>Invites Remaining:</strong>
-                        <span>${details.invites_remaining}</span>
+                        <span>${escapeHtml(details.invites_remaining)}</span>
                     </div>
                     <div class="detail-row">
                         <strong>Invites Used:</strong>
-                        <span>${details.invites_used.length}</span>
+                        <span>${escapeHtml(details.invites_used.length)}</span>
                     </div>
                     <div class="detail-row">
                         <strong>Last Invite Sent:</strong>
-                        <span>${lastInvite}</span>
+                        <span>${escapeHtml(lastInvite)}</span>
                     </div>
-                    
+
                     <h3>Invite Tree</h3>
                     <div style="max-height: 200px; overflow-y: auto; background: var(--background-alt); padding: 10px; border-radius: 5px;">
                         ${inviteesHtml}
@@ -2619,8 +4328,8 @@
                         ${
                           !details.banned
                             ? `
-                            <button style="background: var(--error-color); color: white;" onclick="confirmBan('${details.user_id}')">Ban User</button>
-                            <button style="background: #c0392b; color: white;" onclick="confirmBan('${details.user_id}', true)">Ban Tree (Recursive)</button>
+                            <button style="background: var(--error-color); color: white;" onclick="confirmBan('${escapeHtml(details.user_id)}')">Ban User</button>
+                            <button style="background: #c0392b; color: white;" onclick="confirmBan('${escapeHtml(details.user_id)}', true)">Ban Tree (Recursive)</button>
                         `
                             : '<p class="status-banned">This user is banned.</p>'
                         }
@@ -2632,7 +4341,7 @@
           // Draw invitation tree visualization
           drawInvitationTree(details.user_id, details.invitees);
         } catch (error) {
-          content.innerHTML = `<div class="message error">Failed to load details: ${error.message}</div>`;
+          content.innerHTML = `<div class="message error">Failed to load details: ${escapeHtml(error.message)}</div>`;
         }
       }
 
@@ -2644,7 +4353,7 @@
         if (!confirm(msg)) return;
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const result = await api.banUser(userId, banTree);
 
           alert(`Success! Banned ${result.banned_count} user(s).`);
@@ -2660,7 +4369,7 @@
       // ============================================================================
 
       async function createInvitations() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "invitationsResults",
             "warning",
@@ -2686,17 +4395,14 @@
           return;
         }
 
-        showMessage(
-          "invitationsResults",
-          "info",
-          `<span class="spinner"></span> Creating ${count} invitation(s) for ${inviterId}...`,
-        );
+        document.getElementById("invitationsResults").innerHTML =
+          `<div class="message info"><span class="spinner"></span> Creating ${escapeHtml(count)} invitation(s) for ${escapeHtml(inviterId)}...</div>`;
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const result = await api.createInvitations(inviterId, count);
 
-          let html = `<div class="message success">✓ Created ${result.invitations.length} invitation(s) for ${result.inviter_id}</div>`;
+          let html = `<div class="message success">Created ${escapeHtml(result.invitations.length)} invitation(s) for ${escapeHtml(result.inviter_id)}</div>`;
           html += '<div class="results">';
 
           result.invitations.forEach((inv, index) => {
@@ -2705,14 +4411,14 @@
                         <div class="invitation-item">
                             <strong>Invitation ${index + 1}</strong>
                             <div class="invitation-code">
-                                <strong>Code:</strong> ${inv.code}
-                                <button type="button" class="copy-btn" onclick="copyToClipboard('${inv.code}', this)">📋 Copy</button>
+                                <strong>Code:</strong> ${escapeHtml(inv.code)}
+                                <button type="button" class="copy-btn" onclick="copyToClipboard('${escapeHtml(inv.code)}', this)">Copy</button>
                             </div>
                             <div class="invitation-code">
-                                <strong>Signature:</strong> ${inv.signature}
-                                <button type="button" class="copy-btn" onclick="copyToClipboard('${inv.signature}', this)">📋 Copy</button>
+                                <strong>Signature:</strong> ${escapeHtml(inv.signature)}
+                                <button type="button" class="copy-btn" onclick="copyToClipboard('${escapeHtml(inv.signature)}', this)">Copy</button>
                             </div>
-                            <div class="invitation-meta">Expires: ${expiresAt}</div>
+                            <div class="invitation-meta">Expires: ${escapeHtml(expiresAt)}</div>
                         </div>
                     `;
           });
@@ -2729,7 +4435,7 @@
       }
 
       async function grantInvites() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "grantResults",
             "warning",
@@ -2751,14 +4457,11 @@
           return;
         }
 
-        showMessage(
-          "grantResults",
-          "info",
-          `<span class="spinner"></span> Granting ${count} invite(s) to ${userId}...`,
-        );
+        document.getElementById("grantResults").innerHTML =
+          `<div class="message info"><span class="spinner"></span> Granting ${escapeHtml(count)} invite(s) to ${escapeHtml(userId)}...</div>`;
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const result = await api.grantInvites(userId, count);
 
           showMessage(
@@ -2772,7 +4475,7 @@
       }
 
       async function loadInvitationHistory(page = null) {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "invitationHistoryContainer",
             "warning",
@@ -2791,7 +4494,7 @@
           '<p><span class="spinner"></span> Loading invitation history...</p>';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const { pageSize, currentPage } = state.invitationsPagination;
           const offset = (currentPage - 1) * pageSize;
 
@@ -2860,20 +4563,21 @@
               ? new Date(invite.expires_at * 1000).toLocaleString()
               : "Never";
             const usedBy =
-              invite.invitee_id ||
-              '<span style="opacity: 0.5;">Not used</span>';
-            const codeShort = invite.code.substring(0, 8) + "...";
+              invite.invitee_id
+                ? escapeHtml(invite.invitee_id)
+                : '<span style="opacity: 0.5;">Not used</span>';
+            const codeShort = escapeHtml(invite.code.substring(0, 8) + "...");
             const status = invite.redeemed
-              ? '<span style="color: var(--success-color)">✓ Used</span>'
+              ? '<span style="color: var(--success-color)">Used</span>'
               : '<span style="opacity: 0.5;">Pending</span>';
 
             html += `<tr>`;
-            html += `<td><code title="${invite.code}">${codeShort}</code> <button type="button" class="copy-btn" onclick="copyToClipboard('${invite.code}', this)">📋</button></td>`;
-            html += `<td class="text-mono">${invite.inviter_id}</td>`;
-            html += `<td>${createdAt}</td>`;
+            html += `<td><code title="${escapeHtml(invite.code)}">${codeShort}</code> <button type="button" class="copy-btn" onclick="copyToClipboard('${escapeHtml(invite.code)}', this)">Copy</button></td>`;
+            html += `<td class="text-mono">${escapeHtml(invite.inviter_id)}</td>`;
+            html += `<td>${escapeHtml(createdAt)}</td>`;
             html += `<td class="text-mono">${usedBy}</td>`;
             html += `<td>${status}</td>`;
-            html += `<td>${expiresAt}</td>`;
+            html += `<td>${escapeHtml(expiresAt)}</td>`;
             html += `</tr>`;
           });
 
@@ -2888,7 +4592,7 @@
 
           container.innerHTML = html;
         } catch (error) {
-          container.innerHTML = `<div class="message error">❌ Failed to load invitation history: ${error.message}</div>`;
+          container.innerHTML = `<div class="message error">Failed to load invitation history: ${escapeHtml(error.message)}</div>`;
         }
       }
 
@@ -2996,12 +4700,12 @@
 
       // Export functions
       async function exportInvitations(format) {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           alert("Please configure your API key first");
           return;
         }
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const data = await api.exportInvitations(format);
 
           if (format === "csv") {
@@ -3019,12 +4723,12 @@
       }
 
       async function exportUsers(format) {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           alert("Please configure your API key first");
           return;
         }
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const data = await api.exportUsers(format);
 
           if (format === "csv") {
@@ -3042,12 +4746,12 @@
       }
 
       async function exportAudit(format) {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           alert("Please configure your API key first");
           return;
         }
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const data = await api.exportAudit(format);
 
           if (format === "csv") {
@@ -3081,7 +4785,7 @@
       // ============================================================================
 
       async function loadKeys() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "keysResults",
             "warning",
@@ -3094,7 +4798,7 @@
         keysTable.innerHTML = '<span class="spinner"></span> Loading keys...';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const result = await api.getKeys();
 
           if (!result.keys || result.keys.length === 0) {
@@ -3124,10 +4828,10 @@
               : "N/A";
 
             html += `<tr>`;
-            html += `<td><strong>${key.kid}</strong></td>`;
+            html += `<td><strong>${escapeHtml(key.kid)}</strong></td>`;
             html += `<td>${status}</td>`;
-            html += `<td><code>${publicKeyShort}</code></td>`;
-            html += `<td>${expiresAt}</td>`;
+            html += `<td><code>${escapeHtml(publicKeyShort)}</code></td>`;
+            html += `<td>${escapeHtml(expiresAt)}</td>`;
             html += `</tr>`;
           });
 
@@ -3144,7 +4848,7 @@
       }
 
       async function rotateKey() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "keysResults",
             "warning",
@@ -3172,14 +4876,11 @@
           return;
         }
 
-        showMessage(
-          "keysResults",
-          "info",
-          `<span class="spinner"></span> Rotating to new key ${newKid}...`,
-        );
+        document.getElementById("keysResults").innerHTML =
+          `<div class="message info"><span class="spinner"></span> Rotating to new key ${escapeHtml(newKid)}...</div>`;
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const result = await api.rotateKey(newKid, gracePeriodSecs);
 
           showMessage(
@@ -3203,7 +4904,7 @@
       }
 
       async function cleanupKeys() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "keysResults",
             "warning",
@@ -3212,14 +4913,11 @@
           return;
         }
 
-        showMessage(
-          "keysResults",
-          "info",
-          '<span class="spinner"></span> Cleaning up expired keys...',
-        );
+        document.getElementById("keysResults").innerHTML =
+          '<div class="message info"><span class="spinner"></span> Cleaning up expired keys...</div>';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const result = await api.cleanupKeys();
 
           showMessage(
@@ -3365,13 +5063,13 @@
       }
 
       async function updateActivityChart() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           alert("⚠️ Please configure your API key first");
           return;
         }
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const stats = await api.getStats();
 
           // Add current stats to chart data
@@ -3490,7 +5188,7 @@
       // ============================================================================
 
       async function loadAuditLogs(page = null) {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "auditLogsContainer",
             "warning",
@@ -3509,7 +5207,7 @@
           '<p><span class="spinner"></span> Loading audit logs...</p>';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const { pageSize, currentPage } = state.auditPagination;
           const offset = (currentPage - 1) * pageSize;
 
@@ -3522,7 +5220,7 @@
           state.auditLogs = response.entries;
           renderAuditLogs(response.entries, response.total);
         } catch (error) {
-          container.innerHTML = `<div class="message error">❌ Failed to load audit logs: ${error.message}</div>`;
+          container.innerHTML = `<div class="message error">Failed to load audit logs: ${escapeHtml(error.message)}</div>`;
         }
       }
 
@@ -3550,14 +5248,14 @@
           const timestamp = new Date(log.timestamp * 1000).toLocaleString();
           const levelClass = log.level || "info";
 
-          html += `<div class="log-entry ${levelClass}">`;
-          html += `<div class="log-timestamp">${timestamp}</div>`;
-          html += `<strong>${log.action || "Unknown Action"}</strong>`;
+          html += `<div class="log-entry ${escapeHtml(levelClass)}">`;
+          html += `<div class="log-timestamp">${escapeHtml(timestamp)}</div>`;
+          html += `<strong>${escapeHtml(log.action || "Unknown Action")}</strong>`;
           if (log.user_id) {
-            html += ` by <span class="text-mono">${log.user_id}</span>`;
+            html += ` by <span class="text-mono">${escapeHtml(log.user_id)}</span>`;
           }
           if (log.details) {
-            html += `<div class="text-small" style="margin-top: 5px;">${log.details}</div>`;
+            html += `<div class="text-small" style="margin-top: 5px;">${escapeHtml(log.details)}</div>`;
           }
           html += `</div>`;
         });
@@ -3667,7 +5365,7 @@
       // ============================================================================
 
       async function loadVouches() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "vouchesContainer",
             "warning",
@@ -3681,7 +5379,7 @@
           '<p><span class="spinner"></span> Loading vouches...</p>';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const vouches = await api.getVouches();
 
           if (!vouches || vouches.length === 0) {
@@ -3710,23 +5408,23 @@
               vouch.trust_level !== null ? vouch.trust_level : "N/A";
 
             html += `<tr ${isExpired ? 'style="opacity: 0.5;"' : ""}>`;
-            html += `<td class="text-mono">${vouch.vouched_issuer_id}</td>`;
-            html += `<td>${trustLevel}${trustLevel !== "N/A" ? "%" : ""}</td>`;
-            html += `<td>${createdAt}</td>`;
-            html += `<td>${expiresAt}${isExpired ? ' <span style="color: var(--error-color);">(expired)</span>' : ""}</td>`;
-            html += `<td><button type="button" class="action-btn danger" onclick="removeVouch('${vouch.vouched_issuer_id}')">Remove</button></td>`;
+            html += `<td class="text-mono">${escapeHtml(vouch.vouched_issuer_id)}</td>`;
+            html += `<td>${escapeHtml(trustLevel)}${trustLevel !== "N/A" ? "%" : ""}</td>`;
+            html += `<td>${escapeHtml(createdAt)}</td>`;
+            html += `<td>${escapeHtml(expiresAt)}${isExpired ? ' <span style="color: var(--error-color);">(expired)</span>' : ""}</td>`;
+            html += `<td><button type="button" class="action-btn danger" onclick="removeVouch('${escapeHtml(vouch.vouched_issuer_id)}')">Remove</button></td>`;
             html += "</tr>";
           });
 
           html += "</tbody></table>";
           container.innerHTML = html;
         } catch (error) {
-          container.innerHTML = `<div class="message error">❌ Failed to load vouches: ${error.message}</div>`;
+          container.innerHTML = `<div class="message error">Failed to load vouches: ${escapeHtml(error.message)}</div>`;
         }
       }
 
       async function addVouch() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "vouchResult",
             "warning",
@@ -3752,14 +5450,11 @@
           return;
         }
 
-        showMessage(
-          "vouchResult",
-          "info",
-          '<span class="spinner"></span> Adding vouch...',
-        );
+        document.getElementById("vouchResult").innerHTML =
+          '<div class="message info"><span class="spinner"></span> Adding vouch...</div>';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const now = Math.floor(Date.now() / 1000);
           const expiresAt = now + expiresDays * 24 * 60 * 60;
 
@@ -3796,7 +5491,7 @@
         }
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const result = await api.removeVouch(issuerId);
 
           showMessage("vouchResult", "success", `✓ ${result.message}`);
@@ -3807,7 +5502,7 @@
       }
 
       async function loadRevocations() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "revocationsContainer",
             "warning",
@@ -3821,7 +5516,7 @@
           '<p><span class="spinner"></span> Loading revocations...</p>';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const revocations = await api.getRevocations();
 
           if (!revocations || revocations.length === 0) {
@@ -3840,25 +5535,25 @@
           revocations.forEach((rev) => {
             const revokedAt = new Date(rev.revoked_at * 1000).toLocaleString();
             const reason =
-              rev.reason || '<span style="opacity: 0.5;">Not specified</span>';
+              rev.reason ? escapeHtml(rev.reason) : '<span style="opacity: 0.5;">Not specified</span>';
 
             html += "<tr>";
-            html += `<td class="text-mono">${rev.revoked_issuer_id}</td>`;
-            html += `<td>${revokedAt}</td>`;
+            html += `<td class="text-mono">${escapeHtml(rev.revoked_issuer_id)}</td>`;
+            html += `<td>${escapeHtml(revokedAt)}</td>`;
             html += `<td>${reason}</td>`;
-            html += `<td><button type="button" class="action-btn" onclick="removeRevocation('${rev.revoked_issuer_id}')">Remove</button></td>`;
+            html += `<td><button type="button" class="action-btn" onclick="removeRevocation('${escapeHtml(rev.revoked_issuer_id)}')">Remove</button></td>`;
             html += "</tr>";
           });
 
           html += "</tbody></table>";
           container.innerHTML = html;
         } catch (error) {
-          container.innerHTML = `<div class="message error">❌ Failed to load revocations: ${error.message}</div>`;
+          container.innerHTML = `<div class="message error">Failed to load revocations: ${escapeHtml(error.message)}</div>`;
         }
       }
 
       async function addRevocation() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "revocationResult",
             "warning",
@@ -3875,14 +5570,11 @@
           return;
         }
 
-        showMessage(
-          "revocationResult",
-          "info",
-          '<span class="spinner"></span> Adding revocation...',
-        );
+        document.getElementById("revocationResult").innerHTML =
+          '<div class="message info"><span class="spinner"></span> Adding revocation...</div>';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const now = Math.floor(Date.now() / 1000);
 
           // Create revocation object
@@ -3919,7 +5611,7 @@
         }
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const result = await api.removeRevocation(issuerId);
 
           showMessage("revocationResult", "success", `✓ ${result.message}`);
@@ -3938,7 +5630,7 @@
       // ============================================================================
 
       async function loadWebAuthnCredentials() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "webauthnCredentialsContainer",
             "warning",
@@ -3954,7 +5646,7 @@
           '<p><span class="spinner"></span> Loading credentials...</p>';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const response = await api.getWebAuthnCredentials();
 
           state.webauthnCredentials = response.credentials || [];
@@ -3967,7 +5659,7 @@
 
           renderWebAuthnCredentials(state.webauthnCredentials);
         } catch (error) {
-          container.innerHTML = `<div class="message error">❌ Failed to load credentials: ${error.message}</div>`;
+          container.innerHTML = `<div class="message error">Failed to load credentials: ${escapeHtml(error.message)}</div>`;
         }
       }
 
@@ -4017,11 +5709,11 @@
               : cred.credential_id;
 
           html += "<tr>";
-          html += `<td class="text-mono" title="${cred.credential_id}">${shortCredId}</td>`;
-          html += `<td class="text-mono">${cred.user_id_hash.substring(0, 16)}...</td>`;
-          html += `<td>${registeredAt}</td>`;
+          html += `<td class="text-mono" title="${escapeHtml(cred.credential_id)}">${escapeHtml(shortCredId)}</td>`;
+          html += `<td class="text-mono">${escapeHtml(cred.user_id_hash.substring(0, 16))}...</td>`;
+          html += `<td>${escapeHtml(registeredAt)}</td>`;
           html += `<td>${lastUsed}</td>`;
-          html += `<td><button class="action-btn" style="background: var(--error-color); color: white;" onclick="deleteWebAuthnCredential('${cred.credential_id}')">Delete</button></td>`;
+          html += `<td><button class="action-btn" style="background: var(--error-color); color: white;" onclick="deleteWebAuthnCredential('${escapeHtml(cred.credential_id)}')">Delete</button></td>`;
           html += "</tr>";
         });
 
@@ -4039,7 +5731,7 @@
           return;
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const result = await api.deleteWebAuthnCredential(credentialId);
 
           alert("✓ " + result.message);
@@ -4054,7 +5746,7 @@
       // ============================================================================
 
       async function loadTrustedIssuers() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "trustedIssuersContainer",
             "warning",
@@ -4068,7 +5760,7 @@
           '<p><span class="spinner"></span> Loading trusted issuers...</p>';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const response = await api.getTrustedIssuers();
 
           if (!response.issuers || response.issuers.length === 0) {
@@ -4093,23 +5785,23 @@
                 : '<span style="opacity: 0.5;">Unknown</span>';
 
             html += "<tr>";
-            html += `<td class="text-mono">${issuer.issuer_id}</td>`;
-            html += `<td class="text-mono">${issuer.kid}</td>`;
-            html += `<td class="text-mono">${issuer.pubkey_preview}...</td>`;
-            html += `<td>${formatDuration(issuer.exp_sec)}</td>`;
+            html += `<td class="text-mono">${escapeHtml(issuer.issuer_id)}</td>`;
+            html += `<td class="text-mono">${escapeHtml(issuer.kid)}</td>`;
+            html += `<td class="text-mono">${escapeHtml(issuer.pubkey_preview)}...</td>`;
+            html += `<td>${escapeHtml(formatDuration(issuer.exp_sec))}</td>`;
             html += `<td>${ageDisplay}</td>`;
-            html += `<td><button type="button" class="action-btn" onclick="refreshIssuer('${issuer.issuer_id}')">🔄 Refresh</button></td>`;
+            html += `<td><button type="button" class="action-btn" onclick="refreshIssuer('${escapeHtml(issuer.issuer_id)}')">Refresh</button></td>`;
             html += "</tr>";
           });
 
           html += "</tbody></table>";
-          html += `<p class="text-small" style="margin-top: 10px;">Total: ${response.total} issuer(s)</p>`;
+          html += `<p class="text-small" style="margin-top: 10px;">Total: ${escapeHtml(response.total)} issuer(s)</p>`;
           container.innerHTML = html;
 
           // Also load config
           loadIssuerConfig();
         } catch (error) {
-          container.innerHTML = `<div class="message error">❌ Failed to load issuers: ${error.message}</div>`;
+          container.innerHTML = `<div class="message error">Failed to load issuers: ${escapeHtml(error.message)}</div>`;
         }
       }
 
@@ -4117,34 +5809,34 @@
         const container = document.getElementById("issuerConfigContainer");
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const config = await api.getVerifierConfig();
 
           let html = '<div class="stats-grid">';
-          html += `<div class="stat-card"><h3>Clock Skew</h3><p class="value" style="font-size: 1.2em;">±${config.max_clock_skew_secs}s</p></div>`;
-          html += `<div class="stat-card"><h3>Epoch Duration</h3><p class="value" style="font-size: 1.2em;">${formatDuration(config.epoch_duration_sec)}</p></div>`;
-          html += `<div class="stat-card"><h3>Epoch Retention</h3><p class="value">${config.epoch_retention}</p></div>`;
-          html += `<div class="stat-card"><h3>Refresh Interval</h3><p class="value" style="font-size: 1.2em;">${config.refresh_interval_min} min</p></div>`;
+          html += `<div class="stat-card"><h3>Clock Skew</h3><p class="value" style="font-size: 1.2em;">&plusmn;${escapeHtml(config.max_clock_skew_secs)}s</p></div>`;
+          html += `<div class="stat-card"><h3>Epoch Duration</h3><p class="value" style="font-size: 1.2em;">${escapeHtml(formatDuration(config.epoch_duration_sec))}</p></div>`;
+          html += `<div class="stat-card"><h3>Epoch Retention</h3><p class="value">${escapeHtml(config.epoch_retention)}</p></div>`;
+          html += `<div class="stat-card"><h3>Refresh Interval</h3><p class="value" style="font-size: 1.2em;">${escapeHtml(config.refresh_interval_min)} min</p></div>`;
           html += "</div>";
 
           if (config.issuer_urls && config.issuer_urls.length > 0) {
             html += "<h4>Configured Issuer URLs</h4>";
             html += '<ul style="font-family: monospace; font-size: 0.9em;">';
             config.issuer_urls.forEach((url) => {
-              html += `<li>${url}</li>`;
+              html += `<li>${escapeHtml(url)}</li>`;
             });
             html += "</ul>";
           }
 
           container.innerHTML = html;
         } catch (error) {
-          container.innerHTML = `<div class="message error">❌ Failed to load config: ${error.message}</div>`;
+          container.innerHTML = `<div class="message error">Failed to load config: ${escapeHtml(error.message)}</div>`;
         }
       }
 
       async function refreshIssuer(issuerId) {
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const result = await api.refreshIssuer(issuerId);
           alert(`✓ ${result.message}`);
         } catch (error) {
@@ -4172,7 +5864,7 @@
       // ============================================================================
 
       async function loadCacheStats() {
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           showMessage(
             "cacheStatsContainer",
             "warning",
@@ -4186,17 +5878,17 @@
           '<p><span class="spinner"></span> Loading cache stats...</p>';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const stats = await api.getCacheStats();
 
           let html = '<div class="stats-grid">';
-          html += `<div class="stat-card"><h3>Store Backend</h3><p class="value" style="font-size: 1.2em;">${stats.store_backend}</p></div>`;
-          html += `<div class="stat-card"><h3>Status</h3><p class="value" style="font-size: 1.2em; color: var(--success-color);">${stats.status}</p></div>`;
+          html += `<div class="stat-card"><h3>Store Backend</h3><p class="value" style="font-size: 1.2em;">${escapeHtml(stats.store_backend)}</p></div>`;
+          html += `<div class="stat-card"><h3>Status</h3><p class="value" style="font-size: 1.2em; color: var(--success-color);">${escapeHtml(stats.status)}</p></div>`;
           html += "</div>";
 
           container.innerHTML = html;
         } catch (error) {
-          container.innerHTML = `<div class="message error">❌ Failed to load cache stats: ${error.message}</div>`;
+          container.innerHTML = `<div class="message error">Failed to load cache stats: ${escapeHtml(error.message)}</div>`;
         }
       }
 
@@ -4214,19 +5906,19 @@
           '<p><span class="spinner"></span> Clearing cache...</p>';
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const result = await api.clearCache();
 
           if (result.ok) {
-            resultContainer.innerHTML = `<div class="message success">✓ ${result.message}</div>`;
+            resultContainer.innerHTML = `<div class="message success">${escapeHtml(result.message)}</div>`;
           } else {
-            resultContainer.innerHTML = `<div class="message warning">⚠️ ${result.message}</div>`;
+            resultContainer.innerHTML = `<div class="message warning">${escapeHtml(result.message)}</div>`;
           }
 
           // Refresh stats
           loadCacheStats();
         } catch (error) {
-          resultContainer.innerHTML = `<div class="message error">❌ Failed to clear cache: ${error.message}</div>`;
+          resultContainer.innerHTML = `<div class="message error">Failed to clear cache: ${escapeHtml(error.message)}</div>`;
         }
       }
 
@@ -4237,14 +5929,14 @@
       async function updateHealthBadge() {
         const badge = document.getElementById("systemHealthBadge");
 
-        if (!state.apiKey) {
+        if (!state.authenticated) {
           badge.innerHTML =
             '<span class="badge" style="background: var(--warning-color)">⚠️ No API Key</span>';
           return;
         }
 
         try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const health = await api.getHealth();
 
           if (health.status === "ok") {
@@ -4265,34 +5957,31 @@
       // ============================================================================
 
       window.addEventListener("DOMContentLoaded", async () => {
-        // Load saved API key
-        if (state.apiKey) {
-          document.getElementById("apiKey").value = state.apiKey;
+        // Check if already authenticated via session cookie
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+          const health = await api.getHealth();
+
+          // Session cookie is valid
+          state.authenticated = true;
+          state.serviceType = health.service || "issuer";
+          updateUIForServiceType();
+
           document.getElementById("apiKeyStatus").className =
             "api-key-status success";
           document.getElementById("apiKeyStatus").textContent =
-            "✓ API key loaded from storage";
-
-          // Detect service type from health endpoint
-          try {
-            const api = new FreebirdAdminAPI(CONFIG.issuerUrl, state.apiKey);
-            const health = await api.getHealth();
-            state.serviceType = health.service || "issuer";
-            updateUIForServiceType();
-            document.getElementById("apiKeyStatus").textContent =
-              `✓ API key loaded (${state.serviceType})`;
-          } catch (error) {
-            console.error("Failed to detect service type:", error);
-            // Default to issuer if detection fails
-            state.serviceType = "issuer";
-            updateUIForServiceType();
-          }
+            `Authenticated (${escapeHtml(state.serviceType)})`;
 
           // Auto-load stats
           loadStats();
 
           // Update health badge
           updateHealthBadge();
+        } catch (error) {
+          // No valid session - show login form
+          state.authenticated = false;
+          state.serviceType = "issuer";
+          updateUIForServiceType();
         }
 
         // Initialize chart (only for issuer)

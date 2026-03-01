@@ -800,7 +800,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-common"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64ct",
  "freebird-crypto",
@@ -814,7 +814,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-crypto"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -838,7 +838,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-interface"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64ct",
@@ -855,7 +855,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-issuer"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -869,6 +869,8 @@ dependencies = [
  "freebird-common",
  "freebird-crypto",
  "hex",
+ "hkdf",
+ "hmac",
  "p256",
  "rand 0.8.5",
  "rayon",
@@ -895,7 +897,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-verifier"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -904,11 +906,14 @@ dependencies = [
  "freebird-common",
  "freebird-crypto",
  "hex",
+ "hkdf",
+ "hmac",
  "rayon",
  "redis",
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "subtle",
  "time",
  "tokio",
@@ -1431,7 +1436,7 @@ dependencies = [
 
 [[package]]
 name = "integration_tests"
-version = "0.1.2"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-trait",

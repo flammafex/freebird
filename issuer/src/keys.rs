@@ -20,6 +20,7 @@ use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 use std::{env, fs, io::Write, path::Path};
 use tracing::{info, warn};
+use zeroize::Zeroizing;
 
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt; // for mode 0o600
@@ -27,7 +28,7 @@ use std::os::unix::fs::OpenOptionsExt; // for mode 0o600
 const DEFAULT_PATH: &str = "issuer_sk.bin";
 
 /// Returns (raw_secret_32, pubkey_sec1_b64url, kid)
-pub fn load_or_generate_keypair_b64() -> Result<([u8; 32], String, String)> {
+pub fn load_or_generate_keypair_b64() -> Result<(Zeroizing<[u8; 32]>, String, String)> {
     let path = env::var("ISSUER_SK_PATH").unwrap_or_else(|_| DEFAULT_PATH.to_string());
     let p = Path::new(&path);
 
@@ -76,14 +77,14 @@ pub fn load_or_generate_keypair_b64() -> Result<([u8; 32], String, String)> {
 
 // ---------- helpers ----------
 
-fn finalize(sk: SigningKey) -> Result<([u8; 32], String, String)> {
+fn finalize(sk: SigningKey) -> Result<(Zeroizing<[u8; 32]>, String, String)> {
     let pk = VerifyingKey::from(&sk);
     let pk_sec1 = pk.to_encoded_point(true); // compressed, 33 bytes
     let pubkey_b64 = Base64UrlUnpadded::encode_string(pk_sec1.as_bytes());
     let kid = make_kid(pk_sec1.as_bytes());
 
     let secret = sk.to_bytes();
-    let mut sk_bytes = [0u8; 32];
+    let mut sk_bytes = Zeroizing::new([0u8; 32]);
     sk_bytes.copy_from_slice(secret.as_ref());
 
     Ok((sk_bytes, pubkey_b64, kid))

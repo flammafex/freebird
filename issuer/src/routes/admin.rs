@@ -33,7 +33,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use subtle::ConstantTimeEq;
 use tracing::{info, warn};
 // ============================================================================
 // State & Configuration
@@ -52,15 +51,61 @@ pub struct AdminState {
     pub audit_log: Arc<AuditLog>,
     /// Admin API key for authentication
     pub api_key: String,
+    /// Session signing key derived from API key via HKDF
+    pub session_key: [u8; 32],
     /// Rate limiter for authentication attempts
     pub rate_limiter: AdminRateLimiter,
     /// Whether running behind a proxy (use X-Forwarded-For)
     pub behind_proxy: bool,
+    /// Whether TLS is required (affects Secure cookie flag)
+    pub require_tls: bool,
     /// Optional WebAuthn credential store (only if webauthn feature enabled)
     #[cfg(feature = "human-gate-webauthn")]
     pub webauthn_store: Option<crate::webauthn::CredentialStore>,
     /// Configuration summary for the admin API
     pub config_summary: ConfigSummary,
+}
+
+/// Derive a session signing key from the admin API key using HKDF-SHA256.
+fn derive_session_key(api_key: &str) -> [u8; 32] {
+    use hkdf::Hkdf;
+    use sha2::Sha256;
+    let hkdf = Hkdf::<Sha256>::new(Some(b"freebird-session-salt"), api_key.as_bytes());
+    let mut session_key = [0u8; 32];
+    hkdf.expand(b"freebird-admin-session-v1", &mut session_key)
+        .expect("HKDF expand should not fail for 32 bytes");
+    session_key
+}
+
+/// Compute a session token (HMAC of a fixed message with the session key).
+fn compute_session_token(session_key: &[u8; 32]) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    type HmacSha256 = Hmac<Sha256>;
+    let mut mac = HmacSha256::new_from_slice(session_key).unwrap();
+    mac.update(b"freebird-admin-session-valid");
+    base64ct::Base64UrlUnpadded::encode_string(&mac.finalize().into_bytes())
+}
+
+/// Verify a session token against the session key.
+fn verify_session_token(session_key: &[u8; 32], token: &str) -> bool {
+    let expected = compute_session_token(session_key);
+    constant_time_key_verify(&expected, token)
+}
+
+/// Extract session cookie value from headers.
+fn extract_session_cookie(headers: &HeaderMap) -> Option<String> {
+    if let Some(cookie_header) = headers.get("cookie") {
+        if let Ok(cookie_str) = cookie_header.to_str() {
+            for part in cookie_str.split(';') {
+                let part = part.trim();
+                if let Some(token) = part.strip_prefix("freebird_session=") {
+                    return Some(token.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Sanitized configuration summary (no secrets)
@@ -800,15 +845,48 @@ fn validate_kid(kid: &str) -> Result<(), AdminError> {
 // UI Handler
 // ============================================================================
 
-/// Serve the admin UI
+/// Serve the admin UI with security headers
 pub async fn admin_ui_handler() -> impl IntoResponse {
     const ADMIN_UI_HTML: &str = include_str!("../admin_ui/index.html");
-    Html(ADMIN_UI_HTML)
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "content-security-policy",
+        "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'"
+            .parse().unwrap(),
+    );
+    headers.insert("x-frame-options", "DENY".parse().unwrap());
+    headers.insert("x-content-type-options", "nosniff".parse().unwrap());
+    headers.insert("referrer-policy", "no-referrer".parse().unwrap());
+    headers.insert("x-xss-protection", "0".parse().unwrap());
+    (headers, Html(ADMIN_UI_HTML))
 }
 
 // ============================================================================
 // Authentication
 // ============================================================================
+
+/// Constant-time API key verification using HMAC-then-compare.
+///
+/// Both values are HMAC'd with a fixed key to produce equal-length digests,
+/// eliminating the timing side-channel from length comparison.
+fn constant_time_key_verify(expected: &str, provided: &str) -> bool {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    use subtle::ConstantTimeEq;
+
+    type HmacSha256 = Hmac<Sha256>;
+    let key = b"freebird-admin-key-compare";
+
+    let mut mac_expected = HmacSha256::new_from_slice(key).unwrap();
+    mac_expected.update(expected.as_bytes());
+    let h_expected = mac_expected.finalize().into_bytes();
+
+    let mut mac_provided = HmacSha256::new_from_slice(key).unwrap();
+    mac_provided.update(provided.as_bytes());
+    let h_provided = mac_provided.finalize().into_bytes();
+
+    bool::from(h_expected.ct_eq(&h_provided))
+}
 
 /// Extract client IP from headers or connection info
 fn extract_client_ip(
@@ -836,13 +914,20 @@ fn extract_client_ip(
     connect_info.map(|info| info.0.ip())
 }
 
-/// Verify API key using constant-time comparison with rate limiting
+/// Verify authentication via session cookie or X-Admin-Key header with rate limiting
 async fn verify_api_key_with_rate_limit(
     headers: &HeaderMap,
     state: &AdminState,
     client_ip: Option<IpAddr>,
 ) -> Result<(), AdminError> {
-    // Use a fallback IP for rate limiting if we can't determine the real one
+    // Check session cookie first (preferred, set by /admin/login)
+    if let Some(token) = extract_session_cookie(headers) {
+        if verify_session_token(&state.session_key, &token) {
+            return Ok(());
+        }
+    }
+
+    // Fallback to X-Admin-Key header for API/CLI clients
     let Some(ip) = client_ip else {
         warn!("Admin API request without client IP; skipping auth rate-limit");
 
@@ -851,18 +936,7 @@ async fn verify_api_key_with_rate_limit(
             .and_then(|v| v.to_str().ok())
             .ok_or_else(|| AdminError::Unauthorized)?;
 
-        let expected_bytes = state.api_key.as_bytes();
-        let provided_bytes = provided_key.as_bytes();
-
-        let is_valid = if expected_bytes.len() == provided_bytes.len() {
-            expected_bytes.ct_eq(provided_bytes).into()
-        } else {
-            let dummy = vec![0u8; expected_bytes.len()];
-            let _ = expected_bytes.ct_eq(&dummy);
-            false
-        };
-
-        if !is_valid {
+        if !constant_time_key_verify(&state.api_key, provided_key) {
             warn!("Invalid admin API key provided from unknown IP");
             return Err(AdminError::Unauthorized);
         }
@@ -879,36 +953,75 @@ async fn verify_api_key_with_rate_limit(
         .get("x-admin-key")
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| {
-            // No key provided - still counts as a failed attempt
             AdminError::Unauthorized
         })?;
 
-    // Use constant-time comparison to prevent timing attacks
-    let expected_bytes = state.api_key.as_bytes();
-    let provided_bytes = provided_key.as_bytes();
-
-    // Pad to same length for constant-time comparison
-    // (ConstantTimeEq requires same length)
-    let is_valid = if expected_bytes.len() == provided_bytes.len() {
-        expected_bytes.ct_eq(provided_bytes).into()
-    } else {
-        // Different lengths - still do a comparison to maintain constant time
-        // but result will always be false
-        let dummy = vec![0u8; expected_bytes.len()];
-        let _ = expected_bytes.ct_eq(&dummy);
-        false
-    };
-
-    if !is_valid {
-        // Record failed attempt
+    if !constant_time_key_verify(&state.api_key, provided_key) {
         state.rate_limiter.record_failure(ip).await;
         warn!("Invalid admin API key provided from IP: {}", ip);
         return Err(AdminError::Unauthorized);
     }
 
-    // Clear any previous failures on successful auth
     state.rate_limiter.record_success(ip).await;
     Ok(())
+}
+
+// ============================================================================
+// Login / Logout Handlers
+// ============================================================================
+
+#[derive(Deserialize)]
+struct LoginRequest {
+    api_key: String,
+}
+
+/// POST /admin/login — verify API key and set HttpOnly session cookie
+async fn login_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    Json(req): Json<LoginRequest>,
+) -> Result<impl IntoResponse, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+
+    // Rate-limit login attempts by IP
+    if let Some(ip) = client_ip {
+        if let Err(seconds_remaining) = state.rate_limiter.check_allowed(ip).await {
+            return Err(AdminError::RateLimited(seconds_remaining));
+        }
+    }
+
+    if !constant_time_key_verify(&state.api_key, &req.api_key) {
+        if let Some(ip) = client_ip {
+            state.rate_limiter.record_failure(ip).await;
+        }
+        warn!("Failed login attempt from {:?}", client_ip);
+        return Err(AdminError::Unauthorized);
+    }
+
+    if let Some(ip) = client_ip {
+        state.rate_limiter.record_success(ip).await;
+    }
+
+    let token = compute_session_token(&state.session_key);
+    let secure_flag = if state.require_tls { "; Secure" } else { "" };
+    let cookie = format!(
+        "freebird_session={}; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=86400{}",
+        token, secure_flag
+    );
+
+    let mut resp_headers = HeaderMap::new();
+    resp_headers.insert("set-cookie", cookie.parse().unwrap());
+
+    Ok((resp_headers, Json(serde_json::json!({"status": "ok"}))))
+}
+
+/// POST /admin/logout — clear session cookie
+async fn logout_handler() -> impl IntoResponse {
+    let cookie = "freebird_session=; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=0";
+    let mut headers = HeaderMap::new();
+    headers.insert("set-cookie", cookie.parse().unwrap());
+    (headers, Json(serde_json::json!({"status": "ok"})))
 }
 
 // ============================================================================
@@ -2328,17 +2441,21 @@ pub fn admin_router(
     audit_log: Arc<AuditLog>,
     api_key: String,
     behind_proxy: bool,
+    require_tls: bool,
     webauthn_store: Option<crate::webauthn::CredentialStore>,
     config_summary: ConfigSummary,
 ) -> axum::Router {
+    let session_key = derive_session_key(&api_key);
     let state = Arc::new(AdminState {
         invitation_system,
         multi_key_voprf,
         federation_store,
         audit_log,
         api_key,
+        session_key,
         rate_limiter: AdminRateLimiter::new(),
         behind_proxy,
+        require_tls,
         webauthn_store,
         config_summary,
     });
@@ -2354,16 +2471,20 @@ pub fn admin_router(
     audit_log: Arc<AuditLog>,
     api_key: String,
     behind_proxy: bool,
+    require_tls: bool,
     config_summary: ConfigSummary,
 ) -> axum::Router {
+    let session_key = derive_session_key(&api_key);
     let state = Arc::new(AdminState {
         invitation_system,
         multi_key_voprf,
         federation_store,
         audit_log,
         api_key,
+        session_key,
         rate_limiter: AdminRateLimiter::new(),
         behind_proxy,
+        require_tls,
         config_summary,
     });
 
@@ -2373,6 +2494,8 @@ pub fn admin_router(
 fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
     axum::Router::new()
         .route("/", axum::routing::get(admin_ui_handler))
+        .route("/login", axum::routing::post(login_handler))
+        .route("/logout", axum::routing::post(logout_handler))
         .route("/health", axum::routing::get(health_handler))
         .route("/stats", axum::routing::get(get_stats_handler))
         .route("/config", axum::routing::get(get_config_handler))
