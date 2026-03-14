@@ -496,8 +496,9 @@ mod tests {
         // client finalizes — now returns unblinded PRF output only
         let out_cli_b64 = client.finalize(st, &eval_b64, &pk_b64).unwrap();
 
-        // Verify output is non-empty base64
-        assert!(!out_cli_b64.is_empty());
+        // Verify output decodes to exactly 32 bytes (PRF output length)
+        let out_raw = Base64UrlUnpadded::decode_vec(&out_cli_b64).unwrap();
+        assert_eq!(out_raw.len(), 32);
 
         // nullifier determinism
         let n1 = nullifier_key("issuer:freebird:v1", &out_cli_b64);

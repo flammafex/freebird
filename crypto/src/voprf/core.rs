@@ -190,11 +190,9 @@ impl Client {
         }
 
         // Unblind: W = B * r^(-1), recovering the PRF output point H(input)^sk
-        let r_inv = st.r.invert();
-        if bool::from(r_inv.is_none()) {
-            return Err(Error::ZeroScalar);
-        }
-        let w = b * r_inv.unwrap();
+        let r_inv = Option::<Scalar>::from(st.r.invert())
+            .ok_or(Error::ZeroScalar)?;
+        let w = b * r_inv;
         if bool::from(w.to_affine().is_identity()) {
             return Err(Error::InvalidPoint);
         }
@@ -282,9 +280,9 @@ impl Verifier {
             return Err(Error::InvalidProof);
         }
 
-        // In verification mode, 'b' is the evaluated element from the client
-        // which corresponds to H(input)^sk. It is ALREADY unblinded relative
-        // to the PRF output calculation.
+        // NOTE: This Verifier path hashes blinded B directly. It does NOT
+        // perform unblinding and will be replaced in Task 8 with V3
+        // redemption token verification.
         Ok(prf_output(&b, &self.ctx).to_vec())
     }
 }
