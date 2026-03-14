@@ -66,17 +66,16 @@ pub trait CryptoProvider: Send + Sync {
     /// - Keys MUST be cryptographically independent across epochs
     async fn derive_mac_key(&self, issuer_id: &str, kid: &str, epoch: u32) -> Result<[u8; 32]>;
 
-    /// Sign token metadata using ECDSA (for federation support)
+    /// Sign token metadata using ECDSA (V3 format, federation support)
     ///
     /// Signs the token metadata with the issuer's secret key using ECDSA.
     /// This enables multi-issuer federation because verifiers only need
     /// the public key to verify signatures (unlike MAC which requires secret key).
     ///
-    /// Signs: `SHA256(token_bytes || kid || exp || issuer_id)`
+    /// V3 signs: `SHA256("freebird:token-metadata:v3" || kid_len || kid || exp || issuer_id_len || issuer_id)`
     ///
     /// # Arguments
     ///
-    /// * `token_bytes` - The VOPRF token bytes [VERSION||A||B||Proof] (131 bytes)
     /// * `kid` - Key identifier
     /// * `exp` - Expiration timestamp (Unix seconds)
     /// * `issuer_id` - Issuer identifier
@@ -89,10 +88,9 @@ pub trait CryptoProvider: Send + Sync {
     ///
     /// - HSM implementations MUST perform signing entirely within the HSM
     /// - Uses deterministic ECDSA (RFC 6979) for reproducibility
-    /// - Signature is over SHA256 hash of metadata
+    /// - Signature is over SHA256 hash of domain-separated metadata
     async fn sign_token_metadata(
         &self,
-        token_bytes: &[u8],
         kid: &str,
         exp: i64,
         issuer_id: &str,

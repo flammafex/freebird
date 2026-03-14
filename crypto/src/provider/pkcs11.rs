@@ -428,28 +428,20 @@ impl CryptoProvider for Pkcs11CryptoProvider {
     async fn derive_mac_key(&self, issuer_id: &str, kid: &str, epoch: u32) -> Result<[u8; 32]> {
         // Derive MAC key using HKDF in software
         // Base key material comes from HSM but derivation happens in software
-        Ok(crate::derive_mac_key_v2(
-            &self.mac_base_key,
-            issuer_id,
-            kid,
-            epoch,
-        ))
+        let info = format!("freebird-mac-v1|{}|{}|{}", issuer_id, kid, epoch);
+        Ok(crate::derive_mac_key(&self.mac_base_key, info.as_bytes()))
     }
 
     async fn sign_token_metadata(
         &self,
-        token_bytes: &[u8],
         kid: &str,
         exp: i64,
         issuer_id: &str,
     ) -> Result<[u8; 64]> {
         use sha2::{Digest, Sha256};
 
-        let mut msg = Vec::new();
-        msg.extend_from_slice(token_bytes);
-        msg.extend_from_slice(kid.as_bytes());
-        msg.extend_from_slice(&exp.to_be_bytes());
-        msg.extend_from_slice(issuer_id.as_bytes());
+        // Build V3 metadata message with domain separation
+        let msg = crate::build_metadata_message(kid, exp, issuer_id);
         let msg_hash = Sha256::digest(&msg);
 
         let session = self.open_authenticated_session()?;

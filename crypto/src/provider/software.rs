@@ -84,24 +84,19 @@ impl CryptoProvider for SoftwareCryptoProvider {
     }
 
     async fn derive_mac_key(&self, issuer_id: &str, kid: &str, epoch: u32) -> Result<[u8; 32]> {
-        // Use the existing HKDF-based MAC key derivation
-        Ok(crate::derive_mac_key_v2(
-            &self.secret_key,
-            issuer_id,
-            kid,
-            epoch,
-        ))
+        // Use HKDF-based MAC key derivation with domain-separated info
+        let info = format!("freebird-mac-v1|{}|{}|{}", issuer_id, kid, epoch);
+        Ok(crate::derive_mac_key(&self.secret_key, info.as_bytes()))
     }
 
     async fn sign_token_metadata(
         &self,
-        token_bytes: &[u8],
         kid: &str,
         exp: i64,
         issuer_id: &str,
     ) -> Result<[u8; 64]> {
-        // Use the existing ECDSA signature function
-        crate::compute_token_signature(&self.secret_key, token_bytes, kid, exp, issuer_id)
+        // Use the existing ECDSA signature function (V3 metadata-only message)
+        crate::compute_token_signature(&self.secret_key, kid, exp, issuer_id)
             .map_err(|e| anyhow::anyhow!("signature generation failed: {:?}", e))
     }
 
@@ -195,14 +190,13 @@ mod tests {
 
         let provider = SoftwareCryptoProvider::new(sk, kid, ctx).unwrap();
 
-        let token = vec![1, 2, 3, 4, 5];
         let kid_str = "test-kid";
         let exp = 1234567890i64;
         let issuer_id = "test-issuer";
 
-        // Sign metadata
+        // Sign metadata (V3: no token_bytes parameter)
         let signature = provider
-            .sign_token_metadata(&token, kid_str, exp, issuer_id)
+            .sign_token_metadata(kid_str, exp, issuer_id)
             .await
             .unwrap();
 
@@ -211,14 +205,12 @@ mod tests {
         // Verify signature using public key
         let pubkey = provider.public_key();
         let valid =
-            crate::verify_token_signature(pubkey, &token, &signature, kid_str, exp, issuer_id);
+            crate::verify_token_signature(pubkey, &signature, kid_str, exp, issuer_id);
         assert!(valid);
 
-        // Tampering should fail verification
-        let mut bad_token = token.clone();
-        bad_token[0] ^= 1;
+        // Wrong kid should fail verification
         let invalid =
-            crate::verify_token_signature(pubkey, &bad_token, &signature, kid_str, exp, issuer_id);
+            crate::verify_token_signature(pubkey, &signature, "wrong-kid", exp, issuer_id);
         assert!(!invalid);
     }
 
@@ -230,18 +222,17 @@ mod tests {
 
         let provider = SoftwareCryptoProvider::new(sk, kid, ctx).unwrap();
 
-        let token = vec![1, 2, 3];
         let kid_str = "kid";
         let exp = 123i64;
         let issuer_id = "issuer";
 
         // Signatures should be deterministic (RFC 6979)
         let sig1 = provider
-            .sign_token_metadata(&token, kid_str, exp, issuer_id)
+            .sign_token_metadata(kid_str, exp, issuer_id)
             .await
             .unwrap();
         let sig2 = provider
-            .sign_token_metadata(&token, kid_str, exp, issuer_id)
+            .sign_token_metadata(kid_str, exp, issuer_id)
             .await
             .unwrap();
         assert_eq!(sig1, sig2);
