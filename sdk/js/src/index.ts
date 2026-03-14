@@ -25,5 +25,7 @@ export type {
 import * as voprf from './crypto/voprf.js';
 export const crypto = {
   blind: voprf.blind,
-  finalize: voprf.finalize
+  finalize: voprf.finalize,
+  buildRedemptionToken: voprf.buildRedemptionToken,
+  parseRedemptionToken: voprf.parseRedemptionToken,
 };
