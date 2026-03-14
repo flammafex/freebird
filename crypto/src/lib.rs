@@ -168,9 +168,94 @@ pub const TOKEN_SIGNATURE_LEN: usize = 64; // ECDSA signature (r: 32 bytes, s: 3
 pub const TOKEN_FORMAT_V1_MAC: u8 = 0x01; // VOPRF (131) + MAC (32) = 163 bytes
 pub const TOKEN_FORMAT_V2_SIGNATURE: u8 = 0x02; // VOPRF (131) + ECDSA (64) = 195 bytes
 
+// V3 redemption token constants
+const REDEMPTION_TOKEN_VERSION_V3: u8 = 0x03;
+const REDEMPTION_TOKEN_MIN_LEN: usize = 1 + 32 + 1 + 1 + 8 + 1 + 1 + 64; // 109
+const REDEMPTION_TOKEN_MAX_LEN: usize = 512;
+
 /// Total token lengths including authentication
 pub const TOKEN_LEN_V1: usize = 131 + TOKEN_MAC_LEN; // 163 bytes
 pub const TOKEN_LEN_V2: usize = 131 + TOKEN_SIGNATURE_LEN; // 195 bytes
+
+/// V3 redemption token: the wire format clients send to verifiers.
+///
+/// Wire format: `[VERSION(1) | output(32) | kid_len(1) | kid(N) | exp(8) | issuer_id_len(1) | issuer_id(M) | ECDSA_sig(64)]`
+pub struct RedemptionToken {
+    pub output: [u8; 32],
+    pub kid: String,
+    pub exp: i64,
+    pub issuer_id: String,
+    pub sig: [u8; 64],
+}
+
+/// Serialize a `RedemptionToken` into V3 wire format bytes.
+pub fn build_redemption_token(token: &RedemptionToken) -> Result<Vec<u8>, Error> {
+    if token.kid.is_empty() || token.kid.len() > 255 {
+        return Err(Error::InvalidInput("kid must be 1-255 bytes".to_string()));
+    }
+    if token.issuer_id.is_empty() || token.issuer_id.len() > 255 {
+        return Err(Error::InvalidInput("issuer_id must be 1-255 bytes".to_string()));
+    }
+    let total_len = 1 + 32 + 1 + token.kid.len() + 8 + 1 + token.issuer_id.len() + 64;
+    let mut buf = Vec::with_capacity(total_len);
+    buf.push(REDEMPTION_TOKEN_VERSION_V3);
+    buf.extend_from_slice(&token.output);
+    buf.push(token.kid.len() as u8);
+    buf.extend_from_slice(token.kid.as_bytes());
+    buf.extend_from_slice(&token.exp.to_be_bytes());
+    buf.push(token.issuer_id.len() as u8);
+    buf.extend_from_slice(token.issuer_id.as_bytes());
+    buf.extend_from_slice(&token.sig);
+    Ok(buf)
+}
+
+/// Parse V3 wire format bytes into a `RedemptionToken`.
+pub fn parse_redemption_token(bytes: &[u8]) -> Result<RedemptionToken, Error> {
+    if bytes.len() < REDEMPTION_TOKEN_MIN_LEN {
+        return Err(Error::InvalidInput("token too short".to_string()));
+    }
+    if bytes.len() > REDEMPTION_TOKEN_MAX_LEN {
+        return Err(Error::InvalidInput("token too large".to_string()));
+    }
+    if bytes[0] != REDEMPTION_TOKEN_VERSION_V3 {
+        return Err(Error::InvalidInput("unsupported token version".to_string()));
+    }
+    let mut pos = 1;
+    let output: [u8; 32] = bytes[pos..pos + 32].try_into()
+        .map_err(|_| Error::InvalidInput("bad output".to_string()))?;
+    pos += 32;
+    let kid_len = bytes[pos] as usize;
+    pos += 1;
+    if kid_len == 0 || pos + kid_len > bytes.len() {
+        return Err(Error::InvalidInput("bad kid_len".to_string()));
+    }
+    let kid = String::from_utf8(bytes[pos..pos + kid_len].to_vec())
+        .map_err(|_| Error::InvalidInput("kid not utf8".to_string()))?;
+    pos += kid_len;
+    if pos + 8 > bytes.len() {
+        return Err(Error::InvalidInput("truncated exp".to_string()));
+    }
+    let exp = i64::from_be_bytes(bytes[pos..pos + 8].try_into()
+        .map_err(|_| Error::InvalidInput("bad exp".to_string()))?);
+    pos += 8;
+    if pos >= bytes.len() {
+        return Err(Error::InvalidInput("truncated issuer_id_len".to_string()));
+    }
+    let issuer_id_len = bytes[pos] as usize;
+    pos += 1;
+    if issuer_id_len == 0 || pos + issuer_id_len > bytes.len() {
+        return Err(Error::InvalidInput("bad issuer_id_len".to_string()));
+    }
+    let issuer_id = String::from_utf8(bytes[pos..pos + issuer_id_len].to_vec())
+        .map_err(|_| Error::InvalidInput("issuer_id not utf8".to_string()))?;
+    pos += issuer_id_len;
+    if bytes.len() - pos != 64 {
+        return Err(Error::InvalidInput("bad sig length".to_string()));
+    }
+    let sig: [u8; 64] = bytes[pos..pos + 64].try_into()
+        .map_err(|_| Error::InvalidInput("bad sig".to_string()))?;
+    Ok(RedemptionToken { output, kid, exp, issuer_id, sig })
+}
 
 /// Compute HMAC-SHA256 over token and metadata to prevent tampering
 ///
@@ -954,5 +1039,48 @@ mod tests {
         // Invalid signature (all 0xFF)
         let bad_sig2 = [0xFFu8; 64];
         assert!(!verify_message_signature(&pubkey, message, &bad_sig2));
+    }
+
+    // ========================================================================
+    // V3 Redemption Token Tests
+    // ========================================================================
+
+    #[test]
+    fn test_v3_redemption_token_roundtrip() {
+        let token = RedemptionToken {
+            output: [0xAA; 32],
+            kid: "test-key-01".to_string(),
+            exp: 1700000000i64,
+            issuer_id: "issuer-abc".to_string(),
+            sig: [0xBB; 64],
+        };
+        let bytes = build_redemption_token(&token).unwrap();
+        assert_eq!(bytes[0], 0x03); // version byte
+        let parsed = parse_redemption_token(&bytes).unwrap();
+        assert_eq!(parsed.output, token.output);
+        assert_eq!(parsed.kid, token.kid);
+        assert_eq!(parsed.exp, token.exp);
+        assert_eq!(parsed.issuer_id, token.issuer_id);
+        assert_eq!(parsed.sig, token.sig);
+    }
+
+    #[test]
+    fn test_v3_redemption_token_rejects_bad_version() {
+        let token = RedemptionToken {
+            output: [0xAA; 32],
+            kid: "k".to_string(),
+            exp: 1i64,
+            issuer_id: "i".to_string(),
+            sig: [0xBB; 64],
+        };
+        let mut bytes = build_redemption_token(&token).unwrap();
+        bytes[0] = 0x01; // wrong version
+        assert!(parse_redemption_token(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_v3_redemption_token_rejects_truncated() {
+        let bytes = vec![0x03; 50]; // too short (min 109)
+        assert!(parse_redemption_token(&bytes).is_err());
     }
 }
