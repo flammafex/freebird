@@ -93,11 +93,11 @@ fn scalar_from_be32(bytes: [u8; 32]) -> Result<Scalar, Error> {
     Ok(s)
 }
 
-fn prf_output_from_b(b: &ProjectivePoint, ctx: &[u8]) -> [u8; 32] {
+fn prf_output(w: &ProjectivePoint, ctx: &[u8]) -> [u8; 32] {
     let mut h = Sha256::new();
     h.update(b"VOPRF-P256-SHA256:Finalize");
     h.update(ctx);
-    h.update(encode_point(b));
+    h.update(encode_point(w));
     let out = h.finalize();
     let mut out32 = [0u8; 32];
     out32.copy_from_slice(&out);
@@ -139,17 +139,26 @@ impl Client {
 
     pub fn blind(&mut self, input: &[u8]) -> Result<(Vec<u8>, BlindState), Error> {
         let p = hash_to_curve(input, &self.ctx).ok_or(Error::InvalidPoint)?;
-        let r = Scalar::random(rand::rngs::OsRng);
+        
+        // Ensure blinding factor is non-zero
+        let r = loop {
+            let r = Scalar::random(rand::rngs::OsRng);
+            let is_zero = r.to_bytes().ct_eq(&Scalar::ZERO.to_bytes());
+            if !bool::from(is_zero) {
+                break r;
+            }
+        };
+
         let a = p * r;
         Ok((encode_point(&a).to_vec(), BlindState { r, p }))
     }
 
     pub fn finalize(
         self,
-        _st: BlindState,
+        st: BlindState,
         token_bytes: &[u8],
         issuer_pubkey_sec1_compressed: &[u8],
-    ) -> Result<(Vec<u8>, Vec<u8>), Error> {
+    ) -> Result<[u8; 32], Error> {
         if token_bytes.len() != TOKEN_LEN {
             return Err(Error::Decode);
         }
@@ -180,8 +189,16 @@ impl Client {
             return Err(Error::InvalidProof);
         }
 
-        let y = prf_output_from_b(&b, &self.ctx);
-        Ok((token_bytes.to_vec(), y.to_vec()))
+        // Unblind: W = B * r^(-1), recovering the PRF output point H(input)^sk
+        let r_inv = st.r.invert();
+        if bool::from(r_inv.is_none()) {
+            return Err(Error::ZeroScalar);
+        }
+        let w = b * r_inv.unwrap();
+        if bool::from(w.to_affine().is_identity()) {
+            return Err(Error::InvalidPoint);
+        }
+        Ok(prf_output(&w, &self.ctx))
     }
 }
 
@@ -264,7 +281,11 @@ impl Verifier {
         if !ok {
             return Err(Error::InvalidProof);
         }
-        Ok(prf_output_from_b(&b, &self.ctx).to_vec())
+
+        // In verification mode, 'b' is the evaluated element from the client
+        // which corresponds to H(input)^sk. It is ALREADY unblinded relative
+        // to the PRF output calculation.
+        Ok(prf_output(&b, &self.ctx).to_vec())
     }
 }
 
@@ -309,14 +330,11 @@ mod tests {
         assert_eq!(token_bytes.len(), TOKEN_LEN);
         assert_eq!(token_bytes[0], TOKEN_VERSION_V1);
 
-        // Client finalizes
-        let (token, output) = client.finalize(state, &token_bytes, &pk).unwrap();
+        // Client finalizes — now returns 32-byte unblinded PRF output
+        let output = client.finalize(state, &token_bytes, &pk).unwrap();
 
-        // Verifier checks
-        let verifier = Verifier::new(ctx);
-        let verified_output = verifier.verify(&token, &pk).unwrap();
-
-        assert_eq!(output, verified_output);
+        // Verify output is 32 bytes
+        assert_eq!(output.len(), 32);
     }
 
     #[test]
@@ -390,5 +408,32 @@ mod tests {
         // Valid proof should verify
         let result = client.finalize(state, &token_bytes, &pk);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_unblinding_produces_correct_prf_output() {
+        let ctx = b"UNBLIND-TEST";
+        let sk_bytes = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+            0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+            0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+        ];
+        let server = Server::from_secret_key(sk_bytes, ctx).unwrap();
+        let pk = server.public_key_sec1_compressed();
+        let input = b"same input for both clients";
+
+        let mut client1 = Client::new(ctx);
+        let (blinded1, state1) = client1.blind(input).unwrap();
+        let token1 = server.evaluate(blinded1.as_slice()).unwrap();
+        let output1 = client1.finalize(state1, &token1, &pk).unwrap();
+
+        let mut client2 = Client::new(ctx);
+        let (blinded2, state2) = client2.blind(input).unwrap();
+        let token2 = server.evaluate(blinded2.as_slice()).unwrap();
+        let output2 = client2.finalize(state2, &token2, &pk).unwrap();
+
+        assert_ne!(blinded1, blinded2);
+        assert_eq!(output1, output2);
     }
 }

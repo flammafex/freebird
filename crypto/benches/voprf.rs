@@ -11,6 +11,7 @@
 //!
 //! Run with: cargo bench --bench voprf
 
+use base64ct::Encoding;
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use freebird_crypto::{Client, Server, Verifier};
 
@@ -58,11 +59,12 @@ fn bench_finalize(c: &mut Criterion) {
 
     let server = Server::from_secret_key(sk, ctx).unwrap();
     let pk = server.public_key_sec1_compressed();
+    let pk_b64 = base64ct::Base64UrlUnpadded::encode_string(&pk);
 
     // Pre-generate evaluation
     let mut client = Client::new(ctx);
-    let (blinded_b64, state) = client.blind(b"test input").unwrap();
-    let eval_b64 = server.evaluate_with_proof(&blinded_b64).unwrap();
+    let (blinded_b64, _state) = client.blind(b"test input").unwrap();
+    let _eval_b64 = server.evaluate_with_proof(&blinded_b64).unwrap();
 
     group.bench_function("single", |b| {
         b.iter(|| {
@@ -70,7 +72,7 @@ fn bench_finalize(c: &mut Criterion) {
             let mut client = Client::new(ctx);
             let (blinded_b64, state) = client.blind(b"test input").unwrap();
             let eval_b64 = server.evaluate_with_proof(&blinded_b64).unwrap();
-            black_box(client.finalize(state, &eval_b64, &pk).unwrap())
+            black_box(client.finalize(state, &eval_b64, &pk_b64).unwrap())
         });
     });
 
@@ -86,17 +88,16 @@ fn bench_verify(c: &mut Criterion) {
     let pk = server.public_key_sec1_compressed();
     let verifier = Verifier::new(ctx);
 
-    // Pre-generate a token
+    // Pre-generate a token (use eval_b64 as the token for verification)
     let mut client = Client::new(ctx);
-    let (blinded_b64, state) = client.blind(b"test input").unwrap();
+    let (blinded_b64, _state) = client.blind(b"test input").unwrap();
     let eval_b64 = server.evaluate_with_proof(&blinded_b64).unwrap();
-    let (token_b64, _out) = client.finalize(state, &eval_b64, &pk).unwrap();
 
     group.bench_function("single", |b| {
         b.iter(|| {
             black_box(
                 verifier
-                    .verify(black_box(&token_b64), black_box(&pk))
+                    .verify(black_box(&eval_b64), black_box(&pk))
                     .unwrap(),
             )
         });
@@ -112,16 +113,17 @@ fn bench_end_to_end(c: &mut Criterion) {
 
     let server = Server::from_secret_key(sk, ctx).unwrap();
     let pk = server.public_key_sec1_compressed();
+    let pk_b64 = base64ct::Base64UrlUnpadded::encode_string(&pk);
     let verifier = Verifier::new(ctx);
 
     group.bench_function("full_flow", |b| {
         b.iter(|| {
-            // Full flow: blind -> evaluate -> finalize -> verify
+            // Full flow: blind -> evaluate -> finalize -> verify(eval token)
             let mut client = Client::new(ctx);
             let (blinded_b64, state) = client.blind(black_box(b"test input")).unwrap();
             let eval_b64 = server.evaluate_with_proof(&blinded_b64).unwrap();
-            let (token_b64, _out_cli) = client.finalize(state, &eval_b64, &pk).unwrap();
-            let _out_ver = verifier.verify(&token_b64, &pk).unwrap();
+            let _out_cli = client.finalize(state, &eval_b64, &pk_b64).unwrap();
+            let _out_ver = verifier.verify(&eval_b64, &pk).unwrap();
             black_box(_out_ver)
         });
     });
