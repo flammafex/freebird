@@ -44,28 +44,6 @@ pub trait CryptoProvider: Send + Sync {
     /// - The secret key MUST NOT be exposed during this operation
     async fn voprf_evaluate(&self, blinded: &[u8]) -> Result<Vec<u8>>;
 
-    /// Derive an epoch-specific MAC key using HKDF
-    ///
-    /// Derives a MAC key for token metadata binding using:
-    /// `HKDF(secret_key, salt="freebird-mac-salt", info=issuer_id||kid||epoch)`
-    ///
-    /// # Arguments
-    ///
-    /// * `issuer_id` - Issuer identifier for domain separation
-    /// * `kid` - Key identifier for domain separation
-    /// * `epoch` - Time-based epoch number for key rotation
-    ///
-    /// # Returns
-    ///
-    /// A 32-byte MAC key derived from the secret key
-    ///
-    /// # Security
-    ///
-    /// - HSM implementations MAY perform HKDF in hardware if supported
-    /// - Otherwise, use HSM for base key material and derive in software
-    /// - Keys MUST be cryptographically independent across epochs
-    async fn derive_mac_key(&self, issuer_id: &str, kid: &str, epoch: u32) -> Result<[u8; 32]>;
-
     /// Sign token metadata using ECDSA (V3 format, federation support)
     ///
     /// Signs the token metadata with the issuer's secret key using ECDSA.

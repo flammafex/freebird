@@ -72,6 +72,12 @@ pub struct BlindState {
     inner: v::BlindState,
 }
 
+impl Verifier {
+    pub fn new(ctx: &[u8]) -> Self {
+        Self(v::Verifier::new(ctx))
+    }
+}
+
 /// Deterministic nullifier seed for anti-double-spend.
 pub fn nullifier_key(issuer_id: &str, token_output_b64: &str) -> String {
     let mut h = Sha256::new();
@@ -132,25 +138,6 @@ impl Server {
     }
 }
 
-impl Verifier {
-    pub fn new(ctx: &[u8]) -> Self {
-        Self(v::Verifier::new(ctx))
-    }
-
-    /// Verify opaque token locally and derive token_output used for nullifier.
-    pub fn verify(
-        &self,
-        token_b64: &str,
-        issuer_pubkey_sec1_compressed: &[u8],
-    ) -> Result<String, Error> {
-        let tok_raw = Base64UrlUnpadded::decode_vec(token_b64).map_err(|_| Error::Decode)?;
-        let out_raw = self
-            .0
-            .verify(&tok_raw, issuer_pubkey_sec1_compressed)
-            .map_err(|_| Error::Verify)?;
-        Ok(Base64UrlUnpadded::encode_string(&out_raw))
-    }
-}
 
 /// Token signature constants (for public-key metadata authentication)
 pub const TOKEN_SIGNATURE_LEN: usize = 64; // ECDSA signature (r: 32 bytes, s: 32 bytes)
@@ -425,26 +412,6 @@ pub fn verify_message_signature(public_key: &[u8], message: &[u8], signature: &[
     verifying_key.verify_prehash(&msg_hash, &sig).is_ok()
 }
 
-/// Derive MAC key from server secret key using HKDF (legacy, simple version)
-///
-/// This ensures the MAC key is cryptographically independent from the
-/// VOPRF secret key, following the principle of key separation.
-///
-/// # Arguments
-/// * `server_sk` - Server's secret key (32 bytes)
-/// * `info` - Optional context/domain separation (e.g., "freebird:mac:v1")
-///
-/// # Returns
-/// Derived 32-byte MAC key
-pub fn derive_mac_key(server_sk: &[u8; 32], info: &[u8]) -> [u8; 32] {
-    use hkdf::Hkdf;
-
-    let hkdf = Hkdf::<Sha256>::new(None, server_sk);
-    let mut mac_key = [0u8; 32];
-    hkdf.expand(info, &mut mac_key)
-        .expect("32 bytes is a valid HKDF output length");
-    mac_key
-}
 
 #[cfg(test)]
 mod tests {

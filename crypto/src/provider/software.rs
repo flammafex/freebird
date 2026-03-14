@@ -83,12 +83,6 @@ impl CryptoProvider for SoftwareCryptoProvider {
             .map_err(|e| anyhow::anyhow!("VOPRF evaluation failed: {:?}", e))
     }
 
-    async fn derive_mac_key(&self, issuer_id: &str, kid: &str, epoch: u32) -> Result<[u8; 32]> {
-        // Use HKDF-based MAC key derivation with domain-separated info
-        let info = format!("freebird-mac-v1|{}|{}|{}", issuer_id, kid, epoch);
-        Ok(crate::derive_mac_key(&self.secret_key, info.as_bytes()))
-    }
-
     async fn sign_token_metadata(
         &self,
         kid: &str,
@@ -156,30 +150,6 @@ mod tests {
         // Token format: [VERSION||A||B||Proof] = 1 + 33 + 33 + 64 = 131 bytes
         assert_eq!(token.len(), 131);
         assert_eq!(token[0], 0x01); // VERSION byte
-    }
-
-    #[tokio::test]
-    async fn test_mac_key_derivation() {
-        let sk = [42u8; 32];
-        let kid = "test-key-001".to_string();
-        let ctx = b"test-context".to_vec();
-
-        let provider = SoftwareCryptoProvider::new(sk, kid, ctx).unwrap();
-
-        // Derive MAC keys for different epochs
-        let key_epoch0 = provider.derive_mac_key("issuer1", "kid1", 0).await.unwrap();
-        let key_epoch1 = provider.derive_mac_key("issuer1", "kid1", 1).await.unwrap();
-
-        // Should be deterministic
-        let key_epoch0_again = provider.derive_mac_key("issuer1", "kid1", 0).await.unwrap();
-        assert_eq!(key_epoch0, key_epoch0_again);
-
-        // Different epochs should produce different keys
-        assert_ne!(key_epoch0, key_epoch1);
-
-        // Different issuers should produce different keys
-        let key_issuer2 = provider.derive_mac_key("issuer2", "kid1", 0).await.unwrap();
-        assert_ne!(key_epoch0, key_issuer2);
     }
 
     #[tokio::test]
@@ -285,20 +255,5 @@ mod tests {
         assert_eq!(sk_copy, [42u8; 32]); // Original copy unchanged
     }
 
-    #[tokio::test]
-    async fn test_mac_key_zeroization() {
-        use zeroize::Zeroizing;
-
-        // Test that Zeroizing wrapper works for MAC keys
-        let test_key = [0xAAu8; 32];
-
-        {
-            let mac_key = Zeroizing::new(test_key);
-            assert_eq!(*mac_key, [0xAAu8; 32]);
-            // mac_key will be zeroized when dropped here
-        }
-
-        // Original test_key is unchanged (it's a copy)
-        assert_eq!(test_key, [0xAAu8; 32]);
-    }
 }
+

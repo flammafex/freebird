@@ -37,8 +37,6 @@ use cryptoki::session::{Session, UserType};
 use cryptoki::slot::Slot;
 use cryptoki::types::AuthPin;
 use std::sync::Arc;
-use zeroize::Zeroize;
-
 use super::CryptoProvider;
 
 /// PKCS#11 crypto provider for HSM operations
@@ -67,11 +65,6 @@ pub struct Pkcs11CryptoProvider {
     /// Context for VOPRF operations
     context: Vec<u8>,
 
-    /// Secret key material for MAC derivation (derived from HSM operations)
-    ///
-    /// Note: This is NOT the actual private key, but a derived secret that
-    /// can be safely extracted from the HSM for HKDF operations.
-    mac_base_key: [u8; 32],
 }
 
 impl Pkcs11CryptoProvider {
@@ -128,10 +121,6 @@ impl Pkcs11CryptoProvider {
             .login(UserType::User, Some(&auth_pin))
             .context("Failed to authenticate with HSM")?;
 
-        // Find private key by label
-        let private_key_handle = Self::find_key_by_label(&session, key_label, true)
-            .context("Failed to find private key in HSM")?;
-
         // Find corresponding public key
         let public_key_handle = Self::find_key_by_label(&session, key_label, false)
             .context("Failed to find public key in HSM")?;
@@ -139,13 +128,6 @@ impl Pkcs11CryptoProvider {
         // Extract public key (SEC1 compressed format)
         let public_key = Self::extract_public_key(&session, public_key_handle)
             .context("Failed to extract public key from HSM")?;
-
-        // Derive MAC base key from HSM
-        // We derive this once at initialization from a known constant
-        // This allows us to perform HKDF in software while still basing
-        // the key material on the HSM-protected secret.
-        let mac_base_key = Self::derive_mac_base_key(&session, private_key_handle)
-            .context("Failed to derive MAC base key from HSM")?;
 
         // Close the initialization session (we'll create new ones as needed)
         let _ = session.logout();
@@ -159,7 +141,6 @@ impl Pkcs11CryptoProvider {
             public_key,
             key_id,
             context,
-            mac_base_key,
         })
     }
 
@@ -250,49 +231,6 @@ impl Pkcs11CryptoProvider {
         compressed.extend_from_slice(x);
 
         Ok(compressed)
-    }
-
-    /// Derive a base key for MAC operations from HSM
-    ///
-    /// This uses a constant derivation input to produce a 32-byte secret
-    /// that can be safely extracted and used for HKDF in software.
-    fn derive_mac_base_key(
-        session: &Session,
-        private_key_handle: ObjectHandle,
-    ) -> Result<[u8; 32]> {
-        // Use ECDH with a known public point to derive shared secret
-        // This is safe because we control both sides of the derivation
-
-        // For now, we'll use a simpler approach: sign a constant message
-        // and use the signature as entropy for the base key
-
-        // Constant message for MAC base key derivation
-        let message = b"freebird-mac-base-key-derivation-v1";
-
-        // Hash the message (ECDSA expects a digest)
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(message);
-        let digest = hasher.finalize();
-
-        // Sign with ECDSA
-        let mechanism = Mechanism::Ecdsa;
-        let signature = session
-            .sign(&mechanism, private_key_handle, &digest)
-            .context("Failed to sign with HSM for MAC derivation")?;
-
-        // Normalize raw/DER outputs so key derivation is stable across HSMs.
-        let signature = Self::normalize_ecdsa_signature(&signature)?;
-
-        // ECDSA signature is (r, s), both 32 bytes for P-256
-        // We'll hash the signature to get a 32-byte base key
-        let mut hasher = Sha256::new();
-        hasher.update(&signature);
-        let base_key = hasher.finalize();
-
-        let mut result = [0u8; 32];
-        result.copy_from_slice(&base_key);
-        Ok(result)
     }
 
     /// Parse ASN.1 DER length at `idx`, returning (length, next_idx).
@@ -425,13 +363,6 @@ impl CryptoProvider for Pkcs11CryptoProvider {
         self.voprf_evaluate_internal(blinded)
     }
 
-    async fn derive_mac_key(&self, issuer_id: &str, kid: &str, epoch: u32) -> Result<[u8; 32]> {
-        // Derive MAC key using HKDF in software
-        // Base key material comes from HSM but derivation happens in software
-        let info = format!("freebird-mac-v1|{}|{}|{}", issuer_id, kid, epoch);
-        Ok(crate::derive_mac_key(&self.mac_base_key, info.as_bytes()))
-    }
-
     async fn sign_token_metadata(
         &self,
         kid: &str,
@@ -468,17 +399,6 @@ impl CryptoProvider for Pkcs11CryptoProvider {
     }
 }
 
-impl Drop for Pkcs11CryptoProvider {
-    fn drop(&mut self) {
-        // Zeroize the MAC base key to prevent it from lingering in memory
-        // This is critical for HSM hybrid mode security - the key material
-        // derived from the HSM should be protected even after extraction
-        self.mac_base_key.zeroize();
-
-        // Sessions are created on-demand and closed after use
-        // No additional cleanup needed
-    }
-}
 
 #[cfg(test)]
 mod tests {
