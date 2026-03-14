@@ -224,22 +224,9 @@ pub async fn handle(
     // Calculate expiration
     let exp = OffsetDateTime::now_utc().unix_timestamp() + state.exp_sec as i64;
 
-    // Get current epoch for key rotation
-    let epoch = state.current_epoch();
-
-    // Authenticate token metadata using ECDSA signature
-    // Decode token to get raw bytes
-    let token_bytes = Base64UrlUnpadded::decode_vec(&token_b64).map_err(|e| {
-        error!("failed to decode token for signature: {e:?}");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "token encoding error".into(),
-        )
-    })?;
-
-    // Sign token metadata with issuer's secret key (195 bytes = 131 VOPRF + 64 ECDSA)
+    // Sign token metadata with issuer's secret key (V3: metadata only)
     let signature = voprf
-        .sign_token_metadata(&token_bytes, &kid_used, exp, &state.issuer_id)
+        .sign_token_metadata(&kid_used, exp, &state.issuer_id)
         .await
         .map_err(|e| {
             error!("failed to sign token metadata: {e:?}");
@@ -249,28 +236,22 @@ pub async fn handle(
             )
         })?;
 
-    // Append signature to token: [VOPRF_Token||Signature]
-    let mut final_token_bytes = token_bytes;
-    final_token_bytes.extend_from_slice(&signature);
-
-    // Encode final token
-    let final_token_b64 = Base64UrlUnpadded::encode_string(&final_token_bytes);
+    let sig_b64 = Base64UrlUnpadded::encode_string(&signature);
 
     debug!(
-        "✅ token issued: kid={}, exp={}, epoch={}, sybil_verified={}, token_len={}",
+        "✅ token issued: kid={}, exp={}, issuer_id={}, sybil_verified={}",
         kid_used,
         exp,
-        epoch,
+        state.issuer_id,
         sybil_info.is_some(),
-        final_token_bytes.len()
     );
 
     Ok(Json(IssueResp {
-        token: final_token_b64,
-        proof: String::new(),
+        token: token_b64,
+        sig: sig_b64,
         kid: kid_used,
         exp,
-        epoch,
+        issuer_id: state.issuer_id.clone(),
         sybil_info,
     }))
 }

@@ -7,7 +7,7 @@ use axum::{extract::State, http::HeaderMap, Json};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{BatchIssueReq, SybilProof, TokenResult};
 use freebird_common::federation::Vouch;
-use freebird_crypto::{Client, Server, TOKEN_LEN_V2};
+use freebird_crypto::{Client, Server};
 use freebird_issuer::{
     federation_store::FederationStore, multi_key_voprf::MultiKeyVoprfCore, routes::batch_issue,
     sybil_resistance::SybilResistance, AppStateWithSybil,
@@ -138,9 +138,11 @@ async fn regression_batch_issuance_emits_v2_signature_envelope() -> Result<()> {
     assert_eq!(resp.successful, 3);
     for r in resp.results {
         match r {
-            TokenResult::Success { token, .. } => {
+            TokenResult::Success { token, sig, .. } => {
                 let raw = Base64UrlUnpadded::decode_vec(&token)?;
-                assert_eq!(raw.len(), TOKEN_LEN_V2);
+                assert_eq!(raw.len(), 131, "VOPRF evaluation token should be 131 bytes");
+                let sig_raw = Base64UrlUnpadded::decode_vec(&sig)?;
+                assert_eq!(sig_raw.len(), 64, "ECDSA signature should be 64 bytes");
             }
             TokenResult::Error { message, code } => {
                 anyhow::bail!("unexpected issuance error {code}: {message}");

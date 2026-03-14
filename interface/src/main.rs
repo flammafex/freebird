@@ -2,7 +2,7 @@
 // Copyright 2024 The Carpocratian Church of Commonality and Equality, Inc.
 use anyhow::{anyhow, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use freebird_common::api::{IssueReq, IssueResp, VerifyReq, VerifyResp}; // <--- IMPORT SHARED TYPES
+use freebird_common::api::{IssueReq, IssueResp, VerifyReq, VerifyResp};
 use freebird_crypto::voprf::core::Client;
 use rand::RngCore;
 use reqwest::Client as HttpClient;
@@ -12,9 +12,6 @@ use std::time::Duration;
 #[derive(Serialize, Deserialize)]
 struct SavedToken {
     token_b64: String,
-    issuer_id: String,
-    exp: i64,
-    epoch: u32, // Epoch for key rotation
 }
 
 #[tokio::main]
@@ -103,17 +100,12 @@ async fn normal_flow() -> Result<()> {
         .build()?;
 
     // Issue token
-    let (token_b64, issuer_id, exp, epoch) = issue_token(&http, issuer_url, ctx).await?;
+    let token_b64 = issue_token(&http, issuer_url, ctx).await?;
 
-    println!(
-        "✅ Token issued: exp={} ({}s from now), epoch={}",
-        exp,
-        exp - now(),
-        epoch
-    );
+    println!("✅ Token issued (V3 self-contained redemption token)");
 
     // Verify token
-    let success = verify_token(&http, verifier_url, &token_b64, &issuer_id, exp, epoch).await?;
+    let success = verify_token(&http, verifier_url, &token_b64).await?;
 
     if success {
         println!("✅ SUCCESS! Token verified");
@@ -134,26 +126,26 @@ async fn test_replay_attack() -> Result<()> {
         .build()?;
 
     // Issue token
-    println!("\n📥 Step 1: Issuing fresh token...");
-    let (token_b64, issuer_id, exp, epoch) = issue_token(&http, issuer_url, ctx).await?;
+    println!("\n Step 1: Issuing fresh token...");
+    let token_b64 = issue_token(&http, issuer_url, ctx).await?;
 
     // First verification (should succeed)
-    println!("\n✅ Step 2: First verification attempt...");
-    let success1 = verify_token(&http, verifier_url, &token_b64, &issuer_id, exp, epoch).await?;
+    println!("\n Step 2: First verification attempt...");
+    let success1 = verify_token(&http, verifier_url, &token_b64).await?;
 
     if !success1 {
-        println!("❌ First verification failed! Something is wrong.");
+        println!("First verification failed! Something is wrong.");
         return Ok(());
     }
-    println!("✅ First verification: SUCCESS");
+    println!("First verification: SUCCESS");
 
     // Wait a moment
-    println!("\n⏱️  Waiting 2 seconds...");
+    println!("\n Waiting 2 seconds...");
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     // Second verification with SAME token (should fail)
-    println!("\n🔁 Step 3: Replay attack - reusing the same token...");
-    let success2 = verify_token(&http, verifier_url, &token_b64, &issuer_id, exp, epoch).await?;
+    println!("\n Step 3: Replay attack - reusing the same token...");
+    let success2 = verify_token(&http, verifier_url, &token_b64).await?;
 
     if !success2 {
         println!("✅ REPLAY PROTECTION WORKING! Token was rejected on second use.");
@@ -180,24 +172,20 @@ async fn test_expired_token() -> Result<()> {
         .build()?;
 
     // Issue token
-    println!("\n📥 Step 1: Issuing token...");
-    let (token_b64, issuer_id, real_exp, epoch) = issue_token(&http, issuer_url, ctx).await?;
-    println!("✅ Token issued with exp={}", real_exp);
+    println!("\n Step 1: Issuing token...");
+    let token_b64 = issue_token(&http, issuer_url, ctx).await?;
+    println!("Token issued (V3 self-contained, expiration is embedded)");
 
-    // Try to verify with a past expiration time
-    let fake_exp = now() - 600; // 10 minutes ago
-    println!("\n⏰ Step 2: Attempting verification with expired timestamp...");
-    println!("   Fake exp: {} (600s ago)", fake_exp);
+    // V3 tokens have expiration embedded, so we just verify normally.
+    // The token's exp is set by the issuer and cannot be faked by the client.
+    println!("\n Step 2: Verifying token...");
+    let success = verify_token(&http, verifier_url, &token_b64).await?;
 
-    let success =
-        verify_token(&http, verifier_url, &token_b64, &issuer_id, fake_exp, epoch).await?;
-
-    if !success {
-        println!("✅ EXPIRATION VALIDATION WORKING! Expired token was rejected.");
-        println!("   This prevents using tokens beyond their validity period.");
+    if success {
+        println!("Token verified successfully.");
+        println!("Note: V3 tokens embed their own expiration - it cannot be tampered with.");
     } else {
-        println!("❌ SECURITY ISSUE! Expired token was accepted!");
-        println!("   The expiration validation is not working correctly.");
+        println!("Token verification failed.");
     }
 
     Ok(())
@@ -211,19 +199,12 @@ async fn save_token_mode() -> Result<()> {
         .timeout(Duration::from_secs(5))
         .build()?;
 
-    let (token_b64, issuer_id, exp, epoch) = issue_token(&http, issuer_url, ctx).await?;
+    let token_b64 = issue_token(&http, issuer_url, ctx).await?;
 
-    let saved = SavedToken {
-        token_b64,
-        issuer_id,
-        exp,
-        epoch,
-    };
+    let saved = SavedToken { token_b64 };
 
     std::fs::write("token.json", serde_json::to_string_pretty(&saved)?)?;
-    println!("\n💾 Token saved to token.json");
-    println!("   Expiration: {} ({}s from now)", exp, exp - now());
-    println!("   Epoch: {}", epoch);
+    println!("\n Token saved to token.json");
     println!("   Run 'interface.exe --load' to attempt replay");
 
     Ok(())
@@ -236,27 +217,13 @@ async fn load_token_mode() -> Result<()> {
         .map_err(|_| anyhow!("token.json not found. Run with --save first."))?;
     let saved: SavedToken = serde_json::from_str(&data)?;
 
-    println!("📂 Loaded token from token.json");
-    println!("   Issuer: {}", saved.issuer_id);
-    println!(
-        "   Expiration: {} ({}s from now)",
-        saved.exp,
-        saved.exp - now()
-    );
+    println!("Loaded token from token.json");
 
     let http = HttpClient::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
 
-    let success = verify_token(
-        &http,
-        verifier_url,
-        &saved.token_b64,
-        &saved.issuer_id,
-        saved.exp,
-        saved.epoch,
-    )
-    .await?;
+    let success = verify_token(&http, verifier_url, &saved.token_b64).await?;
 
     if success {
         println!("⚠️  WARNING: Token was accepted (either first use or replay protection failed)");
@@ -285,8 +252,8 @@ async fn stress_test(count: usize) -> Result<()> {
         print!("Token {}/{}: ", i, count);
 
         match issue_token(&http, issuer_url, ctx).await {
-            Ok((token_b64, issuer_id, exp, epoch)) => {
-                match verify_token(&http, verifier_url, &token_b64, &issuer_id, exp, epoch).await {
+            Ok(token_b64) => {
+                match verify_token(&http, verifier_url, &token_b64).await {
                     Ok(true) => {
                         println!("✅ SUCCESS");
                         successes += 1;
@@ -319,7 +286,7 @@ async fn issue_token(
     http: &HttpClient,
     issuer_url: &str,
     ctx: &[u8],
-) -> Result<(String, String, i64, u32)> {
+) -> Result<String> {
     // Initialize OPRF client
     let mut client = Client::new(ctx);
 
@@ -336,8 +303,8 @@ async fn issue_token(
         .post(format!("{issuer_url}/v1/oprf/issue"))
         .json(&IssueReq {
             blinded_element_b64: blinded_b64,
-            ctx_b64: None,     // <--- Initialize new field
-            sybil_proof: None, // <--- Initialize new field
+            ctx_b64: None,
+            sybil_proof: None,
         })
         .send()
         .await?
@@ -357,39 +324,45 @@ async fn issue_token(
     let pubkey_b64 = wk["voprf"]["pubkey"]
         .as_str()
         .ok_or_else(|| anyhow!("missing pubkey"))?;
-    let issuer_id = wk["issuer_id"]
-        .as_str()
-        .ok_or_else(|| anyhow!("missing issuer_id"))?
-        .to_string();
     let issuer_pubkey_bytes = Base64UrlUnpadded::decode_vec(pubkey_b64)?;
 
-    // Finalize token
+    // Finalize: unblind the VOPRF evaluation to get the 32-byte PRF output
     let token_bytes = Base64UrlUnpadded::decode_vec(&issue_resp.token)?;
-    let (token_raw, _out_cli_raw) = client
+    let output = client
         .finalize(blind_state, &token_bytes, &issuer_pubkey_bytes)
         .map_err(|e| anyhow!("{:?}", e))?;
 
-    let token_b64 = Base64UrlUnpadded::encode_string(&token_raw);
+    // Decode the ECDSA signature from the issuance response
+    let sig_bytes = Base64UrlUnpadded::decode_vec(&issue_resp.sig)?;
+    let sig: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| anyhow!("signature must be 64 bytes"))?;
 
-    Ok((token_b64, issuer_id, issue_resp.exp, issue_resp.epoch))
+    // Build the V3 self-contained redemption token
+    let redemption_token = freebird_crypto::RedemptionToken {
+        output,
+        kid: issue_resp.kid,
+        exp: issue_resp.exp,
+        issuer_id: issue_resp.issuer_id,
+        sig,
+    };
+
+    let token_wire = freebird_crypto::build_redemption_token(&redemption_token)
+        .map_err(|e| anyhow!("{:?}", e))?;
+
+    Ok(Base64UrlUnpadded::encode_string(&token_wire))
 }
 
 async fn verify_token(
     http: &HttpClient,
     verifier_url: &str,
     token_b64: &str,
-    issuer_id: &str,
-    exp: i64,
-    epoch: u32,
 ) -> Result<bool> {
-    // Send to verifier with expiration time and epoch
+    // V3: just send the self-contained token
     let resp = http
         .post(format!("{verifier_url}/v1/verify"))
         .json(&VerifyReq {
             token_b64: token_b64.to_string(),
-            issuer_id: issuer_id.to_string(),
-            exp: Some(exp), // Include expiration for validation
-            epoch,          // Include epoch for key rotation
         })
         .send()
         .await?;

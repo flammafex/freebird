@@ -64,24 +64,15 @@ impl VoprfCore {
         })
     }
 
-    /// Derive MAC key for a specific epoch
-    pub async fn derive_mac_key_for_epoch(&self, issuer_id: &str, epoch: u32) -> [u8; 32] {
-        self.provider
-            .derive_mac_key(issuer_id, &self.kid, epoch)
-            .await
-            .expect("MAC key derivation should not fail")
-    }
-
     /// Sign token metadata using ECDSA (for federation support)
     pub async fn sign_token_metadata(
         &self,
-        token_bytes: &[u8],
         kid: &str,
         exp: i64,
         issuer_id: &str,
     ) -> Result<[u8; 64]> {
         self.provider
-            .sign_token_metadata(token_bytes, kid, exp, issuer_id)
+            .sign_token_metadata(kid, exp, issuer_id)
             .await
     }
 

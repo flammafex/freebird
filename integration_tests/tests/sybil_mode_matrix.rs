@@ -5,7 +5,7 @@ use anyhow::Result;
 use axum::{extract::State, http::HeaderMap, http::StatusCode, Json};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{BatchIssueReq, IssueReq, SybilProof, TokenResult};
-use freebird_crypto::{Client, Server, TOKEN_LEN_V2};
+use freebird_crypto::{Client, Server};
 use freebird_issuer::{
     federation_store::FederationStore,
     multi_key_voprf::MultiKeyVoprfCore,
@@ -143,8 +143,8 @@ async fn sybil_none_mode_accepts_with_or_without_proof_on_both_endpoints() -> Re
     // No proof.
     let single_no_proof = run_single(state.clone(), voprf.clone(), None).await?;
     let batch_no_proof = run_batch(state.clone(), voprf.clone(), None).await?;
-    assert_eq!(single_no_proof, Ok(TOKEN_LEN_V2));
-    assert_eq!(batch_no_proof, Ok(TOKEN_LEN_V2));
+    assert_eq!(single_no_proof, Ok(131));
+    assert_eq!(batch_no_proof, Ok(131));
 
     // Irrelevant proof present (should be ignored in none mode).
     let irrelevant_proof = Some(SybilProof::RateLimit {
@@ -154,8 +154,8 @@ async fn sybil_none_mode_accepts_with_or_without_proof_on_both_endpoints() -> Re
     let single_with_proof =
         run_single(state.clone(), voprf.clone(), irrelevant_proof.clone()).await?;
     let batch_with_proof = run_batch(state, voprf, irrelevant_proof).await?;
-    assert_eq!(single_with_proof, Ok(TOKEN_LEN_V2));
-    assert_eq!(batch_with_proof, Ok(TOKEN_LEN_V2));
+    assert_eq!(single_with_proof, Ok(131));
+    assert_eq!(batch_with_proof, Ok(131));
 
     Ok(())
 }
@@ -181,8 +181,8 @@ async fn sybil_required_mode_pass_and_fail_match_on_single_and_batch() -> Result
 
     let single_pass = run_single(state_pass.clone(), voprf_pass.clone(), proof.clone()).await?;
     let batch_pass = run_batch(state_pass, voprf_pass, proof.clone()).await?;
-    assert_eq!(single_pass, Ok(TOKEN_LEN_V2));
-    assert_eq!(batch_pass, Ok(TOKEN_LEN_V2));
+    assert_eq!(single_pass, Ok(131));
+    assert_eq!(batch_pass, Ok(131));
 
     // Failing checker.
     let fail_checker: Arc<dyn SybilResistance> = Arc::new(MockNoneSybil { allow: false });

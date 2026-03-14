@@ -76,6 +76,18 @@ impl Verifier {
     pub fn new(ctx: &[u8]) -> Self {
         Self(v::Verifier::new(ctx))
     }
+
+    /// Verify a VOPRF token and return the base64url-encoded PRF output.
+    ///
+    /// `token_b64` is the base64url-encoded VOPRF evaluation (131 bytes raw).
+    /// `issuer_pubkey` is the SEC1-compressed public key bytes.
+    pub fn verify(&self, token_b64: &str, issuer_pubkey: &[u8]) -> Result<String, Error> {
+        let token_bytes = Base64UrlUnpadded::decode_vec(token_b64)
+            .map_err(|_| Error::InvalidInput("bad base64 token".into()))?;
+        let output = self.0.verify(&token_bytes, issuer_pubkey)
+            .map_err(|_| Error::Verify)?;
+        Ok(Base64UrlUnpadded::encode_string(&output))
+    }
 }
 
 /// Deterministic nullifier seed for anti-double-spend.

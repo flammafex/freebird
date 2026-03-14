@@ -33,7 +33,6 @@ use axum::{
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{BatchIssueReq, BatchIssueResp, SybilInfo, TokenResult};
-use freebird_crypto::{TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN};
 use rayon::prelude::*;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -73,7 +72,6 @@ fn compute_throughput(successful: usize, total_time_ms: u64) -> f64 {
     }
 }
 
-const RAW_VOPRF_TOKEN_LEN: usize = TOKEN_LEN_V2 - TOKEN_SIGNATURE_LEN;
 
 impl BatchMetrics {
     fn log(&self, batch_size: usize) {
@@ -135,16 +133,29 @@ async fn evaluate_token(
     voprf: &MultiKeyVoprfCore,
     blinded_b64: &str,
     exp: i64,
-    epoch: u32,
+    issuer_id: &str,
 ) -> TokenResult {
     match voprf.evaluate_b64(blinded_b64).await {
-        Ok(eval_result) => TokenResult::Success {
-            token: eval_result.token,
-            proof: String::new(),
-            kid: eval_result.kid,
-            exp,
-            epoch,
-        },
+        Ok(eval_result) => {
+            let kid = eval_result.kid;
+            // Sign metadata (V3: metadata only, no token_bytes)
+            match voprf.sign_token_metadata(&kid, exp, issuer_id).await {
+                Ok(sig) => {
+                    let sig_b64 = Base64UrlUnpadded::encode_string(&sig);
+                    TokenResult::Success {
+                        token: eval_result.token,
+                        sig: sig_b64,
+                        kid,
+                        exp,
+                        issuer_id: issuer_id.to_string(),
+                    }
+                }
+                Err(e) => TokenResult::Error {
+                    message: format!("signature generation failed: {}", e),
+                    code: "signature_generation_failed".to_string(),
+                },
+            }
+        }
         Err(e) => TokenResult::Error {
             message: e.to_string(),
             code: "voprf_evaluation_failed".to_string(),
@@ -282,9 +293,9 @@ pub async fn handle_batch(
     // --- PARALLEL VOPRF EVALUATION ---
     let voprf_start = Instant::now();
 
-    // Calculate expiration and epoch once for all tokens
+    // Calculate expiration once for all tokens
     let exp = OffsetDateTime::now_utc().unix_timestamp() + state.exp_sec as i64;
-    let epoch = state.current_epoch();
+    let issuer_id = state.issuer_id.clone();
 
     // Choose processing strategy based on batch size
     let results = if batch_size < MIN_PARALLEL_BATCH_SIZE {
@@ -300,7 +311,7 @@ pub async fn handle_batch(
             match validate_blinded_element(blinded_b64) {
                 Ok(_) => {
                     // Evaluate VOPRF
-                    results.push(evaluate_token(&voprf, blinded_b64, exp, epoch).await);
+                    results.push(evaluate_token(&voprf, blinded_b64, exp, &issuer_id).await);
                 }
                 Err(e) => {
                     results.push(TokenResult::Error {
@@ -335,7 +346,7 @@ pub async fn handle_batch(
                     Ok(_) => {
                         // Use blocking task to await async evaluation
                         runtime_handle.block_on(async {
-                            evaluate_token(&voprf, &req.blinded_elements[idx], exp, epoch).await
+                            evaluate_token(&voprf, &req.blinded_elements[idx], exp, &issuer_id).await
                         })
                     }
                     Err(e) => TokenResult::Error {
@@ -348,85 +359,6 @@ pub async fn handle_batch(
     };
 
     let voprf_time_ms = voprf_start.elapsed().as_millis() as u64;
-
-    // --- APPEND SIGNATUREs TO TOKENS ---
-    // Keep batch issuance output aligned with single issuance:
-    // [VOPRF token (131 bytes)] || [ECDSA signature (64 bytes)] = 195 bytes.
-
-    // Process each result and append signatures to successful tokens.
-    let mut signed_results = Vec::with_capacity(results.len());
-    for result in results {
-        let signed = match result {
-            TokenResult::Success {
-                token,
-                proof,
-                kid,
-                exp,
-                epoch: token_epoch,
-            } => match Base64UrlUnpadded::decode_vec(&token) {
-                Ok(token_bytes) => {
-                    if token_bytes.len() != RAW_VOPRF_TOKEN_LEN {
-                        TokenResult::Error {
-                            message: format!(
-                                "unexpected VOPRF token length: got {}, expected {}",
-                                token_bytes.len(),
-                                RAW_VOPRF_TOKEN_LEN
-                            ),
-                            code: "token_format_error".to_string(),
-                        }
-                    } else {
-                        let signature = match voprf
-                            .sign_token_metadata(&token_bytes, &kid, exp, &state.issuer_id)
-                            .await
-                        {
-                            Ok(sig) => sig,
-                            Err(e) => {
-                                error!("failed to sign token metadata in batch: {:?}", e);
-                                signed_results.push(TokenResult::Error {
-                                    message: "signature generation error".to_string(),
-                                    code: "signature_generation_failed".to_string(),
-                                });
-                                continue;
-                            }
-                        };
-
-                        let mut token_with_sig = token_bytes;
-                        token_with_sig.extend_from_slice(&signature);
-
-                        if token_with_sig.len() != TOKEN_LEN_V2 {
-                            TokenResult::Error {
-                                message: format!(
-                                    "unexpected final token length: got {}, expected {}",
-                                    token_with_sig.len(),
-                                    TOKEN_LEN_V2
-                                ),
-                                code: "token_format_error".to_string(),
-                            }
-                        } else {
-                            let final_token = Base64UrlUnpadded::encode_string(&token_with_sig);
-                            TokenResult::Success {
-                                token: final_token,
-                                proof,
-                                kid,
-                                exp,
-                                epoch: token_epoch,
-                            }
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("failed to decode token for signature: {:?}", e);
-                    TokenResult::Error {
-                        message: "token encoding error".to_string(),
-                        code: "signature_generation_failed".to_string(),
-                    }
-                }
-            },
-            err => err,
-        };
-        signed_results.push(signed);
-    }
-    let results = signed_results;
 
     // --- AGGREGATE RESULTS ---
     let successful = results

@@ -22,22 +22,16 @@ pub struct IssueReq {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IssueResp {
-    /// Base64url-encoded evaluation token
+    /// Base64url-encoded VOPRF evaluation [VERSION|A|B|DLEQ_proof] (131 bytes)
     pub token: String,
-
-    /// DLEQ proof
-    #[serde(default)]
-    pub proof: String,
-
+    /// Base64url-encoded ECDSA signature over metadata (64 bytes)
+    pub sig: String,
     /// Key identifier used for issuance
     pub kid: String,
-
     /// Expiration timestamp (Unix seconds)
     pub exp: i64,
-
-    /// Epoch used for MAC key derivation
-    pub epoch: u32,
-
+    /// Issuer identifier
+    pub issuer_id: String,
     /// Optional Sybil resistance verification info
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sybil_info: Option<SybilInfo>,
@@ -81,10 +75,10 @@ pub struct BatchIssueResp {
 pub enum TokenResult {
     Success {
         token: String,
-        proof: String,
+        sig: String,
         kid: String,
         exp: i64,
-        epoch: u32,
+        issuer_id: String,
     },
     Error {
         message: String,
@@ -98,16 +92,8 @@ pub enum TokenResult {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VerifyReq {
+    /// Base64url-encoded V3 redemption token (self-contained)
     pub token_b64: String,
-    pub issuer_id: String,
-
-    /// Optional: Token expiration time (Unix timestamp)
-    /// If provided, verifier checks clock skew against this.
-    #[serde(default)]
-    pub exp: Option<i64>,
-
-    /// Epoch used for MAC key derivation
-    pub epoch: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -128,20 +114,11 @@ pub struct VerifyResp {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BatchVerifyReq {
     pub tokens: Vec<TokenToVerify>,
-    pub issuer_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TokenToVerify {
     pub token_b64: String,
-
-    /// Optional: Token expiration time (Unix timestamp)
-    /// If provided, verifier checks clock skew against this.
-    #[serde(default)]
-    pub exp: Option<i64>,
-
-    /// Epoch used for MAC key derivation
-    pub epoch: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

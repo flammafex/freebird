@@ -227,23 +227,16 @@ impl MultiKeyVoprfCore {
         self.active_key.read().await.pubkey_b64.clone()
     }
 
-    /// Derive MAC key for the active key and given epoch
-    pub async fn derive_mac_key_for_epoch(&self, issuer_id: &str, epoch: u32) -> [u8; 32] {
-        let active = self.active_key.read().await;
-        active.derive_mac_key_for_epoch(issuer_id, epoch).await
-    }
-
     /// Sign token metadata using the active key (for federation support)
     pub async fn sign_token_metadata(
         &self,
-        token_bytes: &[u8],
         kid: &str,
         exp: i64,
         issuer_id: &str,
     ) -> Result<[u8; 64]> {
         let active = self.active_key.read().await;
         active
-            .sign_token_metadata(token_bytes, kid, exp, issuer_id)
+            .sign_token_metadata(kid, exp, issuer_id)
             .await
     }
 

@@ -12,7 +12,6 @@ use freebird_common::api::{
     BatchVerifyReq, BatchVerifyResp, TokenToVerify, VerifyReq, VerifyResp, VerifyResult,
 };
 use freebird_common::logging;
-use freebird_crypto::{TOKEN_LEN_V2, TOKEN_SIGNATURE_LEN};
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::{
@@ -35,27 +34,9 @@ struct AppState {
     store: Arc<dyn SpendStore>,
     /// Maximum acceptable clock skew in seconds (default: 300 = 5 minutes)
     max_clock_skew_secs: i64,
-    /// Epoch configuration
+    /// Epoch configuration (kept for admin display / backward compat)
     epoch_duration_sec: u64,
     epoch_retention: u32,
-}
-
-impl AppState {
-    /// Calculate current epoch based on Unix timestamp
-    fn current_epoch(&self) -> u32 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        (now / self.epoch_duration_sec) as u32
-    }
-
-    /// Check if an epoch is valid (within acceptable range)
-    fn is_epoch_valid(&self, epoch: u32) -> bool {
-        let current = self.current_epoch();
-        let min_valid = current.saturating_sub(self.epoch_retention);
-        epoch >= min_valid && epoch <= current
-    }
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -84,10 +65,10 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(300); // Default: 5 minutes
 
-    info!("⏰ Clock skew tolerance: {} seconds", max_clock_skew_secs);
+    info!("Clock skew tolerance: {} seconds", max_clock_skew_secs);
 
     // ---------- Epoch Configuration ----------
-    // Verifier uses signature-based authentication (no secret key required)
+    // Kept for admin config display; V3 tokens are self-contained and don't use epochs.
     let epoch_duration_sec = std::env::var("EPOCH_DURATION_SEC")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -97,11 +78,6 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(2); // Default: accept 2 previous epochs
-
-    info!(
-        "🔐 Epoch configuration: duration={}s, retention={}",
-        epoch_duration_sec, epoch_retention
-    );
 
     // ---------- Backend selection ----------
     let (backend, store_backend_name) = if let Ok(url) = std::env::var("REDIS_URL") {
@@ -122,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
         .collect();
 
     info!(
-        "📡 Configured {} issuer URL(s): {:?}",
+        "Configured {} issuer URL(s): {:?}",
         issuer_urls.len(),
         issuer_urls
     );
@@ -216,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
 
             let admin_router = admin::admin_router(admin_state);
             app = app.nest("/admin", admin_router);
-            info!("🔐 Admin API enabled at /admin");
+            info!("Admin API enabled at /admin");
         } else {
             warn!("ADMIN_API_KEY is too short (minimum 32 characters), admin API disabled");
         }
@@ -229,7 +205,7 @@ async fn main() -> anyhow::Result<()> {
     let addr: SocketAddr = bind_addr.parse()?;
     let listener = TcpListener::bind(addr).await?;
     info!(
-        "🕊️ Freebird verifier listening on http://{}",
+        "Freebird verifier listening on http://{}",
         listener.local_addr()?
     );
 
@@ -269,21 +245,112 @@ async fn refresh_issuer_metadata(state: &Arc<AppState>, issuer_url: &str) -> any
     Ok(())
 }
 
+// ============================================================================
+// V3 Token Verification Core
+// ============================================================================
+
+/// Parse a V3 redemption token from a base64url-encoded string, look up
+/// the issuer, verify expiration, and verify the ECDSA signature.
+///
+/// Returns `(parsed_token, issuer_info)` on success.
+fn verify_v3_token(
+    token_b64: &str,
+    issuers: &HashMap<String, IssuerInfo>,
+    max_clock_skew_secs: i64,
+) -> Result<(freebird_crypto::RedemptionToken, IssuerInfo), (StatusCode, String)> {
+    // 1) Decode base64url to get raw bytes
+    let token_bytes = Base64UrlUnpadded::decode_vec(token_b64).map_err(|e| {
+        error!("Failed to decode token: {:?}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            "invalid token encoding".to_string(),
+        )
+    })?;
+
+    // 2) Parse V3 redemption token
+    let parsed = freebird_crypto::parse_redemption_token(&token_bytes).map_err(|e| {
+        error!("Failed to parse V3 token: {:?}", e);
+        (
+            StatusCode::BAD_REQUEST,
+            format!("invalid token format: {:?}", e),
+        )
+    })?;
+
+    // 3) Check expiration (with clock skew tolerance)
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+
+    if now > parsed.exp + max_clock_skew_secs {
+        let expired_by = now - parsed.exp;
+        warn!(
+            "Token expired: expired_by={}s (tolerance={}s)",
+            expired_by, max_clock_skew_secs
+        );
+        return Err((StatusCode::UNAUTHORIZED, "token expired".to_string()));
+    }
+
+    // 4) Look up issuer pubkey using (kid, issuer_id) from the token
+    let issuer = issuers.get(&parsed.issuer_id).ok_or_else(|| {
+        error!("Issuer not found: {}", parsed.issuer_id);
+        (StatusCode::UNAUTHORIZED, "verification failed".to_string())
+    })?;
+
+    // Also check for tokens with expiration too far in the future
+    if parsed.exp > now + issuer.exp_sec as i64 + max_clock_skew_secs {
+        warn!(
+            "Token expiration too far in future: exp={}, max_expected={}",
+            parsed.exp,
+            now + issuer.exp_sec as i64
+        );
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "invalid token expiration".to_string(),
+        ));
+    }
+
+    debug!(
+        "Token not expired (exp in {}s), issuer={}, kid={}",
+        parsed.exp - now,
+        parsed.issuer_id,
+        parsed.kid
+    );
+
+    // 5) Verify ECDSA signature over metadata
+    let sig_valid = freebird_crypto::verify_token_signature(
+        &issuer.pubkey_bytes,
+        &parsed.sig,
+        &parsed.kid,
+        parsed.exp,
+        &parsed.issuer_id,
+    );
+
+    if !sig_valid {
+        error!("Signature verification failed - token metadata tampered or invalid");
+        return Err((StatusCode::UNAUTHORIZED, "verification failed".to_string()));
+    }
+
+    debug!("Signature verified - token metadata authentic");
+
+    Ok((parsed, issuer.clone()))
+}
+
+// ============================================================================
+// Verification handlers
+// ============================================================================
+
 // Wrapper to catch and log JSON deserialization errors
 async fn verify_with_logging(
     state: State<Arc<AppState>>,
     result: Result<Json<VerifyReq>, JsonRejection>,
 ) -> Result<Json<VerifyResp>, (StatusCode, String)> {
-    info!("📥 /v1/verify request received");
+    info!("/v1/verify request received");
 
     match result {
         Ok(Json(req)) => {
-            info!("✅ Request parsed: issuer_id={}", req.issuer_id);
             debug!("Full request: {:?}", req);
             verify(state, Json(req)).await
         }
         Err(rejection) => {
-            error!("❌ JSON deserialization failed: {}", rejection);
+            error!("JSON deserialization failed: {}", rejection);
             Err((
                 StatusCode::BAD_REQUEST,
                 format!("Invalid JSON: {}", rejection),
@@ -292,153 +359,27 @@ async fn verify_with_logging(
     }
 }
 
-// ---------- Verification handler with expiration checking ----------
+// ---------- Verification handler (V3 self-contained tokens) ----------
 async fn verify(
     State(st): State<Arc<AppState>>,
     Json(req): Json<VerifyReq>,
 ) -> Result<Json<VerifyResp>, (StatusCode, String)> {
-    info!("🔍 Starting verification for issuer={}", req.issuer_id);
+    info!("Starting V3 token verification");
 
-    // 1) Lookup issuer
+    // 1) Parse and verify the V3 token (expiration + ECDSA signature)
     let issuers = st.issuers.read().await;
-    debug!("Loaded issuers map, contains {} entries", issuers.len());
+    let (parsed, issuer) = verify_v3_token(&req.token_b64, &issuers, st.max_clock_skew_secs)?;
+    drop(issuers);
 
-    let issuer = issuers.get(&req.issuer_id).ok_or_else(|| {
-        error!("Issuer not found: {}", req.issuer_id);
-        (StatusCode::UNAUTHORIZED, "verification failed".to_string())
-    })?;
-
-    debug!("Found issuer: kid={}", issuer.kid);
-
-    // 2) NEW: Check token expiration BEFORE cryptographic verification
-    //    This prevents wasting CPU on expired tokens
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
-    // Determine expiration time:
-    // - Use explicit exp from request if provided
-    // - Otherwise, tokens expire based on issuer's default TTL from issuance time
-    // Note: For proper validation, tokens should include their exp in the request
-    if let Some(exp) = req.exp {
-        debug!("Checking explicit expiration: exp={}, now={}", exp, now);
-
-        // Check if token has expired (with clock skew tolerance)
-        if now > exp + st.max_clock_skew_secs {
-            let expired_by = now - exp;
-            warn!(
-                "❌ Token expired: expired_by={}s (tolerance={}s)",
-                expired_by, st.max_clock_skew_secs
-            );
-            return Err((StatusCode::UNAUTHORIZED, "token expired".to_string()));
-        }
-
-        // Also check for tokens with expiration too far in the future
-        // (possible clock skew or forged timestamps)
-        if exp > now + issuer.exp_sec as i64 + st.max_clock_skew_secs {
-            warn!(
-                "❌ Token expiration too far in future: exp={}, max_expected={}",
-                exp,
-                now + issuer.exp_sec as i64
-            );
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "invalid token expiration".to_string(),
-            ));
-        }
-
-        debug!("✅ Token not expired (exp in {}s)", exp - now);
-    } else {
-        debug!("⚠️ No explicit expiration provided, relying on nullifier TTL");
-        // Without explicit exp, we rely on the nullifier TTL to prevent
-        // old tokens from being used. This is less secure than explicit
-        // expiration checking but maintains backward compatibility.
-    }
-
-    // 3) Validate epoch is within acceptable range
-    if !st.is_epoch_valid(req.epoch) {
-        error!(
-            "❌ Invalid epoch: got {}, current={}, min_valid={}",
-            req.epoch,
-            st.current_epoch(),
-            st.current_epoch().saturating_sub(st.epoch_retention)
-        );
-        return Err((StatusCode::BAD_REQUEST, "invalid epoch".to_string()));
-    }
-
-    debug!("✅ Epoch {} is valid", req.epoch);
-
-    // 4) Authenticate token metadata using ECDSA signature
-    let exp_value = req.exp.ok_or_else(|| {
-        error!("❌ Token missing expiration field");
-        (
-            StatusCode::BAD_REQUEST,
-            "token must include expiration".to_string(),
-        )
-    })?;
-
-    // Decode token (V2: token bytes + ECDSA signature)
-    let token_with_sig = Base64UrlUnpadded::decode_vec(&req.token_b64).map_err(|e| {
-        error!("❌ Failed to decode token: {:?}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            "invalid token encoding".to_string(),
-        )
-    })?;
-
-    // Validate token length (must match V2 layout)
-    if token_with_sig.len() != TOKEN_LEN_V2 {
-        error!(
-            "❌ Invalid token length: got {} bytes, expected {}",
-            token_with_sig.len(),
-            TOKEN_LEN_V2
-        );
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("invalid token length (expected {} bytes)", TOKEN_LEN_V2),
-        ));
-    }
-
-    // Split token and signature
-    let token_data_len = TOKEN_LEN_V2 - TOKEN_SIGNATURE_LEN;
-    let (token_data, sig_bytes) = token_with_sig.split_at(token_data_len);
-    let received_signature: [u8; 64] = sig_bytes.try_into().expect("Signature is 64 bytes");
-
-    // Verify signature using issuer's public key (federation mode!)
-    let sig_valid = freebird_crypto::verify_token_signature(
-        &issuer.pubkey_bytes,
-        token_data,
-        &received_signature,
-        &issuer.kid,
-        exp_value,
-        &req.issuer_id,
-    );
-
-    if !sig_valid {
-        error!("❌ Signature verification failed - token metadata tampered or invalid");
-        return Err((StatusCode::UNAUTHORIZED, "verification failed".to_string()));
-    }
-
-    debug!("✅ Signature verified - token metadata authentic");
-
-    // 5) Verify DLEQ token and derive PRF output
-    debug!("Verifying DLEQ token with context len={}", issuer.ctx.len());
-    let verifier = freebird_crypto::Verifier::new(&issuer.ctx);
-
-    // Pass only the token data (without authentication) to VOPRF verifier
-    let token_data_b64 = Base64UrlUnpadded::encode_string(token_data);
-    let out_b64 = verifier
-        .verify(&token_data_b64, &issuer.pubkey_bytes)
-        .map_err(|e| {
-            error!("Token cryptographic verification failed: {:?}", e);
-            (StatusCode::UNAUTHORIZED, "verification failed".into())
-        })?;
-
-    debug!("✅ Token cryptographically valid, PRF output derived");
-
-    // 4) Replay / spend tracking
-    let null_key = freebird_crypto::nullifier_key(&req.issuer_id, &out_b64);
-    let spend_key = format!("freebird:spent:{}:{}", req.issuer_id, null_key);
+    // 2) Derive nullifier from unblinded PRF output
+    let output_b64 = Base64UrlUnpadded::encode_string(&parsed.output);
+    let null_key = freebird_crypto::nullifier_key(&parsed.issuer_id, &output_b64);
+    let spend_key = format!("freebird:spent:{}:{}", parsed.issuer_id, null_key);
     debug!("Checking replay with key: {}", spend_key);
 
+    // 3) Replay / spend tracking
     let spent = st
         .store
         .mark_spent(&spend_key, Duration::from_secs(issuer.exp_sec))
@@ -453,11 +394,11 @@ async fn verify(
         return Err((StatusCode::UNAUTHORIZED, "verification failed".into()));
     }
 
-    // 6) Success
+    // 4) Success
     info!(
-        "✅ Token verified successfully: issuer={}, kid={}, nullifier={}",
-        req.issuer_id,
-        issuer.kid,
+        "Token verified successfully: issuer={}, kid={}, nullifier={}",
+        parsed.issuer_id,
+        parsed.kid,
         &null_key[..16]
     );
 
@@ -474,16 +415,15 @@ async fn check_with_logging(
     state: State<Arc<AppState>>,
     result: Result<Json<VerifyReq>, JsonRejection>,
 ) -> Result<Json<VerifyResp>, (StatusCode, String)> {
-    info!("📥 /v1/check request received");
+    info!("/v1/check request received");
 
     match result {
         Ok(Json(req)) => {
-            info!("✅ Request parsed: issuer_id={}", req.issuer_id);
             debug!("Full request: {:?}", req);
             check(state, Json(req)).await
         }
         Err(rejection) => {
-            error!("❌ JSON deserialization failed: {}", rejection);
+            error!("JSON deserialization failed: {}", rejection);
             Err((
                 StatusCode::BAD_REQUEST,
                 format!("Invalid JSON: {}", rejection),
@@ -494,8 +434,8 @@ async fn check_with_logging(
 
 /// Check token validity WITHOUT consuming/recording the nullifier.
 ///
-/// This endpoint validates the token's cryptographic proof and expiration
-/// but does NOT mark it as spent. Use this for:
+/// This endpoint validates the token's V3 format, expiration, and ECDSA
+/// signature but does NOT mark it as spent. Use this for:
 /// - Verifying a user holds a valid Day Pass
 /// - Checking token validity before a multi-step operation
 /// - Rate-limiting based on token possession without consumption
@@ -505,142 +445,21 @@ async fn check(
     State(st): State<Arc<AppState>>,
     Json(req): Json<VerifyReq>,
 ) -> Result<Json<VerifyResp>, (StatusCode, String)> {
-    info!(
-        "🔍 Starting check (no consumption) for issuer={}",
-        req.issuer_id
-    );
+    info!("Starting V3 token check (no consumption)");
 
-    // 1) Lookup issuer
+    // Parse and verify the V3 token (expiration + ECDSA signature)
     let issuers = st.issuers.read().await;
-    debug!("Loaded issuers map, contains {} entries", issuers.len());
+    let (parsed, _issuer) = verify_v3_token(&req.token_b64, &issuers, st.max_clock_skew_secs)?;
+    drop(issuers);
 
-    let issuer = issuers.get(&req.issuer_id).ok_or_else(|| {
-        error!("Issuer not found: {}", req.issuer_id);
-        (StatusCode::UNAUTHORIZED, "check failed".to_string())
-    })?;
-
-    debug!("Found issuer: kid={}", issuer.kid);
-
-    // 2) Check token expiration
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
-
-    if let Some(exp) = req.exp {
-        debug!("Checking explicit expiration: exp={}, now={}", exp, now);
-
-        // Check if token has expired (with clock skew tolerance)
-        if now > exp + st.max_clock_skew_secs {
-            let expired_by = now - exp;
-            warn!(
-                "❌ Token expired: expired_by={}s (tolerance={}s)",
-                expired_by, st.max_clock_skew_secs
-            );
-            return Err((StatusCode::UNAUTHORIZED, "token expired".to_string()));
-        }
-
-        // Also check for tokens with expiration too far in the future
-        if exp > now + issuer.exp_sec as i64 + st.max_clock_skew_secs {
-            warn!(
-                "❌ Token expiration too far in future: exp={}, max_expected={}",
-                exp,
-                now + issuer.exp_sec as i64
-            );
-            return Err((
-                StatusCode::BAD_REQUEST,
-                "invalid token expiration".to_string(),
-            ));
-        }
-
-        debug!("✅ Token not expired (exp in {}s)", exp - now);
-    } else {
-        debug!("⚠️ No explicit expiration provided");
-    }
-
-    // 3) Validate epoch is within acceptable range
-    if !st.is_epoch_valid(req.epoch) {
-        error!(
-            "❌ Invalid epoch: got {}, current={}, min_valid={}",
-            req.epoch,
-            st.current_epoch(),
-            st.current_epoch().saturating_sub(st.epoch_retention)
-        );
-        return Err((StatusCode::BAD_REQUEST, "invalid epoch".to_string()));
-    }
-
-    debug!("✅ Epoch {} is valid", req.epoch);
-
-    // 4) Authenticate token metadata using ECDSA signature
-    let exp_value = req.exp.ok_or_else(|| {
-        error!("❌ Token missing expiration field");
-        (
-            StatusCode::BAD_REQUEST,
-            "token must include expiration".to_string(),
-        )
-    })?;
-
-    // Decode token (V2: token bytes + ECDSA signature)
-    let token_with_sig = Base64UrlUnpadded::decode_vec(&req.token_b64).map_err(|e| {
-        error!("❌ Failed to decode token: {:?}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            "invalid token encoding".to_string(),
-        )
-    })?;
-
-    // Validate token length (must match V2 layout)
-    if token_with_sig.len() != TOKEN_LEN_V2 {
-        error!(
-            "❌ Invalid token length: got {} bytes, expected {}",
-            token_with_sig.len(),
-            TOKEN_LEN_V2
-        );
-        return Err((
-            StatusCode::BAD_REQUEST,
-            format!("invalid token length (expected {} bytes)", TOKEN_LEN_V2),
-        ));
-    }
-
-    // Split token and signature
-    let token_data_len = TOKEN_LEN_V2 - TOKEN_SIGNATURE_LEN;
-    let (token_data, sig_bytes) = token_with_sig.split_at(token_data_len);
-    let received_signature: [u8; 64] = sig_bytes.try_into().expect("Signature is 64 bytes");
-
-    // Verify signature using issuer's public key
-    let sig_valid = freebird_crypto::verify_token_signature(
-        &issuer.pubkey_bytes,
-        token_data,
-        &received_signature,
-        &issuer.kid,
-        exp_value,
-        &req.issuer_id,
-    );
-
-    if !sig_valid {
-        error!("❌ Signature verification failed - token metadata tampered or invalid");
-        return Err((StatusCode::UNAUTHORIZED, "check failed".to_string()));
-    }
-
-    debug!("✅ Signature verified - token metadata authentic");
-
-    // 5) Verify DLEQ token (cryptographic proof)
-    debug!("Verifying DLEQ token with context len={}", issuer.ctx.len());
-    let verifier = freebird_crypto::Verifier::new(&issuer.ctx);
-
-    let token_data_b64 = Base64UrlUnpadded::encode_string(token_data);
-    let _out_b64 = verifier
-        .verify(&token_data_b64, &issuer.pubkey_bytes)
-        .map_err(|e| {
-            error!("Token cryptographic verification failed: {:?}", e);
-            (StatusCode::UNAUTHORIZED, "check failed".into())
-        })?;
-
-    debug!("✅ Token cryptographically valid");
 
     // NOTE: We intentionally skip mark_spent() here - this is the key difference from /v1/verify
     // The token remains valid for future use with /v1/verify
 
     info!(
-        "✅ Token check passed (not consumed): issuer={}, kid={}",
-        req.issuer_id, issuer.kid
+        "Token check passed (not consumed): issuer={}, kid={}",
+        parsed.issuer_id, parsed.kid
     );
 
     Ok(Json(VerifyResp {
@@ -664,7 +483,7 @@ fn compute_throughput(successful: usize, total_time_ms: u64) -> f64 {
     }
 }
 
-// ---------- Batch Verification Handler ----------
+// ---------- Batch Verification Handler (V3) ----------
 async fn batch_verify(
     State(st): State<Arc<AppState>>,
     Json(req): Json<BatchVerifyReq>,
@@ -672,10 +491,7 @@ async fn batch_verify(
     let start = Instant::now();
     let batch_size = req.tokens.len();
 
-    info!(
-        "🔥 /v1/verify/batch: size={}, issuer={}",
-        batch_size, req.issuer_id
-    );
+    info!("/v1/verify/batch: size={}", batch_size);
 
     // --- VALIDATION ---
     if batch_size == 0 {
@@ -692,134 +508,42 @@ async fn batch_verify(
         ));
     }
 
-    // --- LOOKUP ISSUER (once for all tokens) ---
+    // Snapshot issuers map for parallel processing
     let issuers = st.issuers.read().await;
-    let issuer = issuers.get(&req.issuer_id).ok_or_else(|| {
-        error!("Issuer not found: {}", req.issuer_id);
-        (StatusCode::UNAUTHORIZED, "verification failed".to_string())
-    })?;
-
-    // Clone issuer data so we can drop the lock before parallel processing
-    let issuer_clone = issuer.clone();
-    let issuer_id = req.issuer_id.clone();
+    let issuers_snapshot: HashMap<String, IssuerInfo> = issuers.clone();
     drop(issuers);
 
-    info!("✅ Issuer found: kid={}", issuer_clone.kid);
-
-    // --- PARALLEL VERIFICATION ---
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let runtime_handle = tokio::runtime::Handle::current();
-    let token_data_len = TOKEN_LEN_V2 - TOKEN_SIGNATURE_LEN;
+    let max_clock_skew = st.max_clock_skew_secs;
 
-    // Helper function to verify a single token
+    // Helper function to verify a single V3 token
     let verify_one = |token_req: &TokenToVerify| -> VerifyResult {
-        // 1) Validate epoch is within acceptable range
-        if !st.is_epoch_valid(token_req.epoch) {
-            return VerifyResult::Error {
-                message: format!("invalid epoch: {}", token_req.epoch),
-                code: "invalid_epoch".to_string(),
-            };
-        }
-
-        // 2) Check expiration
-        if let Some(exp) = token_req.exp {
-            if now > exp + st.max_clock_skew_secs {
+        // 1) Parse and verify the V3 token
+        let (parsed, issuer) = match verify_v3_token(
+            &token_req.token_b64,
+            &issuers_snapshot,
+            max_clock_skew,
+        ) {
+            Ok(r) => r,
+            Err((_status, msg)) => {
                 return VerifyResult::Error {
-                    message: "token expired".to_string(),
-                    code: "expired".to_string(),
-                };
-            }
-
-            if exp > now + issuer_clone.exp_sec as i64 + st.max_clock_skew_secs {
-                return VerifyResult::Error {
-                    message: "invalid token expiration".to_string(),
-                    code: "invalid_expiration".to_string(),
-                };
-            }
-        } else {
-            return VerifyResult::Error {
-                message: "token must include expiration".to_string(),
-                code: "missing_expiration".to_string(),
-            };
-        }
-
-        let exp_value = token_req.exp.unwrap();
-
-        // 3) Decode token (must match V2 layout)
-        let token_with_sig = match Base64UrlUnpadded::decode_vec(&token_req.token_b64) {
-            Ok(t) => t,
-            Err(_) => {
-                return VerifyResult::Error {
-                    message: "invalid token encoding".to_string(),
-                    code: "invalid_encoding".to_string(),
+                    message: msg,
+                    code: "verification_failed".to_string(),
                 };
             }
         };
 
-        // Validate token length
-        if token_with_sig.len() != TOKEN_LEN_V2 {
-            return VerifyResult::Error {
-                message: format!(
-                    "invalid token length: got {} bytes, expected {}",
-                    token_with_sig.len(),
-                    TOKEN_LEN_V2
-                ),
-                code: "invalid_length".to_string(),
-            };
-        }
+        // 2) Derive nullifier from unblinded PRF output
+        let output_b64 = Base64UrlUnpadded::encode_string(&parsed.output);
+        let null_key = freebird_crypto::nullifier_key(&parsed.issuer_id, &output_b64);
+        let spend_key = format!("freebird:spent:{}:{}", parsed.issuer_id, null_key);
 
-        // Split token and signature
-        let (token_data, sig_bytes) = token_with_sig.split_at(token_data_len);
-        let received_signature: [u8; 64] = match sig_bytes.try_into() {
-            Ok(s) => s,
-            Err(_) => {
-                return VerifyResult::Error {
-                    message: "invalid signature".to_string(),
-                    code: "invalid_signature".to_string(),
-                };
-            }
-        };
-
-        // Verify signature using issuer's public key
-        let sig_valid = freebird_crypto::verify_token_signature(
-            &issuer_clone.pubkey_bytes,
-            token_data,
-            &received_signature,
-            &issuer_clone.kid,
-            exp_value,
-            &issuer_id,
-        );
-
-        if !sig_valid {
-            return VerifyResult::Error {
-                message: "signature verification failed".to_string(),
-                code: "signature_verification_failed".to_string(),
-            };
-        }
-
-        // 4) Verify VOPRF token
-        let verifier = freebird_crypto::Verifier::new(&issuer_clone.ctx);
-        let token_data_b64 = Base64UrlUnpadded::encode_string(token_data);
-        let out_b64 = match verifier.verify(&token_data_b64, &issuer_clone.pubkey_bytes) {
-            Ok(o) => o,
-            Err(_) => {
-                return VerifyResult::Error {
-                    message: "cryptographic verification failed".to_string(),
-                    code: "voprf_verification_failed".to_string(),
-                };
-            }
-        };
-
-        // 5) Check for replay - this is the only part that needs to be async
-        // We'll handle this synchronously in the parallel loop by using block_on
-        let null_key = freebird_crypto::nullifier_key(&issuer_id, &out_b64);
-        let spend_key = format!("freebird:spent:{}:{}", issuer_id, null_key);
-
+        // 3) Check for replay
         // Use captured runtime handle to bridge rayon and tokio.
-        // Calling Handle::current() inside Rayon threads can panic.
         let spent = runtime_handle.block_on(async {
             st.store
-                .mark_spent(&spend_key, Duration::from_secs(issuer_clone.exp_sec))
+                .mark_spent(&spend_key, Duration::from_secs(issuer.exp_sec))
                 .await
         });
 
@@ -859,7 +583,7 @@ async fn batch_verify(
     let throughput = compute_throughput(successful, total_time_ms);
 
     info!(
-        "📊 Batch verify metrics: total={}ms, success={}/{}, throughput={:.0} tok/s",
+        "Batch verify metrics: total={}ms, success={}/{}, throughput={:.0} tok/s",
         total_time_ms, successful, batch_size, throughput
     );
 
