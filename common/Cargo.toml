@@ -1,6 +1,6 @@
 [package]
 name = "freebird-common"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Common utilities and shared types for the Freebird privacy-preserving authentication system"
 license = "MIT OR Apache-2.0"
@@ -25,5 +25,5 @@ base64ct = { version = "1.6", features = ["alloc"] }
 
 # Cryptography (for federation signatures)
 
-freebird-crypto = { version = "0.3.0", path = "../crypto" }
+freebird-crypto = { version = "0.4.0", path = "../crypto" }
 

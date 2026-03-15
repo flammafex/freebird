@@ -117,16 +117,16 @@ export interface IssueRequest {
  * Response from token issuance (Issuer -> Client)
  */
 export interface IssueResponse {
-  /** Base64url encoded evaluated element */
+  /** Base64url encoded VOPRF evaluation [VERSION|A|B|DLEQ_proof] (131 bytes) */
   token: string;
-  /** DLEQ proof for verification */
-  proof: string;
+  /** Base64url encoded ECDSA signature over metadata (64 bytes) */
+  sig: string;
   /** Key ID used for issuance */
   kid: string;
   /** Expiration timestamp (Unix seconds) */
   exp: number;
-  /** Epoch used for verifier MAC key derivation */
-  epoch: number;
+  /** Issuer identifier */
+  issuer_id: string;
   /** Sybil verification details (optional) */
   sybil_info?: {
     required: boolean;
@@ -150,12 +150,10 @@ export interface BlindState {
  * A complete, unblinded token ready for use.
  */
 export interface FreebirdToken {
-  /** Base64url-encoded token bytes returned by issuer (131-byte VOPRF or 195-byte signed token) */
-  tokenValue: string; // Base64url
-  /** Token expiration time */
+  /** Base64url-encoded V3 redemption token (self-contained) */
+  tokenValue: string;
+  /** Token expiration time (extracted for convenience) */
   expiration: number;
-  /** The Issuer ID this token belongs to */
+  /** The Issuer ID this token belongs to (extracted for convenience) */
   issuerId: string;
-  /** Epoch used for verifier MAC key derivation */
-  epoch: number;
 }

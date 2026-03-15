@@ -99,7 +99,7 @@ Resources depend on your anticipated user base and Sybil resistance complexity.
 
 - **Unlinkability**: Mathematical guarantee via VOPRF—issuer cannot correlate token issuance with usage.
 - **Unforgeability**: Only the issuer's private key can create valid tokens.
-- **Verifiability**: DLEQ proofs ensure correct token generation using the committed key.
+- **Verifiability**: DLEQ proofs (client-side) ensure correct evaluation; ECDSA signatures (verifier-side) authenticate token metadata.
 - **Single-Use**: Nullifier-based replay protection ensures tokens are spent exactly once.
 
 ### Implementation Status

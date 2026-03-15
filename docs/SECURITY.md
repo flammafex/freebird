@@ -179,11 +179,11 @@ Complete security analysis, threat model, and guarantees for Freebird.
 **Impact:** HIGH - Breaks unlinkability
 
 **Protection:**
-- ✅ DLEQ proof ensures issuer uses correct key
+- ✅ DLEQ proof ensures issuer uses correct key (verified client-side during issuance)
 - ✅ Public key verification
-- ✅ Client crypto layer verifies proofs automatically
+- ✅ Client crypto layer verifies proofs automatically before unblinding
 
-**Status:** ✅ **Protected** - Clients verify DLEQ proofs
+**Status:** ✅ **Protected** - Clients verify DLEQ proofs during issuance
 
 ---
 
@@ -448,7 +448,7 @@ See [HSM_HYBRID_MODE.md](HSM_HYBRID_MODE.md) for implementation details.
 **Impact on Freebird:**
 - Hash-to-curve security (deterministic point mapping)
 - Nullifier uniqueness (collision = double-spend)
-- HMAC security (token metadata binding in federation)
+- ECDSA signature integrity (token metadata binding)
 
 ### Standard Model vs Random Oracle Model
 

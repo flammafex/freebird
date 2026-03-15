@@ -116,9 +116,10 @@ Issues a single anonymous token via VOPRF evaluation.
 ```json
 {
   "token": "Q9w8x7y6v5u4t3s2r1q0p9o8n7m6l5k4...",
-  "proof": "",
+  "sig": "Base64url-encoded-ECDSA-signature...",
   "kid": "2b8d5f3a-2024-11-08",
   "exp": 1699454445,
+  "issuer_id": "issuer:freebird:v1",
   "sybil_info": {
     "required": true,
     "passed": true,
@@ -127,12 +128,15 @@ Issues a single anonymous token via VOPRF evaluation.
 }
 ```
 
-**Token Formats:**
+**Response Fields:**
 
-- **Basic Token (131 bytes):** VOPRF evaluation result with DLEQ proof
-- **Signature-Based Token (195 bytes):** Includes ECDSA signature for federation support
+- `token`: Base64url-encoded VOPRF evaluation `[VERSION|A|B|DLEQ_proof]` (131 bytes). Used by the client to verify the DLEQ proof and unblind the result. Ephemeral — discarded after client-side finalization.
+- `sig`: Base64url-encoded ECDSA signature (64 bytes) over `SHA256("freebird:token-metadata:v3" || kid_len || kid || exp || issuer_id_len || issuer_id)`. Included in the V3 redemption token sent to verifiers.
+- `kid`: Key identifier for the signing key used.
+- `exp`: Token expiration (Unix timestamp, seconds).
+- `issuer_id`: Issuer identifier. Needed by the client to build the V3 redemption token.
 
-The token format depends on issuer configuration. Federation-enabled issuers return signature-based tokens that can be verified by any verifier with the issuer's public key.
+The client uses these fields to build a **V3 redemption token** — a self-contained binary format containing the unblinded PRF output, metadata, and ECDSA signature. See [How It Works](HOW_IT_WORKS.md) for protocol details.
 
 ---
 
@@ -162,9 +166,9 @@ Issues multiple tokens in parallel (1000+ tokens/sec).
 ```json
 {
   "results": [
-    {"Success": {"token": "Q9w8x7y6...", "exp": 1699454445}},
-    {"Success": {"token": "P8o7n6m5...", "exp": 1699454445}},
-    {"Error": {"message": "invalid base64", "code": "validation_failed"}}
+    {"status": "success", "token": "Q9w8x7y6...", "sig": "...", "kid": "2b8d5f3a", "exp": 1699454445, "issuer_id": "issuer:freebird:v1"},
+    {"status": "success", "token": "P8o7n6m5...", "sig": "...", "kid": "2b8d5f3a", "exp": 1699454445, "issuer_id": "issuer:freebird:v1"},
+    {"status": "error", "message": "invalid base64", "code": "validation_failed"}
   ],
   "successful": 2,
   "failed": 1,
@@ -291,21 +295,17 @@ Get Relying Party configuration.
 
 **POST /v1/verify**
 
-Verifies a token with expiration checking and replay protection. Supports tokens from multiple issuers in federation scenarios.
+Verifies a V3 redemption token with expiration checking and replay protection. Supports tokens from multiple issuers in federation scenarios.
 
 **Request:**
 ```json
 {
-  "token_b64": "Q9w8x7y6v5u4t3s2r1q0p9o8n7m6l5k4...",
-  "issuer_id": "issuer:freebird:v1",
-  "exp": 1699454445
+  "token_b64": "AwAAAA...base64url-encoded-V3-redemption-token..."
 }
 ```
 
 **Fields:**
-- `token_b64`: Base64-encoded token (131 or 195 bytes depending on format)
-- `issuer_id`: Identifier of the issuer that created the token
-- `exp`: Unix timestamp when token expires
+- `token_b64`: Base64url-encoded V3 redemption token. The token is self-contained — it includes the PRF output, key ID, expiration, issuer ID, and ECDSA signature.
 
 **Response (200 OK - Success):**
 ```json
@@ -326,18 +326,20 @@ Verifies a token with expiration checking and replay protection. Supports tokens
 **Error Reasons:**
 - Token expired (`exp < current_time`)
 - Token already used (replay attack)
-- Invalid signature or DLEQ proof
+- Invalid ECDSA signature
 - Unknown issuer (not in trusted issuer list)
 - Nullifier already exists in database
+- Invalid V3 token format
 
-**Federation Support:**
+**Verification Flow:**
 
-In multi-issuer scenarios, the verifier:
-1. Looks up the issuer's public key using `issuer_id`
-2. Verifies the token's ECDSA signature (for signature-based tokens)
-3. Verifies the DLEQ proof
-4. Checks expiration and replay protection
-5. Records the nullifier to prevent reuse
+The verifier processes V3 redemption tokens:
+1. Parses the self-contained V3 token (extracts output, kid, exp, issuer_id, ECDSA sig)
+2. Checks expiration with clock skew tolerance
+3. Looks up the issuer's public key using `(kid, issuer_id)`
+4. Verifies the ECDSA signature over the metadata
+5. Derives the nullifier from the PRF output
+6. Checks and records the nullifier to prevent reuse
 
 See [FEDERATION.md](FEDERATION.md) for configuration details.
 
@@ -347,7 +349,7 @@ See [FEDERATION.md](FEDERATION.md) for configuration details.
 
 **POST /v1/check**
 
-Validates a token's cryptographic proof and expiration **without** recording the nullifier. The token remains valid for future use with `/v1/verify` or other services.
+Validates a V3 token's format, expiration, and ECDSA signature **without** recording the nullifier. The token remains valid for future use with `/v1/verify` or other services.
 
 **Use Cases:**
 - Verifying a user holds a valid Day Pass before granting access
@@ -357,10 +359,7 @@ Validates a token's cryptographic proof and expiration **without** recording the
 **Request:**
 ```json
 {
-  "token_b64": "Q9w8x7y6v5u4t3s2r1q0p9o8n7m6l5k4...",
-  "issuer_id": "issuer:freebird:v1",
-  "exp": 1699454445,
-  "epoch": 42
+  "token_b64": "AwAAAA...base64url-encoded-V3-redemption-token..."
 }
 ```
 

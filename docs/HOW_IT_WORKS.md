@@ -170,34 +170,43 @@ Without proof, client rejects the output
      │                           │ 6. Create DLEQ proof      │
      │                           │    proof: "I used key sk" │
      │                           │                           │
-     │ 7. Return signed ◀────────┤                           │
+     │ 7. Return evaluated ◀─────┤                           │
      │    + DLEQ proof           │                           │
-     │    + expiration           │                           │
-     │    + key ID               │                           │
+     │    + ECDSA sig (metadata) │                           │
+     │    + kid, exp, issuer_id  │                           │
      │                           │                           │
      │ 8. Verify DLEQ proof      │                           │
      │    (check server honesty) │                           │
      │                           │                           │
      │ 9. Unblind                │                           │
-     │    token = evaluated / r  │                           │
+     │    W = evaluated * r⁻¹   │                           │
+     │    output = PRF(W)        │                           │
      │                           │                           │
-     │ 10. Send token ───────────┼──────────────────────────▶
-     │     + expiration          │                           │
-     │     + issuer_id           │                           │
+     │ 10. Discard DLEQ proof,   │                           │
+     │     blinded elements      │                           │
      │                           │                           │
-     │                           │                           │ 11. Check expiration
+     │ 11. Build V3 token        │                           │
+     │     (output + metadata    │                           │
+     │      + ECDSA sig)         │                           │
+     │                           │                           │
+     │ 12. Send V3 token ────────┼──────────────────────────▶
+     │     (self-contained)      │                           │
+     │                           │                           │
+     │                           │                           │ 13. Parse V3 token
+     │                           │                           │
+     │                           │                           │ 14. Check expiration
      │                           │                           │     (time-bound validity)
      │                           │                           │
-     │                           │                           │ 12. Verify signature
-     │                           │                           │     (DLEQ proof check)
+     │                           │                           │ 15. Verify ECDSA signature
+     │                           │                           │     (issuer authenticity)
      │                           │                           │
-     │                           │                           │ 13. Compute nullifier
+     │                           │                           │ 16. Compute nullifier
      │                           │                           │     (replay detection)
      │                           │                           │
-     │                           │                           │ 14. Check nullifier DB
+     │                           │                           │ 17. Check nullifier DB
      │                           │                           │     (prevent double-spend)
      │                           │                           │
-     │ 15. Success ◀─────────────┼───────────────────────────┤
+     │ 18. Success ◀─────────────┼───────────────────────────┤
      │                           │                           │
 ```
 
@@ -276,9 +285,19 @@ let token = evaluated * blind_inverse;      // (H(input) * r)^sk * (1/r)
 
 **Result:** Client obtains `H(input)^sk` without server seeing `input`.
 
+### Separation of Concerns: DLEQ vs ECDSA
+
+Freebird uses two distinct cryptographic mechanisms for different trust boundaries:
+
+- **DLEQ proof (client-side only):** During issuance, the client verifies the DLEQ proof to confirm the issuer computed the evaluation honestly. The proof is then **discarded** — it is never sent to the verifier.
+- **ECDSA signature (verifier-side):** The issuer signs token metadata `(kid, exp, issuer_id)` with ECDSA. The verifier checks this signature to authenticate that the metadata was issued by a trusted issuer.
+
+The PRF output itself is **self-authenticating**: only someone with the issuer's secret key can cause a client to produce a valid output (via the DLEQ-verified evaluation). The verifier trusts the output through the discrete log assumption.
+
 ### DLEQ Proof (Discrete Logarithm Equality Proof)
 
 **Purpose:** Prove that `evaluated = blinded^sk` without revealing `sk`
+**Used by:** Client only (during issuance). Discarded after verification.
 
 **Prover (Server) knows:**
 - `sk` (secret key)
@@ -331,11 +350,13 @@ assert_eq!(challenge, challenge_check);
 **Purpose:** Detect token replay without linking to identity
 
 ```rust
-nullifier = SHA256("freebird:nullifier:v1" || issuer_id || token_output);
+nullifier = base64url(SHA256(issuer_id || "|" || base64url(output)))
 ```
 
+Where `output` is the 32-byte unblinded PRF output `SHA256("VOPRF-P256-SHA256:Finalize" || ctx || W)`.
+
 **Properties:**
-- Deterministic (same token = same nullifier)
+- Deterministic (same input + same issuer key = same nullifier, regardless of blinding factor)
 - Unlinkable to input (can't reverse to find original input)
 - Issuer-bound (different issuers = different nullifiers)
 - Collision-resistant (different tokens = different nullifiers)
@@ -527,7 +548,7 @@ for (nullifier, exp) in nullifier_db {
 | Unlinkability | ✅ Yes | ✅ Yes |
 | Verifiability | ❌ No (trust server) | ✅ Yes (DLEQ proof) |
 | Efficiency | Moderate (RSA) | Fast (ECC) |
-| Standard | Classic | Modern (IETF draft) |
+| Standard | Classic | Modern (RFC 9381) |
 
 **Freebird uses VOPRF for verifiability and efficiency.**
 
@@ -547,7 +568,7 @@ for (nullifier, exp) in nullifier_db {
 
 | Property | Privacy Pass | Freebird |
 |----------|-------------|----------|
-| Protocol | VOPRF (draft RFC) | VOPRF (P-256) |
+| Protocol | VOPRF (RFC 9381) | VOPRF (P-256, RFC 9381) |
 | Deployment | Centralized (Cloudflare) | Self-hostable |
 | Control | Cloudflare policy | Your policy |
 | Sybil Resistance | CAPTCHA | Multiple options |
@@ -612,7 +633,7 @@ for (nullifier, exp) in nullifier_db {
 ## Further Reading
 
 **VOPRF Specification:**
-- [IETF CFRG VOPRF Draft](https://datatracker.ietf.org/doc/draft-irtf-cfrg-voprf/)
+- [RFC 9381: VOPRF](https://datatracker.ietf.org/doc/rfc9381/)
 
 **Hash-to-Curve:**
 - [RFC 9380: Hashing to Elliptic Curves](https://datatracker.ietf.org/doc/rfc9380/)

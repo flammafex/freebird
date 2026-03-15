@@ -1,7 +1,7 @@
 # VOPRF Unblinding Redesign
 
 **Date:** 2026-03-14
-**Status:** Draft
+**Status:** Implemented
 **Authors:** Human + Claude
 
 ## Problem

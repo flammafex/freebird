@@ -82,11 +82,12 @@ Fetches the issuer's metadata (public key, key ID, supported cipher suites) from
 #### `issueToken(proof?: SybilProof): Promise<FreebirdToken>`
 
 Performs the full VOPRF issuance flow:
-1. Generates random input.
-2. Blinds the input.
-3. Sends blinded input (+ optional Sybil proof) to Issuer.
-4. Unblinds the response using the DLEQ proof.
-5. Returns the usable token.
+1. Generates random input and blinds it.
+2. Sends blinded input (+ optional Sybil proof) to Issuer.
+3. Verifies the DLEQ proof (confirms issuer honesty).
+4. Unblinds the evaluation to obtain the PRF output.
+5. Builds a self-contained V3 redemption token from the output + metadata + ECDSA signature.
+6. Returns the usable token.
 
 **Parameters:**
 - `proof` (Optional): A `SybilProof` object if the issuer requires it (e.g. Invitation code, PoW, WebAuthn).
@@ -100,11 +101,11 @@ Performs the full VOPRF issuance flow:
 
 #### `verifyToken(token: FreebirdToken): Promise<boolean>`
 
-Sends the token to the configured Verifier to check validity and replay status.
+Sends the V3 redemption token to the configured Verifier. The token is self-contained — the verifier extracts all needed fields (expiration, issuer ID, ECDSA signature) from the token itself.
 
 **Returns:**
 - `true` if valid and fresh.
-- `false` if expired, invalid signature, or already spent.
+- `false` if expired, invalid ECDSA signature, or already spent.
 
 ---
 
@@ -116,16 +117,18 @@ The standard token object used by applications.
 
 ```typescript
 interface FreebirdToken {
-  /** The unblinded, base64url-encoded VOPRF output string */
+  /** Base64url-encoded V3 redemption token (self-contained) */
   tokenValue: string;
-  
-  /** Unix timestamp (seconds) when this token expires */
+
+  /** Unix timestamp (seconds) when this token expires (extracted for convenience) */
   expiration: number;
-  
-  /** The ID of the issuer that signed this token */
+
+  /** The ID of the issuer that signed this token (extracted for convenience) */
   issuerId: string;
 }
 ```
+
+The `tokenValue` is a self-contained V3 redemption token containing the unblinded PRF output, key ID, expiration, issuer ID, and ECDSA signature. It can be sent directly to the verifier without any additional fields.
 
 ### `SybilProof`
 

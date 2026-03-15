@@ -75,21 +75,29 @@ export class FreebirdClient {
 
     const resp = (await res.json()) as IssueResponse;
 
-    // 4. Finalize (Unblind) the token
-    // This verifies the DLEQ proof and extracts the final token value
-    const tokenBytes = voprf.finalize(
+    // 4. Finalize: verify DLEQ proof and unblind to get PRF output
+    const output = voprf.finalize(
       state,
       resp.token,
       this.metadata!.voprf.pubkey,
       this.context
     );
 
-    // 5. Return usable token
+    // 5. Build V3 redemption token (self-contained wire format)
+    const sigBytes = this.base64UrlToBytes(resp.sig);
+    const redemptionToken = voprf.buildRedemptionToken(
+      output,
+      resp.kid,
+      BigInt(resp.exp),
+      resp.issuer_id,
+      sigBytes
+    );
+
+    // 6. Return usable token
     return {
-      tokenValue: this.bytesToBase64Url(tokenBytes),
+      tokenValue: this.bytesToBase64Url(redemptionToken),
       expiration: resp.exp,
-      issuerId: this.metadata!.issuer_id,
-      epoch: resp.epoch,
+      issuerId: resp.issuer_id,
     };
   }
 
@@ -107,9 +115,6 @@ export class FreebirdClient {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         token_b64: token.tokenValue,
-        issuer_id: token.issuerId,
-        exp: token.expiration,
-        epoch: token.epoch,
       }),
     });
 
@@ -119,6 +124,16 @@ export class FreebirdClient {
   }
 
   // --- Utilities ---
+
+  private base64UrlToBytes(b64: string): Uint8Array {
+    const padded = b64.replace(/-/g, '+').replace(/_/g, '/');
+    const binary = atob(padded);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  }
 
   private bytesToBase64Url(bytes: Uint8Array): string {
     let binary = '';

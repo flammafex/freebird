@@ -1,6 +1,6 @@
 [package]
 name = "freebird-interface"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Client interface and CLI for the Freebird privacy-preserving authentication system"
 license = "MIT OR Apache-2.0"
@@ -12,8 +12,8 @@ categories = ["authentication", "command-line-utilities"]
 [dependencies]
 anyhow = "1"
 base64ct = { version = "1.8", default-features = false }
-freebird-crypto = { version = "0.3.0", path = "../crypto", features = ["voprf-p256"] }
-freebird-common = { version = "0.3.0", path = "../common" } # <--- ADD THIS
+freebird-crypto = { version = "0.4.0", path = "../crypto", features = ["voprf-p256"] }
+freebird-common = { version = "0.4.0", path = "../common" } # <--- ADD THIS
 rand = "0.8"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
