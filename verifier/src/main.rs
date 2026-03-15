@@ -34,8 +34,12 @@ struct AppState {
     store: Arc<dyn SpendStore>,
     /// Maximum acceptable clock skew in seconds (default: 300 = 5 minutes)
     max_clock_skew_secs: i64,
-    /// Epoch configuration (kept for admin display / backward compat)
+    /// Epoch configuration kept for admin display / operator observability.
+    /// V3 tokens are self-contained and do not use epoch-based MAC keys,
+    /// but operators still configure these env vars and expect them surfaced.
+    #[allow(dead_code)]
     epoch_duration_sec: u64,
+    #[allow(dead_code)]
     epoch_retention: u32,
 }
 
@@ -47,6 +51,9 @@ struct WellKnown {
 
 #[derive(Clone, Debug, Deserialize)]
 struct VoprfInfo {
+    /// VOPRF suite identifier from the issuer well-known JSON (e.g. "P256-SHA256").
+    /// Deserialized for completeness; V3 verifier does not branch on suite name.
+    #[allow(dead_code)]
     suite: String,
     kid: String,
     pubkey: String,

@@ -32,6 +32,8 @@ use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 pub struct Application {
+    /// Bound port, captured at construction for logging/testing. Not read after bind.
+    #[allow(dead_code)]
     port: u16,
     listener: TcpListener,
     app: Router,

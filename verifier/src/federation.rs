@@ -565,6 +565,10 @@ impl TrustGraph {
     /// Checks if the issuer appears in the revocations list.
     /// Revocations are considered valid regardless of timestamp (permanent).
     /// Verifies revocation signatures against the revoker's public key.
+    ///
+    /// NOTE: Superseded by `is_revoked_with_limit` (DoS-safe variant). Kept
+    /// as a simpler reference implementation for tests and future use.
+    #[allow(dead_code)]
     async fn is_revoked(&self, issuer_id: &str, revocations: &[Revocation], _now: i64) -> bool {
         for revocation in revocations {
             if revocation.revoked_issuer_id == issuer_id {

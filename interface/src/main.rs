@@ -375,10 +375,3 @@ async fn verify_token(
     }
 }
 
-fn now() -> i64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("time")
-        .as_secs() as i64
-}
