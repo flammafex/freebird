@@ -25,8 +25,12 @@ Thumbs.db
 *.profraw
 *.profdata
 
+# Claude Code
+.claude/
+
 # Backup files
 *.bak
+*.rs.bk
 issuer_sk.bin
 key_rotation_state.json
 invitations.json
