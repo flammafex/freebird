@@ -29,7 +29,37 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::{fs, io::Write, path::Path, sync::Arc, time::Duration};
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
+use tower::ServiceBuilder;
+use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
+
+/// Convert a handler panic into a structured JSON 500 so that raw panic
+/// messages (which may include key material or internal paths) are never
+/// forwarded to the client.
+fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    let msg = if let Some(s) = err.downcast_ref::<&'static str>() {
+        *s
+    } else if let Some(s) = err.downcast_ref::<String>() {
+        s.as_str()
+    } else {
+        "unknown panic"
+    };
+
+    tracing::error!(panic.message = %msg, "handler panic caught; suppressing details from client");
+
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        axum::Json(serde_json::json!({
+            "error": "internal_error",
+            "code": "INTERNAL_ERROR"
+        })),
+    )
+        .into_response()
+}
 
 pub struct Application {
     /// Bound port, captured at construction for logging/testing. Not read after bind.
@@ -789,6 +819,14 @@ impl Application {
                 }
             }
         }
+
+        // Outermost layers: catch panics before they escape handlers, then
+        // emit HTTP tracing spans for every inbound request.
+        let app = app.layer(
+            ServiceBuilder::new()
+                .layer(CatchPanicLayer::custom(handle_panic))
+                .layer(TraceLayer::new_for_http()),
+        );
 
         let listener = TcpListener::bind(config.bind_addr)
             .await

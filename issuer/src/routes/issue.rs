@@ -16,7 +16,7 @@ use axum::{
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use time::OffsetDateTime;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::multi_key_voprf::MultiKeyVoprfCore;
 use crate::sybil_resistance::ClientData; // Keep ClientData local to issuer/sybil if not in common
@@ -104,6 +104,15 @@ pub fn extract_client_data(
 // / extract client-specific information (IP address, User-Agent hash) to include
 // / as additional entropy in invitee ID generation. This makes IDs more unique
 // / and resistant to pre-computation attacks.
+#[instrument(
+    name = "issue_token",
+    skip(state, voprf, connect_info, headers),
+    fields(
+        kid = tracing::field::Empty,
+        sybil_configured = tracing::field::Empty,
+        has_proof = req.sybil_proof.is_some(),
+    )
+)]
 pub async fn handle(
     // Change: Extract tuple from State
     State((state, voprf)): State<(Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>)>,
@@ -112,6 +121,10 @@ pub async fn handle(
     headers: HeaderMap,
     Json(req): Json<IssueReq>,
 ) -> Result<Json<IssueResp>, (StatusCode, String)> {
+    tracing::Span::current()
+        .record("kid", &state.kid.as_str())
+        .record("sybil_configured", state.sybil_checker.is_some());
+
     info!(
         "📥 /v1/oprf/issue entered; kid={}, has_proof={}, sybil_configured={}",
         state.kid,

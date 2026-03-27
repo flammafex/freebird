@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 use uuid::Uuid;
 use webauthn_rs::prelude::*;
 
@@ -234,6 +234,7 @@ pub struct StartRegistrationResponse {
     pub session_id: String,
 }
 
+#[instrument(name = "webauthn_start_registration", skip(state, connect_info, headers), fields(username = %req.username))]
 pub async fn start_registration(
     State(state): State<Arc<WebAuthnState>>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
@@ -378,6 +379,7 @@ pub struct FinishRegistrationResponse {
     pub registered_at: i64,
 }
 
+#[instrument(name = "webauthn_finish_registration", skip(state), fields(session_id = %req.session_id))]
 pub async fn finish_registration(
     State(state): State<Arc<WebAuthnState>>,
     Json(req): Json<FinishRegistrationRequest>,
@@ -476,6 +478,7 @@ pub struct StartAuthenticationResponse {
     pub session_id: String,
 }
 
+#[instrument(name = "webauthn_start_authentication", skip(state, connect_info, headers), fields(username = %req.username))]
 pub async fn start_authentication(
     State(state): State<Arc<WebAuthnState>>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
@@ -630,6 +633,7 @@ pub struct FinishAuthenticationResponse {
     pub proof: String,
 }
 
+#[instrument(name = "webauthn_finish_authentication", skip(state), fields(session_id = %req.session_id))]
 pub async fn finish_authentication(
     State(state): State<Arc<WebAuthnState>>,
     Json(req): Json<FinishAuthenticationRequest>,

@@ -77,16 +77,16 @@ impl Verifier {
         Self(v::Verifier::new(ctx))
     }
 
-    /// Verify a VOPRF token and return the base64url-encoded PRF output.
+    /// Verify a VOPRF token's DLEQ proof against the issuer public key.
     ///
-    /// `token_b64` is the base64url-encoded VOPRF evaluation (131 bytes raw).
-    /// `issuer_pubkey` is the SEC1-compressed public key bytes.
-    pub fn verify(&self, token_b64: &str, issuer_pubkey: &[u8]) -> Result<String, Error> {
+    /// Returns `Ok(())` if the proof is valid; `Err` if the token is malformed or the
+    /// proof fails. Does NOT return a PRF output — use `Client::finalize()` for that,
+    /// as computing the correct output requires the client's blinding factor.
+    pub fn verify(&self, token_b64: &str, issuer_pubkey: &[u8]) -> Result<(), Error> {
         let token_bytes = Base64UrlUnpadded::decode_vec(token_b64)
             .map_err(|_| Error::InvalidInput("bad base64 token".into()))?;
-        let output = self.0.verify(&token_bytes, issuer_pubkey)
-            .map_err(|_| Error::Verify)?;
-        Ok(Base64UrlUnpadded::encode_string(&output))
+        self.0.verify(&token_bytes, issuer_pubkey)
+            .map_err(|_| Error::Verify)
     }
 }
 
@@ -158,9 +158,6 @@ pub const TOKEN_SIGNATURE_LEN: usize = 64; // ECDSA signature (r: 32 bytes, s: 3
 const REDEMPTION_TOKEN_VERSION_V3: u8 = 0x03;
 const REDEMPTION_TOKEN_MIN_LEN: usize = 1 + 32 + 1 + 1 + 8 + 1 + 1 + 64; // 109
 const REDEMPTION_TOKEN_MAX_LEN: usize = 512;
-
-/// Total token length for V2 format (kept for backward compat references)
-pub const TOKEN_LEN_V2: usize = 131 + TOKEN_SIGNATURE_LEN; // 195 bytes
 
 /// V3 redemption token: the wire format clients send to verifiers.
 ///
@@ -844,5 +841,109 @@ mod tests {
     fn test_v3_redemption_token_rejects_truncated() {
         let bytes = vec![0x03; 50]; // too short (min 109)
         assert!(parse_redemption_token(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_build_token_rejects_empty_kid() {
+        let token = RedemptionToken {
+            kid: "".to_string(),
+            output: [0u8; 32],
+            exp: 1,
+            issuer_id: "x".to_string(),
+            sig: [0u8; 64],
+        };
+        assert!(build_redemption_token(&token).is_err());
+    }
+
+    #[test]
+    fn test_build_token_rejects_256_byte_kid() {
+        let token = RedemptionToken {
+            kid: "k".repeat(256),
+            output: [0u8; 32],
+            exp: 1,
+            issuer_id: "x".to_string(),
+            sig: [0u8; 64],
+        };
+        assert!(build_redemption_token(&token).is_err());
+    }
+
+    #[test]
+    fn test_build_token_rejects_empty_issuer_id() {
+        let token = RedemptionToken {
+            kid: "k".to_string(),
+            output: [0u8; 32],
+            exp: 1,
+            issuer_id: "".to_string(),
+            sig: [0u8; 64],
+        };
+        assert!(build_redemption_token(&token).is_err());
+    }
+
+    #[test]
+    fn test_build_token_rejects_256_byte_issuer_id() {
+        let token = RedemptionToken {
+            kid: "k".to_string(),
+            output: [0u8; 32],
+            exp: 1,
+            issuer_id: "i".repeat(256),
+            sig: [0u8; 64],
+        };
+        assert!(build_redemption_token(&token).is_err());
+    }
+
+    #[test]
+    fn test_parse_token_rejects_too_large() {
+        let bytes = vec![0x03u8; 513];
+        assert!(parse_redemption_token(&bytes).is_err());
+    }
+
+    #[test]
+    fn test_nullifier_different_issuers() {
+        let n1 = nullifier_key("issuer-a", "out");
+        let n2 = nullifier_key("issuer-b", "out");
+        assert_ne!(n1, n2);
+    }
+
+    #[test]
+    fn test_nullifier_different_outputs() {
+        let n1 = nullifier_key("issuer", "out1");
+        let n2 = nullifier_key("issuer", "out2");
+        assert_ne!(n1, n2);
+    }
+
+    #[test]
+    fn test_v3_full_roundtrip_with_real_sig() {
+        let sk = [7u8; 32];
+        let ctx = b"freebird-v1";
+        let server = Server::from_secret_key(sk, ctx).unwrap();
+        let pubkey = server.public_key_sec1_compressed();
+
+        let kid = "roundtrip-kid";
+        let exp = 1700000000i64;
+        let issuer_id = "roundtrip-issuer";
+
+        // Compute a real ECDSA signature
+        let sig = compute_token_signature(&sk, kid, exp, issuer_id).unwrap();
+
+        // Build the token
+        let token = RedemptionToken {
+            output: [0xCC; 32],
+            kid: kid.to_string(),
+            exp,
+            issuer_id: issuer_id.to_string(),
+            sig,
+        };
+        let bytes = build_redemption_token(&token).unwrap();
+
+        // Parse it back
+        let parsed = parse_redemption_token(&bytes).unwrap();
+        assert_eq!(parsed.kid, kid);
+        assert_eq!(parsed.exp, exp);
+        assert_eq!(parsed.issuer_id, issuer_id);
+        assert_eq!(parsed.output, [0xCC; 32]);
+
+        // Verify the signature
+        let valid = verify_token_signature(&pubkey, &parsed.sig, &parsed.kid, parsed.exp, &parsed.issuer_id);
+        assert!(valid, "parsed token signature should verify against issuer pubkey");
     }
 }

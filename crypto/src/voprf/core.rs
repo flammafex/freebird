@@ -38,13 +38,18 @@ const TOKEN_PROOF_LEN: usize = 64;
 const TOKEN_LEN: usize = TOKEN_VERSION_LEN + TOKEN_POINT_LEN * 2 + TOKEN_PROOF_LEN;
 
 /// RFC 9380-compliant hash-to-curve for P-256 (SSWU_RO).
+///
+/// The DST is split into two slices (`BASE_DST || ctx`) and passed directly to
+/// `hash_from_bytes`, which concatenates them per the spec. This avoids a
+/// heap allocation on every call that was previously incurred by building a
+/// temporary `Vec<u8>`.
 fn hash_to_curve(input: &[u8], ctx: &[u8]) -> Option<ProjectivePoint> {
     const BASE_DST: &[u8] = b"P256_XMD:SHA-256_SSWU_RO_";
-    let mut dst = Vec::with_capacity(BASE_DST.len() + ctx.len());
-    dst.extend_from_slice(BASE_DST);
-    dst.extend_from_slice(ctx);
-
-    let point = NistP256::hash_from_bytes::<ExpandMsgXmd<Sha256>>(&[input], &[&dst]).ok()?;
+    // Pass the two DST parts as separate slices; `hash_from_bytes` concatenates
+    // them before computing expand_message_xmd, producing the same DST as the
+    // previous `BASE_DST || ctx` Vec without any heap allocation.
+    let point =
+        NistP256::hash_from_bytes::<ExpandMsgXmd<Sha256>>(&[input], &[BASE_DST, ctx]).ok()?;
     Some(ProjectivePoint::from(point))
 }
 
@@ -248,7 +253,7 @@ impl Verifier {
         &self,
         token_bytes: &[u8],
         issuer_pubkey_sec1_compressed: &[u8],
-    ) -> Result<Vec<u8>, Error> {
+    ) -> Result<(), Error> {
         if token_bytes.len() != TOKEN_LEN {
             return Err(Error::Decode);
         }
@@ -280,10 +285,7 @@ impl Verifier {
             return Err(Error::InvalidProof);
         }
 
-        // NOTE: This Verifier path hashes blinded B directly. It does NOT
-        // perform unblinding and will be replaced in Task 8 with V3
-        // redemption token verification.
-        Ok(prf_output(&b, &self.ctx).to_vec())
+        Ok(())
     }
 }
 

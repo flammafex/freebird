@@ -123,8 +123,7 @@ fn bench_end_to_end(c: &mut Criterion) {
             let (blinded_b64, state) = client.blind(black_box(b"test input")).unwrap();
             let eval_b64 = server.evaluate_with_proof(&blinded_b64).unwrap();
             let _out_cli = client.finalize(state, &eval_b64, &pk_b64).unwrap();
-            let _out_ver = verifier.verify(&eval_b64, &pk).unwrap();
-            black_box(_out_ver)
+            verifier.verify(&eval_b64, &pk).unwrap();
         });
     });
 

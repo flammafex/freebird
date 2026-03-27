@@ -126,3 +126,113 @@ impl VoprfCore {
         &self.ctx
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64ct::{Base64UrlUnpadded, Encoding};
+
+    fn make_core() -> VoprfCore {
+        let sk = [1u8; 32];
+        let ctx = b"freebird:v1";
+        let server = freebird_crypto::Server::from_secret_key(sk, ctx).unwrap();
+        let pk = server.public_key_sec1_compressed();
+        let pubkey_b64 = Base64UrlUnpadded::encode_string(&pk);
+        let kid = "test-kid-001".to_string();
+        VoprfCore::new(sk, pubkey_b64, kid, ctx).unwrap()
+    }
+
+    #[test]
+    fn test_new_creates_valid_core() {
+        let core = make_core();
+        assert_eq!(core.kid, "test-kid-001");
+        assert!(!core.pubkey_b64.is_empty());
+    }
+
+    #[test]
+    fn test_new_zero_key_fails() {
+        let sk = [0u8; 32];
+        let ctx = b"freebird:v1";
+        let pubkey_b64 = "dummy".to_string();
+        let kid = "kid".to_string();
+        let result = VoprfCore::new(sk, pubkey_b64, kid, ctx);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_suite_id() {
+        let core = make_core();
+        assert_eq!(core.suite_id(), "OPRF(P-256, SHA-256)-verifiable");
+    }
+
+    #[test]
+    fn test_context_roundtrip() {
+        let core = make_core();
+        assert_eq!(core.context(), b"freebird:v1");
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_b64_valid() {
+        let sk = [1u8; 32];
+        let ctx = b"freebird:v1";
+        let server = freebird_crypto::Server::from_secret_key(sk, ctx).unwrap();
+        let pk = server.public_key_sec1_compressed();
+        let pubkey_b64 = Base64UrlUnpadded::encode_string(&pk);
+        let kid = "test-kid-001".to_string();
+        let core = VoprfCore::new(sk, pubkey_b64, kid, ctx).unwrap();
+
+        let mut client = freebird_crypto::Client::new(ctx);
+        let (blinded_b64, _state) = client.blind(b"test input").unwrap();
+
+        let result = core.evaluate_b64(&blinded_b64).await;
+        assert!(result.is_ok(), "evaluate_b64 failed: {:?}", result.err());
+        let eval_b64 = result.unwrap();
+        assert!(!eval_b64.is_empty());
+        let decoded = Base64UrlUnpadded::decode_vec(&eval_b64).unwrap();
+        assert_eq!(decoded.len(), 131);
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_b64_invalid_base64() {
+        let core = make_core();
+        let result = core.evaluate_b64("not!valid!base64!!").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_evaluate_b64_wrong_size() {
+        let core = make_core();
+        let bad_input = Base64UrlUnpadded::encode_string(&[0xAAu8; 10]);
+        let result = core.evaluate_b64(&bad_input).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_sign_token_metadata_returns_64_bytes() {
+        let core = make_core();
+        let sig = core
+            .sign_token_metadata("test-kid-001", 1700000000, "test-issuer")
+            .await
+            .unwrap();
+        assert_eq!(sig.len(), 64);
+    }
+
+    #[tokio::test]
+    async fn test_sign_token_metadata_verifiable() {
+        let sk = [1u8; 32];
+        let ctx = b"freebird:v1";
+        let server = freebird_crypto::Server::from_secret_key(sk, ctx).unwrap();
+        let pk = server.public_key_sec1_compressed();
+        let pubkey_b64 = Base64UrlUnpadded::encode_string(&pk);
+        let kid = "test-kid-001".to_string();
+        let core = VoprfCore::new(sk, pubkey_b64, kid, ctx).unwrap();
+
+        let kid = "test-kid-001";
+        let exp = 1700000000i64;
+        let issuer_id = "test-issuer";
+
+        let sig = core.sign_token_metadata(kid, exp, issuer_id).await.unwrap();
+        let valid = freebird_crypto::verify_token_signature(&pk, &sig, kid, exp, issuer_id);
+        assert!(valid, "signature should verify against issuer public key");
+    }
+}

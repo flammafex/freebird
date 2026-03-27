@@ -421,6 +421,71 @@ impl MultiPartyVouchingSystem {
         Ok(())
     }
 
+    /// Verify that a proof timestamp is recent (within 0–300 s of `now`).
+    fn verify_proof_timestamp(now: i64, timestamp: i64) -> Result<()> {
+        let age = now - timestamp;
+        if !(0..=300).contains(&age) {
+            return Err(anyhow!("Proof timestamp is outside allowed window"));
+        }
+        Ok(())
+    }
+
+    /// Validate a single vouch entry in isolation:
+    /// - constant-time pubkey match against the registry copy
+    /// - ECDSA signature decodes and verifies over `"vouch:<vouchee>:<ts>"`
+    /// - vouch is not expired or from the future
+    /// - vouchee_id field matches the expected hash
+    fn verify_vouch_entry(
+        vouch: &VouchProof,
+        vouchee_id_hash: &str,
+        now: i64,
+        vouch_expires_secs: i64,
+        registered_pubkey_b64: &str,
+    ) -> Result<()> {
+        if !bool::from(
+            registered_pubkey_b64
+                .as_bytes()
+                .ct_eq(vouch.voucher_pubkey_b64.as_bytes()),
+        ) {
+            return Err(anyhow!("Voucher public key does not match server registry"));
+        }
+
+        let signature_bytes = Base64UrlUnpadded::decode_vec(&vouch.signature)
+            .map_err(|_| anyhow!("Invalid signature encoding"))?;
+        let signature_array: [u8; 64] = signature_bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("Invalid signature length"))?;
+        let signature = Signature::from_bytes((&signature_array).into())
+            .map_err(|_| anyhow!("Invalid signature format"))?;
+
+        let pubkey_bytes = Base64UrlUnpadded::decode_vec(&vouch.voucher_pubkey_b64)
+            .map_err(|_| anyhow!("Invalid voucher public key encoding"))?;
+        let public_key = VerifyingKey::from_sec1_bytes(&pubkey_bytes)
+            .map_err(|_| anyhow!("Invalid voucher public key format"))?;
+
+        let message = format!("vouch:{}:{}", vouch.vouchee_id, vouch.timestamp);
+        public_key
+            .verify(message.as_bytes(), &signature)
+            .map_err(|_| {
+                anyhow!(
+                    "Vouch signature verification failed for voucher {}",
+                    vouch.voucher_id
+                )
+            })?;
+
+        let vouch_age = now - vouch.timestamp;
+        if !(0..=vouch_expires_secs).contains(&vouch_age) {
+            return Err(anyhow!("Vouch expired or timestamp is in the future"));
+        }
+
+        if vouch.vouchee_id != vouchee_id_hash {
+            return Err(anyhow!("Vouch vouchee_id mismatch"));
+        }
+
+        Ok(())
+    }
+
     /// Save state to disk
     async fn save_state(&self) -> Result<()> {
         let vouchers = self.vouchers.read().await.clone();
@@ -464,11 +529,7 @@ impl SybilResistance for MultiPartyVouchingSystem {
                     .unwrap()
                     .as_secs() as i64;
 
-                // Check proof age
-                let age = now - timestamp;
-                if !(0..=300).contains(&age) {
-                    return Err(anyhow!("Proof timestamp is outside allowed window"));
-                }
+                Self::verify_proof_timestamp(now, *timestamp)?;
 
                 if vouches.len() < self.config.required_vouchers as usize {
                     return Err(anyhow!("Insufficient vouches"));
@@ -489,47 +550,13 @@ impl SybilResistance for MultiPartyVouchingSystem {
                         .get(&vouch.voucher_id)
                         .ok_or_else(|| anyhow!("Unknown voucher: {}", vouch.voucher_id))?;
 
-                    if !bool::from(
-                        registered
-                            .public_key_b64
-                            .as_bytes()
-                            .ct_eq(vouch.voucher_pubkey_b64.as_bytes()),
-                    ) {
-                        return Err(anyhow!("Voucher public key does not match server registry"));
-                    }
-
-                    let signature_bytes = Base64UrlUnpadded::decode_vec(&vouch.signature)
-                        .map_err(|_| anyhow!("Invalid signature encoding"))?;
-                    let signature_array: [u8; 64] = signature_bytes
-                        .as_slice()
-                        .try_into()
-                        .map_err(|_| anyhow!("Invalid signature length"))?;
-                    let signature = Signature::from_bytes((&signature_array).into())
-                        .map_err(|_| anyhow!("Invalid signature format"))?;
-
-                    let pubkey_bytes = Base64UrlUnpadded::decode_vec(&vouch.voucher_pubkey_b64)
-                        .map_err(|_| anyhow!("Invalid voucher public key encoding"))?;
-                    let public_key = VerifyingKey::from_sec1_bytes(&pubkey_bytes)
-                        .map_err(|_| anyhow!("Invalid voucher public key format"))?;
-
-                    let message = format!("vouch:{}:{}", vouch.vouchee_id, vouch.timestamp);
-                    public_key
-                        .verify(message.as_bytes(), &signature)
-                        .map_err(|_| {
-                            anyhow!(
-                                "Vouch signature verification failed for voucher {}",
-                                vouch.voucher_id
-                            )
-                        })?;
-
-                    let vouch_age = now - vouch.timestamp;
-                    if !(0..=(self.config.vouch_expires_secs as i64)).contains(&vouch_age) {
-                        return Err(anyhow!("Vouch expired or timestamp is in the future"));
-                    }
-
-                    if vouch.vouchee_id != *vouchee_id_hash {
-                        return Err(anyhow!("Vouch vouchee_id mismatch"));
-                    }
+                    Self::verify_vouch_entry(
+                        vouch,
+                        vouchee_id_hash,
+                        now,
+                        self.config.vouch_expires_secs as i64,
+                        &registered.public_key_b64,
+                    )?;
                 }
 
                 let expected_hmac = self.compute_hmac_proof(vouchee_id_hash, vouches, *timestamp);
@@ -561,6 +588,33 @@ mod tests {
     use p256::ecdsa::signature::Signer;
     use p256::ecdsa::SigningKey;
     use rand::rngs::OsRng;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn test_config(extra: &str) -> MultiPartyVouchingConfig {
+        let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
+        MultiPartyVouchingConfig {
+            required_vouchers: 1,
+            voucher_cooldown_secs: 0,
+            vouch_expires_secs: 86400,
+            new_user_can_vouch_after_secs: 0,
+            persistence_path: PathBuf::from(format!("/tmp/test_mpv_{}_{}.json", extra, id)),
+            autosave_interval_secs: 3600,
+            hmac_secret: Some("test-secret".to_string()),
+            hmac_secret_path: PathBuf::from(format!(
+                "/tmp/test_mpv_{}_secret_{}.bin",
+                extra, id
+            )),
+            user_id_salt: "test-salt".to_string(),
+            allow_insecure_deterministic: false,
+        }
+    }
+
+    fn cleanup(config: &MultiPartyVouchingConfig) {
+        let _ = std::fs::remove_file(&config.persistence_path);
+        let _ = std::fs::remove_file(&config.hmac_secret_path);
+    }
 
     #[tokio::test]
     async fn test_multi_party_vouching_basic() {
@@ -683,5 +737,289 @@ mod tests {
 
         let _ = std::fs::remove_file("/tmp/test_mpv_unknown.json");
         let _ = std::fs::remove_file("/tmp/test_mpv_unknown_secret.bin");
+    }
+
+    // ── Pure unit tests for the extracted helpers ────────────────────────────
+
+    #[test]
+    fn test_verify_proof_timestamp_accepts_recent() {
+        let now = 10_000i64;
+        assert!(MultiPartyVouchingSystem::verify_proof_timestamp(now, now).is_ok());
+        assert!(MultiPartyVouchingSystem::verify_proof_timestamp(now, now - 300).is_ok());
+    }
+
+    #[test]
+    fn test_verify_proof_timestamp_rejects_stale_and_future() {
+        let now = 10_000i64;
+        // one second past the 300 s window
+        assert!(MultiPartyVouchingSystem::verify_proof_timestamp(now, now - 301).is_err());
+        // one second in the future
+        assert!(MultiPartyVouchingSystem::verify_proof_timestamp(now, now + 1).is_err());
+    }
+
+    #[test]
+    fn test_verify_vouch_entry_vouchee_id_mismatch() {
+        let sk = SigningKey::random(&mut OsRng);
+        let pk = VerifyingKey::from(&sk);
+        let pk_b64 =
+            Base64UrlUnpadded::encode_string(pk.to_encoded_point(false).as_bytes());
+
+        let now = 5_000i64;
+        let actual_vouchee = "alice_hash";
+        let message = format!("vouch:{}:{}", actual_vouchee, now);
+        let sig: Signature = sk.sign(message.as_bytes());
+        let sig_b64 = Base64UrlUnpadded::encode_string(&sig.to_bytes());
+
+        let vouch = VouchProof {
+            voucher_id: "voucher1".to_string(),
+            vouchee_id: actual_vouchee.to_string(),
+            timestamp: now,
+            signature: sig_b64,
+            voucher_pubkey_b64: pk_b64.clone(),
+        };
+
+        // Signature covers actual_vouchee but we claim it's for "bob_hash"
+        let err = MultiPartyVouchingSystem::verify_vouch_entry(
+            &vouch,
+            "bob_hash",
+            now,
+            86400,
+            &pk_b64,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("mismatch"),
+            "expected mismatch error, got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_verify_vouch_entry_expired_vouch() {
+        let sk = SigningKey::random(&mut OsRng);
+        let pk = VerifyingKey::from(&sk);
+        let pk_b64 =
+            Base64UrlUnpadded::encode_string(pk.to_encoded_point(false).as_bytes());
+
+        let vouch_ts = 1_000i64;
+        let now = 2_000i64; // 1000 s later
+        let vouchee = "vouchee_hash";
+        let message = format!("vouch:{}:{}", vouchee, vouch_ts);
+        let sig: Signature = sk.sign(message.as_bytes());
+        let sig_b64 = Base64UrlUnpadded::encode_string(&sig.to_bytes());
+
+        let vouch = VouchProof {
+            voucher_id: "v".to_string(),
+            vouchee_id: vouchee.to_string(),
+            timestamp: vouch_ts,
+            signature: sig_b64,
+            voucher_pubkey_b64: pk_b64.clone(),
+        };
+
+        // expires_secs=500 but age=1000 → expired
+        let err = MultiPartyVouchingSystem::verify_vouch_entry(
+            &vouch, vouchee, now, 500, &pk_b64,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("expired"),
+            "expected expiry error, got: {}",
+            err
+        );
+    }
+
+    // ── Async integration-style tests ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_cooldown_prevents_rapid_vouching() {
+        let mut config = test_config("cooldown");
+        config.voucher_cooldown_secs = 3600; // 1 hour
+        let system = MultiPartyVouchingSystem::new(config.clone()).await.unwrap();
+
+        let sk = SigningKey::random(&mut OsRng);
+        system
+            .add_voucher("alice".to_string(), VerifyingKey::from(&sk))
+            .await
+            .unwrap();
+
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        let msg1 = format!("vouch:{}:{}", system.hash_user_id("bob"), ts);
+        system
+            .submit_vouch("alice", "bob", sk.sign(msg1.as_bytes()), ts)
+            .await
+            .unwrap();
+
+        // Immediate second vouch from same voucher should hit cooldown
+        let msg2 = format!("vouch:{}:{}", system.hash_user_id("charlie"), ts);
+        let result = system
+            .submit_vouch("alice", "charlie", sk.sign(msg2.as_bytes()), ts)
+            .await;
+        assert!(result.is_err(), "expected cooldown error");
+
+        cleanup(&config);
+    }
+
+    #[tokio::test]
+    async fn test_new_user_cannot_vouch_immediately() {
+        let mut config = test_config("newuser");
+        config.new_user_can_vouch_after_secs = 3600; // must be 1 hour old first
+        let system = MultiPartyVouchingSystem::new(config.clone()).await.unwrap();
+
+        let sk = SigningKey::random(&mut OsRng);
+        system
+            .add_voucher("fresh".to_string(), VerifyingKey::from(&sk))
+            .await
+            .unwrap();
+
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let msg = format!("vouch:{}:{}", system.hash_user_id("bob"), ts);
+        let result = system
+            .submit_vouch("fresh", "bob", sk.sign(msg.as_bytes()), ts)
+            .await;
+        assert!(result.is_err(), "expected new-user gate error");
+
+        cleanup(&config);
+    }
+
+    #[tokio::test]
+    async fn test_expired_vouches_not_counted() {
+        let mut config = test_config("expiry");
+        // vouch_expires_secs=0 means any vouch is immediately stale in check_vouches.
+        // Using 0 avoids having to pass a past timestamp to submit_vouch (which would
+        // cause the internal age check against first_seen to go negative and panic).
+        config.vouch_expires_secs = 0;
+        let system = MultiPartyVouchingSystem::new(config.clone()).await.unwrap();
+
+        let sk = SigningKey::random(&mut OsRng);
+        system
+            .add_voucher("alice".to_string(), VerifyingKey::from(&sk))
+            .await
+            .unwrap();
+
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let msg = format!("vouch:{}:{}", system.hash_user_id("bob"), ts);
+        system
+            .submit_vouch("alice", "bob", sk.sign(msg.as_bytes()), ts)
+            .await
+            .unwrap();
+
+        // The vouch is stored but check_vouches filters age >= vouch_expires_secs (0)
+        let result = system.check_vouches("bob").await;
+        assert!(result.is_err(), "immediately-expired vouch should not count");
+
+        cleanup(&config);
+    }
+
+    #[tokio::test]
+    async fn test_verify_insufficient_vouches() {
+        let mut config = test_config("insufficient");
+        config.required_vouchers = 3;
+        let system = MultiPartyVouchingSystem::new(config.clone()).await.unwrap();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+
+        // Only 1 vouch but 3 required
+        let proof = SybilProof::MultiPartyVouching {
+            vouchee_id_hash: "some_hash".to_string(),
+            vouches: vec![VouchProof {
+                voucher_id: "v1".to_string(),
+                vouchee_id: "some_hash".to_string(),
+                timestamp: now,
+                signature: "sig".to_string(),
+                voucher_pubkey_b64: "pk".to_string(),
+            }],
+            hmac_proof: "fake".to_string(),
+            timestamp: now,
+        };
+        assert!(system.verify(&proof).is_err());
+
+        cleanup(&config);
+    }
+
+    #[tokio::test]
+    async fn test_verify_duplicate_voucher_rejected() {
+        let config = test_config("dup");
+        let system = MultiPartyVouchingSystem::new(config.clone()).await.unwrap();
+
+        let sk = SigningKey::random(&mut OsRng);
+        system
+            .add_voucher("alice".to_string(), VerifyingKey::from(&sk))
+            .await
+            .unwrap();
+
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let msg = format!("vouch:{}:{}", system.hash_user_id("bob"), ts);
+        system
+            .submit_vouch("alice", "bob", sk.sign(msg.as_bytes()), ts)
+            .await
+            .unwrap();
+
+        let (id, vouches, hmac) = system.generate_proof("bob").await.unwrap();
+
+        // Duplicate the single vouch
+        let proof = SybilProof::MultiPartyVouching {
+            vouchee_id_hash: id,
+            vouches: vec![vouches[0].clone(), vouches[0].clone()],
+            hmac_proof: hmac,
+            timestamp: ts,
+        };
+        let err = system.verify(&proof).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("duplicate"),
+            "expected duplicate error, got: {}",
+            err
+        );
+
+        cleanup(&config);
+    }
+
+    #[tokio::test]
+    async fn test_verify_tampered_hmac_rejected() {
+        let config = test_config("hmac");
+        let system = MultiPartyVouchingSystem::new(config.clone()).await.unwrap();
+
+        let sk = SigningKey::random(&mut OsRng);
+        system
+            .add_voucher("alice".to_string(), VerifyingKey::from(&sk))
+            .await
+            .unwrap();
+
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let msg = format!("vouch:{}:{}", system.hash_user_id("bob"), ts);
+        system
+            .submit_vouch("alice", "bob", sk.sign(msg.as_bytes()), ts)
+            .await
+            .unwrap();
+
+        let (id, vouches, _) = system.generate_proof("bob").await.unwrap();
+
+        let proof = SybilProof::MultiPartyVouching {
+            vouchee_id_hash: id,
+            vouches,
+            hmac_proof: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            timestamp: ts,
+        };
+        assert!(system.verify(&proof).is_err());
+
+        cleanup(&config);
     }
 }

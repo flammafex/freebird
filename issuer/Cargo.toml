@@ -56,7 +56,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tower_governor = "0.5"
 tower = "0.4"
-tower-http = { version = "0.5", features = ["trace", "timeout", "set-header", "util", "request-id"] }
+tower-http = { version = "0.5", features = ["trace", "timeout", "set-header", "util", "request-id", "catch-panic"] }
 # WebAuthn dependencies (conditional on feature flag)
 webauthn-rs = { version = "0.5.3", optional = true }
 url = { version = "2", optional = true }

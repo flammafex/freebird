@@ -21,7 +21,36 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{net::TcpListener, sync::RwLock, time::sleep};
-use tracing::{debug, error, info, warn};
+use tower::ServiceBuilder;
+use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::trace::TraceLayer;
+use tracing::{debug, error, info, instrument, warn};
+
+/// Convert a handler panic into a structured JSON 500 so that internal
+/// details (stack traces, key material) are never forwarded to clients.
+fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    let msg = if let Some(s) = err.downcast_ref::<&'static str>() {
+        *s
+    } else if let Some(s) = err.downcast_ref::<String>() {
+        s.as_str()
+    } else {
+        "unknown panic"
+    };
+
+    tracing::error!(panic.message = %msg, "handler panic caught; suppressing details from client");
+
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        axum::Json(serde_json::json!({
+            "error": "internal_error",
+            "code": "INTERNAL_ERROR"
+        })),
+    )
+        .into_response()
+}
 
 // Import from the library crate
 use freebird_verifier::routes::admin::{self, AdminState, IssuerInfo, VerifierConfig};
@@ -207,6 +236,14 @@ async fn main() -> anyhow::Result<()> {
         info!("Admin API disabled (no ADMIN_API_KEY set)");
     }
 
+    // Outermost layers: catch panics before they escape handlers, then emit
+    // HTTP tracing spans for every inbound request.
+    let app = app.layer(
+        ServiceBuilder::new()
+            .layer(CatchPanicLayer::custom(handle_panic))
+            .layer(TraceLayer::new_for_http()),
+    );
+
     // ---------- Serve ----------
     let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8082".into());
     let addr: SocketAddr = bind_addr.parse()?;
@@ -226,6 +263,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 // ---------- Background metadata refresh ----------
+#[instrument(skip(state), fields(url = %issuer_url))]
 async fn refresh_issuer_metadata(state: &Arc<AppState>, issuer_url: &str) -> anyhow::Result<()> {
     info!(%issuer_url, "fetching issuer metadata");
     let res = reqwest::get(issuer_url)
@@ -367,6 +405,7 @@ async fn verify_with_logging(
 }
 
 // ---------- Verification handler (V3 self-contained tokens) ----------
+#[instrument(name = "verify_token", skip_all)]
 async fn verify(
     State(st): State<Arc<AppState>>,
     Json(req): Json<VerifyReq>,
@@ -448,6 +487,7 @@ async fn check_with_logging(
 /// - Rate-limiting based on token possession without consumption
 ///
 /// The token can still be used with /v1/verify after being checked here.
+#[instrument(name = "check_token", skip_all)]
 async fn check(
     State(st): State<Arc<AppState>>,
     Json(req): Json<VerifyReq>,
@@ -491,6 +531,7 @@ fn compute_throughput(successful: usize, total_time_ms: u64) -> f64 {
 }
 
 // ---------- Batch Verification Handler (V3) ----------
+#[instrument(name = "batch_verify", skip_all, fields(batch_size = req.tokens.len()))]
 async fn batch_verify(
     State(st): State<Arc<AppState>>,
     Json(req): Json<BatchVerifyReq>,

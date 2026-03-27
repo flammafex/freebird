@@ -474,6 +474,19 @@ impl ProgressiveTrustSystem {
         Ok(())
     }
 
+    /// Verify HMAC proof against a reconstructed record (constant-time).
+    fn verify_hmac(&self, proof_hmac: &str, record: &UserTrustRecord) -> Result<()> {
+        let expected = self.compute_hmac_proof(record);
+        if proof_hmac.len() != expected.len() {
+            return Err(anyhow!("Invalid progressive trust proof format"));
+        }
+        if !bool::from(proof_hmac.as_bytes().ct_eq(expected.as_bytes())) {
+            debug!("Progressive trust proof verification failed: HMAC mismatch");
+            return Err(anyhow!("Invalid progressive trust proof"));
+        }
+        Ok(())
+    }
+
     /// Autosave loop
     async fn autosave_loop(&self) {
         let interval = tokio::time::Duration::from_secs(self.config.autosave_interval_secs);
@@ -520,14 +533,7 @@ impl SybilResistance for ProgressiveTrustSystem {
                 };
 
                 // Verify HMAC (constant-time comparison to prevent timing attacks)
-                let expected_hmac = self.compute_hmac_proof(&record);
-                if hmac_proof.len() != expected_hmac.len() {
-                    return Err(anyhow!("Invalid progressive trust proof format"));
-                }
-                if !bool::from(hmac_proof.as_bytes().ct_eq(expected_hmac.as_bytes())) {
-                    debug!("Progressive trust proof verification failed: HMAC mismatch");
-                    return Err(anyhow!("Invalid progressive trust proof"));
-                }
+                self.verify_hmac(hmac_proof, &record)?;
 
                 if self.config.levels.is_empty() {
                     return Err(anyhow!("Progressive trust has no configured levels"));
@@ -716,6 +722,144 @@ mod tests {
         assert!(
             !config.hmac_secret_path.exists(),
             "Secret file should not be created when secret is provided"
+        );
+
+        cleanup_test_files(&config);
+    }
+
+    // ── Pure unit tests for UserTrustRecord helpers ──────────────────────────
+
+    #[test]
+    fn test_age_secs_basic() {
+        let record = UserTrustRecord::new("user_hash".to_string(), 1_000);
+        assert_eq!(record.age_secs(1_100), 100);
+    }
+
+    #[test]
+    fn test_age_secs_clamps_to_zero_for_future_first_seen() {
+        let record = UserTrustRecord::new("user_hash".to_string(), 2_000);
+        assert_eq!(record.age_secs(1_000), 0);
+    }
+
+    #[test]
+    fn test_time_since_last_returns_max_when_never_issued() {
+        let record = UserTrustRecord::new("user_hash".to_string(), 1_000);
+        assert_eq!(record.time_since_last(1_100), u64::MAX);
+    }
+
+    #[test]
+    fn test_time_since_last_after_issuance() {
+        let mut record = UserTrustRecord::new("user_hash".to_string(), 1_000);
+        record.last_issuance = 1_050;
+        assert_eq!(record.time_since_last(1_100), 50);
+    }
+
+    #[test]
+    fn test_trust_level_at_exact_boundary() {
+        // Two levels: level 0 at 0 s, level 1 at exactly 100 s
+        let levels = vec![
+            TrustLevel { min_age_secs: 0, max_tokens_per_period: 1, cooldown_secs: 3600 },
+            TrustLevel { min_age_secs: 100, max_tokens_per_period: 10, cooldown_secs: 60 },
+        ];
+        let config = ProgressiveTrustConfig { levels, ..test_config() };
+        // We can't easily call determine_trust_level without constructing the system,
+        // but UserTrustRecord::age_secs is already tested above. Instead verify
+        // the level selection logic inline with a dummy record.
+        let now = 2_000i64;
+        let record_below = UserTrustRecord::new("h".to_string(), now - 99);  // age 99 s
+        let record_at = UserTrustRecord::new("h".to_string(), now - 100);    // age exactly 100 s
+
+        // Manually replicate determine_trust_level logic
+        let level_for = |rec: &UserTrustRecord| -> usize {
+            let age = rec.age_secs(now);
+            for (idx, lvl) in config.levels.iter().enumerate().rev() {
+                if age >= lvl.min_age_secs {
+                    return idx;
+                }
+            }
+            0
+        };
+
+        assert_eq!(level_for(&record_below), 0, "99 s should be level 0");
+        assert_eq!(level_for(&record_at), 1, "100 s should be level 1");
+
+        cleanup_test_files(&config);
+    }
+
+    // ── Async tests for the extracted verify_hmac and cooldown logic ─────────
+
+    #[tokio::test]
+    async fn test_tampered_hmac_rejected() {
+        let config = test_config();
+        let system = ProgressiveTrustSystem::new(config.clone()).await.unwrap();
+
+        // generate_proof returns a valid SybilProof; mutate the HMAC field
+        if let SybilProof::ProgressiveTrust {
+            user_id_hash,
+            first_seen,
+            tokens_issued,
+            last_issuance,
+            hmac_proof: _,
+        } = system.generate_proof("alice").await.unwrap()
+        {
+            let bad_proof = SybilProof::ProgressiveTrust {
+                user_id_hash,
+                first_seen,
+                tokens_issued,
+                last_issuance,
+                hmac_proof: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
+            };
+            assert!(system.verify(&bad_proof).is_err());
+        } else {
+            panic!("unexpected proof variant");
+        }
+
+        cleanup_test_files(&config);
+    }
+
+    #[tokio::test]
+    async fn test_update_after_issuance_increments_tokens() {
+        let config = test_config();
+        let system = ProgressiveTrustSystem::new(config.clone()).await.unwrap();
+
+        let before = system.get_or_create_user("alice").await.unwrap();
+        assert_eq!(before.tokens_issued, 0);
+
+        system.update_after_issuance("alice").await.unwrap();
+
+        let after = system.get_or_create_user("alice").await.unwrap();
+        assert_eq!(after.tokens_issued, 1);
+        assert!(after.last_issuance > 0);
+
+        cleanup_test_files(&config);
+    }
+
+    #[tokio::test]
+    async fn test_cooldown_blocks_rapid_issuance() {
+        let mut config = test_config();
+        // Level 0: 1-day cooldown, level 1 at 30 days
+        config.levels = vec![TrustLevel {
+            min_age_secs: 0,
+            max_tokens_per_period: 1,
+            cooldown_secs: 86400, // 24 hours
+        }];
+
+        let system = ProgressiveTrustSystem::new(config.clone()).await.unwrap();
+
+        // First proof: last_issuance = 0 → time_since_last = MAX → passes cooldown
+        let proof1 = system.generate_proof("alice").await.unwrap();
+        assert!(system.verify(&proof1).is_ok());
+
+        // Simulate issuance to set last_issuance = now
+        system.update_after_issuance("alice").await.unwrap();
+
+        // Second proof: last_issuance = now → time_since_last ≈ 0 < 86400 → cooldown error
+        let proof2 = system.generate_proof("alice").await.unwrap();
+        let err = system.verify(&proof2).unwrap_err();
+        assert!(
+            err.to_string().to_lowercase().contains("cooldown"),
+            "expected cooldown error, got: {}",
+            err
         );
 
         cleanup_test_files(&config);

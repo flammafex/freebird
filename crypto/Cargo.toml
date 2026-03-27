@@ -47,6 +47,3 @@ rayon = "1.10"
 name = "voprf"
 harness = false
 
-[[bench]]
-name = "mac"
-harness = false
