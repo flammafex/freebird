@@ -1,0 +1,88 @@
+---
+# Kubernetes Ingress for Freebird Issuer
+# Requires an ingress controller (nginx, traefik, etc.)
+# Update the hosts and TLS certificate names for your deployment
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: issuer-ingress
+  namespace: freebird
+  labels:
+    app: freebird
+    component: issuer
+  annotations:
+    # Nginx-specific annotations
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+    # Rate limiting per issuer endpoints
+    nginx.ingress.kubernetes.io/limit-rps: "50"
+    # TLS
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - issuer.example.com  # CHANGE THIS
+      secretName: issuer-tls-cert
+  rules:
+    - host: issuer.example.com  # CHANGE THIS
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: issuer
+                port:
+                  number: 8081
+
+---
+# Kubernetes Ingress for Freebird Verifier
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: verifier-ingress
+  namespace: freebird
+  labels:
+    app: freebird
+    component: verifier
+  annotations:
+    # Nginx-specific annotations
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    # Security headers
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-Frame-Options: DENY";
+    # Rate limiting for verifier (higher since it handles many requests)
+    nginx.ingress.kubernetes.io/limit-rps: "100"
+    # TLS
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - verifier.example.com  # CHANGE THIS
+      secretName: verifier-tls-cert
+  rules:
+    - host: verifier.example.com  # CHANGE THIS
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: verifier
+                port:
+                  number: 8082

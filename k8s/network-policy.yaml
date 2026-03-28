@@ -1,0 +1,136 @@
+---
+# Default deny all traffic
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: freebird
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+---
+# Allow DNS for all pods
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: freebird
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+
+---
+# Allow external HTTPS for issuer/verifier (client requests)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-issuer
+  namespace: freebird
+spec:
+  podSelector:
+    matchLabels:
+      component: issuer
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}  # Allow from any namespace
+      ports:
+        - protocol: TCP
+          port: 8081
+
+---
+# Allow external HTTPS for verifier
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-verifier
+  namespace: freebird
+spec:
+  podSelector:
+    matchLabels:
+      component: verifier
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector: {}  # Allow from any namespace
+      ports:
+        - protocol: TCP
+          port: 8082
+
+---
+# Allow verifier to communicate with issuer
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: verifier-to-issuer
+  namespace: freebird
+spec:
+  podSelector:
+    matchLabels:
+      component: verifier
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              component: issuer
+      ports:
+        - protocol: TCP
+          port: 8081
+
+---
+# Allow verifier to communicate with redis
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: verifier-to-redis
+  namespace: freebird
+spec:
+  podSelector:
+    matchLabels:
+      component: verifier
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
+# Allow redis to accept connections from verifier
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-accept-verifier
+  namespace: freebird
+spec:
+  podSelector:
+    matchLabels:
+      component: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              component: verifier
+      ports:
+        - protocol: TCP
+          port: 6379

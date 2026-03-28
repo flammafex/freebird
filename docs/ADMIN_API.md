@@ -47,6 +47,20 @@ export ADMIN_API_KEY=your-secure-random-key-at-least-32-characters
 - Enable TLS/HTTPS for admin traffic in production
 - Never commit `ADMIN_API_KEY` to version control
 
+### Rate Limiting
+
+Admin login attempts are rate-limited per client IP to prevent brute-force attacks on the admin API key.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_failures` | 5 | Maximum failed login attempts before blocking |
+| `window_duration` | 5 minutes | Time window for tracking failures |
+| `block_duration` | 15 minutes | How long a blocked IP remains blocked |
+
+After `max_failures` failed `POST /admin/login` attempts within `window_duration`, the client IP is blocked for `block_duration`. Rate limiting is applied to `POST /admin/login` only; `X-Admin-Key` header auth on other endpoints is also rate-limited.
+
+These defaults are hardcoded (`AdminRateLimitConfig::default()`). They are not configurable via environment variables.
+
 ---
 
 ## Authentication
@@ -170,19 +184,48 @@ curl http://localhost:8081/admin/metrics \
 
 **Response:**
 ```
-# HELP freebird_tokens_issued_total Total tokens issued
-# TYPE freebird_tokens_issued_total counter
-freebird_tokens_issued_total 12500
+# HELP freebird_users_total Total number of registered users
+# TYPE freebird_users_total gauge
+freebird_users_total 120
 
-# HELP freebird_verifications_total Total verifications
-# TYPE freebird_verifications_total counter
-freebird_verifications_total{result="success"} 49500
-freebird_verifications_total{result="failure"} 500
+# HELP freebird_users_banned Number of banned users
+# TYPE freebird_users_banned gauge
+freebird_users_banned 3
 
-# HELP freebird_active_users Current active users
-# TYPE freebird_active_users gauge
-freebird_active_users 120
+# HELP freebird_invitations_total Total invitations created
+# TYPE freebird_invitations_total counter
+freebird_invitations_total 500
+
+# HELP freebird_invitations_redeemed Total invitations redeemed
+# TYPE freebird_invitations_redeemed counter
+freebird_invitations_redeemed 450
+
+# HELP freebird_invitations_pending Pending invitations
+# TYPE freebird_invitations_pending gauge
+freebird_invitations_pending 50
+
+# HELP freebird_keys_total Total number of signing keys
+# TYPE freebird_keys_total gauge
+freebird_keys_total 3
+
+# HELP freebird_keys_active Number of active signing keys
+# TYPE freebird_keys_active gauge
+freebird_keys_active 1
+
+# HELP freebird_keys_deprecated Number of deprecated signing keys
+# TYPE freebird_keys_deprecated gauge
+freebird_keys_deprecated 2
+
+# HELP freebird_keys_expiring_soon Number of keys expiring within 7 days
+# TYPE freebird_keys_expiring_soon gauge
+freebird_keys_expiring_soon 0
+
+# HELP freebird_info Freebird instance information
+# TYPE freebird_info gauge
+freebird_info{sybil_mode="invitation"} 1
 ```
+
+**Note:** These metrics are emitted by the **issuer** service only. The `/admin/metrics` endpoint on the verifier does not exist.
 
 ---
 

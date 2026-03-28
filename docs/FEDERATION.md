@@ -41,10 +41,12 @@ Layer 1 provides the cryptographic foundation for multi-issuer federation using 
 │ Issuer  │── Public Key ──────│ Verifier │
 └─────────┘                    └──────────┘
      │                              │
-     │    Token (195 bytes)         │
+     │    V3 Redemption Token        │
      │  ┌─────────────────┐         │
-     └─▶│ VOPRF (131)     │────────▶│
-        │ ECDSA (64)      │         │
+     └─▶│ output (32)     │────────▶│
+        │ kid, exp,       │         │
+        │ issuer_id,      │         │
+        │ ECDSA sig (64)  │         │
         └─────────────────┘         │
                                     │
         ✅ Verifier needs only public key!
@@ -58,26 +60,30 @@ Layer 1 provides the cryptographic foundation for multi-issuer federation using 
 
 ### Token Format
 
-#### Signature-Based Token (195 bytes)
+#### V3 Redemption Token (variable length, minimum 109 bytes)
 
 ```
-┌─────────────────────────────────────────┐
-│ VERSION (1)                             │
-│ Point A (33) - SEC1 compressed          │
-│ Point B (33) - SEC1 compressed          │
-│ DLEQ Proof (64) - c (32) + s (32)       │
-│ ECDSA Signature (64) - r (32) + s (32)  │
-└─────────────────────────────────────────┘
-Total: 195 bytes
+┌────────────────────────────────────────────────────────┐
+│ VERSION (1)        - always 0x03                       │
+│ output (32)        - unblinded VOPRF PRF output        │
+│ kid_len (1)        - length of key identifier          │
+│ kid (N bytes)      - UTF-8 key identifier              │
+│ exp (8)            - expiration timestamp, i64 big-endian │
+│ issuer_id_len (1)  - length of issuer identifier       │
+│ issuer_id (M bytes)- UTF-8 issuer identifier           │
+│ ECDSA sig (64)     - r (32) + s (32), P-256            │
+└────────────────────────────────────────────────────────┘
+Minimum: 109 bytes (1+32+1+1+8+1+1+64, with 1-byte kid and issuer_id)
+Maximum: 512 bytes
 ```
 
 **Authentication**: ECDSA (P-256) signature over token metadata, verifiable with issuer's public key
 
-**Message Signed**: `token_bytes || kid || exp || issuer_id`
+**Message Signed**: `"freebird:token-metadata:v3" || kid_len(1) || kid || exp(8, i64 BE) || issuer_id_len(1) || issuer_id`
 
 **Components**:
-- **VOPRF Token** (131 bytes): Cryptographic proof from blind signature protocol
-- **ECDSA Signature** (64 bytes): Metadata authentication using P-256
+- **PRF output** (32 bytes): Unblinded VOPRF output; self-authenticating via discrete log
+- **ECDSA Signature** (64 bytes): Metadata authentication using P-256 — binds `kid`, `exp`, and `issuer_id` to the token
 
 ### Public Key Discovery
 
@@ -642,14 +648,11 @@ curl -X POST http://localhost:8081/v1/oprf/issue \
 # Start verifier
 cargo run --bin verifier
 
-# Verify token
+# Verify token (V3 tokens are self-contained; only token_b64 is required)
 curl -X POST http://localhost:8082/v1/verify \
   -H "Content-Type: application/json" \
   -d '{
-    "token_b64": "<195-byte-token>",
-    "issuer_id": "issuer:example:v1",
-    "epoch": 12345,
-    "exp": 1234567890
+    "token_b64": "<base64url-encoded-V3-redemption-token>"
   }'
 ```
 

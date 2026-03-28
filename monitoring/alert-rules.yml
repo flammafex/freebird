@@ -1,0 +1,253 @@
+# Prometheus Alert Rules for Freebird
+#
+# These rules detect operational issues and trigger alerts
+#
+
+groups:
+  - name: freebird
+    interval: 30s
+    rules:
+      # ====================================================================
+      # Service Availability Alerts
+      # ====================================================================
+
+      - alert: FreebirdIssuerDown
+        expr: up{job="freebird-issuer"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: issuer
+        annotations:
+          summary: "Freebird Issuer is down"
+          description: "Issuer service has been unreachable for 5 minutes"
+          runbook_url: "https://github.com/flammafex/freebird/docs/TROUBLESHOOTING.md"
+
+      - alert: FreebirdVerifierDown
+        expr: up{job="freebird-verifier"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: verifier
+        annotations:
+          summary: "Freebird Verifier is down"
+          description: "Verifier service has been unreachable for 5 minutes"
+          runbook_url: "https://github.com/flammafex/freebird/docs/TROUBLESHOOTING.md"
+
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: redis
+        annotations:
+          summary: "Redis is down"
+          description: "Redis service has been unreachable for 5 minutes. Verifier cannot persist nullifiers."
+
+      # ====================================================================
+      # System Resource Alerts
+      # ====================================================================
+
+      - alert: HighIssuerCPUUsage
+        expr: |
+          (rate(container_cpu_usage_seconds_total{name="freebird-issuer"}[5m]) * 100) > 80
+        for: 10m
+        labels:
+          severity: warning
+          component: issuer
+        annotations:
+          summary: "High CPU usage on Issuer"
+          description: "Issuer CPU usage is above 80% for 10 minutes"
+
+      - alert: HighVerifierCPUUsage
+        expr: |
+          (rate(container_cpu_usage_seconds_total{name="freebird-verifier"}[5m]) * 100) > 80
+        for: 10m
+        labels:
+          severity: warning
+          component: verifier
+        annotations:
+          summary: "High CPU usage on Verifier"
+          description: "Verifier CPU usage is above 80% for 10 minutes"
+
+      - alert: HighMemoryUsage
+        expr: |
+          (container_memory_usage_bytes / container_spec_memory_limit_bytes) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is above 85% for {{ $labels.name }}"
+
+      - alert: LowDiskSpace
+        expr: |
+          (node_filesystem_avail_bytes / node_filesystem_size_bytes) < 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: storage
+        annotations:
+          summary: "Low disk space"
+          description: "Disk space is below 10% on {{ $labels.device }}"
+
+      # ====================================================================
+      # Key Management Alerts
+      # ====================================================================
+
+      - alert: KeyExpiringSoon
+        expr: freebird_keys_expiring_soon > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: key-management
+        annotations:
+          summary: "Cryptographic keys expiring soon"
+          description: "{{ $value }} key(s) will expire within 7 days. Plan key rotation."
+
+      - alert: NoActiveKeys
+        expr: freebird_keys_active == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: key-management
+        annotations:
+          summary: "No active cryptographic keys"
+          description: "Issuer has no active signing keys. Token issuance will fail."
+
+      # ====================================================================
+      # User & Authorization Alerts
+      # ====================================================================
+
+      - alert: HighBanRate
+        expr: |
+          rate(freebird_users_banned[5m]) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          component: sybil-resistance
+        annotations:
+          summary: "High user ban rate"
+          description: "Users are being banned at a high rate ({{ printf \"%.2f\" $value }}/sec)"
+
+      - alert: InvitationRedemptionStaleness
+        expr: |
+          (time() - timestamp(freebird_invitations_redeemed)) > 3600
+        for: 5m
+        labels:
+          severity: info
+          component: sybil-resistance
+        annotations:
+          summary: "No invitation redemptions in the past hour"
+          description: "No invitations have been redeemed in the past hour"
+
+      # ====================================================================
+      # Token & Verification Alerts
+      # ====================================================================
+
+      - alert: HighVerificationFailureRate
+        expr: |
+          (rate(freebird_verify_failures_total[5m]) / rate(freebird_verify_total[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          component: verification
+        annotations:
+          summary: "High token verification failure rate"
+          description: "More than 5% of verification attempts are failing"
+
+      - alert: ClockSkewDetected
+        expr: freebird_verification_clock_skew_rejections > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: verification
+        annotations:
+          summary: "Clock skew causing verification failures"
+          description: "{{ $value }} verification(s) rejected due to clock skew"
+
+      # ====================================================================
+      # Redis Alerts
+      # ====================================================================
+
+      - alert: RedisMemoryHigh
+        expr: |
+          (redis_memory_used_bytes / redis_memory_max_bytes) > 0.85
+        for: 10m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "High Redis memory usage"
+          description: "Redis memory usage is above 85%"
+
+      - alert: RedisEvictions
+        expr: |
+          rate(redis_evicted_keys_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Redis is evicting keys"
+          description: "Redis is evicting keys due to memory pressure"
+
+      - alert: RedisPersistenceLag
+        expr: |
+          (time() - timestamp(redis_rdb_last_save_timestamp_seconds)) > 300
+        for: 10m
+        labels:
+          severity: warning
+          component: redis
+        annotations:
+          summary: "Redis RDB persistence lag"
+          description: "Last Redis RDB save was more than 5 minutes ago"
+
+      # ====================================================================
+      # API & Network Alerts
+      # ====================================================================
+
+      - alert: HighHTTPErrorRate
+        expr: |
+          (rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m])) > 0.01
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High HTTP error rate (5xx)"
+          description: "{{ printf \"%.2f\" $value }}% of requests are returning 5xx errors"
+
+      - alert: IssuerVerifierLatency
+        expr: |
+          histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{endpoint="/v1/oprf/issue"}[5m])) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High issuer latency"
+          description: "95th percentile latency for token issuance is above 1 second"
+
+      # ====================================================================
+      # Configuration Alerts
+      # ====================================================================
+
+      - alert: AdminKeyNotSet
+        expr: |
+          freebird_admin_api_key_entropy_bits == 0
+        for: 5m
+        labels:
+          severity: critical
+          component: security
+        annotations:
+          summary: "Admin API key not properly configured"
+          description: "Admin API key entropy is zero. Security compromised."
+
+      - alert: TLSNotRequired
+        expr: |
+          freebird_require_tls == 0
+        for: 5m
+        labels:
+          severity: warning
+          component: security
+        annotations:
+          summary: "TLS not required in production"
+          description: "REQUIRE_TLS is disabled. Enable for production deployments."

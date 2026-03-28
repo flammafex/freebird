@@ -23,8 +23,8 @@ import { FreebirdClient } from '@freebird/sdk';
 
 // 1. Configure
 const client = new FreebirdClient({
-  issuerUrl: '[https://issuer.example.com](https://issuer.example.com)',
-  verifierUrl: '[https://verifier.example.com](https://verifier.example.com)' // Optional, for verification
+  issuerUrl: 'https://issuer.example.com',
+  verifierUrl: 'https://verifier.example.com' // Optional, for verification
 });
 
 async function main() {
@@ -179,3 +179,160 @@ const proof = {
   timestamp: 1699454445
 };
 ```
+
+#### 5. Registered User
+Used for users already in the system (e.g., instance owner). Bypasses the invitation requirement for existing database users.
+
+```typescript
+const proof = {
+  type: 'registered_user',
+  user_id: 'alice'
+};
+```
+
+#### 6. Progressive Trust
+Used for time-based reputation building.
+
+```typescript
+const proof = {
+  type: 'progressive_trust',
+  user_id_hash: 'blake3-hash',   // Blake3(username + salt)
+  first_seen: 1699000000,
+  tokens_issued: 10,
+  last_issuance: 1699454445,
+  hmac_proof: 'base64url...'
+};
+```
+
+#### 7. Multi-Party Vouching
+Used when multiple users must vouch for the requester.
+
+```typescript
+const proof = {
+  type: 'multi_party_vouching',
+  vouchee_id_hash: 'blake3-hash',
+  vouches: [
+    {
+      voucher_id: 'alice',
+      vouchee_id: 'bob',
+      timestamp: 1699454445,
+      signature: 'base64url...',
+      voucher_pubkey_b64: 'base64url...'
+    }
+  ],
+  hmac_proof: 'base64url...',
+  timestamp: 1699454445
+};
+```
+
+---
+
+## Error Handling
+
+All SDK methods throw standard `Error` objects on failure. The error message contains a human-readable description.
+
+```typescript
+try {
+  const token = await client.issueToken(proof);
+} catch (e: unknown) {
+  if (e instanceof Error) {
+    // Issuer rejected the request (HTTP 400/401/403)
+    if (e.message.includes('403')) {
+      console.error('Sybil proof rejected');
+    }
+    // DLEQ proof verification failure (issuer misbehavior)
+    if (e.message.includes('DLEQ')) {
+      console.error('Issuer cheated: DLEQ proof invalid');
+    }
+  }
+}
+```
+
+**Common errors:**
+
+| Condition | Typical message |
+|-----------|----------------|
+| Invalid sybil proof | `"Issuer returned 403: Sybil resistance proof failed"` |
+| No sybil proof provided when required | `"Issuer returned 403: Sybil resistance proof required"` |
+| DLEQ verification fails | `"DLEQ proof verification failed"` |
+| Network error | `"fetch failed"` or `"NetworkError"` |
+| Token already spent | `"Verifier returned 401: token already spent"` |
+| Token expired | `"Verifier returned 401: token expired"` |
+
+---
+
+## Low-Level Crypto API
+
+The SDK exports low-level cryptographic primitives for advanced use cases. These are available as `crypto.*` from the package root.
+
+```typescript
+import { crypto } from '@freebird/sdk';
+```
+
+### `crypto.blind(input, context)`
+
+Blinds a byte array for the VOPRF protocol. Returns the blinded element and a `BlindState` needed for finalization.
+
+```typescript
+const { blinded, state } = crypto.blind(
+  new TextEncoder().encode('my-secret-input'),
+  new TextEncoder().encode('freebird-voprf-v1')
+);
+// blinded: Uint8Array — 33-byte SEC1 compressed P-256 point
+// state: BlindState — contains scalar r and point P for finalization
+```
+
+### `crypto.finalize(state, evaluationB64, kid, exp, issuerId)`
+
+Finalizes the VOPRF by unblinding the server's evaluation and building the V3 redemption token.
+
+```typescript
+const token = await crypto.finalize(
+  state,
+  serverEvaluationBase64,  // from IssueResp.token
+  kid,                     // from IssueResp.kid
+  exp,                     // from IssueResp.exp
+  issuerId                 // from IssueResp.issuer_id
+);
+```
+
+### `crypto.buildRedemptionToken(output, kid, exp, issuerId, sig)`
+
+Assembles a V3 redemption token from its components. Used after unblinding.
+
+```typescript
+const tokenBytes = crypto.buildRedemptionToken(output, kid, exp, issuerId, sig);
+```
+
+### `crypto.parseRedemptionToken(bytes)`
+
+Parses a V3 redemption token binary back into its components.
+
+```typescript
+const { output, kid, exp, issuerId, sig } = crypto.parseRedemptionToken(tokenBytes);
+```
+
+---
+
+## Browser vs. Node.js Differences
+
+The SDK uses `@noble/curves` and `@noble/hashes` for all elliptic curve and hash operations. These are pure-JavaScript implementations with no native dependencies and work identically in both environments.
+
+**Fetch:** The SDK uses the global `fetch` API, available in:
+- Node.js 18+ (built-in)
+- All modern browsers (Chrome, Firefox, Safari, Edge)
+- For older Node.js: use `node-fetch` as a polyfill
+
+**Random scalar generation:** Uses `crypto.getRandomValues()` (Web Crypto API) — available in Node.js 15+ and all modern browsers.
+
+**Module format:** The package ships both ESM and CJS bundles (via `tsup`). Import style:
+
+```typescript
+// ESM (recommended)
+import { FreebirdClient } from '@freebird/sdk';
+
+// CommonJS
+const { FreebirdClient } = require('@freebird/sdk');
+```
+
+**WASM/native:** No WASM or native bindings are used. The SDK is pure TypeScript/JavaScript.

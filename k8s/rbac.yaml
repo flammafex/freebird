@@ -1,0 +1,83 @@
+---
+# ServiceAccount for Issuer
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: freebird-issuer
+  namespace: freebird
+  labels:
+    app: freebird
+    component: issuer
+
+---
+# ServiceAccount for Verifier
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: freebird-verifier
+  namespace: freebird
+  labels:
+    app: freebird
+    component: verifier
+
+---
+# Minimal RBAC for Issuer (read own pod info)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: issuer-role
+  namespace: freebird
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["admin-credentials"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: issuer-rolebinding
+  namespace: freebird
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: issuer-role
+subjects:
+  - kind: ServiceAccount
+    name: freebird-issuer
+    namespace: freebird
+
+---
+# Minimal RBAC for Verifier (read own pod info)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: verifier-role
+  namespace: freebird
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["admin-credentials"]
+    verbs: ["get"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: verifier-rolebinding
+  namespace: freebird
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: verifier-role
+subjects:
+  - kind: ServiceAccount
+    name: freebird-verifier
+    namespace: freebird

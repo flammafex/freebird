@@ -405,24 +405,29 @@ curl [https://issuer.example.com/admin/health](https://issuer.example.com/admin/
 # Verifier implicit health (attempt verification)
 ```
 
-### Prometheus Metrics (Future)
+### Prometheus Metrics
+
+The issuer exposes Prometheus-format metrics at `GET /admin/metrics` (requires `X-Admin-Key`).
 
 ```
-# Issuer metrics
-freebird_issuer_requests_total{endpoint="/v1/oprf/issue", status="success"}
-freebird_issuer_sybil_checks_total{type="invitation", result="pass"}
-freebird_issuer_token_issuance_duration_seconds
+# User and invitation metrics (issuer only)
+freebird_users_total          - gauge  - Total registered users
+freebird_users_banned         - gauge  - Banned users
+freebird_invitations_total    - counter - Total invitations created
+freebird_invitations_redeemed - counter - Total invitations redeemed
+freebird_invitations_pending  - gauge  - Pending (unredeemed) invitations
 
-# Verifier metrics
-freebird_verifier_requests_total{endpoint="/v1/verify", status="success"}
-freebird_verifier_nullifier_hits_total{reason="replay"}
-freebird_verifier_verification_duration_seconds
+# Key metrics (issuer only)
+freebird_keys_total           - gauge  - Total signing keys held
+freebird_keys_active          - gauge  - Currently active keys
+freebird_keys_deprecated      - gauge  - Deprecated (but still valid) keys
+freebird_keys_expiring_soon   - gauge  - Keys expiring within 7 days
 
-# Invitation system metrics
-freebird_invitation_total_users
-freebird_invitation_total_invitations
-freebird_invitation_banned_users
+# Instance label
+freebird_info{sybil_mode="..."}  - gauge - Always 1; carries sybil_mode label
 ```
+
+The verifier does not expose a `/admin/metrics` endpoint.
 
 ### Log Monitoring
 

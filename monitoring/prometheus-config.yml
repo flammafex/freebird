@@ -1,0 +1,103 @@
+# Prometheus Configuration for Freebird Monitoring
+#
+# Usage:
+#   docker run -d --name prometheus \
+#     -p 9090:9090 \
+#     -v $(pwd)/prometheus-config.yml:/etc/prometheus/prometheus.yml \
+#     -v prometheus-data:/prometheus \
+#     prom/prometheus
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'freebird'
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - localhost:9093
+
+# Rule files
+rule_files:
+  - 'alert-rules.yml'
+
+# Scrape configurations
+scrape_configs:
+  # ========================================================================
+  # Freebird Issuer Metrics
+  # ========================================================================
+  - job_name: 'freebird-issuer'
+    static_configs:
+      - targets: ['127.0.0.1:8081']
+    metrics_path: /admin/metrics
+    scheme: http
+
+    # Authorization header for admin API
+    authorization:
+      type: Bearer
+      credentials: 'YOUR_ADMIN_API_KEY_HERE'
+
+    # Scrape interval for this job
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+    # Relabel configs for better organization
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+      - source_labels: [__scheme__]
+        target_label: scheme
+
+  # ========================================================================
+  # Freebird Verifier Metrics
+  # ========================================================================
+  - job_name: 'freebird-verifier'
+    static_configs:
+      - targets: ['127.0.0.1:8082']
+    metrics_path: /admin/metrics
+    scheme: http
+
+    # Authorization header
+    authorization:
+      type: Bearer
+      credentials: 'YOUR_ADMIN_API_KEY_HERE'
+
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+
+  # ========================================================================
+  # Redis Metrics (via redis_exporter)
+  # ========================================================================
+  # Optional: Deploy redis_exporter for detailed Redis metrics
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['127.0.0.1:9121']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # ========================================================================
+  # Node Metrics (Host System)
+  # ========================================================================
+  # Optional: Deploy node_exporter for system metrics
+  - job_name: 'node'
+    static_configs:
+      - targets: ['127.0.0.1:9100']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+
+  # ========================================================================
+  # Docker Metrics (via cAdvisor)
+  # ========================================================================
+  # Optional: Deploy cAdvisor for container metrics
+  - job_name: 'docker'
+    static_configs:
+      - targets: ['127.0.0.1:8080']
+    scrape_interval: 30s
+    scrape_timeout: 10s

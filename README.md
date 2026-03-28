@@ -363,10 +363,25 @@ scrape_configs:
 
 ### 🐳 Docker (Recommended)
 
-The fastest way to get Freebird running is with Docker:
+The fastest way to get Freebird running is with Docker.
+
+**Option A: Use pre-built images from GitHub Container Registry (no Rust needed):**
 
 ```bash
-git clone https://github.com/yourusername/freebird.git
+# Pull the latest pre-built image
+docker pull ghcr.io/flammafex/freebird:latest
+
+# Or run the full stack with docker-compose using the pre-built image
+git clone https://github.com/flammafex/freebird.git
+cd freebird
+cp .env.example .env
+docker compose up
+```
+
+**Option B: Build from source:**
+
+```bash
+git clone https://github.com/flammafex/freebird.git
 cd freebird
 
 # Copy and optionally customize the environment configuration
@@ -515,7 +530,7 @@ Duration fields support human-readable formats:
 
 **Apache License 2.0**
 
-Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
+Copyright 2026 The Carpocratian Church of Commonality and Equality, Inc.
 
 ---
 

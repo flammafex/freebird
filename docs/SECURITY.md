@@ -571,7 +571,7 @@ See [HSM_HYBRID_MODE.md](HSM_HYBRID_MODE.md) for implementation details.
 - No unsafe Rust in cryptographic code
 - Comprehensive test coverage
 - Based on well-studied protocols (VOPRF, Schnorr)
-- Constant-time operations verified (see SECURITY_AUDIT_CONSTANT_TIME.md)
+- Constant-time operations used throughout cryptographic code
 
 **Use in Production:**
 - ⚠️ Understand risks before deployment

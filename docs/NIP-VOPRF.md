@@ -27,11 +27,9 @@ The client sends the token back to the relay using the `AUTH` command.
 ```json
 ["AUTH", {
   "kind": 22242,
-  "content": "<base64url-token>",
+  "content": "<base64url-encoded-V3-redemption-token>",
   "tags": [
-    ["issuer", "[https://issuer.example.com](https://issuer.example.com)"],
-    ["proof", "<dleq-proof>"],
-    ["exp", "<timestamp>"]
+    ["issuer", "https://issuer.example.com"]
   ]
 }]
 ```

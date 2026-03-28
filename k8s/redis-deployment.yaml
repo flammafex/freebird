@@ -1,0 +1,168 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: redis-data
+  namespace: freebird
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: freebird
+  labels:
+    app: freebird
+    component: redis
+spec:
+  replicas: 1  # Redis should be singleton for persistence
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: freebird
+      component: redis
+  template:
+    metadata:
+      labels:
+        app: freebird
+        component: redis
+    spec:
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          imagePullPolicy: IfNotPresent
+
+          # Command with persistence settings
+          command:
+            - redis-server
+            - "--appendonly"
+            - "yes"
+            - "--appendfsync"
+            - "everysec"
+            - "--requirepass"
+            - "$(REDIS_PASSWORD)"
+            - "--timeout"
+            - "300"
+            - "--tcp-keepalive"
+            - "60"
+
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-credentials
+                  key: password
+
+          # Ports
+          ports:
+            - name: redis
+              containerPort: 6379
+              protocol: TCP
+
+          # Health checks
+          livenessProbe:
+            exec:
+              command:
+                - redis-cli
+                - "-a"
+                - "$(REDIS_PASSWORD)"
+                - "ping"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            exec:
+              command:
+                - redis-cli
+                - "-a"
+                - "$(REDIS_PASSWORD)"
+                - "ping"
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+
+          # Resource management
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "1000m"
+
+          # Volume mounts
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: redis-config
+              mountPath: /usr/local/etc/redis
+
+          # Security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: false
+
+          # Graceful shutdown
+          lifecycle:
+            preStop:
+              exec:
+                command:
+                  - sh
+                  - -c
+                  - redis-cli -a $REDIS_PASSWORD shutdown
+
+      # Volumes
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: redis-data
+        - name: redis-config
+          emptyDir: {}
+
+      # DNS policy
+      dnsPolicy: ClusterFirst
+
+      # Termination grace period for shutdown
+      terminationGracePeriodSeconds: 30
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: freebird
+  labels:
+    app: freebird
+    component: redis
+spec:
+  type: ClusterIP
+  clusterIP: None  # Headless service for StatefulSet compatibility
+  ports:
+    - port: 6379
+      targetPort: redis
+      protocol: TCP
+      name: redis
+  selector:
+    app: freebird
+    component: redis

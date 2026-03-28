@@ -22,25 +22,12 @@ Measures the performance of core VOPRF operations using P-256 elliptic curve cry
 
 **Key Performance Insight**: P-256 scalar multiplication is the primary CPU bottleneck, as stated in the README. The evaluate operation (which performs the VOPRF evaluation and generates DLEQ proofs) is the most expensive operation at ~540-570µs per token.
 
-### 2. MAC and Key Derivation (`mac.rs`)
-
-Measures the performance of token authentication and key management:
-
-- **`mac/compute`**: HMAC-SHA256 computation with various token sizes (32-512 bytes)
-- **`mac/verify`**: Constant-time MAC verification (both valid and invalid MACs)
-- **`mac/derive_key`**: Legacy HKDF-based MAC key derivation
-- **`mac/derive_key_v2`**: Enhanced HKDF-based MAC key derivation with domain separation
-- **`mac/throughput`**: Batch MAC computation and verification (10-1000 tokens)
-
-**Key Performance Insight**: MAC operations are significantly faster than VOPRF operations, taking only a few microseconds per token.
-
 ## Running Benchmarks
 
 ### Quick Test (Verify benchmarks compile and run)
 
 ```bash
 cargo bench --package crypto --bench voprf -- --test
-cargo bench --package crypto --bench mac -- --test
 ```
 
 ### Run All Benchmarks
@@ -54,9 +41,6 @@ cargo bench --package crypto
 ```bash
 # VOPRF benchmarks only
 cargo bench --package crypto --bench voprf
-
-# MAC benchmarks only
-cargo bench --package crypto --bench mac
 ```
 
 ### Run Specific Benchmark
@@ -74,8 +58,6 @@ cargo bench --package crypto --bench voprf "batch_evaluate_parallel"
 ```
 
 ### Quick Benchmarks (Shorter Duration)
-
-Use the `--quick` flag for faster results with less statistical rigor:
 
 ```bash
 cargo bench --package crypto --bench voprf -- --quick

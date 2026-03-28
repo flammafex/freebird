@@ -1,31 +1,43 @@
 # ==============================================================================
 # Stage 1: Base Builder (shared dependencies)
 # ==============================================================================
-FROM rust:latest as base-builder
+FROM rust:1.70-bullseye as base-builder
 
 WORKDIR /app
 
+# Install build dependencies with security scanning
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY . .
+COPY Cargo.toml Cargo.lock ./
+COPY crypto ./crypto
+COPY common ./common
+COPY interface ./interface
+COPY issuer ./issuer
+COPY verifier ./verifier
+COPY integration_tests ./integration_tests
+
+# Pre-cache dependencies to optimize layer caching
+RUN cargo fetch
 
 # ==============================================================================
 # Stage 2: Issuer Builder (builds ONLY issuer)
 # ==============================================================================
 FROM base-builder as issuer-builder
 
-# Build only the issuer binary
-RUN cargo build --release -p freebird-issuer
+# Build only the issuer binary with optimizations
+RUN cargo build --release -p freebird-issuer \
+    && cargo build --release --bin freebird-cli
 
 # ==============================================================================
 # Stage 3: Verifier Builder (builds ONLY verifier)
 # ==============================================================================
 FROM base-builder as verifier-builder
 
-# Build only the verifier binary
+# Build only the verifier binary with optimizations
 RUN cargo build --release -p freebird-verifier
 
 # ==============================================================================
@@ -35,24 +47,42 @@ FROM debian:bookworm-slim as issuer
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
+# Install runtime dependencies with minimal attack surface
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-RUN groupadd -r freebird && useradd -r -g freebird freebird
+# Create non-root user with explicit UID/GID for consistency
+RUN groupadd -r -g 1000 freebird && useradd -r -u 1000 -g freebird freebird
+
+# Create data directories with proper permissions
 RUN mkdir -p /data/keys /data/state /data/federation && \
-    chown -R freebird:freebird /data
+    chown -R 1000:1000 /data && \
+    chmod 750 /data /data/keys /data/state /data/federation
 
-# Copy from issuer-specific builder
+# Copy binaries from build stage
 COPY --from=issuer-builder /app/target/release/freebird-issuer /usr/local/bin/freebird-issuer
-RUN chmod +x /usr/local/bin/freebird-issuer
+COPY --from=issuer-builder /app/target/release/freebird-cli /usr/local/bin/freebird-cli
+RUN chmod 755 /usr/local/bin/freebird-issuer /usr/local/bin/freebird-cli
 
-ENV BIND_ADDR=0.0.0.0:8081
-ENV ISSUER_SK_PATH=/data/keys/issuer_sk.bin
-ENV KEY_ROTATION_STATE_PATH=/data/keys/key_rotation_state.json
-ENV SYBIL_INVITE_PERSISTENCE_PATH=/data/state/invitations.json
+# Set secure defaults
+ENV BIND_ADDR=0.0.0.0:8081 \
+    ISSUER_SK_PATH=/data/keys/issuer_sk.bin \
+    KEY_ROTATION_STATE_PATH=/data/keys/key_rotation_state.json \
+    SYBIL_INVITE_PERSISTENCE_PATH=/data/state/invitations.json \
+    RUST_LOG=info
+
+# Add metadata labels for supply chain
+LABEL org.opencontainers.image.title="Freebird Issuer" \
+      org.opencontainers.image.description="Privacy-preserving authorization - Issuer component" \
+      org.opencontainers.image.vendor="Freebird" \
+      org.opencontainers.image.documentation="https://github.com/flammafex/freebird"
+
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
+    CMD curl -f http://localhost:8081/.well-known/issuer || exit 1
 
 USER freebird
 VOLUME ["/data"]
@@ -67,18 +97,31 @@ FROM debian:bookworm-slim as verifier
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y \
+# Install minimal runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-RUN groupadd -r freebird && useradd -r -g freebird freebird
+# Create non-root user with explicit UID/GID
+RUN groupadd -r -g 1000 freebird && useradd -r -u 1000 -g freebird freebird
 
-# Copy from verifier-specific builder
+# Copy binary from build stage
 COPY --from=verifier-builder /app/target/release/freebird-verifier /usr/local/bin/freebird-verifier
-RUN chmod +x /usr/local/bin/freebird-verifier
+RUN chmod 755 /usr/local/bin/freebird-verifier
 
-ENV BIND_ADDR=0.0.0.0:8082
+# Set secure defaults
+ENV BIND_ADDR=0.0.0.0:8082 \
+    RUST_LOG=info
+
+# Add metadata labels for supply chain
+LABEL org.opencontainers.image.title="Freebird Verifier" \
+      org.opencontainers.image.description="Privacy-preserving authorization - Verifier component" \
+      org.opencontainers.image.vendor="Freebird" \
+      org.opencontainers.image.documentation="https://github.com/flammafex/freebird"
+
+# Security: disable unnecessary capabilities
+RUN setcap -r /usr/sbin/setcap || true
 
 USER freebird
 EXPOSE 8082

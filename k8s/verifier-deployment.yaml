@@ -1,0 +1,205 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: verifier-config
+  namespace: freebird
+data:
+  RUST_LOG: "info,freebird=debug"
+  BIND_ADDR: "0.0.0.0:8082"
+  ISSUER_URL: "http://issuer:8081/.well-known/issuer"
+  REDIS_URL: "redis://redis:6379"
+  MAX_CLOCK_SKEW_SECS: "300"
+  REFRESH_INTERVAL_MIN: "10"
+  EPOCH_DURATION_SEC: "86400"
+  EPOCH_RETENTION: "2"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: verifier
+  namespace: freebird
+  labels:
+    app: freebird
+    component: verifier
+spec:
+  replicas: 3  # Verifiers are stateless and can scale
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: freebird
+      component: verifier
+  template:
+    metadata:
+      labels:
+        app: freebird
+        component: verifier
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8082"
+        prometheus.io/path: "/admin/metrics"
+    spec:
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Main containers
+      containers:
+        - name: verifier
+          image: ghcr.io/flammafex/freebird-verifier:latest
+          imagePullPolicy: IfNotPresent
+
+          # Environment
+          envFrom:
+            - configMapRef:
+                name: verifier-config
+          env:
+            - name: ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: admin-credentials
+                  key: admin-api-key
+
+          # Ports
+          ports:
+            - name: http
+              containerPort: 8082
+              protocol: TCP
+
+          # Liveliness and readiness
+          livenessProbe:
+            httpGet:
+              path: /v1/check
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /v1/check
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+
+          # Startup probe
+          startupProbe:
+            httpGet:
+              path: /v1/check
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 30
+
+          # Resource management
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "2000m"
+
+          # Security context for container
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - NET_BIND_SERVICE
+            readOnlyRootFilesystem: false
+
+          # Graceful shutdown
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
+
+      # Pod-level configuration
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                    - key: component
+                      operator: In
+                      values:
+                        - verifier
+                topologyKey: kubernetes.io/hostname
+
+      # DNS policy
+      dnsPolicy: ClusterFirst
+      serviceAccountName: freebird-verifier
+
+      # Termination grace period
+      terminationGracePeriodSeconds: 45
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: verifier
+  namespace: freebird
+  labels:
+    app: freebird
+    component: verifier
+spec:
+  type: ClusterIP
+  sessionAffinity: None
+  ports:
+    - port: 8082
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: freebird
+    component: verifier
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: verifier-lb
+  namespace: freebird
+  labels:
+    app: freebird
+    component: verifier
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 443
+      targetPort: http
+      protocol: TCP
+      name: https
+  selector:
+    app: freebird
+    component: verifier
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: verifier-pdb
+  namespace: freebird
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: freebird
+      component: verifier

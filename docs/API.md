@@ -74,6 +74,76 @@ curl http://localhost:8081/.well-known/issuer
 
 ---
 
+### Get Key Discovery Metadata
+
+**GET /.well-known/keys**
+
+Returns epoch and key rotation information for epoch-aware clients. Verifiers call this to retrieve the full epoch range and valid key set.
+
+**Request:**
+```bash
+curl http://localhost:8081/.well-known/keys
+```
+
+**Response (200 OK):**
+```json
+{
+  "issuer_id": "issuer:freebird:v1",
+  "current_epoch": 42,
+  "valid_epochs": [40, 41, 42],
+  "epoch_duration_sec": 86400,
+  "voprf": {
+    "suite": "OPRF(P-256, SHA-256)-verifiable",
+    "kid": "2b8d5f3a-2024-11-08",
+    "pubkey": "A3x5Y2z8B4w7C6v5D4u3E2t1F0s9G8h7I6j5K4l3M2n1",
+    "exp_sec": 600
+  }
+}
+```
+
+**Additional Fields (beyond `/.well-known/issuer`):**
+- `current_epoch`: Current epoch number
+- `valid_epochs`: List of epochs whose tokens the issuer currently accepts
+- `epoch_duration_sec`: Duration of each epoch in seconds
+
+---
+
+### Get Federation Metadata
+
+**GET /.well-known/federation**
+
+Returns this issuer's trust graph: the list of issuers it vouches for and any revocations. Used by verifiers implementing Layer 2 trust graph federation.
+
+**Request:**
+```bash
+curl http://localhost:8081/.well-known/federation
+```
+
+**Response (200 OK):**
+```json
+{
+  "issuer_id": "issuer:example:v1",
+  "vouches": [
+    {
+      "voucher_issuer_id": "issuer:example:v1",
+      "vouched_issuer_id": "issuer:partner:v1",
+      "vouched_pubkey": "AzQ1...base64...",
+      "expires_at": 1735689600,
+      "created_at": 1704067200,
+      "trust_level": 90,
+      "signature": "r7K9...base64..."
+    }
+  ],
+  "revocations": [],
+  "updated_at": 1704067200,
+  "cache_ttl_secs": 3600
+}
+```
+
+See [FEDERATION.md](FEDERATION.md) for trust graph architecture and configuration.
+
+---
+
 ### Issue Token (Single)
 
 **POST /v1/oprf/issue**
@@ -101,6 +171,17 @@ Issues a single anonymous token via VOPRF evaluation.
     "type": "invitation",
     "code": "Abc123XyZ456PqRsTuVw",
     "signature": "3045022100d7f2e8c9a1b3f4e5d6c7a8b9..."
+  }
+}
+```
+
+**Request (Registered User — bypasses invitation requirement for existing users):**
+```json
+{
+  "blinded_element_b64": "A1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6...",
+  "sybil_proof": {
+    "type": "registered_user",
+    "user_id": "alice"
   }
 }
 ```
@@ -345,6 +426,45 @@ See [FEDERATION.md](FEDERATION.md) for configuration details.
 
 ---
 
+### Verify Token Batch
+
+**POST /v1/verify/batch**
+
+Verifies multiple V3 redemption tokens in a single request. Each token is checked independently; failures do not affect other tokens in the batch.
+
+**Request:**
+```json
+{
+  "tokens": [
+    {"token_b64": "AwAAAA...first-token..."},
+    {"token_b64": "AwAAAA...second-token..."},
+    {"token_b64": "AwAAAA...third-token..."}
+  ]
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "results": [
+    {"status": "success", "verified_at": 1699454445},
+    {"status": "error", "message": "token expired", "code": "token_expired"},
+    {"status": "success", "verified_at": 1699454445}
+  ],
+  "successful": 2,
+  "failed": 1,
+  "processing_time_ms": 12,
+  "throughput": 250.0
+}
+```
+
+**Notes:**
+- Each result corresponds positionally to the input token.
+- Successfully verified tokens are recorded as spent (replay-protected).
+- HTTP 200 is returned even if some tokens fail; check each `status` field.
+
+---
+
 ### Check Token (Non-Consuming)
 
 **POST /v1/check**
@@ -396,13 +516,110 @@ Validates a V3 token's format, expiration, and ECDSA signature **without** recor
 
 See [Admin API Reference](ADMIN_API.md) for complete documentation.
 
-**Authentication:** All require `X-Admin-Key` header.
+**Authentication:** All endpoints require either the `X-Admin-Key` header with the API key, or a valid `freebird_session` cookie set by `POST /admin/login`.
 
-**Available Endpoints:**
-- User management (invitation system)
-- Key rotation
-- Statistics and monitoring
-- Invitation generation and revocation
+### Session Authentication
+
+**POST /admin/login**
+
+Verifies the API key and sets an HttpOnly session cookie for browser-based admin UI access.
+
+**Request:**
+```json
+{
+  "api_key": "your-admin-api-key"
+}
+```
+
+**Response (200 OK):**
+```json
+{"status": "ok"}
+```
+Sets `freebird_session` cookie (HttpOnly, SameSite=Strict, Max-Age=86400).
+
+**Rate limiting:** Login attempts are rate-limited per IP (5 failures in 5 minutes triggers a 15-minute block).
+
+---
+
+**POST /admin/logout**
+
+Clears the session cookie.
+
+**Request:** No body required.
+
+**Response (200 OK):**
+```json
+{"status": "ok"}
+```
+Sets `freebird_session` cookie with `Max-Age=0` to clear it.
+
+---
+
+### Bootstrap: Register Instance Owner
+
+**POST /admin/register-owner**
+
+Registers a user as the owner of this Freebird instance. Only the first registration succeeds; subsequent calls return an error. Used by applications like Clout to tie the instance to its founding user.
+
+**Request:**
+```json
+{
+  "user_id": "alice"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "success": true,
+  "owner": "alice"
+}
+```
+
+**Error (400 Bad Request):** If an owner is already registered.
+
+---
+
+### Bootstrap: Add Bootstrap User
+
+**POST /admin/bootstrap/add**
+
+Grants a user a starting allocation of invitations without requiring them to be invited first. Useful for seeding a new instance.
+
+**Request:**
+```json
+{
+  "user_id": "alice",
+  "invite_count": 10
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "ok": true,
+  "user_id": "alice",
+  "invites_granted": 10
+}
+```
+
+---
+
+**Available Endpoints (summary):**
+- Session: `POST /admin/login`, `POST /admin/logout`
+- Health: `GET /admin/health`
+- Stats: `GET /admin/stats`
+- Config: `GET /admin/config`
+- Metrics: `GET /admin/metrics` (Prometheus format, issuer only)
+- Users: `GET /admin/users`, `GET /admin/users/:user_id`, `POST /admin/users/ban`
+- Invitations: `GET /admin/invitations`, `POST /admin/invitations/create`, `GET /admin/invitations/:code`
+- Invite grants: `POST /admin/invites/grant`
+- Bootstrap: `POST /admin/bootstrap/add`, `POST /admin/register-owner`
+- Keys: `GET /admin/keys`, `POST /admin/keys/rotate`, `POST /admin/keys/cleanup`, `DELETE /admin/keys/:kid`
+- Audit: `GET /admin/audit`
+- Exports: `GET /admin/export/invitations`, `GET /admin/export/users`, `GET /admin/export/audit`
+- Federation: `GET /admin/federation/vouches`, `POST /admin/federation/vouches`, `DELETE /admin/federation/vouches/:issuer_id`, `GET /admin/federation/revocations`, `POST /admin/federation/revocations`
+- Save state: `POST /admin/save`
 
 ---
 

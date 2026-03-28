@@ -19,6 +19,8 @@ Get Freebird running in 5 minutes.
 
 **Goal:** Launch the complete stack (Issuer, Verifier, Redis) instantly without installing Rust.
 
+Pre-built images are published to the GitHub Container Registry at `ghcr.io/flammafex/freebird`. If you do not want to build from source, you can pull these directly.
+
 ### Step 1: Start Services
 
 ```bash
@@ -26,7 +28,11 @@ Get Freebird running in 5 minutes.
 git clone https://github.com/flammafex/freebird.git
 cd freebird
 
-# Start everything
+# Option A: Use pre-built image (no Rust build required)
+docker pull ghcr.io/flammafex/freebird:latest
+docker-compose up
+
+# Option B: Build from source
 docker-compose up --build
 ```
 

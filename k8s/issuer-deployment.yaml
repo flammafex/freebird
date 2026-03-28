@@ -1,0 +1,236 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: issuer-config
+  namespace: freebird
+data:
+  RUST_LOG: "info,freebird=debug"
+  BIND_ADDR: "0.0.0.0:8081"
+  TOKEN_TTL_MIN: "10"
+  REQUIRE_TLS: "true"
+  BEHIND_PROXY: "true"
+  EPOCH_DURATION_SEC: "86400"
+  EPOCH_RETENTION: "2"
+  SYBIL_RESISTANCE: "invitation"
+  SYBIL_INVITE_PER_USER: "5"
+  SYBIL_INVITE_COOLDOWN_SECS: "3600"
+  SYBIL_INVITE_EXPIRES_SECS: "2592000"
+  SYBIL_INVITE_AUTOSAVE_INTERVAL_SECS: "300"
+  SYBIL_INVITE_BOOTSTRAP_USERS: "admin:100"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: issuer-data
+  namespace: freebird
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: issuer
+  namespace: freebird
+  labels:
+    app: freebird
+    component: issuer
+spec:
+  replicas: 1  # Issuer must be singleton to maintain key consistency
+  strategy:
+    type: Recreate  # Avoid simultaneous instances
+  selector:
+    matchLabels:
+      app: freebird
+      component: issuer
+  template:
+    metadata:
+      labels:
+        app: freebird
+        component: issuer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+        prometheus.io/path: "/admin/metrics"
+    spec:
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Init containers for setup
+      initContainers:
+        - name: setup
+          image: ghcr.io/flammafex/freebird-issuer:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - sh
+            - -c
+            - mkdir -p /data/keys /data/state /data/federation && chmod 750 /data/*
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsNonRoot: false
+
+      # Main containers
+      containers:
+        - name: issuer
+          image: ghcr.io/flammafex/freebird-issuer:latest
+          imagePullPolicy: IfNotPresent
+
+          # Environment
+          envFrom:
+            - configMapRef:
+                name: issuer-config
+          env:
+            - name: ISSUER_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['app']
+            - name: ADMIN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: admin-credentials
+                  key: admin-api-key
+            - name: ISSUER_SK_PATH
+              value: /data/keys/issuer_sk.bin
+            - name: KEY_ROTATION_STATE_PATH
+              value: /data/keys/key_rotation_state.json
+            - name: SYBIL_INVITE_PERSISTENCE_PATH
+              value: /data/state/invitations.json
+
+          # Ports
+          ports:
+            - name: http
+              containerPort: 8081
+              protocol: TCP
+
+          # Liveliness and readiness
+          livenessProbe:
+            httpGet:
+              path: /.well-known/issuer
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /.well-known/issuer
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 2
+
+          # Startup probe for slow starting containers
+          startupProbe:
+            httpGet:
+              path: /.well-known/issuer
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 30
+
+          # Resource management
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "2000m"
+
+          # Volume mounts
+          volumeMounts:
+            - name: data
+              mountPath: /data
+
+          # Security context for container
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+              add:
+                - NET_BIND_SERVICE
+            readOnlyRootFilesystem: false
+
+          # Graceful shutdown
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 15"]
+
+      # Pod-level configuration
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: issuer-data
+
+      # Affinity rules
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - freebird
+                topologyKey: kubernetes.io/hostname
+
+      # DNS policy
+      dnsPolicy: ClusterFirst
+      serviceAccountName: freebird-issuer
+
+      # Termination grace period for graceful shutdown
+      terminationGracePeriodSeconds: 45
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: issuer
+  namespace: freebird
+  labels:
+    app: freebird
+    component: issuer
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8081
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: freebird
+    component: issuer
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: issuer-pdb
+  namespace: freebird
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: freebird
+      component: issuer

@@ -1,21 +1,31 @@
+version: '3.8'
+
 services:
-  # ----------------------------------------------------------------------------
+  # ============================================================================
   # ISSUER
-  # ----------------------------------------------------------------------------
+  # ============================================================================
   issuer:
     build:
       context: .
       target: issuer
     image: freebird-issuer:latest
+    container_name: freebird-issuer
+    restart: unless-stopped
+
+    # Port bindings - production: use reverse proxy instead
     ports:
-      - "8081:8081"
+      - "${ISSUER_BIND_ADDR:-127.0.0.1:8081}:8081"
+
+    # Data persistence
     volumes:
-      # Persist keys and invitations
-      - issuer-data:/data
+      - issuer-data:/data:rw
+      # Optional: bind mount for key backups
+      - ./backups/issuer:/backups:rw
+
+    # Configuration
     env_file:
       - .env
     environment:
-      # These can be overridden in .env file
       - RUST_LOG=${RUST_LOG:-info,freebird=debug}
       - LOG_FORMAT=${LOG_FORMAT:-plain}
       - ISSUER_ID=${ISSUER_ID:-issuer:docker:v1}
@@ -36,28 +46,65 @@ services:
       - SYBIL_INVITE_PERSISTENCE_PATH=${SYBIL_INVITE_PERSISTENCE_PATH:-/data/state/invitations.json}
       - SYBIL_INVITE_AUTOSAVE_INTERVAL_SECS=${SYBIL_INVITE_AUTOSAVE_INTERVAL_SECS:-300}
       - SYBIL_INVITE_BOOTSTRAP_USERS=${SYBIL_INVITE_BOOTSTRAP_USERS:-admin:100}
+
+    # Networking
     networks:
       - freebird-net
+    links:
+      - redis
+
+    # Health checks for orchestration
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/.well-known/issuer"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
-  # ----------------------------------------------------------------------------
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '1'
+          memory: 512M
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+
+  # ============================================================================
   # VERIFIER
-  # ----------------------------------------------------------------------------
+  # ============================================================================
   verifier:
     build:
       context: .
       target: verifier
     image: freebird-verifier:latest
+    container_name: freebird-verifier
+    restart: unless-stopped
+
+    # Port bindings - production: use reverse proxy instead
     ports:
-      - "8082:8082"
+      - "${VERIFIER_BIND_ADDR:-127.0.0.1:8082}:8082"
+
+    # Configuration
     env_file:
       - .env
     environment:
-      # These can be overridden in .env file
       - RUST_LOG=${RUST_LOG:-info,freebird=debug}
       - LOG_FORMAT=${LOG_FORMAT:-plain}
       - BIND_ADDR=${VERIFIER_BIND_ADDR:-0.0.0.0:8082}
@@ -67,26 +114,109 @@ services:
       - REFRESH_INTERVAL_MIN=${REFRESH_INTERVAL_MIN:-10}
       - EPOCH_DURATION_SEC=${VERIFIER_EPOCH_DURATION_SEC:-86400}
       - EPOCH_RETENTION=${VERIFIER_EPOCH_RETENTION:-2}
+
+    # Networking
+    networks:
+      - freebird-net
     depends_on:
       issuer:
         condition: service_healthy
       redis:
         condition: service_started
-    networks:
-      - freebird-net
 
-  # ----------------------------------------------------------------------------
-  # INFRASTRUCTURE
-  # ----------------------------------------------------------------------------
+    # Health checks
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8082/v1/check"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '1'
+          memory: 512M
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+
+  # ============================================================================
+  # REDIS (Nullifier Cache & Persistence)
+  # ============================================================================
   redis:
-    image: redis:alpine
+    image: redis:7-alpine
+    container_name: freebird-redis
+    restart: unless-stopped
+
+    # Data persistence with AOF
+    command: redis-server --appendonly yes --appendfsync everysec
+
+    # Storage
     volumes:
-      - redis-data:/data
+      - redis-data:/data:rw
+
+    # Networking - internal only
     networks:
       - freebird-net
+    expose:
+      - "6379"
+
+    # Health checks
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
 volumes:
   redis-data:
+    driver: local
   issuer-data:
+    driver: local
+
 networks:
   freebird-net:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: br-freebird
