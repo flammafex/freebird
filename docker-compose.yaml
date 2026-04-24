@@ -8,7 +8,7 @@ services:
     build:
       context: .
       target: issuer
-    image: freebird-issuer:latest
+    image: ${ISSUER_IMAGE:-ghcr.io/flammafex/freebird-issuer:latest}
     container_name: freebird-issuer
     restart: unless-stopped
 
@@ -93,7 +93,7 @@ services:
     build:
       context: .
       target: verifier
-    image: freebird-verifier:latest
+    image: ${VERIFIER_IMAGE:-ghcr.io/flammafex/freebird-verifier:latest}
     container_name: freebird-verifier
     restart: unless-stopped
 
