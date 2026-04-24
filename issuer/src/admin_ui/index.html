@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>🕊️ Freebird Admin</title>
+    <title>Freebird Admin</title>
     <style>/* water.css v2 - inlined for security */
 /**
  * Automatic version:
@@ -1701,7 +1701,7 @@ body > footer {
         --success-color: #2ecc71;
         --error-color: #e74c3c;
         --warning-color: #f39c12;
-        --text-muted: #888;
+        --text-muted: #767676;
       }
 
       body {
@@ -1900,7 +1900,7 @@ body > footer {
 
       .invitation-meta {
         font-size: 0.85em;
-        opacity: 0.7;
+        color: var(--text-muted);
         margin-top: 5px;
       }
 
@@ -2294,10 +2294,16 @@ body > footer {
       }
 
       .stat-card .value {
-        background: var(--gradient-primary);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-        background-clip: text;
+        color: var(--tab-active-color); /* fallback */
+      }
+      @supports (-webkit-background-clip: text) or (background-clip: text) {
+        .stat-card .value {
+          background: var(--gradient-primary);
+          -webkit-background-clip: text;
+          background-clip: text;
+          -webkit-text-fill-color: transparent;
+          color: transparent;
+        }
       }
 
       /* Enhanced Form Sections */
@@ -2699,16 +2705,59 @@ body > footer {
           min-width: 44px;
         }
       }
+
+      /* Skip link */
+      .skip-link {
+        position: absolute; top: -40px; left: 0;
+        background: var(--tab-active-color); color: #fff;
+        padding: 8px 16px; z-index: 100; text-decoration: none;
+        border-radius: 0 0 4px 0;
+      }
+      .skip-link:focus { top: 0; }
+
+      /* Screen-reader only */
+      .sr-only {
+        position: absolute; width: 1px; height: 1px;
+        padding: 0; margin: -1px; overflow: hidden;
+        clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+      }
+
+      /* Danger button */
+      .btn-danger {
+        background: var(--error-color);
+        color: #fff;
+        border: 2px solid var(--error-color);
+      }
+      .btn-danger:hover { filter: brightness(0.9); }
+
+      /* Button group */
+      .button-group {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+
+      /* Global toast notification */
+      #globalToast {
+        position: fixed; bottom: 20px; right: 20px;
+        min-width: 250px; max-width: 400px;
+        z-index: 200; border-radius: 6px;
+        padding: 12px 16px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      }
+      #globalToast[hidden] { display: none; }
     </style>
   </head>
   <body>
-    <div class="header">
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+    <header class="header">
       <h1>🕊️ Freebird Admin<span id="serviceBadge"></span></h1>
       <p>Authorization without identity. Privacy without compromise.</p>
       <div id="systemHealthBadge" style="margin-top: 10px">
         <span class="badge">Checking...</span>
       </div>
-    </div>
+    </header>
 
     <!-- API Key Configuration -->
     <div class="api-key-section">
@@ -2728,53 +2777,82 @@ body > footer {
       <div id="apiKeyStatus" class="api-key-status"></div>
     </div>
 
-    <div class="tabs">
-      <button type="button" class="tab active" onclick="switchTab('dashboard')">
+    <nav aria-label="Admin navigation">
+    <div class="tabs" role="tablist" aria-label="Admin sections">
+      <button type="button" class="tab active" role="tab"
+        id="tab-dashboard" aria-selected="true" aria-controls="dashboard-tab"
+        onclick="switchTab('dashboard', this)">
         📊 Dashboard
       </button>
       <!-- Issuer-only tabs -->
       <button
         type="button"
         class="tab issuer-only"
-        onclick="switchTab('sybil')"
+        role="tab"
+        id="tab-sybil"
+        aria-selected="false"
+        aria-controls="sybil-tab"
+        onclick="switchTab('sybil', this)"
       >
         🛡️ Sybil
       </button>
       <button
         type="button"
         class="tab issuer-only"
-        onclick="switchTab('users')"
+        role="tab"
+        id="tab-users"
+        aria-selected="false"
+        aria-controls="users-tab"
+        onclick="switchTab('users', this)"
       >
         👥 Users
       </button>
       <button
         type="button"
         class="tab issuer-only"
-        onclick="switchTab('invitations')"
+        role="tab"
+        id="tab-invitations"
+        aria-selected="false"
+        aria-controls="invitations-tab"
+        onclick="switchTab('invitations', this)"
       >
         🎫 Invitations
       </button>
-      <button type="button" class="tab issuer-only" onclick="switchTab('keys')">
+      <button type="button" class="tab issuer-only" role="tab"
+        id="tab-keys" aria-selected="false" aria-controls="keys-tab"
+        onclick="switchTab('keys', this)">
         🔑 Keys
       </button>
       <button
         type="button"
         class="tab issuer-only"
-        onclick="switchTab('audit')"
+        role="tab"
+        id="tab-audit"
+        aria-selected="false"
+        aria-controls="audit-tab"
+        onclick="switchTab('audit', this)"
       >
         📝 Audit
       </button>
       <button
         type="button"
         class="tab issuer-only"
-        onclick="switchTab('federation')"
+        role="tab"
+        id="tab-federation"
+        aria-selected="false"
+        aria-controls="federation-tab"
+        onclick="switchTab('federation', this)"
       >
         🌐 Federation
       </button>
       <button
         type="button"
         class="tab issuer-only"
-        onclick="switchTab('webauthn')"
+        role="tab"
+        id="tab-webauthn"
+        aria-selected="false"
+        aria-controls="webauthn-tab"
+        onclick="switchTab('webauthn', this)"
       >
         🔐 WebAuthn
       </button>
@@ -2782,20 +2860,30 @@ body > footer {
       <button
         type="button"
         class="tab verifier-only hidden"
-        onclick="switchTab('trusted-issuers')"
+        role="tab"
+        id="tab-trusted-issuers"
+        aria-selected="false"
+        aria-controls="trusted-issuers-tab"
+        onclick="switchTab('trusted-issuers', this)"
       >
         🏛️ Issuers
       </button>
       <button
         type="button"
         class="tab verifier-only hidden"
-        onclick="switchTab('cache')"
+        role="tab"
+        id="tab-cache"
+        aria-selected="false"
+        aria-controls="cache-tab"
+        onclick="switchTab('cache', this)"
       >
         💾 Cache
       </button>
     </div>
+    </nav>
+    <main id="main-content">
 
-    <div id="dashboard-tab" class="tab-content active">
+    <div id="dashboard-tab" class="tab-content active" role="tabpanel" aria-labelledby="tab-dashboard" tabindex="0">
       <h2>System Statistics</h2>
       <button type="button" onclick="loadStats()">🔄 Refresh</button>
 
@@ -2813,7 +2901,9 @@ body > footer {
           class="chart-canvas"
           width="800"
           height="300"
-        ></canvas>
+          role="img"
+          aria-label="Real-time system activity chart. Current data available in the stats grid above."
+        ><p>Real-time activity chart — data available in the stats grid above.</p></canvas>
         <div style="margin-top: 15px">
           <button type="button" onclick="updateActivityChart()">
             Update Chart
@@ -2824,7 +2914,7 @@ body > footer {
     </div>
 
     <!-- Sybil Configuration Tab -->
-    <div id="sybil-tab" class="tab-content">
+    <div id="sybil-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-sybil" tabindex="0">
       <h2>🛡️ Sybil Resistance Configuration</h2>
       <p>View the current Sybil resistance settings for this issuer.</p>
 
@@ -2835,33 +2925,24 @@ body > footer {
       </div>
     </div>
 
-    <div id="users-tab" class="tab-content">
+    <div id="users-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-users" tabindex="0">
       <h2>User Management</h2>
 
       <div class="form-row">
         <div class="form-field">
+          <label for="userSearch" class="sr-only">Search users</label>
           <input
             type="text"
             id="userSearch"
             placeholder="Search users..."
-            onkeyup="filterUsers()"
+            oninput="filterUsers()"
           />
         </div>
         <button type="button" onclick="loadUsers()">🔄 Refresh List</button>
-        <button
-          type="button"
-          onclick="exportUsers('json')"
-          style="margin-left: 10px"
-        >
-          📥 Export JSON
-        </button>
-        <button
-          type="button"
-          onclick="exportUsers('csv')"
-          style="margin-left: 5px"
-        >
-          📥 Export CSV
-        </button>
+        <div class="button-group">
+          <button type="button" onclick="exportUsers('json')">📥 Export JSON</button>
+          <button type="button" onclick="exportUsers('csv')">📥 Export CSV</button>
+        </div>
       </div>
 
       <div id="usersContainer">
@@ -2881,7 +2962,7 @@ body > footer {
       </div>
     </dialog>
 
-    <div id="invitations-tab" class="tab-content">
+    <div id="invitations-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-invitations" tabindex="0">
       <div class="form-section">
         <h3>🎫 Create Invitations</h3>
         <p class="text-small">
@@ -3017,7 +3098,7 @@ body > footer {
     </div>
 
     <!-- Keys Tab -->
-    <div id="keys-tab" class="tab-content">
+    <div id="keys-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-keys" tabindex="0">
       <h2>🔑 Key Management</h2>
       <p>Manage cryptographic keys for VOPRF token issuance.</p>
 
@@ -3068,17 +3149,18 @@ body > footer {
     </div>
 
     <!-- Audit Logs Tab -->
-    <div id="audit-tab" class="tab-content">
+    <div id="audit-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-audit" tabindex="0">
       <h2>📝 Audit Logs</h2>
       <p>View and search system activity logs.</p>
 
       <div class="form-row">
         <div class="form-field">
+          <label for="auditSearch" class="sr-only">Search audit logs</label>
           <input
             type="text"
             id="auditSearch"
             placeholder="Search logs..."
-            onkeyup="filterAuditLogs()"
+            oninput="filterAuditLogs()"
           />
         </div>
         <div class="form-field" style="max-width: 200px">
@@ -3091,20 +3173,10 @@ body > footer {
           </select>
         </div>
         <button type="button" onclick="loadAuditLogs()">🔄 Refresh</button>
-        <button
-          type="button"
-          onclick="exportAudit('json')"
-          style="margin-left: 10px"
-        >
-          📥 Export JSON
-        </button>
-        <button
-          type="button"
-          onclick="exportAudit('csv')"
-          style="margin-left: 5px"
-        >
-          📥 Export CSV
-        </button>
+        <div class="button-group">
+          <button type="button" onclick="exportAudit('json')">📥 Export JSON</button>
+          <button type="button" onclick="exportAudit('csv')">📥 Export CSV</button>
+        </div>
       </div>
 
       <div id="auditLogsContainer" class="mt-20">
@@ -3113,7 +3185,7 @@ body > footer {
     </div>
 
     <!-- Federation Tab -->
-    <div id="federation-tab" class="tab-content">
+    <div id="federation-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-federation" tabindex="0">
       <h2>🌐 Federation Management</h2>
       <p>
         Manage trust relationships with other Freebird issuers through vouches
@@ -3234,7 +3306,7 @@ body > footer {
     </div>
 
     <!-- WebAuthn Tab -->
-    <div id="webauthn-tab" class="tab-content">
+    <div id="webauthn-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-webauthn" tabindex="0">
       <h2>🔐 WebAuthn Management</h2>
       <p>View and manage FIDO2 credentials for passwordless authentication.</p>
 
@@ -3247,11 +3319,12 @@ body > footer {
 
         <div class="form-row">
           <div class="form-field">
+            <label for="credentialSearch" class="sr-only">Search by User ID hash</label>
             <input
               type="text"
               id="credentialSearch"
               placeholder="Search by User ID hash..."
-              onkeyup="filterWebAuthnCredentials()"
+              oninput="filterWebAuthnCredentials()"
             />
           </div>
           <button type="button" onclick="loadWebAuthnCredentials()">
@@ -3266,7 +3339,7 @@ body > footer {
     </div>
 
     <!-- Verifier: Trusted Issuers Tab -->
-    <div id="trusted-issuers-tab" class="tab-content verifier-only">
+    <div id="trusted-issuers-tab" class="tab-content verifier-only" role="tabpanel" aria-labelledby="tab-trusted-issuers" tabindex="0">
       <h2>🏛️ Trusted Issuers</h2>
       <p>View and manage trusted token issuers for verification.</p>
 
@@ -3297,7 +3370,7 @@ body > footer {
     </div>
 
     <!-- Verifier: Cache Tab -->
-    <div id="cache-tab" class="tab-content verifier-only">
+    <div id="cache-tab" class="tab-content verifier-only" role="tabpanel" aria-labelledby="tab-cache" tabindex="0">
       <h2>💾 Replay Cache</h2>
       <p>Monitor and manage the token replay detection cache.</p>
 
@@ -3322,13 +3395,26 @@ body > footer {
         <button
           type="button"
           onclick="clearCache()"
-          style="background: var(--error-color)"
+          class="btn-danger"
         >
-          Clear Replay Cache
+          ⚠️ Clear Replay Cache
         </button>
         <div id="cacheClearResult"></div>
       </div>
     </div>
+    </main>
+
+    <div role="status" aria-live="polite" aria-atomic="true" id="liveRegion" class="sr-only"></div>
+    <div id="globalToast" role="alert" aria-live="assertive" hidden></div>
+
+    <dialog id="confirmDialog" aria-modal="true" aria-labelledby="confirmDialogTitle">
+      <h3 id="confirmDialogTitle" style="margin-top: 0">Confirm Action</h3>
+      <p id="confirmMessage"></p>
+      <div style="display: flex; gap: 8px; justify-content: flex-end; margin-top: 20px;">
+        <button type="button" id="confirmCancel">Cancel</button>
+        <button type="button" id="confirmOk">Confirm</button>
+      </div>
+    </dialog>
 
     <script>
       function escapeHtml(str) {
@@ -3654,12 +3740,16 @@ body > footer {
         }
       }
 
-      function switchTab(tabName) {
+      function switchTab(tabName, triggerEl = null) {
         // Update tab buttons
-        document
-          .querySelectorAll(".tab")
-          .forEach((tab) => tab.classList.remove("active"));
-        event.target.classList.add("active");
+        document.querySelectorAll(".tab").forEach((tab) => {
+          tab.classList.remove("active");
+          tab.setAttribute("aria-selected", "false");
+        });
+        if (triggerEl) {
+          triggerEl.classList.add("active");
+          triggerEl.setAttribute("aria-selected", "true");
+        }
 
         // Update tab content
         document.querySelectorAll(".tab-content").forEach((content) => {
@@ -3668,6 +3758,10 @@ body > footer {
         document.getElementById(`${tabName}-tab`).classList.add("active");
 
         state.currentTab = tabName;
+
+        // Announce tab change to screen readers
+        const liveRegion = document.getElementById("liveRegion");
+        if (liveRegion) liveRegion.textContent = `${tabName} tab selected`;
 
         // Auto-load data
         if (tabName === "users" && state.users.length === 0) {
@@ -3685,6 +3779,28 @@ body > footer {
         }
       }
 
+      function showToast(type, message) {
+        const toast = document.getElementById("globalToast");
+        toast.className = `message ${type}`;
+        toast.textContent = message;
+        toast.hidden = false;
+        if (type !== "error") {
+          setTimeout(() => { toast.hidden = true; }, 5000);
+        } else {
+          setTimeout(() => { toast.hidden = true; }, 8000);
+        }
+      }
+
+      function showConfirm(message, onConfirm, dangerous = false) {
+        const dialog = document.getElementById("confirmDialog");
+        document.getElementById("confirmMessage").textContent = message;
+        const okBtn = document.getElementById("confirmOk");
+        okBtn.className = dangerous ? "btn-danger" : "";
+        document.getElementById("confirmCancel").onclick = () => dialog.close();
+        okBtn.onclick = () => { dialog.close(); onConfirm(); };
+        dialog.showModal();
+      }
+
       function copyToClipboard(text, buttonElement) {
         navigator.clipboard
           .writeText(text)
@@ -3699,7 +3815,7 @@ body > footer {
             }, 2000);
           })
           .catch((err) => {
-            alert("Failed to copy: " + err);
+            showToast("error", "Failed to copy: " + err);
           });
       }
 
@@ -4350,18 +4466,18 @@ body > footer {
           ? `Are you sure you want to ban ${userId} AND all users they invited? This cannot be undone.`
           : `Are you sure you want to ban ${userId}?`;
 
-        if (!confirm(msg)) return;
+        showConfirm(msg, async () => {
+          try {
+            const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+            const result = await api.banUser(userId, banTree);
 
-        try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
-          const result = await api.banUser(userId, banTree);
-
-          alert(`Success! Banned ${result.banned_count} user(s).`);
-          document.getElementById("userModal").close();
-          loadUsers(); // Refresh list
-        } catch (error) {
-          alert(`Failed to ban user: ${error.message}`);
-        }
+            showToast("success", `Banned ${result.banned_count} user(s).`);
+            document.getElementById("userModal").close();
+            loadUsers(); // Refresh list
+          } catch (error) {
+            showToast("error", `Failed to ban user: ${error.message}`);
+          }
+        }, true);
       }
 
       // ============================================================================
@@ -4701,7 +4817,7 @@ body > footer {
       // Export functions
       async function exportInvitations(format) {
         if (!state.authenticated) {
-          alert("Please configure your API key first");
+          showToast("warning", "Please configure your API key first");
           return;
         }
         try {
@@ -4718,13 +4834,13 @@ body > footer {
             );
           }
         } catch (error) {
-          alert("Export failed: " + error.message);
+          showToast("error", "Export failed: " + error.message);
         }
       }
 
       async function exportUsers(format) {
         if (!state.authenticated) {
-          alert("Please configure your API key first");
+          showToast("warning", "Please configure your API key first");
           return;
         }
         try {
@@ -4741,13 +4857,13 @@ body > footer {
             );
           }
         } catch (error) {
-          alert("Export failed: " + error.message);
+          showToast("error", "Export failed: " + error.message);
         }
       }
 
       async function exportAudit(format) {
         if (!state.authenticated) {
-          alert("Please configure your API key first");
+          showToast("warning", "Please configure your API key first");
           return;
         }
         try {
@@ -4764,7 +4880,7 @@ body > footer {
             );
           }
         } catch (error) {
-          alert("Export failed: " + error.message);
+          showToast("error", "Export failed: " + error.message);
         }
       }
 
@@ -5064,7 +5180,7 @@ body > footer {
 
       async function updateActivityChart() {
         if (!state.authenticated) {
-          alert("⚠️ Please configure your API key first");
+          showToast("warning", "Please configure your API key first");
           return;
         }
 
@@ -5093,7 +5209,7 @@ body > footer {
 
           drawActivityChart();
         } catch (error) {
-          alert(`Failed to update chart: ${error.message}`);
+          showToast("error", `Failed to update chart: ${error.message}`);
         }
       }
 
@@ -5486,19 +5602,17 @@ body > footer {
       }
 
       async function removeVouch(issuerId) {
-        if (!confirm(`Remove vouch for ${issuerId}?`)) {
-          return;
-        }
+        showConfirm(`Remove vouch for ${issuerId}?`, async () => {
+          try {
+            const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+            const result = await api.removeVouch(issuerId);
 
-        try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
-          const result = await api.removeVouch(issuerId);
-
-          showMessage("vouchResult", "success", `✓ ${result.message}`);
-          loadVouches();
-        } catch (error) {
-          showMessage("vouchResult", "error", `❌ Failed: ${error.message}`);
-        }
+            showMessage("vouchResult", "success", `✓ ${result.message}`);
+            loadVouches();
+          } catch (error) {
+            showMessage("vouchResult", "error", `❌ Failed: ${error.message}`);
+          }
+        }, true);
       }
 
       async function loadRevocations() {
@@ -5606,23 +5720,21 @@ body > footer {
       }
 
       async function removeRevocation(issuerId) {
-        if (!confirm(`Remove revocation for ${issuerId}?`)) {
-          return;
-        }
+        showConfirm(`Remove revocation for ${issuerId}?`, async () => {
+          try {
+            const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+            const result = await api.removeRevocation(issuerId);
 
-        try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
-          const result = await api.removeRevocation(issuerId);
-
-          showMessage("revocationResult", "success", `✓ ${result.message}`);
-          loadRevocations();
-        } catch (error) {
-          showMessage(
-            "revocationResult",
-            "error",
-            `❌ Failed: ${error.message}`,
-          );
-        }
+            showMessage("revocationResult", "success", `✓ ${result.message}`);
+            loadRevocations();
+          } catch (error) {
+            showMessage(
+              "revocationResult",
+              "error",
+              `❌ Failed: ${error.message}`,
+            );
+          }
+        }, true);
       }
 
       // ============================================================================
@@ -5723,22 +5835,21 @@ body > footer {
       }
 
       async function deleteWebAuthnCredential(credentialId) {
-        if (
-          !confirm(
-            "Are you sure you want to delete this credential? This cannot be undone.",
-          )
-        )
-          return;
+        showConfirm(
+          "Are you sure you want to delete this credential? This cannot be undone.",
+          async () => {
+            try {
+              const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+              const result = await api.deleteWebAuthnCredential(credentialId);
 
-        try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
-          const result = await api.deleteWebAuthnCredential(credentialId);
-
-          alert("✓ " + result.message);
-          loadWebAuthnCredentials();
-        } catch (error) {
-          alert(`❌ Failed to delete credential: ${error.message}`);
-        }
+              showMessage("webauthnCredentialsContainer", "success", result.message);
+              loadWebAuthnCredentials();
+            } catch (error) {
+              showMessage("webauthnCredentialsContainer", "error", `Failed to delete credential: ${error.message}`);
+            }
+          },
+          true
+        );
       }
 
       // ============================================================================
@@ -5838,9 +5949,9 @@ body > footer {
         try {
           const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
           const result = await api.refreshIssuer(issuerId);
-          alert(`✓ ${result.message}`);
+          showToast("success", result.message);
         } catch (error) {
-          alert(`❌ Failed to refresh issuer: ${error.message}`);
+          showToast("error", `Failed to refresh issuer: ${error.message}`);
         }
       }
 
@@ -5893,33 +6004,31 @@ body > footer {
       }
 
       async function clearCache() {
-        if (
-          !confirm(
-            "⚠️ WARNING: Clearing the cache will allow previously-used tokens to be replayed. Only use in development. Continue?",
-          )
-        ) {
-          return;
-        }
+        showConfirm(
+          "WARNING: Clearing the cache will allow previously-used tokens to be replayed. Only use in development. Continue?",
+          async () => {
+            const resultContainer = document.getElementById("cacheClearResult");
+            resultContainer.innerHTML =
+              '<p><span class="spinner"></span> Clearing cache...</p>';
 
-        const resultContainer = document.getElementById("cacheClearResult");
-        resultContainer.innerHTML =
-          '<p><span class="spinner"></span> Clearing cache...</p>';
+            try {
+              const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+              const result = await api.clearCache();
 
-        try {
-          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
-          const result = await api.clearCache();
+              if (result.ok) {
+                resultContainer.innerHTML = `<div class="message success">${escapeHtml(result.message)}</div>`;
+              } else {
+                resultContainer.innerHTML = `<div class="message warning">${escapeHtml(result.message)}</div>`;
+              }
 
-          if (result.ok) {
-            resultContainer.innerHTML = `<div class="message success">${escapeHtml(result.message)}</div>`;
-          } else {
-            resultContainer.innerHTML = `<div class="message warning">${escapeHtml(result.message)}</div>`;
-          }
-
-          // Refresh stats
-          loadCacheStats();
-        } catch (error) {
-          resultContainer.innerHTML = `<div class="message error">Failed to clear cache: ${escapeHtml(error.message)}</div>`;
-        }
+              // Refresh stats
+              loadCacheStats();
+            } catch (error) {
+              resultContainer.innerHTML = `<div class="message error">Failed to clear cache: ${escapeHtml(error.message)}</div>`;
+            }
+          },
+          true
+        );
       }
 
       // ============================================================================
@@ -5987,6 +6096,20 @@ body > footer {
         // Initialize chart (only for issuer)
         if (state.serviceType !== "verifier") {
           drawActivityChart();
+        }
+
+        // Arrow key navigation for tab widget
+        const tablist = document.querySelector('[role="tablist"]');
+        if (tablist) {
+          tablist.addEventListener("keydown", (e) => {
+            const tabs = [...document.querySelectorAll('[role="tab"]:not(.hidden)')];
+            const idx = tabs.indexOf(document.activeElement);
+            if (idx === -1) return;
+            if (e.key === "ArrowRight") { e.preventDefault(); tabs[(idx + 1) % tabs.length].focus(); }
+            if (e.key === "ArrowLeft") { e.preventDefault(); tabs[(idx - 1 + tabs.length) % tabs.length].focus(); }
+            if (e.key === "Home") { e.preventDefault(); tabs[0].focus(); }
+            if (e.key === "End") { e.preventDefault(); tabs[tabs.length - 1].focus(); }
+          });
         }
       });
     </script>
