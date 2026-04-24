@@ -22,14 +22,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Log in to Forgejo registry
-        run: echo "${{ gitea.token }}" | docker login git.carpocratian.org -u ${{ gitea.actor }} --password-stdin
+        run: echo "${{ github.token }}" | docker login git.carpocratian.org -u ${{ github.actor }} --password-stdin
 
       - name: Compute tags
         id: tags
         run: |
           IMAGE="${{ env.IMAGE_PREFIX }}-${{ matrix.target }}"
-          SHA=$(echo "${{ gitea.sha }}" | cut -c1-7)
-          REF="${{ gitea.ref }}"
+          SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          REF="${{ github.ref }}"
           TAGS="${IMAGE}:${SHA}"
           if [ "$REF" = "refs/heads/main" ]; then
             TAGS="${TAGS},${IMAGE}:latest"
