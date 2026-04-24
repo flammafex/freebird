@@ -1,7 +1,7 @@
 # ==============================================================================
 # Stage 1: Base Builder (shared dependencies)
 # ==============================================================================
-FROM rust:1.70-bullseye as base-builder
+FROM rust:1-bookworm as base-builder
 
 WORKDIR /app
 
