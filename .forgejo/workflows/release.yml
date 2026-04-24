@@ -1,0 +1,50 @@
+name: Release Binaries
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build images
+        run: |
+          docker build --target issuer   -t freebird-issuer-build .
+          docker build --target verifier -t freebird-verifier-build .
+
+      - name: Extract binaries
+        run: |
+          docker create --name issuer-tmp freebird-issuer-build
+          docker cp issuer-tmp:/usr/local/bin/freebird-issuer ./freebird-issuer-linux-amd64
+          docker cp issuer-tmp:/usr/local/bin/freebird-cli    ./freebird-cli-linux-amd64
+          docker rm issuer-tmp
+
+          docker create --name verifier-tmp freebird-verifier-build
+          docker cp verifier-tmp:/usr/local/bin/freebird-verifier ./freebird-verifier-linux-amd64
+          docker rm verifier-tmp
+
+          chmod +x freebird-*-linux-amd64
+
+      - name: Create Forgejo release
+        id: release
+        run: |
+          RESPONSE=$(curl -s -X POST \
+            "https://git.carpocratian.org/api/v1/repos/sibyl/freebird/releases" \
+            -H "Authorization: token ${{ secrets.RELEASE_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"tag_name\":\"${{ github.ref_name }}\",\"name\":\"${{ github.ref_name }}\",\"draft\":false,\"prerelease\":false}")
+          echo "release_id=$(echo "$RESPONSE" | jq -r '.id')" >> "$GITHUB_OUTPUT"
+
+      - name: Upload binaries
+        run: |
+          RELEASE_ID="${{ steps.release.outputs.release_id }}"
+          for binary in freebird-issuer-linux-amd64 freebird-verifier-linux-amd64 freebird-cli-linux-amd64; do
+            curl -s -X POST \
+              "https://git.carpocratian.org/api/v1/repos/sibyl/freebird/releases/${RELEASE_ID}/assets?name=${binary}" \
+              -H "Authorization: token ${{ secrets.RELEASE_TOKEN }}" \
+              -F "attachment=@${binary}"
+          done
