@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Log in to Forgejo registry
-        run: echo "${{ github.token }}" | docker login git.carpocratian.org -u ${{ github.actor }} --password-stdin
+        run: echo "${{ secrets.FORGEJO_TOKEN }}" | docker login git.carpocratian.org -u ${{ github.actor }} --password-stdin
 
       - name: Compute tags
         id: tags
