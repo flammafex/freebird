@@ -7,8 +7,8 @@ on:
   workflow_dispatch:
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_PREFIX: ghcr.io/flammafex/freebird
+  REGISTRY: git.carpocratian.org
+  IMAGE_PREFIX: git.carpocratian.org/sibyl/freebird
 
 jobs:
   build:
@@ -21,15 +21,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Log in to GHCR
-        run: echo "${{ secrets.CR_PAT }}" | docker login ghcr.io -u flammafex --password-stdin
+      - name: Log in to Forgejo registry
+        run: echo "${{ gitea.token }}" | docker login git.carpocratian.org -u ${{ gitea.actor }} --password-stdin
 
       - name: Compute tags
         id: tags
         run: |
           IMAGE="${{ env.IMAGE_PREFIX }}-${{ matrix.target }}"
-          SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          REF="${{ github.ref }}"
+          SHA=$(echo "${{ gitea.sha }}" | cut -c1-7)
+          REF="${{ gitea.ref }}"
           TAGS="${IMAGE}:${SHA}"
           if [ "$REF" = "refs/heads/main" ]; then
             TAGS="${TAGS},${IMAGE}:latest"
