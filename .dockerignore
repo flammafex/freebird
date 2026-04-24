@@ -3,4 +3,3 @@ target/
 .git/
 .env
 data/
-Cargo.lock
