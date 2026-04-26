@@ -44,9 +44,33 @@ pub struct IssuerInfo {
     pub pubkey_bytes: Vec<u8>,
     pub kid: String,
     pub ctx: Vec<u8>,
-    pub exp_sec: u64,
+    pub verification_key: Option<[u8; 32]>,
+    pub deprecated_verification_keys: HashMap<String, [u8; 32]>,
+    pub public_keys:
+        HashMap<[u8; freebird_crypto::PUBLIC_BEARER_TOKEN_KEY_ID_LEN], PublicIssuerKey>,
     /// When this issuer's metadata was last refreshed
     pub last_refreshed: Option<Instant>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PublicIssuerKey {
+    pub token_key_id: [u8; freebird_crypto::PUBLIC_BEARER_TOKEN_KEY_ID_LEN],
+    pub token_key_id_hex: String,
+    pub pubkey_spki: Vec<u8>,
+    pub issuer_id: String,
+    pub valid_from: i64,
+    pub valid_until: i64,
+    pub audience: Option<String>,
+}
+
+impl IssuerInfo {
+    pub fn verification_key_for(&self, kid: &str) -> Option<[u8; 32]> {
+        if self.kid == kid {
+            self.verification_key
+        } else {
+            self.deprecated_verification_keys.get(kid).copied()
+        }
+    }
 }
 
 // ============================================================================
@@ -121,7 +145,8 @@ fn extract_session_cookie(headers: &HeaderMap) -> Option<String> {
 /// Verifier configuration (for /admin/config endpoint)
 #[derive(Clone, Debug, Serialize)]
 pub struct VerifierConfig {
-    pub max_clock_skew_secs: i64,
+    pub verifier_id: String,
+    pub audience: String,
     pub epoch_duration_sec: u64,
     pub epoch_retention: u32,
     pub refresh_interval_min: u64,
@@ -191,7 +216,8 @@ pub struct StatsResponse {
 /// Configuration response
 #[derive(Debug, Serialize)]
 pub struct ConfigResponse {
-    pub max_clock_skew_secs: i64,
+    pub verifier_id: String,
+    pub audience: String,
     pub epoch_duration_sec: u64,
     pub epoch_retention: u32,
     pub refresh_interval_min: u64,
@@ -204,9 +230,9 @@ pub struct ConfigResponse {
 pub struct IssuerSummary {
     pub issuer_id: String,
     pub kid: String,
+    pub public_key_count: usize,
     /// First 16 chars of base64-encoded pubkey for identification
     pub pubkey_preview: String,
-    pub exp_sec: u64,
     /// Seconds since last refresh (if known)
     pub age_secs: Option<u64>,
 }
@@ -225,7 +251,7 @@ pub struct IssuerDetailsResponse {
     pub kid: String,
     pub pubkey_b64: String,
     pub context: String,
-    pub exp_sec: u64,
+    pub public_key_ids: Vec<String>,
     pub age_secs: Option<u64>,
 }
 
@@ -520,7 +546,8 @@ pub async fn config_handler(
     info!("Admin: retrieved verifier config");
 
     Ok(Json(ConfigResponse {
-        max_clock_skew_secs: state.config.max_clock_skew_secs,
+        verifier_id: state.config.verifier_id.clone(),
+        audience: state.config.audience.clone(),
         epoch_duration_sec: state.config.epoch_duration_sec,
         epoch_retention: state.config.epoch_retention,
         refresh_interval_min: state.config.refresh_interval_min,
@@ -555,8 +582,8 @@ pub async fn list_issuers_handler(
             IssuerSummary {
                 issuer_id: id.clone(),
                 kid: info.kid.clone(),
+                public_key_count: info.public_keys.len(),
                 pubkey_preview,
-                exp_sec: info.exp_sec,
                 age_secs,
             }
         })
@@ -590,6 +617,11 @@ pub async fn get_issuer_handler(
 
     let pubkey_b64 = base64ct::Base64UrlUnpadded::encode_string(&info.pubkey_bytes);
     let context = String::from_utf8_lossy(&info.ctx).to_string();
+    let public_key_ids = info
+        .public_keys
+        .values()
+        .map(|key| key.token_key_id_hex.clone())
+        .collect();
     let age_secs = info.last_refreshed.map(|t| t.elapsed().as_secs());
 
     info!("Admin: retrieved issuer details for {}", issuer_id);
@@ -599,7 +631,7 @@ pub async fn get_issuer_handler(
         kid: info.kid.clone(),
         pubkey_b64,
         context,
-        exp_sec: info.exp_sec,
+        public_key_ids,
         age_secs,
     }))
 }

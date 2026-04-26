@@ -27,7 +27,7 @@ enum VerifyCode {
 }
 
 async fn verify_once(store: &dyn SpendStore, key: &str, ttl: Duration) -> VerifyCode {
-    match store.mark_spent(key, ttl).await {
+    match store.mark_spent(key, Some(ttl)).await {
         Ok(true) => VerifyCode::Success,
         Ok(false) => VerifyCode::ReplayDetected,
         Err(_) => VerifyCode::StoreError,
@@ -62,7 +62,7 @@ impl FlakyInMemoryStore {
 
 #[async_trait]
 impl SpendStore for FlakyInMemoryStore {
-    async fn mark_spent(&self, key: &str, ttl: Duration) -> anyhow::Result<bool> {
+    async fn mark_spent(&self, key: &str, ttl: Option<Duration>) -> anyhow::Result<bool> {
         let mut guard = self.failures_remaining.lock().await;
         if *guard > 0 {
             *guard -= 1;
@@ -100,7 +100,7 @@ async fn test_memory_atomic_double_spend_protection() -> Result<()> {
 
         handles.push(tokio::spawn(async move {
             // Try to mark as spent
-            match store_clone.mark_spent(&key_clone, ttl).await {
+            match store_clone.mark_spent(&key_clone, Some(ttl)).await {
                 Ok(true) => {
                     // Success: We were the first!
                     counter.fetch_add(1, Ordering::SeqCst);
@@ -141,18 +141,18 @@ async fn test_memory_ttl_expiration() -> Result<()> {
 
     // Mark as spent with very short TTL
     let ttl = Duration::from_millis(100);
-    let first = store.mark_spent(&key, ttl).await?;
+    let first = store.mark_spent(&key, Some(ttl)).await?;
     assert!(first, "First spend should succeed");
 
     // Immediately try again - should fail
-    let second = store.mark_spent(&key, ttl).await?;
+    let second = store.mark_spent(&key, Some(ttl)).await?;
     assert!(!second, "Immediate replay should fail");
 
     // Wait for TTL to expire
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     // Try again after expiration - should succeed (entry expired)
-    let after_ttl = store.mark_spent(&key, ttl).await?;
+    let after_ttl = store.mark_spent(&key, Some(ttl)).await?;
     assert!(after_ttl, "Spend after TTL expiration should succeed");
 
     println!("✅ TTL expiration works correctly");
@@ -170,14 +170,23 @@ async fn test_memory_different_keys_independent() -> Result<()> {
     let key3 = format!("test:key3:{}", uuid::Uuid::new_v4());
 
     // All first spends should succeed
-    assert!(store.mark_spent(&key1, ttl).await?, "key1 first spend");
-    assert!(store.mark_spent(&key2, ttl).await?, "key2 first spend");
-    assert!(store.mark_spent(&key3, ttl).await?, "key3 first spend");
+    assert!(
+        store.mark_spent(&key1, Some(ttl)).await?,
+        "key1 first spend"
+    );
+    assert!(
+        store.mark_spent(&key2, Some(ttl)).await?,
+        "key2 first spend"
+    );
+    assert!(
+        store.mark_spent(&key3, Some(ttl)).await?,
+        "key3 first spend"
+    );
 
     // All replays should fail
-    assert!(!store.mark_spent(&key1, ttl).await?, "key1 replay");
-    assert!(!store.mark_spent(&key2, ttl).await?, "key2 replay");
-    assert!(!store.mark_spent(&key3, ttl).await?, "key3 replay");
+    assert!(!store.mark_spent(&key1, Some(ttl)).await?, "key1 replay");
+    assert!(!store.mark_spent(&key2, Some(ttl)).await?, "key2 replay");
+    assert!(!store.mark_spent(&key3, Some(ttl)).await?, "key3 replay");
 
     println!("✅ Independent key tracking works correctly");
     Ok(())

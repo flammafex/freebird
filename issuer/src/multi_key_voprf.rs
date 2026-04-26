@@ -227,19 +227,6 @@ impl MultiKeyVoprfCore {
         self.active_key.read().await.pubkey_b64.clone()
     }
 
-    /// Sign token metadata using the active key (for federation support)
-    pub async fn sign_token_metadata(
-        &self,
-        kid: &str,
-        exp: i64,
-        issuer_id: &str,
-    ) -> Result<[u8; 64]> {
-        let active = self.active_key.read().await;
-        active
-            .sign_token_metadata(kid, exp, issuer_id)
-            .await
-    }
-
     /// Evaluate a blinded element using the active key
     ///
     /// Returns the evaluation token and the key ID used

@@ -6,10 +6,13 @@ Complete guide to cryptographic key lifecycle, rotation, and security.
 
 ## Overview
 
-Freebird uses **ECDSA P-256** keys for:
-- VOPRF evaluation (issuer secret key)
-- Invitation signatures (invitation system)
-- DLEQ proofs (verifying issuer behavior)
+Freebird uses separate keys for separate protocol roles:
+
+- **V4 VOPRF issuer key:** raw 32-byte P-256 scalar at `ISSUER_SK_PATH`.
+- **V5 public bearer key:** DER RSA private key at `PUBLIC_BEARER_SK_PATH`.
+- **Invitation signing key:** P-256 signing key at `SYBIL_INVITE_SIGNING_KEY_PATH`.
+
+Do not reuse one key across these roles.
 
 ---
 
@@ -32,14 +35,16 @@ Keys are automatically generated on first run:
 ```
 
 **File created:**
-- `issuer_sk.bin` - 32-byte P-256 secret key (raw scalar)
+- `issuer_sk.bin` - V4 32-byte P-256 secret key (raw scalar)
+- `public_bearer_sk.der` - V5 RSA blind-signature private key
+- `public_bearer_metadata.json` - immutable V5 public bearer key metadata
 - Permissions: 0600 (owner read/write only)
 - Atomic writes prevent corruption
 
 ### Manual Generation
 
 ```bash
-# Generate key with OpenSSL
+# Generate a V4 P-256 key with OpenSSL
 openssl ecparam -genkey -name prime256v1 -noout -out key.pem
 
 # Convert to PKCS#8 DER (Freebird supports this format)
@@ -48,6 +53,9 @@ openssl pkcs8 -topk8 -nocrypt -in key.pem -outform DER -out issuer_sk.bin
 # Set restrictive permissions
 chmod 600 issuer_sk.bin
 ```
+
+For V5, let the issuer generate the RFC 9474 RSA key and metadata on first
+startup unless you have a dedicated key-management workflow for DER RSA keys.
 
 ---
 
@@ -118,13 +126,11 @@ gcloud secrets versions access latest \
   --secret=freebird-issuer-key > /tmp/issuer_sk.bin
 ```
 
-**5. Hardware Security Module (HSM)** - Roadmap
+**5. Hardware Security Module (HSM)**
 
-Future support for:
-- AWS CloudHSM
-- Google Cloud HSM
-- YubiHSM
-- PKCS#11 interface
+V4 supports the HSM hybrid storage path documented in
+[HSM_HYBRID_MODE.md](HSM_HYBRID_MODE.md). V5 RSA blind-signature keys are
+software-managed in the current implementation.
 
 ---
 
@@ -141,7 +147,9 @@ Future support for:
 
 ### Rotation Process
 
-**Step 1: Generate New Key**
+### V4 Rotation Process
+
+**Step 1: Generate New V4 Key**
 
 ```bash
 # New key is generated automatically during rotation
@@ -215,6 +223,17 @@ curl -X POST http://localhost:8081/admin/keys/cleanup \
   -H "X-Admin-Key: ${ADMIN_KEY}"
 ```
 
+### V5 Rotation Process
+
+V5 metadata is immutable for a key. To change audience, validity, policy, or
+the RSA key itself:
+
+1. stop issuing with the old V5 key;
+2. create a new `PUBLIC_BEARER_SK_PATH` and `PUBLIC_BEARER_METADATA_PATH`;
+3. start the issuer with the new paths or move the old files aside;
+4. let verifiers refresh `/.well-known/keys`;
+5. keep replay records until the old V5 key's `valid_until` has passed.
+
 ---
 
 ## Key Backup & Recovery
@@ -231,9 +250,15 @@ DATE=$(date +%Y%m%d-%H%M%S)
 # Create backup directory
 mkdir -p "$BACKUP_DIR"
 
-# Backup issuer key
+# Backup V4 issuer key
 cp /var/lib/freebird/keys/issuer_sk.bin \
    "$BACKUP_DIR/issuer_sk_$DATE.bin"
+
+# Backup V5 public bearer key and metadata
+cp /var/lib/freebird/keys/public_bearer_sk.der \
+   "$BACKUP_DIR/public_bearer_sk_$DATE.der"
+cp /var/lib/freebird/keys/public_bearer_metadata.json \
+   "$BACKUP_DIR/public_bearer_metadata_$DATE.json"
 
 # Backup key rotation state
 cp /var/lib/freebird/keys/key_rotation_state.json \
@@ -242,12 +267,18 @@ cp /var/lib/freebird/keys/key_rotation_state.json \
 # Encrypt backups
 gpg --encrypt --recipient admin@example.com \
     "$BACKUP_DIR/issuer_sk_$DATE.bin"
+gpg --encrypt --recipient admin@example.com \
+    "$BACKUP_DIR/public_bearer_sk_$DATE.der"
+gpg --encrypt --recipient admin@example.com \
+    "$BACKUP_DIR/public_bearer_metadata_$DATE.json"
 
 gpg --encrypt --recipient admin@example.com \
     "$BACKUP_DIR/rotation_state_$DATE.json"
 
 # Remove unencrypted backups
 shred -u "$BACKUP_DIR/issuer_sk_$DATE.bin"
+shred -u "$BACKUP_DIR/public_bearer_sk_$DATE.der"
+rm "$BACKUP_DIR/public_bearer_metadata_$DATE.json"
 rm "$BACKUP_DIR/rotation_state_$DATE.json"
 
 # Keep last 30 days

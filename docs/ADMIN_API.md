@@ -606,7 +606,7 @@ curl -X POST http://localhost:8081/admin/save \
 }
 ```
 
-**Note:** State is automatically saved at configured intervals (`SYBIL_INVITE_AUTOSAVE_INTERVAL_SECS`). This endpoint is for manual backups or before maintenance windows.
+**Note:** State is automatically saved at configured intervals (`SYBIL_INVITE_AUTOSAVE_INTERVAL`). This endpoint is for manual backups or before maintenance windows.
 
 ---
 
@@ -1367,7 +1367,7 @@ ntpdate -q pool.ntp.org
 - [Sybil Resistance](SYBIL_RESISTANCE.md) - Sybil mechanism comparison
 - [Key Management](KEY_MANAGEMENT.md) - Key generation, rotation, security
 - [WebAuthn](WEBAUTHN.md) - Hardware authenticator integration
-- [Federation](FEDERATION.md) - Multi-issuer trust
+- [Issuer Trust](FEDERATION.md) - Verifier trust and key configuration
 - [Production Deployment](PRODUCTION.md) - Security hardening checklist
 - [Troubleshooting Guide](TROUBLESHOOTING.md) - Common issues and solutions
 - [Admin UI](../admin-ui/README.md) - Web dashboard documentation

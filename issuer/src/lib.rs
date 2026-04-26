@@ -1,8 +1,8 @@
 pub mod audit;
 pub mod config;
-pub mod federation_store;
 pub mod keys;
 pub mod multi_key_voprf;
+pub mod public_tokens;
 pub mod routes;
 pub mod startup;
 pub mod sybil_resistance;
@@ -15,7 +15,7 @@ pub use main_state::AppStateWithSybil;
 // We need to move AppStateWithSybil out of main.rs to a shared place.
 // Let's create a small internal module for it or put it in lib.rs directly.
 pub mod main_state {
-    use crate::federation_store::FederationStore;
+    use crate::public_tokens::PublicTokenIssuer;
     use crate::sybil_resistance::{invitation::InvitationSystem, SybilResistance};
     use std::sync::Arc;
 
@@ -23,18 +23,16 @@ pub mod main_state {
     pub struct AppStateWithSybil {
         pub issuer_id: String,
         pub kid: String,
-        pub exp_sec: u64,
         pub pubkey_b64: String,
         pub require_tls: bool,
         pub behind_proxy: bool,
         pub sybil_checker: Option<Arc<dyn SybilResistance>>,
         pub invitation_system: Option<Arc<InvitationSystem>>,
+        pub public_issuer: Option<Arc<PublicTokenIssuer>>,
         /// Duration of each epoch in seconds (default: 86400 = 1 day)
         pub epoch_duration_sec: u64,
         /// Number of previous epochs to accept (for graceful rotation)
         pub epoch_retention: u32,
-        /// Federation storage for vouches and revocations
-        pub federation_store: FederationStore,
     }
 
     impl AppStateWithSybil {

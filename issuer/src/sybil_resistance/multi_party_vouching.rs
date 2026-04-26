@@ -602,10 +602,7 @@ mod tests {
             persistence_path: PathBuf::from(format!("/tmp/test_mpv_{}_{}.json", extra, id)),
             autosave_interval_secs: 3600,
             hmac_secret: Some("test-secret".to_string()),
-            hmac_secret_path: PathBuf::from(format!(
-                "/tmp/test_mpv_{}_secret_{}.bin",
-                extra, id
-            )),
+            hmac_secret_path: PathBuf::from(format!("/tmp/test_mpv_{}_secret_{}.bin", extra, id)),
             user_id_salt: "test-salt".to_string(),
             allow_insecure_deterministic: false,
         }
@@ -761,8 +758,7 @@ mod tests {
     fn test_verify_vouch_entry_vouchee_id_mismatch() {
         let sk = SigningKey::random(&mut OsRng);
         let pk = VerifyingKey::from(&sk);
-        let pk_b64 =
-            Base64UrlUnpadded::encode_string(pk.to_encoded_point(false).as_bytes());
+        let pk_b64 = Base64UrlUnpadded::encode_string(pk.to_encoded_point(false).as_bytes());
 
         let now = 5_000i64;
         let actual_vouchee = "alice_hash";
@@ -779,14 +775,9 @@ mod tests {
         };
 
         // Signature covers actual_vouchee but we claim it's for "bob_hash"
-        let err = MultiPartyVouchingSystem::verify_vouch_entry(
-            &vouch,
-            "bob_hash",
-            now,
-            86400,
-            &pk_b64,
-        )
-        .unwrap_err();
+        let err =
+            MultiPartyVouchingSystem::verify_vouch_entry(&vouch, "bob_hash", now, 86400, &pk_b64)
+                .unwrap_err();
         assert!(
             err.to_string().contains("mismatch"),
             "expected mismatch error, got: {}",
@@ -798,8 +789,7 @@ mod tests {
     fn test_verify_vouch_entry_expired_vouch() {
         let sk = SigningKey::random(&mut OsRng);
         let pk = VerifyingKey::from(&sk);
-        let pk_b64 =
-            Base64UrlUnpadded::encode_string(pk.to_encoded_point(false).as_bytes());
+        let pk_b64 = Base64UrlUnpadded::encode_string(pk.to_encoded_point(false).as_bytes());
 
         let vouch_ts = 1_000i64;
         let now = 2_000i64; // 1000 s later
@@ -817,10 +807,8 @@ mod tests {
         };
 
         // expires_secs=500 but age=1000 → expired
-        let err = MultiPartyVouchingSystem::verify_vouch_entry(
-            &vouch, vouchee, now, 500, &pk_b64,
-        )
-        .unwrap_err();
+        let err = MultiPartyVouchingSystem::verify_vouch_entry(&vouch, vouchee, now, 500, &pk_b64)
+            .unwrap_err();
         assert!(
             err.to_string().contains("expired"),
             "expected expiry error, got: {}",
@@ -915,7 +903,10 @@ mod tests {
 
         // The vouch is stored but check_vouches filters age >= vouch_expires_secs (0)
         let result = system.check_vouches("bob").await;
-        assert!(result.is_err(), "immediately-expired vouch should not count");
+        assert!(
+            result.is_err(),
+            "immediately-expired vouch should not count"
+        );
 
         cleanup(&config);
     }

@@ -5,9 +5,8 @@ use anyhow::Result;
 use axum::{extract::State, http::HeaderMap, http::StatusCode, Json};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{BatchIssueReq, IssueReq, SybilProof, TokenResult};
-use freebird_crypto::{Client, Server};
+use freebird_crypto::{Client, Server, VOPRF_CONTEXT_V4};
 use freebird_issuer::{
-    federation_store::FederationStore,
     multi_key_voprf::MultiKeyVoprfCore,
     routes::{batch_issue, issue},
     sybil_resistance::SybilResistance,
@@ -46,7 +45,7 @@ async fn build_state(
     sybil_checker: Option<Arc<dyn SybilResistance>>,
 ) -> Result<(Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>)> {
     let sk = [0x77u8; 32];
-    let server = Server::from_secret_key(sk, b"freebird:v1")
+    let server = Server::from_secret_key(sk, VOPRF_CONTEXT_V4)
         .map_err(|e| anyhow::anyhow!("server init failed: {:?}", e))?;
     let pubkey = server.public_key_sec1_compressed();
     let pubkey_b64 = Base64UrlUnpadded::encode_string(&pubkey);
@@ -56,31 +55,27 @@ async fn build_state(
         sk,
         pubkey_b64.clone(),
         kid.clone(),
-        b"freebird:v1",
+        VOPRF_CONTEXT_V4,
     )?);
-
-    let temp_dir = tempfile::tempdir()?;
-    let federation_store = FederationStore::new(temp_dir.path()).await?;
 
     let state = Arc::new(AppStateWithSybil {
         issuer_id: "issuer:test:sybil-matrix".to_string(),
         kid,
-        exp_sec: 3600,
         pubkey_b64,
         require_tls: false,
         behind_proxy: false,
         sybil_checker,
         invitation_system: None,
+        public_issuer: None,
         epoch_duration_sec: 86400,
         epoch_retention: 2,
-        federation_store,
     });
 
     Ok((state, voprf))
 }
 
 fn blinded_element_b64() -> String {
-    let mut client = Client::new(b"freebird:v1");
+    let mut client = Client::new(VOPRF_CONTEXT_V4);
     client
         .blind(&[0x42; 32])
         .expect("blinding should succeed")

@@ -92,7 +92,7 @@ When `LOG_FORMAT=json`, logs are emitted as JSON for easy parsing and aggregatio
   "fields": {
     "message": "Token verified",
     "token_hash": "...",
-    "issuer_id": "issuer:prod:v1",
+    "issuer_id": "issuer:prod:v4",
     "result": "accepted",
     "duration_ms": 25
   }
@@ -488,7 +488,7 @@ Create a Grafana dashboard with:
 ### Log Levels
 
 - **ERROR**: System failures, security issues, crypto errors
-- **WARN**: Unusual conditions, clock skew, expired keys
+- **WARN**: Unusual conditions, replay attempts, expired keys
 - **INFO**: Normal operations, token issuance/verification
 - **DEBUG**: Detailed flow information (verbose)
 - **TRACE**: Every operation (very verbose)

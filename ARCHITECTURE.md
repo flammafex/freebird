@@ -1,291 +1,201 @@
 # Freebird Architecture
 
-This document describes the overall system design, crate structure, and key abstractions in Freebird.
+Freebird is an anonymous authorization system with two token modes:
+
+- **V4 private option:** verifier-bound VOPRF tokens. The issuer cannot see the verifier scope at redemption time, and the verifier recomputes the authenticator locally with issuer-approved private verification key material.
+- **V5 public option:** public bearer passes using RFC 9474 blind RSA signatures. Verifiers use issuer-published public keys, accept only immutable `single_use` key metadata, and do not need VOPRF private verification key material.
+
+Both modes share the same operational model: an issuer gates issuance with a Sybil-resistance policy, a client blinds the issuance message, and a verifier spends a bearer token exactly once with a nullifier store.
 
 ---
 
-## Table of Contents
+## Workspace
 
-1. [System Overview](#system-overview)
-2. [Crate Structure](#crate-structure)
-3. [Protocol Flow](#protocol-flow)
-4. [Key Abstractions](#key-abstractions)
-5. [Token Format (V3)](#token-format-v3)
-6. [Admin UI Embedding](#admin-ui-embedding)
-7. [Deployment Topology](#deployment-topology)
-
----
-
-## System Overview
-
-Freebird is an anonymous token issuance and verification system built on the Verifiable Oblivious Pseudorandom Function (VOPRF) protocol over P-256. It allows users to obtain tokens that prove they passed some access check (Sybil resistance) without revealing which user they are. Verifiers can check token validity using only the issuer's public key — no shared secrets, no per-user tracking.
-
-The system has three services:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ CLIENT (SDK / freebird-interface)                           │
-│   1. blind(input) → blinded_element                        │
-│   2. POST /v1/oprf/issue {blinded_element, sybil_proof}    │
-│   3. finalize(evaluation) → PRF output                     │
-│   4. buildRedemptionToken(output, kid, exp, issuer_id, sig) │
-└────────────────────┬────────────────────────────────────────┘
-                     │ token_b64
-                     │ POST /v1/verify
-┌────────────────────▼────────────────────────────────────────┐
-│ VERIFIER (freebird-verifier)                                │
-│   - Fetches issuer pubkey from /.well-known/issuer          │
-│   - Verifies ECDSA sig over metadata                        │
-│   - Checks expiration + nullifier (replay protection)       │
-└─────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────┐
-│ ISSUER (freebird-issuer)                                    │
-│   - Verifies Sybil proof                                    │
-│   - Evaluates VOPRF: evaluates blinded_element with sk      │
-│   - Signs metadata: ECDSA(kid, exp, issuer_id)              │
-│   - Returns evaluation + ECDSA sig + metadata               │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## Crate Structure
-
-The workspace (`Cargo.toml`) contains six crates:
-
-```
+```text
 freebird/
-├── crypto/          freebird-crypto   — cryptographic primitives
-├── common/          freebird-common   — shared API types, logging, federation types
-├── issuer/          freebird-issuer   — HTTP issuer service + admin API
-├── verifier/        freebird-verifier — HTTP verifier service
-├── interface/       freebird-interface — CLI test client
-└── integration_tests/                — end-to-end test suite
+├── crypto/             freebird-crypto: VOPRF, V4/V5 codecs, nullifiers, providers
+├── common/             freebird-common: shared API types, logging, duration parsing
+├── issuer/             freebird-issuer: HTTP issuer, metadata, Sybil gates, admin API
+├── verifier/           freebird-verifier: HTTP verifier, issuer trust, replay store
+├── interface/          freebird-interface: CLI test client
+├── sdk/js/             TypeScript SDK
+└── integration_tests/  protocol and service tests
 ```
 
-### `freebird-crypto`
+## Services
 
-All cryptographic operations. No HTTP, no configuration. Exposes:
+### Issuer
 
-- `Client` — blind and finalize VOPRF operations
-- `Server` — evaluate blinded elements and generate DLEQ proofs
-- `Verifier` — verify DLEQ proofs (client-side verification of issuer honesty)
-- `RedemptionToken` / `build_redemption_token` / `parse_redemption_token` — V3 binary token codec
-- `compute_token_signature` / `verify_token_signature` — ECDSA metadata signing
-- `provider::CryptoProvider` trait — abstraction over software vs. PKCS#11 HSM backends
+The issuer exposes:
 
-The VOPRF implementation is in `crypto/src/voprf/` (core operations and DLEQ proof generation/verification). The provider abstraction is in `crypto/src/provider/`.
+- `GET /.well-known/issuer`: issuer summary metadata.
+- `GET /.well-known/keys`: VOPRF metadata and V5 public bearer key metadata.
+- `POST /v1/oprf/issue`: V4 VOPRF evaluation.
+- `POST /v1/oprf/issue/batch`: batch V4 VOPRF evaluation.
+- `POST /v1/public/issue`: V5 blind RSA signature.
+- `POST /v1/public/issue/batch`: batch V5 blind RSA signatures.
+- `/admin/*`: issuer administration when `ADMIN_API_KEY` is configured.
 
-### `freebird-common`
+The issuer owns the issuance policy. It may require invitation proofs, proof of work, rate limits, progressive trust, proof of diversity, multi-party vouching, WebAuthn, or combined mechanisms before signing.
 
-Types shared between issuer and verifier:
+### Verifier
 
-- `api.rs` — all HTTP request/response structs (`IssueReq`, `IssueResp`, `VerifyReq`, `VerifyResp`, `BatchVerifyReq`, `BatchVerifyResp`, `SybilProof`, `KeyDiscoveryResp`, etc.)
-- `federation.rs` — federation types (`Vouch`, `Revocation`, `FederationMetadata`, `TrustPolicy`)
-- `duration.rs` — human-readable duration parsing (`1d`, `24h`, `5m`)
-- `logging.rs` — structured logging initialization (supports plain and JSON output)
+The verifier exposes:
 
-### `freebird-issuer`
+- `GET /.well-known/verifier`: verifier scope metadata for V4 clients.
+- `POST /v1/verify`: consuming verification for V4 or V5 tokens.
+- `POST /v1/verify/batch`: consuming batch verification for V4 or V5 tokens.
+- `POST /v1/check`: non-consuming validation for V4 or V5 tokens.
+- `/admin/*`: verifier administration when `ADMIN_API_KEY` is configured.
 
-The issuer HTTP service. Key modules:
+The verifier is configured with trusted issuer metadata URLs via `ISSUER_URL` or `ISSUER_URLS`. For each issuer, it refreshes `/.well-known/issuer` and `/.well-known/keys`.
 
-- `config.rs` — reads all env vars, constructs `Config`
-- `startup.rs` — wires together config, VOPRF core, sybil resistance, federation store, and axum router
-- `multi_key_voprf.rs` — manages multiple signing keys for epoch-based key rotation; wraps `voprf_core.rs`
-- `voprf_core.rs` — thin wrapper around `freebird-crypto`, uses `CryptoProvider` for signing
-- `federation_store.rs` — persists vouches and revocations to JSON files
-- `routes/issue.rs` — `POST /v1/oprf/issue` handler
-- `routes/batch_issue.rs` — `POST /v1/oprf/issue/batch` handler
-- `routes/metadata.rs` — `GET /.well-known/issuer`, `GET /.well-known/keys`, `GET /.well-known/federation`
-- `routes/admin.rs` — full admin API (82 KB, all admin handlers)
-- `routes/admin_rate_limit.rs` — per-IP rate limiting for login attempts
-- `sybil_resistance/` — pluggable Sybil resistance backends (invitation, PoW, rate_limit, progressive_trust, proof_of_diversity, multi_party_vouching, federated_trust, webauthn)
-- `admin_ui/index.html` — admin UI HTML, embedded at compile time via `include_str!`
+## V4 Private Option
 
-Binaries:
-- `freebird-issuer` — main server binary
-- `freebird-validate-config` — pre-flight config validation tool
-- `freebird-cli` — admin CLI for managing users, keys, invitations
+V4 is verifier-bound private verification.
 
-### `freebird-verifier`
-
-The verifier HTTP service. Key modules:
-
-- `main.rs` — configuration, router, background issuer-metadata refresh loop
-- `store.rs` — nullifier (spend) store abstraction with in-memory and Redis backends
-- `routes/admin.rs` — verifier admin API (health, stats, config, issuer management, login/logout)
-- `routes/admin_rate_limit.rs` — per-IP rate limiting for login attempts
-- `admin_ui/index.html` — admin UI HTML, embedded at compile time via `include_str!`
-
-Verifier routes:
-- `POST /v1/verify` — single token verification (consuming; marks token spent)
-- `POST /v1/verify/batch` — batch token verification
-- `POST /v1/check` — non-consuming token validation (does not record nullifier)
-
-### `freebird-interface`
-
-CLI test client used for development and integration testing. Issues tokens against a running issuer, then verifies them against a running verifier.
-
-### `integration_tests`
-
-End-to-end test suite that starts real issuer and verifier instances in-process and exercises the full protocol flow, including key rotation, batch operations, double-spend detection, and Sybil mode permutations.
-
----
-
-## Protocol Flow
-
-### Token Issuance
-
-```
-Client                     Issuer
-  |                           |
-  | 1. random_input = rand()  |
-  | blind(input) → (A, r)     |
-  |                           |
-  | POST /v1/oprf/issue       |
-  | { blinded_element_b64: A, |
-  |   sybil_proof: {...} }    |
-  |-------------------------->|
-  |                           | 2. verify Sybil proof
-  |                           | 3. sk * A → B  (VOPRF evaluate)
-  |                           | 4. DLEQ_proof(sk, A, B, pk)
-  |                           | 5. sig = ECDSA(kid, exp, issuer_id)
-  |                           |
-  |  { token: [V|A|B|DLEQ],  |
-  |    sig, kid, exp,         |
-  |    issuer_id }            |
-  |<--------------------------|
-  |                           |
-  | 6. verify DLEQ proof      |
-  | 7. output = H(input, r⁻¹*B) — unblind
-  | 8. buildRedemptionToken(  |
-  |      output, kid, exp,    |
-  |      issuer_id, sig)      |
-  | → V3 token bytes          |
+```text
+Client                         Issuer                         Verifier
+  |                              |                              |
+  | GET /.well-known/verifier    |                              |
+  |<------------------------------------------------------------|
+  | build nonce + scope_digest   |                              |
+  | blind V4 token input         |                              |
+  | POST /v1/oprf/issue          |                              |
+  |----------------------------->| verify Sybil proof           |
+  |                              | evaluate blinded element     |
+  |<-----------------------------| token = VOPRF eval + DLEQ    |
+  | verify DLEQ, unblind         |                              |
+  | build V4 redemption token    |                              |
+  | POST /v1/verify {token_b64}  |                              |
+  |------------------------------------------------------------>|
+  |                              |                              | parse token
+  |                              |                              | check scope
+  |                              |                              | recompute authenticator
+  |                              |                              | mark V4 nullifier spent
 ```
 
-### Token Verification
+V4 wire format:
 
-```
-Client                     Verifier
-  |                           |
-  | POST /v1/verify           |
-  | { token_b64: <V3 token> } |
-  |-------------------------->|
-  |                           | 1. parse_redemption_token(bytes)
-  |                           |    → output, kid, exp, issuer_id, sig
-  |                           | 2. check exp > now (with clock skew)
-  |                           | 3. lookup issuer pubkey by issuer_id
-  |                           | 4. verify_token_signature(pk, sig,
-  |                           |      kid, exp, issuer_id)
-  |                           | 5. nullifier = hash(output)
-  |                           | 6. store.try_spend(nullifier)
-  |                           |    → error if already spent
-  |  { ok: true,              |
-  |    verified_at: <ts> }    |
-  |<--------------------------|
+```text
+[VERSION=0x04]
+[nonce(32)]
+[scope_digest(32)]
+[kid_len(1) | kid]
+[issuer_id_len(1) | issuer_id]
+[authenticator(32)]
 ```
 
----
+The authenticator is the unblinded VOPRF output over:
 
-## Key Abstractions
-
-### `CryptoProvider` Trait
-
-Defined in `crypto/src/provider/mod.rs`. All cryptographic operations that touch the secret key go through this trait:
-
-```rust
-#[async_trait]
-pub trait CryptoProvider: Send + Sync {
-    async fn voprf_evaluate(&self, blinded: &[u8]) -> Result<Vec<u8>>;
-    async fn sign_token_metadata(&self, kid: &str, exp: i64, issuer_id: &str) -> Result<[u8; 64]>;
-    fn public_key(&self) -> &[u8];
-    fn key_id(&self) -> &str;
-    fn suite_id(&self) -> &str;
-    fn context(&self) -> &[u8];
-}
+```text
+freebird:private-token-input:v4
+issuer_id_len | issuer_id
+kid_len | kid
+nonce
+scope_digest
 ```
 
-Implementations:
-- `SoftwareCryptoProvider` (`provider/software.rs`) — P-256 secret key in memory
-- `Pkcs11CryptoProvider` (`provider/pkcs11.rs`) — delegates to a PKCS#11 HSM (enabled by `--features pkcs11`)
+Verifier requirements for V4:
 
-The `MultiKeyVoprfCore` in the issuer holds a pool of `Arc<dyn CryptoProvider>` instances, one per active epoch key.
+- trusted issuer metadata URL;
+- verifier scope configured with `VERIFIER_ID` and `VERIFIER_AUDIENCE`;
+- matching private verification key material through `VERIFIER_SK_B64`, `VERIFIER_SK_PATH`, or `VERIFIER_KEYRING_B64`;
+- durable replay storage for production.
 
-### `SybilProof` Enum
+## V5 Public Option
 
-Defined in `common/src/api.rs`. A tagged union of all supported Sybil resistance proof types sent with issuance requests. The issuer dispatches to the appropriate `SybilResistance` implementation based on configured mode.
+V5 is a public bearer pass.
 
-### `SpendStore` Trait
-
-Defined in `verifier/src/store.rs`. Abstracts the nullifier store used for double-spend prevention:
-
-```rust
-pub trait SpendStore: Send + Sync {
-    async fn try_spend(&self, key: &str) -> Result<bool, StoreError>;
-}
+```text
+Client                         Issuer                         Verifier
+  | GET /.well-known/keys        |                              |
+  |<-----------------------------|                              |
+  | choose public token key      |                              |
+  | build nonce + token_key_id   |                              |
+  | build V5 message digest      |                              |
+  | blind digest with RFC 9474   |                              |
+  | POST /v1/public/issue        |                              |
+  |----------------------------->| verify Sybil proof           |
+  |                              | blind-sign message           |
+  |<-----------------------------| blind_signature              |
+  | finalize blind signature     |                              |
+  | build V5 public bearer pass  |                              |
+  | POST /v1/verify {token_b64}  |                              |
+  |------------------------------------------------------------>|
+  |                              |                              | parse token
+  |                              |                              | find public key
+  |                              |                              | check metadata policy
+  |                              |                              | verify RSA signature
+  |                              |                              | mark V5 nullifier spent
 ```
 
-Backends: `InMemoryStore` (default), `RedisStore` (production, set `REDIS_URL`).
+V5 wire format:
 
----
-
-## Token Format (V3)
-
-V3 redemption tokens are variable-length binary blobs sent from client to verifier. Wire format:
-
-```
-[VERSION(1)] [output(32)] [kid_len(1)] [kid(N)] [exp(8, i64 BE)] [issuer_id_len(1)] [issuer_id(M)] [ECDSA_sig(64)]
+```text
+[VERSION=0x05]
+[nonce(32)]
+[token_key_id(32)]
+[issuer_id_len(1) | issuer_id]
+[sig_len(2, big endian) | signature]
 ```
 
-- Minimum size: 109 bytes (1-byte kid and issuer_id)
-- Maximum size: 512 bytes
-- `output`: 32-byte unblinded VOPRF PRF output; self-authenticating via discrete log
-- `kid`, `exp`, `issuer_id`: metadata bound by the ECDSA signature
-- `ECDSA_sig`: P-256 signature over `"freebird:token-metadata:v3" || kid_len || kid || exp || issuer_id_len || issuer_id`
+The V5 message passed to the RFC 9474 library is:
 
-Tokens are base64url-encoded for transport.
-
----
-
-## Admin UI Embedding
-
-Both the issuer and the verifier serve a web-based admin UI at `GET /admin`. The HTML is a single self-contained file embedded at compile time using `include_str!`:
-
-- Issuer: `issuer/src/admin_ui/index.html` (included by `issuer/src/routes/admin.rs`)
-- Verifier: `verifier/src/admin_ui/index.html` (included by `verifier/src/routes/admin.rs`)
-
-The source for these files lives in `admin-ui/` at the project root. To rebuild after editing the UI source, copy the built `index.html` into the respective `src/admin_ui/` directories.
-
-The HTML is served with security headers (CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy). Session cookies set by `POST /admin/login` are HttpOnly, SameSite=Strict.
-
----
-
-## Deployment Topology
-
-```
-Internet
-    │
-    ├─ issuer.example.com:8081    (freebird-issuer)
-    │     ├─ /v1/oprf/issue
-    │     ├─ /v1/oprf/issue/batch
-    │     ├─ /.well-known/issuer
-    │     ├─ /.well-known/keys
-    │     ├─ /.well-known/federation
-    │     ├─ /webauthn/...        (optional, --features human-gate-webauthn)
-    │     └─ /admin/...           (requires ADMIN_API_KEY)
-    │
-    └─ verifier.example.com:8082  (freebird-verifier)
-          ├─ /v1/verify
-          ├─ /v1/verify/batch
-          ├─ /v1/check
-          └─ /admin/...           (requires ADMIN_API_KEY)
-               └─ (fetches /.well-known/issuer periodically for key refresh)
+```text
+SHA-384(
+  "freebird:public-bearer-pass:v5" ||
+  0x00 ||
+  0x05 ||
+  nonce ||
+  token_key_id ||
+  issuer_id_len ||
+  issuer_id
+)
 ```
 
-The verifier and issuer are completely independent processes communicating only via HTTP. The verifier never needs access to the issuer's secret key; it only needs the issuer's public key (fetched from `/.well-known/issuer`).
+`token_key_id` is `SHA-256(pubkey_spki)` and is encoded in JSON as strict lowercase 64-character hex.
 
-For persistence:
-- Issuer: secret key at `ISSUER_SK_PATH`, key rotation state at `KEY_ROTATION_STATE_PATH`, invitation system at `SYBIL_INVITE_PERSISTENCE_PATH`, federation data at `FEDERATION_DATA_PATH`
-- Verifier: nullifier store — in-memory (default) or Redis (`REDIS_URL`)
+Verifier requirements for V5:
+
+- trusted issuer metadata URL;
+- valid public key metadata from `/.well-known/keys`;
+- `token_type = "public_bearer_pass"`;
+- `rfc9474_variant = "RSABSSA-SHA384-PSS-Deterministic"`;
+- `spend_policy = "single_use"`;
+- `token_key_id` must match `SHA-256(pubkey_spki)`;
+- optional `audience` must match the verifier audience;
+- durable replay storage for production.
+
+## Nullifiers
+
+V4 nullifiers include verifier scope, issuer ID, key ID, nonce, scope digest, and authenticator. This makes V4 replay keys verifier-scoped.
+
+V5 nullifiers include nonce, token key ID, issuer ID, and finalized signature. V5 public tokens are bearer instruments, so replay protection is the verifier's spend database.
+
+Use Redis in production. In-memory replay storage is for local testing because restart loses spend state.
+
+## Issuer Trust
+
+Freebird uses explicit issuer trust rather than global federation. A verifier trusts only configured issuer URLs. V4 adds private verification key authority; V5 uses issuer-published public keys with strict metadata policy.
+
+This is "minimal federation": verifiers can accept more than one issuer, but there is no transitive trust graph, no token forwarding between issuers, and no verifier phone-home to the issuer during redemption.
+
+## Deployment
+
+```text
+issuer.example.com
+  /.well-known/issuer
+  /.well-known/keys
+  /v1/oprf/issue
+  /v1/public/issue
+  /admin/*
+
+verifier.example.com
+  /.well-known/verifier
+  /v1/verify
+  /v1/check
+  /admin/*
+```
+
+Run issuer and verifier as separate services in production. TLS is required for bearer tokens. Keep issuer logs, verifier logs, and replay stores operationally separate when privacy against timing correlation matters.

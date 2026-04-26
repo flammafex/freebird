@@ -201,14 +201,13 @@ Features:
 ```bash
 ADMIN_API_KEY=<32+ char random>    # Admin authentication
 REQUIRE_TLS=true                   # TLS requirement
-ISSUER_ID=issuer:prod:v1          # Unique identifier
+ISSUER_ID=issuer:prod:v4          # Unique identifier
 ```
 
 **Recommended**
 ```bash
 SYBIL_RESISTANCE=invitation        # Sybil resistance mode
 EPOCH_DURATION_SEC=86400           # Key rotation period
-MAX_CLOCK_SKEW_SECS=300           # Clock tolerance
 ```
 
 See **[.env.example](.env.example)** for 60+ options.
@@ -265,15 +264,6 @@ See **[.env.example](.env.example)** for 60+ options.
 **Low Entropy**
 ```bash
 ./scripts/validate-deployment.sh --mode docker --fix-entropy
-```
-
-**Clock Skew**
-```bash
-# Check
-timedatectl
-
-# Fix
-sudo ntpdate -s time.nist.gov
 ```
 
 **Services Won't Start**

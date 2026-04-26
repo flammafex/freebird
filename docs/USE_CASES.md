@@ -354,7 +354,6 @@ Freebird provides anonymous credential systems that enable local governments and
 ```bash
 SYBIL_RESISTANCE=proof_of_work
 SYBIL_POW_DIFFICULTY=16  # Instant on mobile
-TOKEN_TTL_MIN=1440       # 24 hours
 ```
 
 ### Pattern 2: Community Trust (Invitation)
@@ -366,7 +365,6 @@ TOKEN_TTL_MIN=1440       # 24 hours
 SYBIL_RESISTANCE=invitation
 SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
 SYBIL_INVITE_PER_USER=0  # Users cannot invite others (Admin control)
-TOKEN_TTL_MIN=10080      # 7 days
 ```
 
 ### Pattern 3: Standard Rate Limiting
@@ -376,8 +374,7 @@ TOKEN_TTL_MIN=10080      # 7 days
 
 ```bash
 SYBIL_RESISTANCE=rate_limit
-SYBIL_RATE_LIMIT_SECS=86400 # One token per day
-TOKEN_TTL_MIN=1440
+SYBIL_RATE_LIMIT=1d # One token per day
 ```
 
 ### Pattern 4: High-Security Access
@@ -388,5 +385,5 @@ TOKEN_TTL_MIN=1440
 ```bash
 SYBIL_RESISTANCE=combined
 SYBIL_POW_DIFFICULTY=20     # Prevents bots
-SYBIL_RATE_LIMIT_SECS=3600  # Prevents flooding
+SYBIL_RATE_LIMIT=1h         # Prevents flooding
 ```

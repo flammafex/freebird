@@ -64,7 +64,9 @@ integration_tests
 
 **`freebird-crypto`** has no dependencies on other Freebird crates and no HTTP/config code. Keep it that way — it should remain a pure cryptography library.
 
-**`freebird-common`** defines all types that cross the issuer/verifier boundary (request/response structs, `SybilProof`, federation types). If you add a new API field, add it here.
+**`freebird-common`** defines all types that cross the issuer/verifier boundary
+(request/response structs, `SybilProof`, metadata types). If you add a new API
+field, add it here.
 
 **`freebird-issuer`** and **`freebird-verifier`** are independent binaries. They share types through `freebird-common` but never call each other's library code directly.
 
@@ -85,9 +87,6 @@ All operations that touch the VOPRF secret key go through the `CryptoProvider` t
 pub trait CryptoProvider: Send + Sync {
     /// Evaluate the VOPRF: sk * blinded_element → evaluation bytes
     async fn voprf_evaluate(&self, blinded: &[u8]) -> Result<Vec<u8>>;
-
-    /// Sign token metadata using ECDSA-P256
-    async fn sign_token_metadata(&self, kid: &str, exp: i64, issuer_id: &str) -> Result<[u8; 64]>;
 
     /// Return the SEC1-compressed P-256 public key (33 bytes)
     fn public_key(&self) -> &[u8];
@@ -130,12 +129,10 @@ cargo test --package integration_tests
 ```
 
 Notable test files:
-- `e2e_issuance_verification.rs` — full VOPRF flow: blind → issue → finalize → verify
-- `key_rotation.rs` — tokens issued under old keys are still accepted after rotation
-- `memory_double_spend.rs` — nullifier store rejects reused tokens
-- `batch_verification_duplicates.rs` — batch verify correctly handles duplicates
+- `smoke_voprf_roundtrip.rs` — V4 VOPRF token construction and tamper checks
+- `v4_private_verification.rs` — verifier-side private authenticator verification
+- `redis_double_spend.rs` — nullifier store rejects reused tokens
 - `sybil_mode_matrix.rs` — all Sybil proof types are exercised
-- `token_contract_matrix.rs` — V3 token format compliance checks
 - `regressions.rs` — known-bad inputs that previously caused panics or incorrect behavior
 
 To run tests that require Redis:

@@ -1,790 +1,265 @@
-# ⚙️ Configuration Reference
+# Configuration Reference
 
-Complete reference for all Freebird environment variables and configuration options.
-
----
-
-## Table of Contents
-
-1. [Duration Format](#duration-format)
-2. [Configuration Validation](#configuration-validation)
-3. [Issuer Configuration](#issuer-configuration)
-4. [Verifier Configuration](#verifier-configuration)
-5. [Epoch Configuration](#epoch-configuration)
-6. [Sybil Resistance](#sybil-resistance)
-7. [WebAuthn Configuration](#webauthn-configuration)
-8. [Federation & Trust Policy](#federation--trust-policy)
-9. [Admin API & CLI](#admin-api--cli)
-10. [Logging Configuration](#logging-configuration)
-11. [Environment-Specific Configs](#environment-specific-configs)
+Freebird is configured with environment variables. The issuer and verifier are separate services and should usually have separate environment files.
 
 ---
 
 ## Duration Format
 
-Duration fields support human-readable formats throughout the configuration:
+Duration fields accept compact human-readable values:
 
-| Format | Example | Description |
-|--------|---------|-------------|
-| Days | `30d` | 30 days |
-| Hours | `24h` | 24 hours |
-| Minutes | `30m` | 30 minutes |
-| Seconds | `45s` | 45 seconds |
-| Combined | `1d12h` | 1 day and 12 hours |
-| Raw | `3600` | Seconds (backward compatible) |
+| Example | Meaning |
+|---------|---------|
+| `30d` | 30 days |
+| `24h` | 24 hours |
+| `30m` | 30 minutes |
+| `45s` | 45 seconds |
+| `1d12h` | 1 day and 12 hours |
+| `3600` | 3600 seconds |
 
-**Examples:**
-```bash
-EPOCH_DURATION=1d                    # 1 day
-SYBIL_INVITE_COOLDOWN=1h             # 1 hour
-SYBIL_INVITE_EXPIRES=30d             # 30 days
-WEBAUTHN_MAX_PROOF_AGE=5m            # 5 minutes
-TRUST_POLICY_REFRESH_INTERVAL=1h     # 1 hour
-```
+## Issuer
 
----
-
-## Configuration Validation
-
-Validate your configuration before starting Freebird:
+### Core
 
 ```bash
-# Load and validate
-source .env && freebird-validate-config
-```
-
-This checks for:
-- Missing required variables
-- Invalid duration formats
-- Missing key files and directories
-- Common configuration errors
-- Security warnings (weak keys, missing TLS)
-
----
-
-## Issuer Configuration
-
-### Core Settings
-
-```bash
-# Unique issuer identifier (appears in tokens)
-export ISSUER_ID=issuer:myservice:v1
-
-# Network binding
-export BIND_ADDR=0.0.0.0:8081
-
-# Token time-to-live (minutes)
-export TOKEN_TTL_MIN=60
-
-# Enforce HTTPS (production: true)
-export REQUIRE_TLS=false
-
-# Trust X-Forwarded-* headers when behind proxy
-export BEHIND_PROXY=false
-```
-
-| Variable | Default | Description | Production Value |
-|----------|---------|-------------|------------------|
-| `ISSUER_ID` | `issuer:freebird:v1` | Unique identifier for this issuer | `issuer:yourcompany:prod` |
-| `BIND_ADDR` | `0.0.0.0:8081` | IP:PORT to listen on | `127.0.0.1:8081` (with reverse proxy) |
-| `TOKEN_TTL_MIN` | `10` | Token expiration time in minutes | `60` (1 hour) typical |
-| `REQUIRE_TLS` | `false` | Reject non-HTTPS requests | `true` in production |
-| `BEHIND_PROXY` | `false` | Trust X-Forwarded-For/Proto headers | `true` with nginx/Caddy |
-
-### Key & Data Storage
-
-```bash
-# Path to secret key file
-export ISSUER_SK_PATH=/data/keys/issuer_sk.bin
-
-# Key rotation state persistence
-export KEY_ROTATION_STATE_PATH=/data/keys/key_rotation_state.json
-
-# Federation data directory
-export FEDERATION_DATA_PATH=/data/federation
+ISSUER_ID=issuer:community:v4
+BIND_ADDR=0.0.0.0:8081
+REQUIRE_TLS=true
+BEHIND_PROXY=true
+ADMIN_API_KEY=<at-least-32-characters>
 ```
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ISSUER_SK_PATH` | `issuer_sk.bin` | Path to 32-byte P-256 secret key |
-| `KEY_ROTATION_STATE_PATH` | `key_rotation_state.json` | Key rotation metadata storage |
-| `FEDERATION_DATA_PATH` | `/data/federation` | Directory for federation store data |
+| `ISSUER_ID` | `issuer:freebird:v4` | Stable issuer identifier embedded in V4 and V5 tokens. |
+| `BIND_ADDR` | `0.0.0.0:8081` | Issuer listen address. |
+| `REQUIRE_TLS` | `false` | Reject non-HTTPS requests when behind a proxy that reports scheme. |
+| `BEHIND_PROXY` | `false` | Trust proxy headers for client IP and scheme. |
+| `ADMIN_API_KEY` | unset | Enables issuer admin endpoints when at least 32 characters. |
 
-**Key Format:** Raw 32-byte scalar or PKCS#8 DER format
-
----
-
-## Verifier Configuration
+### V4 Private Option Keys
 
 ```bash
-# Network binding
-export BIND_ADDR=0.0.0.0:8082
-
-# Issuer metadata URL (comma-separated for multiple issuers)
-export ISSUER_URL=http://issuer:8081/.well-known/issuer
-
-# How often to refresh issuer metadata (minutes)
-export REFRESH_INTERVAL_MIN=10
-
-# Clock skew tolerance (seconds)
-export MAX_CLOCK_SKEW_SECS=300
-
-# Redis for production storage
-export REDIS_URL=redis://localhost:6379
-
-# Epoch configuration (should match issuer)
-export EPOCH_DURATION_SEC=86400
-export EPOCH_RETENTION=2
-```
-
-| Variable | Default | Description | Production Value |
-|----------|---------|-------------|------------------|
-| `BIND_ADDR` | `0.0.0.0:8082` | IP:PORT to listen on | `127.0.0.1:8082` |
-| `ISSUER_URL` | `http://localhost:8081/.well-known/issuer` | Issuer metadata URL(s), comma-separated | HTTPS URL(s) |
-| `REFRESH_INTERVAL_MIN` | `10` | Metadata refresh interval | `5-10` minutes |
-| `MAX_CLOCK_SKEW_SECS` | `300` | Tolerance for time differences | `300` (5 minutes) |
-| `REDIS_URL` | None (in-memory) | Redis connection string | `redis://redis:6379` |
-| `EPOCH_DURATION_SEC` | `86400` | Epoch duration in seconds (match issuer) | `86400` |
-| `EPOCH_RETENTION` | `2` | Previous epochs to accept | `2` |
-
-**Storage Options:**
-- **In-Memory:** Fast, no persistence (dev/testing)
-- **Redis:** Persistent, distributed (production)
-
----
-
-## Epoch Configuration
-
-Epochs control key rotation timing. Issuer and verifier settings should match.
-
-```bash
-# Issuer epoch settings
-export EPOCH_DURATION=1d      # Duration of each epoch
-export EPOCH_RETENTION=2      # Previous epochs to honor
-
-# Verifier epoch settings (should match issuer)
-export EPOCH_DURATION_SEC=86400
-export EPOCH_RETENTION=2
+ISSUER_SK_PATH=/var/lib/freebird/keys/issuer_sk.bin
+KEY_ROTATION_STATE_PATH=/var/lib/freebird/keys/key_rotation_state.json
+EPOCH_DURATION=1d
+EPOCH_RETENTION=2
 ```
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `EPOCH_DURATION` | `1d` | How long each cryptographic epoch lasts |
-| `EPOCH_DURATION_SEC` | `86400` | Verifier epoch duration in seconds |
-| `EPOCH_RETENTION` | `2` | Number of previous epochs to accept tokens from |
+| `ISSUER_SK_PATH` | `issuer_sk.bin` | Raw 32-byte P-256 VOPRF issuer key. Created if missing. |
+| `KEY_ROTATION_STATE_PATH` | `key_rotation_state.json` | VOPRF key rotation state. |
+| `KID` | derived | Optional key ID override. |
+| `EPOCH_DURATION` | `1d` | Issuer key epoch duration. |
+| `EPOCH_RETENTION` | `2` | Previous VOPRF epochs retained. |
 
-**Key Rotation:**
-- Keys rotate automatically at epoch boundaries
-- Old keys remain valid during the retention window
-- Recommended: `1d` epoch with `2` retention (3-day validity window)
+### V5 Public Option Keys
 
----
+V5 public bearer issuance is enabled by default.
+
+```bash
+PUBLIC_BEARER_ENABLE=true
+PUBLIC_BEARER_SK_PATH=/var/lib/freebird/keys/public_bearer_sk.der
+PUBLIC_BEARER_METADATA_PATH=/var/lib/freebird/keys/public_bearer_metadata.json
+PUBLIC_BEARER_VALIDITY=30d
+PUBLIC_BEARER_MODULUS_BITS=2048
+# Optional audience binding:
+PUBLIC_BEARER_AUDIENCE=community.example
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PUBLIC_BEARER_ENABLE` | `true` | Enables `/v1/public/issue` and public key metadata. |
+| `PUBLIC_BEARER_SK_PATH` | `public_bearer_sk.der` | DER RSA private key for RFC 9474 blind signatures. Created if missing. |
+| `PUBLIC_BEARER_METADATA_PATH` | `public_bearer_metadata.json` | Immutable V5 public key metadata. Created with the key. |
+| `PUBLIC_BEARER_VALIDITY` | `30d` | Validity window for newly generated V5 metadata. |
+| `PUBLIC_BEARER_AUDIENCE` | unset | Optional audience restriction for V5 verifiers. |
+| `PUBLIC_BEARER_MODULUS_BITS` | `2048` | RSA modulus size. Accepted range is 2048 to 4096. |
+
+Metadata is intentionally immutable for a key. To change `audience`, `spend_policy`, validity, or key parameters, rotate the V5 public bearer key and metadata together.
+
+## Verifier
+
+### Core
+
+```bash
+BIND_ADDR=0.0.0.0:8082
+ISSUER_URL=https://issuer.example.com/.well-known/issuer
+VERIFIER_ID=verifier:community:v4
+VERIFIER_AUDIENCE=community.example
+REFRESH_INTERVAL_MIN=10
+REDIS_URL=redis://redis:6379
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `BIND_ADDR` | `0.0.0.0:8082` | Verifier listen address. |
+| `ISSUER_URL` | `http://127.0.0.1:8081/.well-known/issuer` | Trusted issuer metadata URL. |
+| `ISSUER_URLS` | unset | Comma-separated trusted issuer metadata URLs. |
+| `VERIFIER_ID` | required | Stable verifier scope ID for V4. |
+| `VERIFIER_AUDIENCE` | `VERIFIER_ID` | Audience for V4 scope and V5 audience checks. |
+| `REFRESH_INTERVAL_MIN` | `10` | Issuer metadata refresh interval. |
+| `REDIS_URL` | unset | Redis replay store. If unset, verifier uses in-memory replay storage. |
+
+### V4 Private Verification
+
+```bash
+VERIFIER_SK_PATH=/run/secrets/issuer_sk.bin
+# or:
+VERIFIER_SK_B64=<base64url-raw-32-byte-key>
+# or:
+VERIFIER_KEYRING_B64='{"kid-a":"<base64url-key-a>","kid-b":"<base64url-key-b>"}'
+```
+
+| Variable | Description |
+|----------|-------------|
+| `VERIFIER_SK_PATH` | Raw 32-byte private verification key file. |
+| `VERIFIER_SK_B64` | Base64url raw 32-byte private verification key. |
+| `VERIFIER_KEYRING_B64` | JSON object mapping V4 `kid` values to base64url raw keys. |
+
+V4 verification fails if the verifier trusts issuer metadata but has no matching private verification key.
+
+### V5 Public Verification
+
+No verifier secret is required for V5. The verifier fetches public bearer key metadata from the trusted issuer's `/.well-known/keys` endpoint.
+
+The verifier accepts a V5 public key only when:
+
+- `token_type = "public_bearer_pass"`;
+- `rfc9474_variant = "RSABSSA-SHA384-PSS-Deterministic"`;
+- `spend_policy = "single_use"`;
+- `token_key_id = SHA-256(pubkey_spki)`;
+- optional `audience` matches `VERIFIER_AUDIENCE`;
+- the key is inside its validity window.
 
 ## Sybil Resistance
 
-### Available Mechanisms
-
 ```bash
-# Sybil resistance mechanism
-# Options: none, invitation, pow, rate_limit, progressive_trust,
-#          proof_of_diversity, multi_party_vouching, federated_trust,
-#          webauthn, combined
-export SYBIL_RESISTANCE=invitation
-```
-
-| Mode | Description | Use Case |
-|------|-------------|----------|
-| `none` | No resistance | Development only |
-| `invitation` | Cryptographic invite codes | Communities, controlled growth |
-| `pow` | Proof of work | Resource-based limiting |
-| `rate_limit` | Time-based throttling | Simple rate limiting |
-| `progressive_trust` | Reputation-based access | Long-term communities |
-| `proof_of_diversity` | Multi-signal verification | High-security apps |
-| `multi_party_vouching` | Peer vouching system | Decentralized trust |
-| `federated_trust` | Cross-issuer trust | Federated deployments |
-| `webauthn` | Hardware authentication | Proof of humanity |
-| `combined` | Multiple mechanisms | Defense in depth |
-
-### Invitation System
-
-```bash
-export SYBIL_RESISTANCE=invitation
-
-# Invites per user
-export SYBIL_INVITE_PER_USER=5
-
-# Cooldown between invitations
-export SYBIL_INVITE_COOLDOWN=1h
-
-# Invitation validity period
-export SYBIL_INVITE_EXPIRES=30d
-
-# Wait time before new users can invite
-export SYBIL_INVITE_NEW_USER_WAIT=30d
-
-# State persistence
-export SYBIL_INVITE_PERSISTENCE_PATH=/data/state/invitations.json
-export SYBIL_INVITE_AUTOSAVE_INTERVAL=5m
-
-# Bootstrap users (format: user1:count1,user2:count2)
-export SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
-```
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SYBIL_INVITE_PER_USER` | `5` | Invites per user |
-| `SYBIL_INVITE_COOLDOWN` | `1h` | Cooldown between invitations |
-| `SYBIL_INVITE_EXPIRES` | `30d` | How long invitations remain valid |
-| `SYBIL_INVITE_NEW_USER_WAIT` | `30d` | Wait before new users can invite |
-| `SYBIL_INVITE_PERSISTENCE_PATH` | `invitations.json` | State file path |
-| `SYBIL_INVITE_AUTOSAVE_INTERVAL` | `5m` | Auto-save interval |
-| `SYBIL_INVITE_BOOTSTRAP_USERS` | None | Initial users with invites |
-
-See [Sybil Resistance Guide](SYBIL_RESISTANCE.md) for detailed mechanism strategies.
-
-### Proof of Work
-
-```bash
-export SYBIL_RESISTANCE=pow
-export SYBIL_POW_DIFFICULTY=20
-```
-
-| Difficulty | Hashes | Time (Avg) | Use Case |
-|------------|--------|------------|----------|
-| 16 | ~65k | Instant | Testing |
-| 20 | ~1M | ~1 second | Light protection |
-| 24 | ~16M | ~10-30 seconds | Moderate protection |
-| 28 | ~268M | ~5-10 minutes | Strong protection |
-
-### Rate Limiting
-
-```bash
-export SYBIL_RESISTANCE=rate_limit
-export SYBIL_RATE_LIMIT=1h
-```
-
-| Interval | Description | Use Case |
-|----------|-------------|----------|
-| `5m` | Aggressive | High-frequency APIs |
-| `1h` | Moderate | General applications |
-| `24h` | Conservative | Voting, surveys |
-
-### Progressive Trust
-
-Reputation-based access that increases with account age:
-
-```bash
-export SYBIL_RESISTANCE=progressive_trust
-
-# Format: "min_age:max_tokens:cooldown"
-export SYBIL_PROGRESSIVE_TRUST_LEVELS=0:1:1d,30d:10:1h,90d:100:1m
-export SYBIL_PROGRESSIVE_TRUST_PERSISTENCE_PATH=/data/state/progressive_trust.json
-export SYBIL_PROGRESSIVE_TRUST_AUTOSAVE=5m
-export SYBIL_PROGRESSIVE_TRUST_SALT=change-in-production
-```
-
-### Proof of Diversity
-
-Multi-signal verification requiring diverse proof sources:
-
-```bash
-export SYBIL_RESISTANCE=proof_of_diversity
-
-export SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE=40
-export SYBIL_PROOF_OF_DIVERSITY_PERSISTENCE_PATH=/data/state/proof_of_diversity.json
-export SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE=5m
-export SYBIL_PROOF_OF_DIVERSITY_SECRET_PATH=/data/state/proof_of_diversity_secret.bin
-# Optional alternative to *_SECRET_PATH:
-# export SYBIL_PROOF_OF_DIVERSITY_SECRET="$(openssl rand -base64 32)"
-export SYBIL_PROOF_OF_DIVERSITY_SALT=change-in-production
-# Local testing only (insecure deterministic fallback):
-# export SYBIL_PROOF_OF_DIVERSITY_ALLOW_INSECURE=true
-```
-
-### Multi-Party Vouching
-
-Peer-based vouching requiring multiple endorsements:
-
-```bash
-export SYBIL_RESISTANCE=multi_party_vouching
-
-export SYBIL_MULTI_PARTY_VOUCHING_REQUIRED=3
-export SYBIL_MULTI_PARTY_VOUCHING_COOLDOWN=1h
-export SYBIL_MULTI_PARTY_VOUCHING_EXPIRES=30d
-export SYBIL_MULTI_PARTY_VOUCHING_NEW_USER_WAIT=30d
-export SYBIL_MULTI_PARTY_VOUCHING_PERSISTENCE_PATH=/data/state/multi_party_vouching.json
-export SYBIL_MULTI_PARTY_VOUCHING_AUTOSAVE=5m
-export SYBIL_MULTI_PARTY_VOUCHING_SECRET_PATH=/data/state/multi_party_vouching_secret.bin
-# Optional alternative to *_SECRET_PATH:
-# export SYBIL_MULTI_PARTY_VOUCHING_SECRET="$(openssl rand -base64 32)"
-export SYBIL_MULTI_PARTY_VOUCHING_SALT=change-in-production
-# Local testing only (insecure deterministic fallback):
-# export SYBIL_MULTI_PARTY_VOUCHING_ALLOW_INSECURE=true
-```
-
-### Federated Trust
-
-Cross-issuer trust verification:
-
-```bash
-export SYBIL_RESISTANCE=federated_trust
-
-export SYBIL_FEDERATED_TRUST_ENABLED=true
-export SYBIL_FEDERATED_TRUST_MAX_DEPTH=2
-export SYBIL_FEDERATED_TRUST_MIN_PATHS=1
-export SYBIL_FEDERATED_TRUST_REQUIRE_DIRECT=false
-export SYBIL_FEDERATED_TRUST_MIN_TRUST_LEVEL=50
-export SYBIL_FEDERATED_TRUST_CACHE_TTL=1h
-export SYBIL_FEDERATED_TRUST_MAX_TOKEN_AGE=10m
-```
-
-### Combined Resistance
-
-Stack multiple mechanisms for defense in depth:
-
-```bash
-export SYBIL_RESISTANCE=combined
-export SYBIL_POW_DIFFICULTY=20
-export SYBIL_RATE_LIMIT=1h
-# Add other mechanism configs as needed
-```
-
----
-
-## WebAuthn Configuration
-
-Hardware-backed authentication for proof of humanity. See [WebAuthn Guide](WEBAUTHN.md) for complete documentation.
-
-### Core Settings
-
-```bash
-export SYBIL_RESISTANCE=webauthn
-
-# Relying Party configuration
-export WEBAUTHN_RP_ID=example.com
-export WEBAUTHN_RP_NAME="Freebird"
-export WEBAUTHN_RP_ORIGIN=https://example.com
-
-# Credential storage
-export WEBAUTHN_REDIS_URL=redis://localhost:6379
-export WEBAUTHN_CRED_TTL=1y
-
-# Proof settings
-export WEBAUTHN_MAX_PROOF_AGE=5m
-export WEBAUTHN_PROOF_SECRET=your-random-secret-here
-```
-
-### Attestation Policy
-
-```bash
-# Policy level: none, indirect, direct, enterprise
-export WEBAUTHN_ATTESTATION_POLICY=direct
-export WEBAUTHN_REQUIRE_ATTESTATION=true
-
-# AAGUID allowlist (comma-separated)
-export WEBAUTHN_ALLOWED_AAGUIDS=fa2b99dc-9e39-4257-8f92-4a30d23c4118
-
-# Audit logging
-export WEBAUTHN_AUDIT_LOGGING=true
-```
-
-### Credential Management
-
-```bash
-export WEBAUTHN_MAX_CREDENTIALS_PER_USER=10
-export WEBAUTHN_ALLOW_CREDENTIAL_REVOCATION=true
-export WEBAUTHN_REQUIRE_RESIDENT_KEY=false
-```
-
-### Rate Limiting
-
-```bash
-export WEBAUTHN_MAX_REGISTRATION_ATTEMPTS=10
-export WEBAUTHN_MAX_AUTH_ATTEMPTS=20
-export WEBAUTHN_RATE_LIMIT_WINDOW=5m
-export WEBAUTHN_BLOCK_DURATION=15m
-export WEBAUTHN_MAX_SESSIONS_PER_IP=50
-export WEBAUTHN_MAX_TOTAL_SESSIONS=10000
-```
-
----
-
-## Federation & Trust Policy
-
-Configure trust relationships between issuers for multi-issuer deployments.
-
-### Verifier Trust Policy
-
-```bash
-# Enable federation trust graph traversal
-export TRUST_POLICY_ENABLED=true
-
-# Maximum depth in trust graph (0 = direct only)
-export TRUST_POLICY_MAX_DEPTH=2
-
-# Minimum independent trust paths required
-export TRUST_POLICY_MIN_PATHS=1
-
-# Only accept issuers with direct vouches
-export TRUST_POLICY_REQUIRE_DIRECT=false
-
-# Trusted root issuers (comma-separated)
-export TRUST_POLICY_TRUSTED_ROOTS=issuer:mozilla:v1,issuer:eff:v1
-
-# Blocked issuers (comma-separated)
-export TRUST_POLICY_BLOCKED_ISSUERS=issuer:compromised:v1
-
-# Refresh interval for federation metadata
-export TRUST_POLICY_REFRESH_INTERVAL=1h
-
-# Minimum trust level for vouches (0-100)
-export TRUST_POLICY_MIN_TRUST_LEVEL=50
-```
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TRUST_POLICY_ENABLED` | `true` | Enable federation trust |
-| `TRUST_POLICY_MAX_DEPTH` | `2` | Maximum trust graph hops |
-| `TRUST_POLICY_MIN_PATHS` | `1` | Required independent paths |
-| `TRUST_POLICY_REQUIRE_DIRECT` | `false` | Require direct vouches |
-| `TRUST_POLICY_TRUSTED_ROOTS` | None | Always-trusted issuers |
-| `TRUST_POLICY_BLOCKED_ISSUERS` | None | Never-trusted issuers |
-| `TRUST_POLICY_REFRESH_INTERVAL` | `1h` | Metadata refresh interval |
-| `TRUST_POLICY_MIN_TRUST_LEVEL` | `50` | Minimum vouch trust level |
-
-See [Federation Guide](FEDERATION.md) for detailed documentation.
-
----
-
-## Admin API & CLI
-
-### Admin API
-
-```bash
-# API key (minimum 32 characters)
-export ADMIN_API_KEY=your-secure-random-key-at-least-32-characters
-```
-
-**Security Requirements:**
-- API key must be ≥32 characters
-- All requests require `X-Admin-Key` header
-- Store in secret manager (Vault, AWS Secrets Manager, etc.)
-- Rotate quarterly
-- Never commit to version control
-
-See [Admin API Reference](ADMIN_API.md) for endpoint documentation.
-
-### Admin CLI (freebird-cli)
-
-```bash
-# CLI configuration via environment
-export FREEBIRD_ISSUER_URL=http://localhost:8081
-export FREEBIRD_ADMIN_KEY=your-admin-key
-
-# Or via command-line flags
-freebird-cli --url http://localhost:8081 --key your-admin-key <command>
-```
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `FREEBIRD_ISSUER_URL` | `http://localhost:8081` | Issuer URL |
-| `FREEBIRD_ADMIN_KEY` | (Required) | Admin API key |
-
-See the [CLI documentation](../README.md#command-line-interface) for available commands.
-
----
-
-## Logging Configuration
-
-```bash
-# Log level (trace, debug, info, warn, error)
-export RUST_LOG=info,freebird=debug
-
-# Log format (plain, json)
-export LOG_FORMAT=plain
-```
-
-### Log Level Examples
-
-```bash
-# Production (minimal)
-RUST_LOG=info
-
-# Development (verbose)
-RUST_LOG=debug
-
-# Freebird debug, others quiet
-RUST_LOG=info,freebird=debug
-
-# Fine-grained control
-RUST_LOG=info,axum=warn,tower_http=off
-```
-
-| Level | Description |
-|-------|-------------|
-| `trace` | Very verbose, includes all internal details |
-| `debug` | Detailed information for debugging |
-| `info` | General operational messages |
-| `warn` | Warning conditions |
-| `error` | Error conditions only |
-
----
-
-## Environment-Specific Configs
-
-### Development
-
-Use separate environment files for issuer and verifier.
-
-```bash
-# issuer.env (permissive)
-export ISSUER_ID=issuer:dev
-export BIND_ADDR=127.0.0.1:8081
-export TOKEN_TTL_MIN=10
-export REQUIRE_TLS=false
-export SYBIL_RESISTANCE=none
-export EPOCH_DURATION=1d
-export EPOCH_RETENTION=2
-
-```
-
-```bash
-# verifier.env (in-memory)
-export BIND_ADDR=127.0.0.1:8082
-export ISSUER_URL=http://127.0.0.1:8081/.well-known/issuer
-export MAX_CLOCK_SKEW_SECS=300
-export EPOCH_DURATION_SEC=86400
-export EPOCH_RETENTION=2
-```
-
-### Staging
-
-```bash
-# issuer.staging.env
-export ISSUER_ID=issuer:staging:v1
-export BIND_ADDR=0.0.0.0:8081
-export TOKEN_TTL_MIN=60
-export REQUIRE_TLS=true
-export BEHIND_PROXY=true
-export EPOCH_DURATION=1d
-export EPOCH_RETENTION=2
-
-# Sybil resistance
-export SYBIL_RESISTANCE=invitation
-export SYBIL_INVITE_BOOTSTRAP_USERS=admin:100,test1:50
-export SYBIL_INVITE_PERSISTENCE_PATH=/var/lib/freebird/invitations.staging.json
-
-# Admin
-export ADMIN_API_KEY=${VAULT_STAGING_ADMIN_KEY}
-```
-
-```bash
-# verifier.staging.env
-export BIND_ADDR=0.0.0.0:8082
-export ISSUER_URL=https://issuer-staging.example.com/.well-known/issuer
-export REDIS_URL=redis://redis-staging:6379
-export REFRESH_INTERVAL_MIN=5
-export EPOCH_DURATION_SEC=86400
-export EPOCH_RETENTION=2
-
-# Logging
-export RUST_LOG=info,freebird=debug
-```
-
-### Production
-
-```bash
-# issuer.production.env (strict configuration)
-export ISSUER_ID=issuer:production:v1
-export BIND_ADDR=127.0.0.1:8081  # Behind reverse proxy
-export TOKEN_TTL_MIN=60
-export REQUIRE_TLS=true
-export BEHIND_PROXY=true
-export EPOCH_DURATION=1d
-export EPOCH_RETENTION=2
-
-# Sybil resistance
-export SYBIL_RESISTANCE=invitation
-export SYBIL_INVITE_PER_USER=5
-export SYBIL_INVITE_COOLDOWN=1h
-export SYBIL_INVITE_EXPIRES=30d
-export SYBIL_INVITE_NEW_USER_WAIT=30d
-export SYBIL_INVITE_PERSISTENCE_PATH=/var/lib/freebird/invitations.json
-export SYBIL_INVITE_AUTOSAVE_INTERVAL=5m
-export SYBIL_INVITE_BOOTSTRAP_USERS=${VAULT_BOOTSTRAP_USERS}
-
-# Key management
-export ISSUER_SK_PATH=/var/lib/freebird/keys/issuer_sk.bin
-export KEY_ROTATION_STATE_PATH=/var/lib/freebird/keys/rotation_state.json
-export FEDERATION_DATA_PATH=/var/lib/freebird/federation
-
-# Admin
-export ADMIN_API_KEY=${VAULT_ADMIN_API_KEY}
-```
-
-```bash
-# verifier.production.env
-export BIND_ADDR=127.0.0.1:8082
-export ISSUER_URL=https://issuer.example.com/.well-known/issuer
-export REDIS_URL=redis://redis.internal:6379
-export REFRESH_INTERVAL_MIN=10
-export MAX_CLOCK_SKEW_SECS=300
-export EPOCH_DURATION_SEC=86400
-export EPOCH_RETENTION=2
-
-# Logging
-export RUST_LOG=info
-export LOG_FORMAT=json
-```
-
----
-
-## Common Errors
-
-**"ADMIN_API_KEY too short"**
-```bash
-# Bad
-export ADMIN_API_KEY=admin123
-
-# Good
-export ADMIN_API_KEY=$(openssl rand -base64 48)
-```
-
-**"Failed to load issuer metadata"**
-```bash
-# Check issuer URL is accessible
-curl https://issuer.example.com/.well-known/issuer
-
-# Verify TLS certificate
-openssl s_client -connect issuer.example.com:443
-```
-
-**"Invalid duration format"**
-```bash
-# Bad
-export EPOCH_DURATION=1 day
-
-# Good
-export EPOCH_DURATION=1d
-```
-
----
-
-## Best Practices
-
-### Security
-
-✅ **DO:**
-- Use HTTPS in production (`REQUIRE_TLS=true`)
-- Run behind reverse proxy (`BEHIND_PROXY=true`)
-- Store keys in secure locations (0600 permissions)
-- Use strong admin API keys (≥48 characters)
-- Rotate keys quarterly
-
-❌ **DON'T:**
-- Expose issuer directly to internet
-- Commit secrets to version control
-- Reuse keys across environments
-- Use predictable key IDs
-
-### Performance
-
-✅ **DO:**
-- Use Redis for verifier storage in production
-- Set appropriate token TTL (balance security vs. performance)
-- Monitor nullifier database size
-- Configure autosave interval based on I/O capacity
-
-❌ **DON'T:**
-- Use in-memory storage for production verifier
-- Set excessive token TTLs (increases nullifier DB size)
-- Disable autosave (risk data loss)
-
-### Reliability
-
-✅ **DO:**
-- Back up invitation state daily
-- Monitor issuer metadata refresh failures
-- Set up health checks
-- Use systemd for automatic restarts
-
-❌ **DON'T:**
-- Rely on manual backups
-- Ignore refresh failures
-- Run without process supervision
-
----
-
-## Quick Reference
-
-### Issuer Variables
-
-```bash
-# Core
-ISSUER_ID=issuer:myservice:v1
-BIND_ADDR=0.0.0.0:8081
-TOKEN_TTL_MIN=60
-REQUIRE_TLS=true
-BEHIND_PROXY=true
-EPOCH_DURATION=1d
-EPOCH_RETENTION=2
-
-# Storage
-ISSUER_SK_PATH=/data/keys/issuer_sk.bin
-KEY_ROTATION_STATE_PATH=/data/keys/key_rotation_state.json
-FEDERATION_DATA_PATH=/data/federation
-
-# Admin
-ADMIN_API_KEY=your-32-char-min-secret
-
-# Sybil (choose one mode)
 SYBIL_RESISTANCE=invitation
+```
+
+Supported modes:
+
+| Mode | Purpose |
+|------|---------|
+| `none` | Local development only. |
+| `invitation` | Invite-based community growth. |
+| `pow` or `proof_of_work` | Permissionless computational cost. |
+| `rate_limit` | Simple time-based throttling. |
+| `progressive_trust` | Increasing quota with account age. |
+| `proof_of_diversity` | Multi-signal diversity score. |
+| `multi_party_vouching` | Peer vouching. |
+| `webauthn` | Hardware-backed proof of humanity when built with WebAuthn support. |
+| `combined` | Combine multiple mechanisms. |
+
+### Invitation
+
+```bash
 SYBIL_INVITE_PER_USER=5
 SYBIL_INVITE_COOLDOWN=1h
 SYBIL_INVITE_EXPIRES=30d
 SYBIL_INVITE_NEW_USER_WAIT=30d
-SYBIL_INVITE_PERSISTENCE_PATH=/data/state/invitations.json
+SYBIL_INVITE_PERSISTENCE_PATH=/var/lib/freebird/invitations.json
 SYBIL_INVITE_AUTOSAVE_INTERVAL=5m
+SYBIL_INVITE_SIGNING_KEY_PATH=/var/lib/freebird/invitation_signing_key.bin
 SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
+```
 
-# Logging
+### Proof of Work and Rate Limit
+
+```bash
+SYBIL_POW_DIFFICULTY=20
+SYBIL_RATE_LIMIT=1h
+```
+
+### Progressive Trust
+
+```bash
+SYBIL_PROGRESSIVE_TRUST_LEVELS=0:1:1d,30d:10:1h,90d:100:1m
+SYBIL_PROGRESSIVE_TRUST_PERSISTENCE_PATH=/var/lib/freebird/progressive_trust.json
+SYBIL_PROGRESSIVE_TRUST_AUTOSAVE=5m
+SYBIL_PROGRESSIVE_TRUST_SECRET_PATH=/var/lib/freebird/progressive_trust_secret.bin
+SYBIL_PROGRESSIVE_TRUST_SALT=<random-salt>
+```
+
+### Proof of Diversity
+
+```bash
+SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE=40
+SYBIL_PROOF_OF_DIVERSITY_PERSISTENCE_PATH=/var/lib/freebird/proof_of_diversity.json
+SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE=5m
+SYBIL_PROOF_OF_DIVERSITY_SECRET_PATH=/var/lib/freebird/proof_of_diversity_secret.bin
+SYBIL_PROOF_OF_DIVERSITY_SALT=<random-salt>
+```
+
+### Multi-Party Vouching
+
+```bash
+SYBIL_MULTI_PARTY_VOUCHING_REQUIRED=3
+SYBIL_MULTI_PARTY_VOUCHING_COOLDOWN=1h
+SYBIL_MULTI_PARTY_VOUCHING_EXPIRES=30d
+SYBIL_MULTI_PARTY_VOUCHING_NEW_USER_WAIT=30d
+SYBIL_MULTI_PARTY_VOUCHING_PERSISTENCE_PATH=/var/lib/freebird/multi_party_vouching.json
+SYBIL_MULTI_PARTY_VOUCHING_AUTOSAVE=5m
+SYBIL_MULTI_PARTY_VOUCHING_SECRET_PATH=/var/lib/freebird/multi_party_vouching_secret.bin
+SYBIL_MULTI_PARTY_VOUCHING_SALT=<random-salt>
+```
+
+### Combined
+
+```bash
+SYBIL_RESISTANCE=combined
+SYBIL_COMBINED_MECHANISMS=pow,rate_limit,invitation
+SYBIL_COMBINED_MODE=threshold
+SYBIL_COMBINED_THRESHOLD=2
+```
+
+`SYBIL_COMBINED_MODE` can be `or`, `and`, or `threshold`.
+
+## Logging
+
+```bash
 RUST_LOG=info,freebird=debug
 LOG_FORMAT=plain
 ```
 
-### Verifier Variables
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RUST_LOG` | `info` | Standard Rust tracing filter. |
+| `LOG_FORMAT` | `plain` | `plain` or `json`. |
+
+## Example Development Config
+
+Issuer:
 
 ```bash
-# Core
-BIND_ADDR=0.0.0.0:8082
-ISSUER_URL=http://issuer:8081/.well-known/issuer
-REFRESH_INTERVAL_MIN=10
-MAX_CLOCK_SKEW_SECS=300
-EPOCH_DURATION_SEC=86400
-EPOCH_RETENTION=2
-
-# Storage
-REDIS_URL=redis://localhost:6379
-
-# Trust Policy
-TRUST_POLICY_ENABLED=true
-TRUST_POLICY_MAX_DEPTH=2
-TRUST_POLICY_TRUSTED_ROOTS=issuer:trusted:v1
+ISSUER_ID=issuer:dev:v4
+BIND_ADDR=127.0.0.1:8081
+REQUIRE_TLS=false
+SYBIL_RESISTANCE=none
+ISSUER_SK_PATH=issuer_sk.bin
+KEY_ROTATION_STATE_PATH=key_rotation_state.json
+PUBLIC_BEARER_ENABLE=true
+PUBLIC_BEARER_SK_PATH=public_bearer_sk.der
+PUBLIC_BEARER_METADATA_PATH=public_bearer_metadata.json
 ```
 
----
+Verifier:
 
-## Related Documentation
+```bash
+BIND_ADDR=127.0.0.1:8082
+ISSUER_URL=http://127.0.0.1:8081/.well-known/issuer
+VERIFIER_ID=verifier:dev:v4
+VERIFIER_AUDIENCE=dev
+VERIFIER_SK_PATH=issuer_sk.bin
+```
 
-- [Production Deployment](PRODUCTION.md) - Best practices and hardening
-- [Invitation System](SYBIL_RESISTANCE.md) - Detailed invitation configuration
-- [WebAuthn Guide](WEBAUTHN.md) - Hardware-backed authentication
-- [Federation Guide](FEDERATION.md) - Multi-issuer deployments
-- [Admin API Reference](ADMIN_API.md) - HTTP API documentation
-- [Troubleshooting](TROUBLESHOOTING.md) - Common configuration issues
+## Example Production Notes
 
----
-
-**Need Help?**
-
-Check the [Troubleshooting Guide](TROUBLESHOOTING.md) or open a GitHub issue.
+- Use TLS and set `REQUIRE_TLS=true`.
+- Use Redis for verifier replay storage.
+- Store issuer and verifier secrets in a secret manager or mounted secret files.
+- Keep issuer and verifier logs separate.
+- Rotate V4 and V5 keys intentionally; V5 metadata changes require a new V5 key.
+- Configure `PUBLIC_BEARER_AUDIENCE` when V5 tokens should be accepted only by a specific verifier audience.

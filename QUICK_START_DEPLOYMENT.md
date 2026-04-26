@@ -145,7 +145,7 @@ kubectl set image deployment/verifier \
 ```bash
 ADMIN_API_KEY=<32+ char random string>   # Generate: openssl rand -base64 32
 REQUIRE_TLS=true                          # ALWAYS true in production
-ISSUER_ID=issuer:prod:v1                  # Unique identifier
+ISSUER_ID=issuer:prod:v4                  # Unique identifier
 ```
 
 **Optional but recommended:**
@@ -153,7 +153,6 @@ ISSUER_ID=issuer:prod:v1                  # Unique identifier
 ```bash
 SYBIL_RESISTANCE=invitation               # invitation, pow, webauthn
 EPOCH_DURATION_SEC=86400                  # 24 hour key rotation
-MAX_CLOCK_SKEW_SECS=300                   # 5 minute tolerance
 REDIS_URL=redis://redis:6379              # Redis connection
 ```
 

@@ -11,7 +11,6 @@
 // limitations under the License.
 pub mod api;
 pub mod duration;
-pub mod federation;
 pub mod logging {
     use std::sync::Once;
     use tracing::level_filters::LevelFilter;

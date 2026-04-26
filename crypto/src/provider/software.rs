@@ -14,21 +14,20 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use zeroize::Zeroizing;
+use blind_rsa_signatures::{
+    DefaultRng, KeyPairSha384PSSDeterministic, SecretKeySha384PSSDeterministic,
+};
 
-use super::CryptoProvider;
+use super::{BlindRsaProvider, CryptoProvider};
 use crate::voprf::core::Server as VoprfServer;
 
 /// Software crypto provider with in-memory key storage
 ///
-/// This provider wraps the existing VOPRF implementation and provides
-/// MAC key derivation using the secret key material.
+/// This provider wraps the existing VOPRF implementation for blinded
+/// evaluations.
 pub struct SoftwareCryptoProvider {
     /// VOPRF server instance for evaluations
     server: VoprfServer,
-
-    /// Secret key (stored for MAC key derivation, auto-zeroized on drop)
-    secret_key: Zeroizing<[u8; 32]>,
 
     /// Public key (SEC1 compressed format, 33 bytes)
     public_key: [u8; 33],
@@ -38,6 +37,14 @@ pub struct SoftwareCryptoProvider {
 
     /// Context for VOPRF operations
     context: Vec<u8>,
+}
+
+/// Software provider for V5 public bearer pass blind RSA signatures.
+pub struct SoftwareBlindRsaProvider {
+    secret_key: SecretKeySha384PSSDeterministic,
+    public_key_spki: Vec<u8>,
+    token_key_id: [u8; crate::PUBLIC_BEARER_TOKEN_KEY_ID_LEN],
+    modulus_bits: u16,
 }
 
 impl SoftwareCryptoProvider {
@@ -66,10 +73,52 @@ impl SoftwareCryptoProvider {
 
         Ok(Self {
             server,
-            secret_key: Zeroizing::new(secret_key),
             public_key,
             key_id,
             context,
+        })
+    }
+}
+
+impl SoftwareBlindRsaProvider {
+    /// Generate a new RSA blind-signature key.
+    pub fn generate(modulus_bits: usize) -> Result<Self> {
+        let mut rng = DefaultRng;
+        let key_pair = KeyPairSha384PSSDeterministic::generate(&mut rng, modulus_bits)
+            .map_err(|e| anyhow::anyhow!("failed to generate blind RSA key: {e}"))?;
+        Self::from_secret_key(key_pair.sk)
+    }
+
+    /// Load a provider from PKCS#8 or PKCS#1 DER private key bytes.
+    pub fn from_der(der: &[u8]) -> Result<Self> {
+        let secret_key = SecretKeySha384PSSDeterministic::from_der(der)
+            .map_err(|e| anyhow::anyhow!("invalid blind RSA private key: {e}"))?;
+        Self::from_secret_key(secret_key)
+    }
+
+    pub fn to_der(&self) -> Result<Vec<u8>> {
+        self.secret_key
+            .to_der()
+            .map_err(|e| anyhow::anyhow!("failed to encode blind RSA private key: {e}"))
+    }
+
+    fn from_secret_key(secret_key: SecretKeySha384PSSDeterministic) -> Result<Self> {
+        let public_key = secret_key
+            .public_key()
+            .map_err(|e| anyhow::anyhow!("invalid blind RSA public key: {e}"))?;
+        let public_key_spki = public_key
+            .to_spki()
+            .map_err(|e| anyhow::anyhow!("failed to encode blind RSA public key SPKI: {e}"))?;
+        let token_key_id = crate::token_key_id_from_spki(&public_key_spki);
+        let modulus_bits = public_key.components().n().len().saturating_mul(8);
+        let modulus_bits = u16::try_from(modulus_bits)
+            .map_err(|_| anyhow::anyhow!("blind RSA modulus is too large"))?;
+
+        Ok(Self {
+            secret_key,
+            public_key_spki,
+            token_key_id,
+            modulus_bits,
         })
     }
 }
@@ -83,17 +132,6 @@ impl CryptoProvider for SoftwareCryptoProvider {
             .map_err(|e| anyhow::anyhow!("VOPRF evaluation failed: {:?}", e))
     }
 
-    async fn sign_token_metadata(
-        &self,
-        kid: &str,
-        exp: i64,
-        issuer_id: &str,
-    ) -> Result<[u8; 64]> {
-        // Use the existing ECDSA signature function (V3 metadata-only message)
-        crate::compute_token_signature(&self.secret_key, kid, exp, issuer_id)
-            .map_err(|e| anyhow::anyhow!("signature generation failed: {:?}", e))
-    }
-
     fn public_key(&self) -> &[u8] {
         &self.public_key
     }
@@ -104,6 +142,29 @@ impl CryptoProvider for SoftwareCryptoProvider {
 
     fn context(&self) -> &[u8] {
         &self.context
+    }
+}
+
+#[async_trait]
+impl BlindRsaProvider for SoftwareBlindRsaProvider {
+    async fn blind_sign(&self, blinded_msg: &[u8]) -> Result<Vec<u8>> {
+        let sig = self
+            .secret_key
+            .blind_sign(blinded_msg)
+            .map_err(|e| anyhow::anyhow!("blind RSA signing failed: {e}"))?;
+        Ok(sig.0)
+    }
+
+    fn public_key_spki(&self) -> &[u8] {
+        &self.public_key_spki
+    }
+
+    fn token_key_id(&self) -> &[u8; crate::PUBLIC_BEARER_TOKEN_KEY_ID_LEN] {
+        &self.token_key_id
+    }
+
+    fn modulus_bits(&self) -> u16 {
+        self.modulus_bits
     }
 }
 
@@ -153,62 +214,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_signature_signing_and_verification() {
-        let sk = [42u8; 32];
-        let kid = "test-key-001".to_string();
-        let ctx = b"test-context".to_vec();
-
-        let provider = SoftwareCryptoProvider::new(sk, kid, ctx).unwrap();
-
-        let kid_str = "test-kid";
-        let exp = 1234567890i64;
-        let issuer_id = "test-issuer";
-
-        // Sign metadata (V3: no token_bytes parameter)
-        let signature = provider
-            .sign_token_metadata(kid_str, exp, issuer_id)
-            .await
-            .unwrap();
-
-        assert_eq!(signature.len(), 64);
-
-        // Verify signature using public key
-        let pubkey = provider.public_key();
-        let valid =
-            crate::verify_token_signature(pubkey, &signature, kid_str, exp, issuer_id);
-        assert!(valid);
-
-        // Wrong kid should fail verification
-        let invalid =
-            crate::verify_token_signature(pubkey, &signature, "wrong-kid", exp, issuer_id);
-        assert!(!invalid);
-    }
-
-    #[tokio::test]
-    async fn test_signature_determinism() {
-        let sk = [42u8; 32];
-        let kid = "test-key-001".to_string();
-        let ctx = b"test-context".to_vec();
-
-        let provider = SoftwareCryptoProvider::new(sk, kid, ctx).unwrap();
-
-        let kid_str = "kid";
-        let exp = 123i64;
-        let issuer_id = "issuer";
-
-        // Signatures should be deterministic (RFC 6979)
-        let sig1 = provider
-            .sign_token_metadata(kid_str, exp, issuer_id)
-            .await
-            .unwrap();
-        let sig2 = provider
-            .sign_token_metadata(kid_str, exp, issuer_id)
-            .await
-            .unwrap();
-        assert_eq!(sig1, sig2);
-    }
-
-    #[tokio::test]
     async fn test_zero_scalar_rejection() {
         let sk = [0u8; 32];
         let kid = "test-key-001".to_string();
@@ -254,6 +259,4 @@ mod tests {
         // This test documents the zeroization behavior
         assert_eq!(sk_copy, [42u8; 32]); // Original copy unchanged
     }
-
 }
-

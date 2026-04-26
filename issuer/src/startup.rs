@@ -197,7 +197,7 @@ impl Application {
             })
             .unwrap_or_else(|| format!("{}-{}", kid_from_key, OffsetDateTime::now_utc().date()));
 
-        let ctx = b"freebird:v1";
+        let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
         let voprf = Arc::new(
             multi_key_voprf::MultiKeyVoprfCore::load_or_create(
                 *sk_bytes,
@@ -219,6 +219,19 @@ impl Application {
                 }
             }
         });
+
+        let public_issuer = crate::public_tokens::PublicTokenIssuer::load_or_generate(
+            &config.public_key_config,
+            &config.issuer_id,
+        )
+        .context("Failed to initialize V5 public bearer issuer")?
+        .map(Arc::new);
+        if let Some(public_issuer) = &public_issuer {
+            info!(
+                token_key_id = %public_issuer.token_key_id_hex(),
+                "✅ V5 public bearer issuer initialized"
+            );
+        }
 
         // 2. WebAuthn Setup
         #[cfg(feature = "human-gate-webauthn")]
@@ -255,17 +268,7 @@ impl Application {
             None
         };
 
-        // 3. Federation Store (needed before Sybil setup for Federated Trust)
-        let federation_store =
-            crate::federation_store::FederationStore::new(&config.federation_data_path)
-                .await
-                .context("Failed to initialize federation store")?;
-        info!(
-            "✅ Federation store initialized at {:?}",
-            config.federation_data_path
-        );
-
-        // 3.5 Audit Log Setup
+        // 3. Audit Log Setup
         let audit_config = AuditConfig {
             persistence_path: std::path::PathBuf::from("audit_log.json"),
             max_entries: 10000,
@@ -427,33 +430,6 @@ impl Application {
                     .context("Failed to initialize Multi-Party Vouching system")?;
 
                 info!("✅ Sybil resistance: Multi-Party Vouching");
-                Some(sys)
-            }
-            "federated_trust" => {
-                let trust_policy = freebird_common::federation::TrustPolicy {
-                    enabled: config.sybil_config.federated_trust_enabled,
-                    max_trust_depth: config.sybil_config.federated_trust_max_depth,
-                    min_trust_paths: config.sybil_config.federated_trust_min_paths,
-                    require_direct_trust: config.sybil_config.federated_trust_require_direct,
-                    trusted_roots: config.sybil_config.federated_trust_trusted_roots.clone(),
-                    blocked_issuers: config.sybil_config.federated_trust_blocked_issuers.clone(),
-                    refresh_interval_secs: config.sybil_config.federated_trust_cache_ttl_secs,
-                    min_trust_level: config.sybil_config.federated_trust_min_trust_level,
-                };
-
-                let ft_config = sybil_resistance::FederatedTrustConfig {
-                    trust_policy,
-                    federation_store: Arc::new(federation_store.clone()),
-                    our_issuer_id: config.issuer_id.clone(),
-                    cache_ttl_secs: config.sybil_config.federated_trust_cache_ttl_secs,
-                    max_token_age_secs: config.sybil_config.federated_trust_max_token_age_secs,
-                };
-
-                let sys = sybil_resistance::FederatedTrustSystem::new(ft_config)
-                    .await
-                    .context("Failed to initialize Federated Trust system")?;
-
-                info!("✅ Sybil resistance: Federated Trust");
                 Some(sys)
             }
             "combined" => {
@@ -630,47 +606,6 @@ impl Application {
                                 )?;
                             mechanisms.push(sys);
                         }
-                        "federated_trust" => {
-                            let trust_policy = freebird_common::federation::TrustPolicy {
-                                enabled: config.sybil_config.federated_trust_enabled,
-                                max_trust_depth: config.sybil_config.federated_trust_max_depth,
-                                min_trust_paths: config.sybil_config.federated_trust_min_paths,
-                                require_direct_trust: config
-                                    .sybil_config
-                                    .federated_trust_require_direct,
-                                trusted_roots: config
-                                    .sybil_config
-                                    .federated_trust_trusted_roots
-                                    .clone(),
-                                blocked_issuers: config
-                                    .sybil_config
-                                    .federated_trust_blocked_issuers
-                                    .clone(),
-                                refresh_interval_secs: config
-                                    .sybil_config
-                                    .federated_trust_cache_ttl_secs,
-                                min_trust_level: config
-                                    .sybil_config
-                                    .federated_trust_min_trust_level,
-                            };
-
-                            let ft_config = sybil_resistance::FederatedTrustConfig {
-                                trust_policy,
-                                federation_store: Arc::new(federation_store.clone()),
-                                our_issuer_id: config.issuer_id.clone(),
-                                cache_ttl_secs: config.sybil_config.federated_trust_cache_ttl_secs,
-                                max_token_age_secs: config
-                                    .sybil_config
-                                    .federated_trust_max_token_age_secs,
-                            };
-
-                            let sys = sybil_resistance::FederatedTrustSystem::new(ft_config)
-                                .await
-                                .context(
-                                    "Failed to initialize Federated Trust for combined mode",
-                                )?;
-                            mechanisms.push(sys);
-                        }
                         unknown => {
                             warn!(
                                 "⚠️  Unknown mechanism '{}' in SYBIL_COMBINED_MECHANISMS, skipping",
@@ -728,15 +663,14 @@ impl Application {
         let state = Arc::new(AppStateWithSybil {
             issuer_id: config.issuer_id.clone(),
             kid: kid.clone(),
-            exp_sec: config.token_ttl_min * 60,
             pubkey_b64: pubkey_b64.clone(),
             require_tls: config.require_tls,
             behind_proxy: config.behind_proxy,
             sybil_checker: sybil_checker.clone(),
             invitation_system: invitation_system.clone(),
+            public_issuer: public_issuer.clone(),
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
-            federation_store: federation_store.clone(),
         });
 
         let app_state = (state.clone(), voprf.clone());
@@ -749,14 +683,15 @@ impl Application {
                 get(routes::metadata::well_known_handler),
             )
             .route("/.well-known/keys", get(routes::metadata::keys_handler))
-            .route(
-                "/.well-known/federation",
-                get(routes::metadata::federation_handler),
-            )
             .route("/v1/oprf/issue", post(routes::issue::handle))
             .route(
                 "/v1/oprf/issue/batch",
                 post(routes::batch_issue::handle_batch),
+            )
+            .route("/v1/public/issue", post(routes::public_issue::handle))
+            .route(
+                "/v1/public/issue/batch",
+                post(routes::public_issue::handle_batch),
             )
             .layer(DefaultBodyLimit::max(64 * 1024));
 
@@ -796,7 +731,6 @@ impl Application {
                     let admin = routes::admin_router(
                         inv_sys,
                         voprf.clone(),
-                        federation_store.clone(),
                         audit_log.clone(),
                         key,
                         config.behind_proxy,
@@ -808,7 +742,6 @@ impl Application {
                     let admin = routes::admin_router(
                         inv_sys,
                         voprf.clone(),
-                        federation_store.clone(),
                         audit_log.clone(),
                         key,
                         config.behind_proxy,

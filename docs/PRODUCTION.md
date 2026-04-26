@@ -36,12 +36,10 @@ Complete checklist and best practices for deploying Freebird in production.
 
 ```
 □ ISSUER_ID unique and versioned
-□ TOKEN_TTL_MIN appropriate for use case
 □ REQUIRE_TLS=true
 □ BEHIND_PROXY=true (if using reverse proxy)
 □ SYBIL_RESISTANCE configured
 □ REDIS_URL set for verifier
-□ MAX_CLOCK_SKEW_SECS reasonable (300s default)
 □ Key rotation schedule established
 ```
 
@@ -93,10 +91,10 @@ services:
     ports:
       - "127.0.0.1:8081:8081"  # Bind to localhost, use Nginx for TLS
     volumes:
-      - ./data/keys:/data/keys           # Persist VOPRF keys
+      - ./data/keys:/data/keys           # Persist V4 VOPRF and V5 public bearer keys
       - ./data/state:/data/state         # Persist invitations
     environment:
-      - ISSUER_ID=issuer:prod:v1
+      - ISSUER_ID=issuer:prod:v4
       - BIND_ADDR=0.0.0.0:8081
       - REQUIRE_TLS=true
       - BEHIND_PROXY=true
@@ -105,6 +103,12 @@ services:
       # Paths inside container
       - ISSUER_SK_PATH=/data/keys/issuer_sk.bin
       - KEY_ROTATION_STATE_PATH=/data/keys/key_rotation_state.json
+      - PUBLIC_BEARER_ENABLE=true
+      - PUBLIC_BEARER_SK_PATH=/data/keys/public_bearer_sk.der
+      - PUBLIC_BEARER_METADATA_PATH=/data/keys/public_bearer_metadata.json
+      - PUBLIC_BEARER_VALIDITY=30d
+      # Optional: bind V5 public bearer passes to one verifier audience.
+      # - PUBLIC_BEARER_AUDIENCE=api.example.com
       - SYBIL_INVITE_PERSISTENCE_PATH=/data/state/invitations.json
 
   verifier:
@@ -112,9 +116,16 @@ services:
     restart: always
     ports:
       - "127.0.0.1:8082:8082"
+    volumes:
+      - ./data/keys:/data/keys:ro
     environment:
       - BIND_ADDR=0.0.0.0:8082
-      - ISSUER_URL=[https://issuer.example.com/.well-known/issuer](https://issuer.example.com/.well-known/issuer)
+      - ISSUER_URL=https://issuer.example.com/.well-known/issuer
+      - VERIFIER_ID=verifier:prod:v4
+      - VERIFIER_AUDIENCE=api.example.com
+      # Required for V4 private verification. V5 public bearer verification
+      # uses issuer-published public keys from /.well-known/keys.
+      - VERIFIER_SK_PATH=/data/keys/issuer_sk.bin
       - REDIS_URL=redis://redis.internal:6379
     depends_on:
       - redis
@@ -558,7 +569,7 @@ freebird hard nofile 65536
 export TOKIO_WORKER_THREADS=8  # Number of CPU cores
 
 # Tune invitation autosave (balance safety vs I/O)
-export SYBIL_INVITE_AUTOSAVE_INTERVAL_SECS=600  # 10 minutes
+export SYBIL_INVITE_AUTOSAVE_INTERVAL=10m
 ```
 
 ### Verifier

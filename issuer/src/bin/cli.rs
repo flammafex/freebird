@@ -21,7 +21,6 @@
 //! freebird-cli users ban <id>      # Ban a user
 //! freebird-cli keys list           # List signing keys
 //! freebird-cli keys rotate         # Rotate signing key
-//! freebird-cli federation vouches  # List federation vouches
 //! ```
 
 use anyhow::{Context, Result};
@@ -87,10 +86,6 @@ enum Commands {
     /// Signing key management commands
     #[command(subcommand)]
     Keys(KeysCommands),
-
-    /// Federation management commands
-    #[command(subcommand)]
-    Federation(FederationCommands),
 
     /// Export data commands
     #[command(subcommand)]
@@ -186,51 +181,6 @@ enum KeysCommands {
 
     /// Clean up old keys beyond retention period
     Cleanup,
-}
-
-#[derive(Subcommand)]
-enum FederationCommands {
-    /// List vouches for other issuers
-    Vouches,
-
-    /// Add a vouch for another issuer
-    Vouch {
-        /// Issuer ID to vouch for
-        issuer_id: String,
-
-        /// Trust level (1-10)
-        #[arg(short, long, default_value = "5")]
-        level: u8,
-
-        /// Optional note
-        #[arg(short, long)]
-        note: Option<String>,
-    },
-
-    /// Remove a vouch for an issuer
-    Unvouch {
-        /// Issuer ID to remove vouch for
-        issuer_id: String,
-    },
-
-    /// List revocations
-    Revocations,
-
-    /// Add a revocation for an issuer
-    Revoke {
-        /// Issuer ID to revoke
-        issuer_id: String,
-
-        /// Reason for revocation
-        #[arg(short, long)]
-        reason: Option<String>,
-    },
-
-    /// Remove a revocation
-    Unrevoke {
-        /// Issuer ID to unrevoke
-        issuer_id: String,
-    },
 }
 
 #[derive(Subcommand)]
@@ -342,31 +292,6 @@ struct KeysResponse {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct VouchSummary {
-    issuer_id: String,
-    trust_level: u8,
-    created_at: String,
-    note: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct VouchesResponse {
-    vouches: Vec<VouchSummary>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct RevocationSummary {
-    issuer_id: String,
-    reason: Option<String>,
-    created_at: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct RevocationsResponse {
-    revocations: Vec<RevocationSummary>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
 struct AuditEntry {
     timestamp: String,
     action: String,
@@ -401,19 +326,6 @@ struct CreateInvitationsRequest {
 struct GrantInvitesRequest {
     user_id: String,
     count: usize,
-}
-
-#[derive(Debug, Serialize)]
-struct AddVouchRequest {
-    issuer_id: String,
-    trust_level: u8,
-    note: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-struct AddRevocationRequest {
-    issuer_id: String,
-    reason: Option<String>,
 }
 
 struct ApiClient {
@@ -475,25 +387,6 @@ impl ApiClient {
         let resp = self
             .client
             .post(&url)
-            .header("X-Admin-Key", &self.admin_key)
-            .send()
-            .await
-            .context("Failed to connect to issuer")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("API error ({}): {}", status, body);
-        }
-
-        resp.json().await.context("Failed to parse response")
-    }
-
-    async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        let url = format!("{}/admin{}", self.base_url, path);
-        let resp = self
-            .client
-            .delete(&url)
             .header("X-Admin-Key", &self.admin_key)
             .send()
             .await
@@ -631,27 +524,6 @@ impl TableRow for KeySummary {
             } else {
                 "No".dimmed().to_string()
             },
-        ]
-    }
-}
-
-impl TableRow for VouchSummary {
-    fn values(&self) -> Vec<String> {
-        vec![
-            self.issuer_id.clone(),
-            self.trust_level.to_string(),
-            self.created_at.clone(),
-            self.note.clone().unwrap_or_else(|| "-".to_string()),
-        ]
-    }
-}
-
-impl TableRow for RevocationSummary {
-    fn values(&self) -> Vec<String> {
-        vec![
-            self.issuer_id.clone(),
-            self.reason.clone().unwrap_or_else(|| "-".to_string()),
-            self.created_at.clone(),
         ]
     }
 }
@@ -1010,103 +882,6 @@ async fn main() -> Result<()> {
                     if let Some(removed) = resp.get("removed").and_then(|r| r.as_u64()) {
                         println!("  Removed {} old key(s)", removed);
                     }
-                }
-            }
-        },
-
-        Commands::Federation(cmd) => match cmd {
-            FederationCommands::Vouches => {
-                let vouches: VouchesResponse = api.get("/federation/vouches").await?;
-                if format == OutputFormat::Json {
-                    println!("{}", serde_json::to_string_pretty(&vouches)?);
-                } else {
-                    println!("{}", "Federation Vouches".bold().underline());
-                    println!();
-                    if vouches.vouches.is_empty() {
-                        println!("{}", "No vouches configured.".dimmed());
-                    } else {
-                        print_table(&["Issuer ID", "Level", "Created", "Note"], &vouches.vouches);
-                    }
-                }
-            }
-
-            FederationCommands::Vouch {
-                issuer_id,
-                level,
-                note,
-            } => {
-                let req = AddVouchRequest {
-                    issuer_id: issuer_id.clone(),
-                    trust_level: level,
-                    note,
-                };
-                let resp: Value = api.post("/federation/vouches", &req).await?;
-                if format == OutputFormat::Json {
-                    println!("{}", serde_json::to_string_pretty(&resp)?);
-                } else {
-                    println!(
-                        "{} Added vouch for {} (level {})",
-                        "✓".green(),
-                        issuer_id.bold(),
-                        level
-                    );
-                }
-            }
-
-            FederationCommands::Unvouch { issuer_id } => {
-                let resp: Value = api
-                    .delete(&format!("/federation/vouches/{}", issuer_id))
-                    .await?;
-                if format == OutputFormat::Json {
-                    println!("{}", serde_json::to_string_pretty(&resp)?);
-                } else {
-                    println!("{} Removed vouch for {}", "✓".green(), issuer_id.bold());
-                }
-            }
-
-            FederationCommands::Revocations => {
-                let revocations: RevocationsResponse = api.get("/federation/revocations").await?;
-                if format == OutputFormat::Json {
-                    println!("{}", serde_json::to_string_pretty(&revocations)?);
-                } else {
-                    println!("{}", "Federation Revocations".bold().underline());
-                    println!();
-                    if revocations.revocations.is_empty() {
-                        println!("{}", "No revocations configured.".dimmed());
-                    } else {
-                        print_table(
-                            &["Issuer ID", "Reason", "Created"],
-                            &revocations.revocations,
-                        );
-                    }
-                }
-            }
-
-            FederationCommands::Revoke { issuer_id, reason } => {
-                let req = AddRevocationRequest {
-                    issuer_id: issuer_id.clone(),
-                    reason,
-                };
-                let resp: Value = api.post("/federation/revocations", &req).await?;
-                if format == OutputFormat::Json {
-                    println!("{}", serde_json::to_string_pretty(&resp)?);
-                } else {
-                    println!("{} Added revocation for {}", "✓".green(), issuer_id.bold());
-                }
-            }
-
-            FederationCommands::Unrevoke { issuer_id } => {
-                let resp: Value = api
-                    .delete(&format!("/federation/revocations/{}", issuer_id))
-                    .await?;
-                if format == OutputFormat::Json {
-                    println!("{}", serde_json::to_string_pretty(&resp)?);
-                } else {
-                    println!(
-                        "{} Removed revocation for {}",
-                        "✓".green(),
-                        issuer_id.bold()
-                    );
                 }
             }
         },

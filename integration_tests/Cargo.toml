@@ -30,3 +30,4 @@ freebird-common = { path = "../common" }
 freebird-issuer = { path = "../issuer" }
 
 freebird-verifier = { path = "../verifier" } # <--- Now accessible as a lib
+blind-rsa-signatures = "0.17.1"

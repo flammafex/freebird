@@ -6,7 +6,7 @@ description = "Common utilities and shared types for the Freebird privacy-preser
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/flammafex/freebird"
 homepage = "https://github.com/flammafex/freebird"
-keywords = ["privacy", "authentication", "federation"]
+keywords = ["privacy", "authorization", "voprf"]
 categories = ["authentication"]
 
 [dev-dependencies]
@@ -22,8 +22,6 @@ time = { version = "0.3", features = ["formatting"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64ct = { version = "1.6", features = ["alloc"] }
-
-# Cryptography (for federation signatures)
 
 freebird-crypto = { version = "0.4.0", path = "../crypto" }
 

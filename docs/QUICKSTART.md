@@ -83,10 +83,13 @@ cargo build --release
 ./target/release/freebird-issuer
 ```
 
+The issuer starts both token modes by default: V4 private issuance at
+`/v1/oprf/issue` and V5 public bearer issuance at `/v1/public/issue`.
+
 **Expected output:**
 ```
 ✅ Issuer starting...
-   ├─ ISSUER_ID: issuer:freebird:v1
+   ├─ ISSUER_ID: issuer:freebird:v4
    ├─ Bind address: 0.0.0.0:8081
    ├─ Sybil resistance: none
 ```
@@ -165,9 +168,8 @@ redis-server
 ```bash
 cat > .env.issuer << 'ENVFILE'
 # Issuer
-ISSUER_ID=issuer:production:v1
+ISSUER_ID=issuer:production:v4
 BIND_ADDR=127.0.0.1:8081
-TOKEN_TTL_MIN=60
 SYBIL_RESISTANCE=invitation
 SYBIL_INVITE_PERSISTENCE_PATH=invitations.json
 SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
@@ -179,6 +181,9 @@ cat > .env.verifier << 'ENVFILE'
 BIND_ADDR=127.0.0.1:8082
 REDIS_URL=redis://localhost:6379
 ISSUER_URL=http://localhost:8081/.well-known/issuer
+VERIFIER_ID=verifier:production:v4
+VERIFIER_AUDIENCE=production
+VERIFIER_SK_PATH=issuer_sk.bin
 ENVFILE
 ```
 

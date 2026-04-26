@@ -324,7 +324,6 @@ Freebird provides anonymous credential systems that enable businesses to verify 
 ```bash
 SYBIL_RESISTANCE=invitation
 SYBIL_INVITE_PER_USER=0  # User cannot invite others
-TOKEN_TTL_MIN=43200      # Long validity (30 days)
 ```
 
 ### Pattern 3: Subscription Access
@@ -332,8 +331,7 @@ TOKEN_TTL_MIN=43200      # Long validity (30 days)
 **Mechanism:** Rate Limit (Time-based).
 ```bash
 SYBIL_RESISTANCE=rate_limit
-SYBIL_RATE_LIMIT_SECS=86400 # Daily refresh
-TOKEN_TTL_MIN=1440          # 24 hour validity
+SYBIL_RATE_LIMIT=1d # Daily refresh
 ```
 
 ### Pattern 4: High-Friction Public
@@ -342,7 +340,7 @@ TOKEN_TTL_MIN=1440          # 24 hour validity
 ```bash
 SYBIL_RESISTANCE=combined
 SYBIL_POW_DIFFICULTY=24     # Expensive to automate
-SYBIL_RATE_LIMIT_SECS=3600
+SYBIL_RATE_LIMIT=1h
 ```
 
 ---

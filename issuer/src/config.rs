@@ -12,16 +12,15 @@ use std::path::PathBuf;
 pub struct Config {
     pub issuer_id: String,
     pub bind_addr: SocketAddr,
-    pub token_ttl_min: u64,
     pub require_tls: bool,
     pub behind_proxy: bool,
     pub key_config: KeyConfig,
+    pub public_key_config: PublicKeyConfig,
     pub sybil_config: SybilConfig,
     pub webauthn_config: Option<WebAuthnConfig>,
     pub admin_api_key: Option<String>,
     pub epoch_duration_sec: u64,
     pub epoch_retention: u32,
-    pub federation_data_path: PathBuf,
 }
 
 #[derive(Clone, Debug)]
@@ -30,6 +29,16 @@ pub struct KeyConfig {
     pub rotation_state_path: PathBuf,
     pub kid_override: Option<String>,
     pub hsm: Option<HsmConfig>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PublicKeyConfig {
+    pub enabled: bool,
+    pub sk_path: PathBuf,
+    pub metadata_path: PathBuf,
+    pub validity_secs: u64,
+    pub audience: Option<String>,
+    pub modulus_bits: usize,
 }
 
 #[derive(Clone)]
@@ -109,16 +118,6 @@ pub struct SybilConfig {
     pub multi_party_vouching_hmac_secret_path: PathBuf,
     pub multi_party_vouching_salt: String,
     pub multi_party_vouching_allow_insecure: bool,
-    // Federated Trust configuration
-    pub federated_trust_enabled: bool,
-    pub federated_trust_max_depth: u32,
-    pub federated_trust_min_paths: u32,
-    pub federated_trust_require_direct: bool,
-    pub federated_trust_min_trust_level: u8,
-    pub federated_trust_cache_ttl_secs: u64,
-    pub federated_trust_max_token_age_secs: i64,
-    pub federated_trust_trusted_roots: Vec<String>,
-    pub federated_trust_blocked_issuers: Vec<String>,
     // Combined mode configuration
     pub combined_mechanisms: Vec<String>, // e.g., ["pow", "rate_limit", "progressive_trust"]
     pub combined_mode: String,            // "or", "and", "threshold"
@@ -136,18 +135,12 @@ pub struct WebAuthnConfig {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let issuer_id = env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v1".to_string());
+        let issuer_id = env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".to_string());
 
         let bind_str = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8081".to_string());
         let bind_addr: SocketAddr = bind_str
             .parse()
             .context(format!("Invalid BIND_ADDR: {}", bind_str))?;
-
-        let token_ttl_min = env::var("TOKEN_TTL_MIN")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(10)
-            .clamp(1, 24 * 60);
 
         let require_tls = env_bool("REQUIRE_TLS");
         let behind_proxy = env_bool("BEHIND_PROXY");
@@ -157,24 +150,18 @@ impl Config {
         let epoch_duration_sec = env_duration("EPOCH_DURATION", 86400); // Default: 1 day
         let epoch_retention = env_u32("EPOCH_RETENTION", 2); // Default: accept 2 previous epochs
 
-        // Federation data path (default: /data/federation for Docker, override for bare metal)
-        let federation_data_path = env::var("FEDERATION_DATA_PATH")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from("/data/federation"));
-
         Ok(Self {
             issuer_id,
             bind_addr,
-            token_ttl_min,
             require_tls,
             behind_proxy,
             key_config: KeyConfig::from_env(),
+            public_key_config: PublicKeyConfig::from_env(),
             sybil_config: SybilConfig::from_env(),
             webauthn_config: WebAuthnConfig::from_env(),
             admin_api_key,
             epoch_duration_sec,
             epoch_retention,
-            federation_data_path,
         })
     }
 }
@@ -190,6 +177,28 @@ impl KeyConfig {
                 .unwrap_or_else(|_| "key_rotation_state.json".into()),
             kid_override: env::var("KID").ok(),
             hsm: HsmConfig::from_env(),
+        }
+    }
+}
+
+impl PublicKeyConfig {
+    fn from_env() -> Self {
+        Self {
+            enabled: env_bool_default("PUBLIC_BEARER_ENABLE", true),
+            sk_path: env::var("PUBLIC_BEARER_SK_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "public_bearer_sk.der".into()),
+            metadata_path: env::var("PUBLIC_BEARER_METADATA_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "public_bearer_metadata.json".into()),
+            validity_secs: env_duration("PUBLIC_BEARER_VALIDITY", 30 * 24 * 3600),
+            audience: env::var("PUBLIC_BEARER_AUDIENCE")
+                .ok()
+                .filter(|v| !v.is_empty()),
+            modulus_bits: env::var("PUBLIC_BEARER_MODULUS_BITS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(2048),
         }
     }
 }
@@ -336,26 +345,6 @@ impl SybilConfig {
             multi_party_vouching_allow_insecure: env_bool(
                 "SYBIL_MULTI_PARTY_VOUCHING_ALLOW_INSECURE",
             ),
-            // Federated Trust
-            federated_trust_enabled: env_bool("SYBIL_FEDERATED_TRUST_ENABLED"),
-            federated_trust_max_depth: env_u32("SYBIL_FEDERATED_TRUST_MAX_DEPTH", 2),
-            federated_trust_min_paths: env_u32("SYBIL_FEDERATED_TRUST_MIN_PATHS", 1),
-            federated_trust_require_direct: env_bool("SYBIL_FEDERATED_TRUST_REQUIRE_DIRECT"),
-            federated_trust_min_trust_level: env_u32("SYBIL_FEDERATED_TRUST_MIN_TRUST_LEVEL", 50)
-                as u8,
-            federated_trust_cache_ttl_secs: env_duration("SYBIL_FEDERATED_TRUST_CACHE_TTL", 3600), // Default: 1h
-            federated_trust_max_token_age_secs: env_duration(
-                "SYBIL_FEDERATED_TRUST_MAX_TOKEN_AGE",
-                600,
-            ) as i64, // Default: 10m
-            federated_trust_trusted_roots: env::var("SYBIL_FEDERATED_TRUST_TRUSTED_ROOTS")
-                .ok()
-                .map(|s| s.split(',').map(|s| s.to_string()).collect())
-                .unwrap_or_default(),
-            federated_trust_blocked_issuers: env::var("SYBIL_FEDERATED_TRUST_BLOCKED_ISSUERS")
-                .ok()
-                .map(|s| s.split(',').map(|s| s.to_string()).collect())
-                .unwrap_or_default(),
             // Combined mode configuration
             combined_mechanisms: env::var("SYBIL_COMBINED_MECHANISMS")
                 .ok()
@@ -391,9 +380,13 @@ impl WebAuthnConfig {
 
 // Helpers
 fn env_bool(key: &str) -> bool {
+    env_bool_default(key, false)
+}
+
+fn env_bool_default(key: &str, default: bool) -> bool {
     env::var(key)
-        .map(|v| v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(default)
 }
 
 fn env_u32(key: &str, default: u32) -> u32 {

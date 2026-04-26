@@ -44,36 +44,6 @@ pub trait CryptoProvider: Send + Sync {
     /// - The secret key MUST NOT be exposed during this operation
     async fn voprf_evaluate(&self, blinded: &[u8]) -> Result<Vec<u8>>;
 
-    /// Sign token metadata using ECDSA (V3 format, federation support)
-    ///
-    /// Signs the token metadata with the issuer's secret key using ECDSA.
-    /// This enables multi-issuer federation because verifiers only need
-    /// the public key to verify signatures (unlike MAC which requires secret key).
-    ///
-    /// V3 signs: `SHA256("freebird:token-metadata:v3" || kid_len || kid || exp || issuer_id_len || issuer_id)`
-    ///
-    /// # Arguments
-    ///
-    /// * `kid` - Key identifier
-    /// * `exp` - Expiration timestamp (Unix seconds)
-    /// * `issuer_id` - Issuer identifier
-    ///
-    /// # Returns
-    ///
-    /// A 64-byte ECDSA signature (r || s, each 32 bytes)
-    ///
-    /// # Security
-    ///
-    /// - HSM implementations MUST perform signing entirely within the HSM
-    /// - Uses deterministic ECDSA (RFC 6979) for reproducibility
-    /// - Signature is over SHA256 hash of domain-separated metadata
-    async fn sign_token_metadata(
-        &self,
-        kid: &str,
-        exp: i64,
-        issuer_id: &str,
-    ) -> Result<[u8; 64]>;
-
     /// Get the public key corresponding to the secret key
     ///
     /// Returns the P-256 public key in SEC1 compressed format (33 bytes)
@@ -99,6 +69,30 @@ pub trait CryptoProvider: Send + Sync {
     ///
     /// Returns the context bytes used for domain separation
     fn context(&self) -> &[u8];
+}
+
+/// Cryptographic provider for V5 public bearer pass blind RSA signatures.
+///
+/// This is deliberately separate from `CryptoProvider`: V4 private verification
+/// uses VOPRF keys, while V5 public verification uses RFC 9474 blind RSA keys.
+#[async_trait]
+pub trait BlindRsaProvider: Send + Sync {
+    /// Sign one RFC 9474 blinded message.
+    async fn blind_sign(&self, blinded_msg: &[u8]) -> Result<Vec<u8>>;
+
+    /// Return the RFC 9474 SPKI public key bytes used for V5 verification.
+    fn public_key_spki(&self) -> &[u8];
+
+    /// Return `SHA-256(public_key_spki)`.
+    fn token_key_id(&self) -> &[u8; crate::PUBLIC_BEARER_TOKEN_KEY_ID_LEN];
+
+    /// Return the RSA modulus size.
+    fn modulus_bits(&self) -> u16;
+
+    /// Return the RFC 9474 suite identifier used by this provider.
+    fn variant(&self) -> &str {
+        crate::PUBLIC_BEARER_RFC9474_VARIANT
+    }
 }
 
 /// Configuration for creating a crypto provider

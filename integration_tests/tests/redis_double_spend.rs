@@ -19,7 +19,7 @@ enum VerifyCode {
 }
 
 async fn verify_once(store: &dyn SpendStore, key: &str, ttl: Duration) -> VerifyCode {
-    match store.mark_spent(key, ttl).await {
+    match store.mark_spent(key, Some(ttl)).await {
         Ok(true) => VerifyCode::Success,
         Ok(false) => VerifyCode::ReplayDetected,
         Err(_) => VerifyCode::StoreError,
@@ -54,7 +54,7 @@ impl FlakyRedisStore {
 
 #[async_trait]
 impl SpendStore for FlakyRedisStore {
-    async fn mark_spent(&self, key: &str, ttl: Duration) -> anyhow::Result<bool> {
+    async fn mark_spent(&self, key: &str, ttl: Option<Duration>) -> anyhow::Result<bool> {
         let mut guard = self.failures_remaining.lock().await;
         if *guard > 0 {
             *guard -= 1;
@@ -65,23 +65,39 @@ impl SpendStore for FlakyRedisStore {
     }
 }
 
-#[tokio::test]
-async fn test_redis_atomic_double_spend_protection() -> Result<()> {
-    // 1. Setup Redis Store
-    // We use a distinct prefix or DB in real apps, but for this test
-    // we'll just generate a random nullifier key to avoid collisions.
+async fn redis_store_or_skip() -> Option<Arc<RedisStore>> {
     let redis_url =
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-
     let store = match RedisStore::new(&redis_url) {
         Ok(s) => Arc::new(s),
         Err(e) => {
             eprintln!(
-                "⚠️ Skipping Redis test: could not connect to {}: {}",
+                "Skipping Redis test: could not create client for {}: {}",
                 redis_url, e
             );
-            return Ok(());
+            return None;
         }
+    };
+
+    let probe_key = format!("test:redis_probe:{}", uuid::Uuid::new_v4());
+    if let Err(e) = store
+        .mark_spent(&probe_key, Some(Duration::from_secs(1)))
+        .await
+    {
+        eprintln!(
+            "Skipping Redis test: Redis command probe failed for {}: {}",
+            redis_url, e
+        );
+        return None;
+    }
+
+    Some(store)
+}
+
+#[tokio::test]
+async fn test_redis_atomic_double_spend_protection() -> Result<()> {
+    let Some(store) = redis_store_or_skip().await else {
+        return Ok(());
     };
 
     // 2. Prepare the attack
@@ -108,7 +124,7 @@ async fn test_redis_atomic_double_spend_protection() -> Result<()> {
 
         handles.push(tokio::spawn(async move {
             // Try to mark as spent
-            match store_clone.mark_spent(&key_clone, ttl).await {
+            match store_clone.mark_spent(&key_clone, Some(ttl)).await {
                 Ok(true) => {
                     // Success: We were the first!
                     counter.fetch_add(1, Ordering::SeqCst);
@@ -147,17 +163,8 @@ async fn test_redis_atomic_double_spend_protection() -> Result<()> {
 #[tokio::test]
 async fn test_redis_n_way_race_duplicate_submissions() -> Result<()> {
     const N_WAY: usize = 200;
-    let redis_url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    let store = match RedisStore::new(&redis_url) {
-        Ok(s) => Arc::new(s),
-        Err(e) => {
-            eprintln!(
-                "⚠️ Skipping Redis test: could not connect to {}: {}",
-                redis_url, e
-            );
-            return Ok(());
-        }
+    let Some(store) = redis_store_or_skip().await else {
+        return Ok(());
     };
 
     let key = format!("test:n_way_race:{}", uuid::Uuid::new_v4());
@@ -202,17 +209,8 @@ async fn test_redis_n_way_race_duplicate_submissions() -> Result<()> {
 
 #[tokio::test]
 async fn test_redis_transient_failure_handling_path() -> Result<()> {
-    let redis_url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    let base = match RedisStore::new(&redis_url) {
-        Ok(s) => Arc::new(s),
-        Err(e) => {
-            eprintln!(
-                "⚠️ Skipping Redis test: could not connect to {}: {}",
-                redis_url, e
-            );
-            return Ok(());
-        }
+    let Some(base) = redis_store_or_skip().await else {
+        return Ok(());
     };
 
     let flaky = FlakyRedisStore::new(base, 1);
@@ -231,17 +229,8 @@ async fn test_redis_transient_failure_handling_path() -> Result<()> {
 
 #[tokio::test]
 async fn test_redis_batch_duplicate_error_code_stability() -> Result<()> {
-    let redis_url =
-        std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://127.0.0.1:6379".to_string());
-    let store = match RedisStore::new(&redis_url) {
-        Ok(s) => Arc::new(s),
-        Err(e) => {
-            eprintln!(
-                "⚠️ Skipping Redis test: could not connect to {}: {}",
-                redis_url, e
-            );
-            return Ok(());
-        }
+    let Some(store) = redis_store_or_skip().await else {
+        return Ok(());
     };
 
     let ttl = Duration::from_secs(60);

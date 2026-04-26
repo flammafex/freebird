@@ -15,7 +15,6 @@ use axum::{
     Json,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
-use time::OffsetDateTime;
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::multi_key_voprf::MultiKeyVoprfCore;
@@ -234,36 +233,16 @@ pub async fn handle(
     let token_b64 = eval_result.token;
     let kid_used = eval_result.kid;
 
-    // Calculate expiration
-    let exp = OffsetDateTime::now_utc().unix_timestamp() + state.exp_sec as i64;
-
-    // Sign token metadata with issuer's secret key (V3: metadata only)
-    let signature = voprf
-        .sign_token_metadata(&kid_used, exp, &state.issuer_id)
-        .await
-        .map_err(|e| {
-            error!("failed to sign token metadata: {e:?}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "signature generation error".into(),
-            )
-        })?;
-
-    let sig_b64 = Base64UrlUnpadded::encode_string(&signature);
-
     debug!(
-        "✅ token issued: kid={}, exp={}, issuer_id={}, sybil_verified={}",
+        "✅ token issued: kid={}, issuer_id={}, sybil_verified={}",
         kid_used,
-        exp,
         state.issuer_id,
         sybil_info.is_some(),
     );
 
     Ok(Json(IssueResp {
         token: token_b64,
-        sig: sig_b64,
         kid: kid_used,
-        exp,
         issuer_id: state.issuer_id.clone(),
         sybil_info,
     }))
@@ -272,26 +251,21 @@ pub async fn handle(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::federation_store::FederationStore;
     use crate::sybil_resistance::{NoSybilResistance, ProofOfWork, SybilResistance};
     use std::sync::Arc;
 
     async fn mock_state(sybil_checker: Option<Arc<dyn SybilResistance>>) -> AppStateWithSybil {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let federation_store = FederationStore::new(temp_dir.path()).await.unwrap();
-
         AppStateWithSybil {
             issuer_id: "test-issuer".into(),
             kid: "test-key-001".into(),
-            exp_sec: 3600,
             pubkey_b64: "test-pubkey".into(),
             require_tls: false,
             behind_proxy: false,
             sybil_checker,
             invitation_system: None,
+            public_issuer: None,
             epoch_duration_sec: 86400,
             epoch_retention: 2,
-            federation_store,
         }
     }
 

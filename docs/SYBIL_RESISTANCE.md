@@ -1,4 +1,4 @@
-# 🛡️ Sybil Resistance Guide
+# Sybil Resistance Guide
 
 Comprehensive comparison of all Sybil resistance mechanisms in Freebird.
 
@@ -25,7 +25,6 @@ Comprehensive comparison of all Sybil resistance mechanisms in Freebird.
 | **Progressive Trust** | ✅ Production | ✅✅ Strong | Time | ✅✅✅ Excellent | Gradual access, loyalty rewards |
 | **Proof of Diversity** | ✅ Production | ✅✅✅ Strong | Behavioral | ✅✅ Good | Anti-botnet, diversity analysis |
 | **Multi-Party Vouching** | ✅ Production | ✅✅✅ Strong | Social | ✅✅ Good | Collective accountability, consensus |
-| **Federated Trust** | ✅ Production | ✅✅ Moderate | Federation | ✅✅✅ Excellent | Cross-issuer interoperability |
 | **WebAuthn** | ✅ Production | ✅✅✅ Strong | Zero | ✅✅ Good | Hardware-backed, biometric |
 | **Combined** | ✅ Production | ✅✅✅ Strong | Multiple | ✅✅ Good | Defense-in-depth |
 
@@ -74,11 +73,11 @@ Tokens are issued freely to anyone who requests them. No verification, no proof 
 ```bash
 export SYBIL_RESISTANCE=invitation
 export SYBIL_INVITE_PER_USER=5
-export SYBIL_INVITE_COOLDOWN_SECS=3600
-export SYBIL_INVITE_EXPIRES_SECS=2592000
-export SYBIL_INVITE_NEW_USER_WAIT_SECS=2592000
+export SYBIL_INVITE_COOLDOWN=1h
+export SYBIL_INVITE_EXPIRES=30d
+export SYBIL_INVITE_NEW_USER_WAIT=30d
 export SYBIL_INVITE_PERSISTENCE_PATH=invitations.json
-export SYBIL_INVITE_AUTOSAVE_INTERVAL_SECS=300
+export SYBIL_INVITE_AUTOSAVE_INTERVAL=5m
 export SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
 ./target/release/freebird-issuer
 ```
@@ -195,7 +194,7 @@ export SYBIL_POW_DIFFICULTY=20  # Leading zero bits required
 
 ```bash
 export SYBIL_RESISTANCE=rate_limit
-export SYBIL_RATE_LIMIT_SECS=3600  # One token per hour per client
+export SYBIL_RATE_LIMIT=1h  # One token per hour per client
 ./target/release/freebird-issuer
 ```
 
@@ -243,9 +242,9 @@ SHA-256("freebird:client:" || ip_address || user_agent_hash)[0..16]
 
 ```bash
 export SYBIL_RESISTANCE=progressive_trust
-export SYBIL_PROGRESSIVE_TRUST_LEVELS="0:1:86400,2592000:10:3600,7776000:100:60"
+export SYBIL_PROGRESSIVE_TRUST_LEVELS="0:1:1d,30d:10:1h,90d:100:1m"
 export SYBIL_PROGRESSIVE_TRUST_PERSISTENCE_PATH="progressive_trust.json"
-export SYBIL_PROGRESSIVE_TRUST_AUTOSAVE_SECS=300
+export SYBIL_PROGRESSIVE_TRUST_AUTOSAVE=5m
 export SYBIL_PROGRESSIVE_TRUST_SECRET="$(openssl rand -base64 32)"
 export SYBIL_PROGRESSIVE_TRUST_SALT="$(openssl rand -hex 16)"
 ./target/release/freebird-issuer
@@ -267,7 +266,8 @@ export SYBIL_PROGRESSIVE_TRUST_SALT="$(openssl rand -hex 16)"
 | 1 | 30 days | 10 | 1 hour | Trusted users |
 | 2 | 90 days | 100 | 1 minute | Veterans |
 
-**Format**: `min_age_secs:max_tokens:cooldown_secs`
+**Format**: `min_age:max_tokens:cooldown`, where durations can be raw seconds
+or values such as `1h`, `30d`, and `90d`.
 
 ### Properties
 
@@ -322,7 +322,7 @@ See [Configuration Reference](CONFIGURATION.md#progressive-trust) for detailed s
 export SYBIL_RESISTANCE=proof_of_diversity
 export SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE=40  # Default
 export SYBIL_PROOF_OF_DIVERSITY_PERSISTENCE_PATH="proof_of_diversity.json"
-export SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE_SECS=300
+export SYBIL_PROOF_OF_DIVERSITY_AUTOSAVE=5m
 export SYBIL_PROOF_OF_DIVERSITY_SECRET="$(openssl rand -base64 32)"
 export SYBIL_PROOF_OF_DIVERSITY_SALT="$(openssl rand -hex 16)"
 ./target/release/freebird-issuer
@@ -401,9 +401,9 @@ See [Configuration Reference](CONFIGURATION.md#proof-of-diversity) for detailed 
 ```bash
 export SYBIL_RESISTANCE=multi_party_vouching
 export SYBIL_MULTI_PARTY_VOUCHING_REQUIRED=3  # Number of vouchers required
-export SYBIL_MULTI_PARTY_VOUCHING_COOLDOWN_SECS=3600
-export SYBIL_MULTI_PARTY_VOUCHING_EXPIRES_SECS=2592000
-export SYBIL_MULTI_PARTY_VOUCHING_NEW_USER_WAIT_SECS=2592000
+export SYBIL_MULTI_PARTY_VOUCHING_COOLDOWN=1h
+export SYBIL_MULTI_PARTY_VOUCHING_EXPIRES=30d
+export SYBIL_MULTI_PARTY_VOUCHING_NEW_USER_WAIT=30d
 export SYBIL_MULTI_PARTY_VOUCHING_SECRET="$(openssl rand -base64 32)"
 export SYBIL_MULTI_PARTY_VOUCHING_SALT="$(openssl rand -hex 16)"
 ./target/release/freebird-issuer
@@ -476,93 +476,7 @@ See [Configuration Reference](CONFIGURATION.md#multi-party-vouching) for detaile
 
 ---
 
-## 8. Federated Trust ⭐ (Cross-Issuer)
-
-### Configuration
-
-```bash
-export SYBIL_RESISTANCE=federated_trust
-export SYBIL_FEDERATED_TRUST_ENABLED=true
-export SYBIL_FEDERATED_TRUST_MAX_DEPTH=2
-export SYBIL_FEDERATED_TRUST_REQUIRE_DIRECT=false
-export SYBIL_FEDERATED_TRUST_MIN_TRUST_LEVEL=50
-export SYBIL_FEDERATED_TRUST_CACHE_TTL_SECS=3600
-export SYBIL_FEDERATED_TRUST_MAX_TOKEN_AGE_SECS=600
-export SYBIL_FEDERATED_TRUST_TRUSTED_ROOTS="issuer:root:v1,issuer:partner:v1"
-export SYBIL_FEDERATED_TRUST_BLOCKED_ISSUERS=""
-./target/release/freebird-issuer
-```
-
-### How It Works
-
-1. **User has token from Source Issuer** (Issuer A)
-2. **User presents token to Target Issuer** (Issuer B) via Federated Trust proof
-3. **Target Issuer verifies**:
-   - Token hasn't expired
-   - Token isn't too old (anti-replay)
-   - Source issuer is in trust graph (direct or indirect vouch)
-   - Trust path is valid
-4. **Target Issuer issues new token** to user
-
-### Trust Graph Example
-
-```
-Stanford vouches for MIT (trust_level: 90)
-MIT vouches for Harvard (trust_level: 90)
-
-Student with MIT token can access:
-- Stanford resources (direct vouch, depth 1)
-- Harvard resources (indirect vouch via MIT, depth 2)
-```
-
-### Properties
-
-**Advantages:**
-- ✅✅✅ **Zero user friction** (just present existing token)
-- ✅✅✅ **Cross-issuer interoperability** (federation benefits)
-- ✅✅✅ **Privacy-preserving** (no additional identity verification)
-- ✅✅ **Cryptographically verifiable** (ECDSA-signed vouches)
-- ✅ **Configurable trust policy** (depth, levels, trusted roots)
-- ✅ **Anti-replay protection** (token age limits)
-
-**Disadvantages:**
-- ⚠️ **Compromised issuer risk** (if trusted issuer compromised, unlimited tokens)
-- ⚠️ **Bootstrap dependency** (requires existing federation)
-- ⚠️ **Trust dilution** (indirect trust weaker than direct)
-- ⚠️ **Moderate Sybil resistance** (only as strong as source issuer)
-
-### Security
-
-**Attack Vectors:**
-1. **Compromised trusted issuer:** Attacker controls vouched issuer → generates unlimited tokens
-   - **Mitigation:** Vet trusted roots carefully, use revocation, monitor anomalies
-2. **Trust graph manipulation:** Complex trust paths to gain access
-   - **Mitigation:** Require direct trust, limit max depth, blocked issuer list
-3. **Token theft:** Stolen tokens used to obtain new tokens
-   - **Mitigation:** Short token age limits, rate limiting, anomaly detection
-
-**Strengths:**
-- ECDSA P-256 vouches (unforgeable)
-- Token age limits (prevent replay)
-- Trust graph validation (path integrity)
-- Blocked issuer list (known bad actors)
-
-### Use Cases
-
-- ✅ **Academic consortiums** (students access resources across universities)
-- ✅ **Healthcare networks** (patients access federated facilities)
-- ✅ **Enterprise multi-cloud** (unified access across providers)
-- ✅ **Open source communities** (contributors across projects)
-- ✅ **Government federations** (cross-agency interoperability)
-- ⚠️ **Standalone applications** (no federation = no benefit)
-
-### Detailed Guide
-
-See [Federation Guide](FEDERATION.md) for complete documentation.
-
----
-
-## 9. WebAuthn (Hardware Authenticators)
+## 8. WebAuthn (Hardware Authenticators)
 
 *For full WebAuthn documentation, see [WEBAUTHN.md](WEBAUTHN.md)*
 
@@ -577,7 +491,7 @@ See [Federation Guide](FEDERATION.md) for complete documentation.
 
 ---
 
-## 10. Combined Resistance (Defense-in-Depth)
+## 9. Combined Resistance (Defense-in-Depth)
 
 Combine multiple Sybil resistance mechanisms with flexible logic modes.
 
@@ -590,7 +504,7 @@ export SYBIL_RESISTANCE=combined
 export SYBIL_COMBINED_MECHANISMS=pow,rate_limit
 export SYBIL_COMBINED_MODE=or  # Default
 export SYBIL_POW_DIFFICULTY=20
-export SYBIL_RATE_LIMIT_SECS=3600
+export SYBIL_RATE_LIMIT=1h
 ./target/release/freebird-issuer
 ```
 
@@ -602,7 +516,7 @@ export SYBIL_COMBINED_MECHANISMS=pow,progressive_trust,invitation
 export SYBIL_COMBINED_MODE=or
 # Configure each mechanism as needed
 export SYBIL_POW_DIFFICULTY=24
-export SYBIL_PROGRESSIVE_TRUST_LEVELS="0:1:86400,2592000:10:3600"
+export SYBIL_PROGRESSIVE_TRUST_LEVELS="0:1:1d,30d:10:1h"
 export SYBIL_INVITE_PER_USER=5
 ./target/release/freebird-issuer
 ```
@@ -759,12 +673,11 @@ All mechanisms can be combined:
 | Mechanism | Config Name | Requirements |
 |-----------|-------------|--------------|
 | Proof of Work | `pow` | SYBIL_POW_DIFFICULTY |
-| Rate Limiting | `rate_limit` | SYBIL_RATE_LIMIT_SECS |
+| Rate Limiting | `rate_limit` | SYBIL_RATE_LIMIT |
 | Invitation | `invitation` | SYBIL_INVITE_* configs |
 | Progressive Trust | `progressive_trust` | SYBIL_PROGRESSIVE_TRUST_* configs |
 | Proof of Diversity | `proof_of_diversity` | SYBIL_PROOF_OF_DIVERSITY_* configs |
 | Multi-Party Vouching | `multi_party_vouching` | SYBIL_MULTI_PARTY_VOUCHING_* configs |
-| Federated Trust | `federated_trust` | SYBIL_FEDERATED_TRUST_* configs |
 | WebAuthn | `webauthn` | WEBAUTHN_* configs |
 
 ### Example Configurations
@@ -774,7 +687,7 @@ All mechanisms can be combined:
 export SYBIL_COMBINED_MODE=or
 export SYBIL_COMBINED_MECHANISMS=pow,rate_limit
 export SYBIL_POW_DIFFICULTY=20
-export SYBIL_RATE_LIMIT_SECS=3600
+export SYBIL_RATE_LIMIT=1h
 ```
 
 #### Medium Security (Community Service)
@@ -791,7 +704,7 @@ export SYBIL_INVITE_PER_USER=3
 export SYBIL_COMBINED_MODE=and
 export SYBIL_COMBINED_MECHANISMS=invitation,progressive_trust,proof_of_diversity
 export SYBIL_INVITE_PER_USER=1
-export SYBIL_PROGRESSIVE_TRUST_LEVELS="7776000:1:86400"  # 90 days wait
+export SYBIL_PROGRESSIVE_TRUST_LEVELS="90d:1:1d"
 export SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE=70
 ```
 
@@ -801,7 +714,7 @@ export SYBIL_COMBINED_MODE=threshold
 export SYBIL_COMBINED_THRESHOLD=3
 export SYBIL_COMBINED_MECHANISMS=pow,progressive_trust,proof_of_diversity,multi_party_vouching,webauthn
 export SYBIL_POW_DIFFICULTY=24
-export SYBIL_PROGRESSIVE_TRUST_LEVELS="0:1:86400,2592000:10:3600"
+export SYBIL_PROGRESSIVE_TRUST_LEVELS="0:1:1d,30d:10:1h"
 export SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE=50
 export SYBIL_MULTI_PARTY_VOUCHING_REQUIRED=3
 # WebAuthn config...
@@ -845,7 +758,6 @@ export SYBIL_MULTI_PARTY_VOUCHING_REQUIRED=3
 | Progressive Trust | ✅✅✅ | ✅✅ | ✅✅ | ✅✅ |
 | Proof of Diversity | ✅✅✅ | ✅✅ | ✅✅ | ✅ |
 | Multi-Party Vouching | ✅✅✅ | ✅✅✅ | ✅✅✅ | ✅✅✅ |
-| Federated Trust | ✅✅ | ✅✅ | ✅✅ | ✅✅✅ |
 | WebAuthn | ✅✅✅ | ✅✅✅ | ✅✅✅ | ✅✅✅ |
 | Combined | ✅✅✅ | ✅✅✅ | ✅✅ | ✅✅ |
 
@@ -860,7 +772,6 @@ export SYBIL_MULTI_PARTY_VOUCHING_REQUIRED=3
 | Progressive Trust | Hashed user ID, timestamps | Low | Very Low |
 | Proof of Diversity | Hashed networks/devices | Low | Very Low |
 | Multi-Party Vouching | Vouch graph (pseudonymous) | Low | Low |
-| Federated Trust | Source issuer ID, token | Very Low | Very Low |
 | WebAuthn | Credential ID, public key | Low | Low |
 | Combined | Varies | Varies | Low |
 
@@ -875,7 +786,6 @@ export SYBIL_MULTI_PARTY_VOUCHING_REQUIRED=3
 | Progressive Trust | Very Low | Instant | ✅ Universal (starts limited) |
 | Proof of Diversity | Very Low | Instant | ✅ Universal (starts limited) |
 | Multi-Party Vouching | Medium | Instant (after vouches) | ⚠️ Requires vouchers |
-| Federated Trust | None | Instant | ⚠️ Requires federated token |
 | WebAuthn | Low | ~1-3 seconds | ⚠️ Requires hardware |
 | Combined | Varies | Varies | ⚠️ Most restrictive |
 
@@ -906,14 +816,6 @@ export SYBIL_MULTI_PARTY_VOUCHING_REQUIRED=3
 ✅ Very low friction required  
 ✅ Don't need strong Sybil resistance  
 
-### Choose Federated Trust If:
-
-✅ Building a federation with other issuers
-✅ Users already have tokens from trusted issuers
-✅ Want zero friction for federated users
-✅ Need cross-organizational interoperability
-✅ Have established trust relationships
-
 ### Choose Combined If:
 
 ✅ Need defense-in-depth
@@ -930,9 +832,9 @@ export SYBIL_MULTI_PARTY_VOUCHING_REQUIRED=3
 ```bash
 export SYBIL_RESISTANCE=invitation
 export SYBIL_INVITE_PER_USER=3
-export SYBIL_INVITE_COOLDOWN_SECS=86400  # 24 hours
-export SYBIL_INVITE_NEW_USER_WAIT_SECS=7776000  # 90 days
-export SYBIL_INVITE_EXPIRES_SECS=604800  # 7 days (must use quickly)
+export SYBIL_INVITE_COOLDOWN=1d
+export SYBIL_INVITE_NEW_USER_WAIT=90d
+export SYBIL_INVITE_EXPIRES=7d
 ```
 
 ### Public API (Moderate Protection)
@@ -946,7 +848,7 @@ export SYBIL_POW_DIFFICULTY=24  # ~10-30 seconds
 
 ```bash
 export SYBIL_RESISTANCE=rate_limit
-export SYBIL_RATE_LIMIT_SECS=3600  # One token per hour
+export SYBIL_RATE_LIMIT=1h
 ```
 
 ### Layered Defense
@@ -954,27 +856,14 @@ export SYBIL_RATE_LIMIT_SECS=3600  # One token per hour
 ```bash
 export SYBIL_RESISTANCE=combined
 export SYBIL_POW_DIFFICULTY=20  # Light PoW
-export SYBIL_RATE_LIMIT_SECS=3600  # Plus rate limiting
+export SYBIL_RATE_LIMIT=1h  # Plus rate limiting
 ```
-
----
-
-## Future Mechanisms
-
-**Roadmap:**
-- [ ] WebAuthn (hardware keys)
-- [ ] Email verification (one-time codes)
-- [ ] Phone verification (SMS codes)
-- [ ] Proof of humanity (hCaptcha, reCAPTCHA)
-- [ ] Social proof (Twitter, GitHub verification)
-- [ ] Economic bonds (stake tokens)
 
 ---
 
 ## Related Documentation
 
 - [Configuration](CONFIGURATION.md) - Environment variables for all mechanisms
-- [Federation](FEDERATION.md) - Cross-issuer trust and interoperability
 - [WebAuthn](WEBAUTHN.md) - Hardware-backed authentication
 - [Security Model](SECURITY.md) - Threat model and guarantees
 - [API Reference](API.md) - Sybil proof formats

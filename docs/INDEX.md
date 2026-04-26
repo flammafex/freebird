@@ -1,6 +1,6 @@
 # 📚 Freebird Documentation
 
-Complete guide to deploying and using Freebird's anonymous credential system.
+Complete guide to deploying and using Freebird's anonymous authorization system.
 
 ---
 
@@ -20,8 +20,8 @@ Complete guide to deploying and using Freebird's anonymous credential system.
 
 | Document | Purpose |
 |----------|---------|
-| [How It Works](HOW_IT_WORKS.md) | VOPRF protocol and cryptography |
-| [Multi-Issuer Federation](FEDERATION.md) | Signature-based tokens & federation |
+| [How It Works](HOW_IT_WORKS.md) | V4 private and V5 public token flows |
+| [Issuer Trust](FEDERATION.md) | Minimal issuer trust and key configuration |
 | [Security Model](SECURITY.md) | Threat model and guarantees |
 | [Sybil Resistance](SYBIL_RESISTANCE.md) | Compare all mechanisms |
 
@@ -51,7 +51,7 @@ Complete guide to deploying and using Freebird's anonymous credential system.
 |----------|---------|
 | [Invitation System](SYBIL_RESISTANCE.md) | Trust-based Sybil resistance |
 | [WebAuthn](WEBAUTHN.md) | Hardware-backed authentication |
-| [HSM Hybrid Mode](HSM_HYBRID_MODE.md) | Hardware security modules |
+| [HSM Status](HSM_HYBRID_MODE.md) | Current HSM limitations and storage guidance |
 | [NIP-VOPRF](NIP-VOPRF.md) | Nostr integration |
 
 ---
@@ -80,7 +80,7 @@ Managing invitation-based communities:
 
 **Installation & Setup**: [Quick Start](QUICKSTART.md) • [Configuration](CONFIGURATION.md) • [Production](PRODUCTION.md)
 
-**Cryptography**: [How It Works](HOW_IT_WORKS.md) • [Security Model](SECURITY.md) • [Key Management](KEY_MANAGEMENT.md) • [Federation](FEDERATION.md)
+**Cryptography**: [How It Works](HOW_IT_WORKS.md) • [Security Model](SECURITY.md) • [Key Management](KEY_MANAGEMENT.md) • [Issuer Trust](FEDERATION.md)
 
 **Sybil Resistance**: [Overview](SYBIL_RESISTANCE.md) • [Invitation System](SYBIL_RESISTANCE.md) • [WebAuthn](WEBAUTHN.md)
 
@@ -96,7 +96,8 @@ Managing invitation-based communities:
 
 **Standards:**
 - [VOPRF RFC Draft](https://datatracker.ietf.org/doc/draft-irtf-cfrg-voprf/)
-- [Privacy Pass Protocol](https://datatracker.ietf.org/doc/draft-ietf-privacypass-protocol/)
+- [Privacy Pass Architecture](https://www.rfc-editor.org/rfc/rfc9576.html)
+- [RSA Blind Signatures](https://www.rfc-editor.org/rfc/rfc9474.html)
 - [RFC 9380: Hash-to-Curve](https://datatracker.ietf.org/doc/rfc9380/)
 
 **Related Projects:**

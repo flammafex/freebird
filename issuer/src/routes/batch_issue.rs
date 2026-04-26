@@ -37,7 +37,6 @@ use rayon::prelude::*;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
-use time::OffsetDateTime;
 use tracing::{debug, error, info, instrument, warn};
 // / Maximum batch size to prevent memory exhaustion
 // /
@@ -71,7 +70,6 @@ fn compute_throughput(successful: usize, total_time_ms: u64) -> f64 {
         (successful as f64 / total_time_ms as f64) * 1000.0
     }
 }
-
 
 impl BatchMetrics {
     fn log(&self, batch_size: usize) {
@@ -132,28 +130,15 @@ fn validate_blinded_element(blinded_b64: &str) -> Result<Vec<u8>, String> {
 async fn evaluate_token(
     voprf: &MultiKeyVoprfCore,
     blinded_b64: &str,
-    exp: i64,
     issuer_id: &str,
 ) -> TokenResult {
     match voprf.evaluate_b64(blinded_b64).await {
         Ok(eval_result) => {
             let kid = eval_result.kid;
-            // Sign metadata (V3: metadata only, no token_bytes)
-            match voprf.sign_token_metadata(&kid, exp, issuer_id).await {
-                Ok(sig) => {
-                    let sig_b64 = Base64UrlUnpadded::encode_string(&sig);
-                    TokenResult::Success {
-                        token: eval_result.token,
-                        sig: sig_b64,
-                        kid,
-                        exp,
-                        issuer_id: issuer_id.to_string(),
-                    }
-                }
-                Err(e) => TokenResult::Error {
-                    message: format!("signature generation failed: {}", e),
-                    code: "signature_generation_failed".to_string(),
-                },
+            TokenResult::Success {
+                token: eval_result.token,
+                kid,
+                issuer_id: issuer_id.to_string(),
             }
         }
         Err(e) => TokenResult::Error {
@@ -293,8 +278,6 @@ pub async fn handle_batch(
     // --- PARALLEL VOPRF EVALUATION ---
     let voprf_start = Instant::now();
 
-    // Calculate expiration once for all tokens
-    let exp = OffsetDateTime::now_utc().unix_timestamp() + state.exp_sec as i64;
     let issuer_id = state.issuer_id.clone();
 
     // Choose processing strategy based on batch size
@@ -311,7 +294,7 @@ pub async fn handle_batch(
             match validate_blinded_element(blinded_b64) {
                 Ok(_) => {
                     // Evaluate VOPRF
-                    results.push(evaluate_token(&voprf, blinded_b64, exp, &issuer_id).await);
+                    results.push(evaluate_token(&voprf, blinded_b64, &issuer_id).await);
                 }
                 Err(e) => {
                     results.push(TokenResult::Error {
@@ -346,7 +329,7 @@ pub async fn handle_batch(
                     Ok(_) => {
                         // Use blocking task to await async evaluation
                         runtime_handle.block_on(async {
-                            evaluate_token(&voprf, &req.blinded_elements[idx], exp, &issuer_id).await
+                            evaluate_token(&voprf, &req.blinded_elements[idx], &issuer_id).await
                         })
                     }
                     Err(e) => TokenResult::Error {

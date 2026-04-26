@@ -128,7 +128,7 @@ REQUIRE_TLS=true
 BEHIND_PROXY=true
 
 # Issuer Configuration
-ISSUER_ID=issuer:prod:v1
+ISSUER_ID=issuer:prod:v4
 ADMIN_API_KEY=$(openssl rand -base64 32)
 EPOCH_DURATION_SEC=86400
 SYBIL_RESISTANCE=invitation
@@ -263,7 +263,7 @@ Key environment variables in `.env`:
 
 ```bash
 # Issuer
-ISSUER_ID=issuer:prod:v1              # Unique issuer identifier
+ISSUER_ID=issuer:prod:v4              # Unique issuer identifier
 BIND_ADDR=0.0.0.0:8081                # Issuer listening address
 ADMIN_API_KEY=<32+ char random key>   # Admin API authentication
 REQUIRE_TLS=true                       # Enforce TLS in production
@@ -273,7 +273,6 @@ SYBIL_RESISTANCE=invitation           # Sybil resistance mode
 # Verifier
 ISSUER_URL=http://issuer:8081/...     # Issuer metadata endpoint
 REDIS_URL=redis://redis:6379          # Redis connection
-MAX_CLOCK_SKEW_SECS=300               # Clock tolerance
 ```
 
 ### Scaling Docker Deployments
@@ -722,20 +721,7 @@ sudo systemctl start haveged
 # Or use scripts/validate-deployment.sh --fix-entropy
 ```
 
-#### 2. Clock Skew
-
-```bash
-# Check time sync
-timedatectl
-
-# Sync with NTP
-sudo ntpdate -s time.nist.gov
-
-# Verify with verifier
-curl http://localhost:8082/v1/check
-```
-
-#### 3. Redis Connection Issues
+#### 2. Redis Connection Issues
 
 ```bash
 # Test Redis connectivity

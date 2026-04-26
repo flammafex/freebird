@@ -64,18 +64,6 @@ impl VoprfCore {
         })
     }
 
-    /// Sign token metadata using ECDSA (for federation support)
-    pub async fn sign_token_metadata(
-        &self,
-        kid: &str,
-        exp: i64,
-        issuer_id: &str,
-    ) -> Result<[u8; 64]> {
-        self.provider
-            .sign_token_metadata(kid, exp, issuer_id)
-            .await
-    }
-
     pub async fn evaluate_b64(&self, blinded_b64: &str) -> Result<String> {
         debug!("🔍 evaluate_b64 called ({} chars)", blinded_b64.len());
 
@@ -134,7 +122,7 @@ mod tests {
 
     fn make_core() -> VoprfCore {
         let sk = [1u8; 32];
-        let ctx = b"freebird:v1";
+        let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
         let server = freebird_crypto::Server::from_secret_key(sk, ctx).unwrap();
         let pk = server.public_key_sec1_compressed();
         let pubkey_b64 = Base64UrlUnpadded::encode_string(&pk);
@@ -152,7 +140,7 @@ mod tests {
     #[test]
     fn test_new_zero_key_fails() {
         let sk = [0u8; 32];
-        let ctx = b"freebird:v1";
+        let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
         let pubkey_b64 = "dummy".to_string();
         let kid = "kid".to_string();
         let result = VoprfCore::new(sk, pubkey_b64, kid, ctx);
@@ -168,13 +156,13 @@ mod tests {
     #[test]
     fn test_context_roundtrip() {
         let core = make_core();
-        assert_eq!(core.context(), b"freebird:v1");
+        assert_eq!(core.context(), freebird_crypto::VOPRF_CONTEXT_V4);
     }
 
     #[tokio::test]
     async fn test_evaluate_b64_valid() {
         let sk = [1u8; 32];
-        let ctx = b"freebird:v1";
+        let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
         let server = freebird_crypto::Server::from_secret_key(sk, ctx).unwrap();
         let pk = server.public_key_sec1_compressed();
         let pubkey_b64 = Base64UrlUnpadded::encode_string(&pk);
@@ -205,34 +193,5 @@ mod tests {
         let bad_input = Base64UrlUnpadded::encode_string(&[0xAAu8; 10]);
         let result = core.evaluate_b64(&bad_input).await;
         assert!(result.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_sign_token_metadata_returns_64_bytes() {
-        let core = make_core();
-        let sig = core
-            .sign_token_metadata("test-kid-001", 1700000000, "test-issuer")
-            .await
-            .unwrap();
-        assert_eq!(sig.len(), 64);
-    }
-
-    #[tokio::test]
-    async fn test_sign_token_metadata_verifiable() {
-        let sk = [1u8; 32];
-        let ctx = b"freebird:v1";
-        let server = freebird_crypto::Server::from_secret_key(sk, ctx).unwrap();
-        let pk = server.public_key_sec1_compressed();
-        let pubkey_b64 = Base64UrlUnpadded::encode_string(&pk);
-        let kid = "test-kid-001".to_string();
-        let core = VoprfCore::new(sk, pubkey_b64, kid, ctx).unwrap();
-
-        let kid = "test-kid-001";
-        let exp = 1700000000i64;
-        let issuer_id = "test-issuer";
-
-        let sig = core.sign_token_metadata(kid, exp, issuer_id).await.unwrap();
-        let valid = freebird_crypto::verify_token_signature(&pk, &sig, kid, exp, issuer_id);
-        assert!(valid, "signature should verify against issuer public key");
     }
 }

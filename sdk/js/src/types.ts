@@ -4,8 +4,12 @@
 export interface ClientConfig {
   /** The base URL of the issuer (e.g. "https://issuer.example.com") */
   issuerUrl: string;
-  /** Optional: The base URL of the verifier (e.g. "https://verifier.example.com") */
+  /** The base URL of the verifier (e.g. "https://verifier.example.com") */
   verifierUrl?: string;
+  /** Optional verifier scope override when verifierUrl is unavailable. */
+  verifierId?: string;
+  /** Optional audience override when verifierUrl is unavailable. */
+  audience?: string;
 }
 
 /**
@@ -17,8 +21,50 @@ export interface IssuerMetadata {
     suite: string;
     kid: string;
     pubkey: string; // Base64url encoded SEC1 compressed point
-    exp_sec: number;
   };
+  public?: {
+    token_type: string;
+    token_key_id: string;
+    rfc9474_variant: string;
+    modulus_bits: number;
+    spend_policy: string;
+  };
+}
+
+export interface PublicKeyInfo {
+  token_key_id: string;
+  token_type: string;
+  rfc9474_variant: string;
+  modulus_bits: number;
+  pubkey_spki_b64: string;
+  issuer_id: string;
+  valid_from: number;
+  valid_until: number;
+  audience?: string;
+  spend_policy: string;
+  max_uses?: number;
+}
+
+export interface KeyDiscoveryMetadata {
+  issuer_id: string;
+  current_epoch: number;
+  valid_epochs: number[];
+  epoch_duration_sec: number;
+  voprf: {
+    suite: string;
+    kid: string;
+    pubkey: string;
+  };
+  public: PublicKeyInfo[];
+}
+
+/**
+ * Represents the .well-known/verifier metadata
+ */
+export interface VerifierMetadata {
+  verifier_id: string;
+  audience: string;
+  scope_digest_b64: string;
 }
 
 /**
@@ -88,14 +134,6 @@ export type SybilProof =
       timestamp: number;
     }
   | {
-      type: 'federated_trust';
-      source_issuer_id: string;
-      source_token_b64: string;
-      token_exp: number;
-      token_issued_at?: number;
-      trust_path: string[];
-    }
-  | {
       type: 'multi';
       proofs: SybilProof[];
     }
@@ -119,12 +157,32 @@ export interface IssueRequest {
 export interface IssueResponse {
   /** Base64url encoded VOPRF evaluation [VERSION|A|B|DLEQ_proof] (131 bytes) */
   token: string;
-  /** Base64url encoded ECDSA signature over metadata (64 bytes) */
-  sig: string;
   /** Key ID used for issuance */
   kid: string;
-  /** Expiration timestamp (Unix seconds) */
-  exp: number;
+  /** Issuer identifier */
+  issuer_id: string;
+  /** Sybil verification details (optional) */
+  sybil_info?: {
+    required: boolean;
+    passed: boolean;
+    cost: number;
+  };
+}
+
+export interface PublicIssueRequest {
+  /** Base64url encoded RFC 9474 blinded message */
+  blinded_msg_b64: string;
+  /** Strict lowercase hex token key ID */
+  token_key_id?: string;
+  /** Sybil resistance proof if required */
+  sybil_proof?: SybilProof;
+}
+
+export interface PublicIssueResponse {
+  /** Base64url encoded RFC 9474 blind signature */
+  blind_signature_b64: string;
+  /** Strict lowercase hex token key ID */
+  token_key_id: string;
   /** Issuer identifier */
   issuer_id: string;
   /** Sybil verification details (optional) */
@@ -150,10 +208,14 @@ export interface BlindState {
  * A complete, unblinded token ready for use.
  */
 export interface FreebirdToken {
-  /** Base64url-encoded V3 redemption token (self-contained) */
+  /** Base64url-encoded redemption token */
   tokenValue: string;
-  /** Token expiration time (extracted for convenience) */
-  expiration: number;
   /** The Issuer ID this token belongs to (extracted for convenience) */
   issuerId: string;
+  /** Token wire version */
+  version?: 4 | 5;
+  /** V4 key ID used for issuance */
+  kid?: string;
+  /** V5 public bearer token key ID */
+  tokenKeyId?: string;
 }

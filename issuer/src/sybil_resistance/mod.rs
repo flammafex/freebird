@@ -23,7 +23,6 @@ use anyhow::{anyhow, Result};
 use freebird_common::api::SybilProof;
 use std::sync::Arc;
 
-pub mod federated_trust;
 pub mod invitation;
 pub mod multi_party_vouching;
 pub mod progressive_trust;
@@ -34,7 +33,6 @@ pub mod rate_limit;
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
 #[cfg(feature = "human-gate-webauthn")]
 pub use crate::webauthn::gate::WebAuthnGate;
-pub use federated_trust::{FederatedTrustConfig, FederatedTrustSystem};
 pub use invitation::ClientData;
 pub use multi_party_vouching::{MultiPartyVouchingConfig, MultiPartyVouchingSystem};
 pub use progressive_trust::{ProgressiveTrustConfig, ProgressiveTrustSystem, TrustLevel};
@@ -380,16 +378,19 @@ mod tests {
         assert!(threshold.verify(&duplicate).is_err());
 
         // Distinct proofs should satisfy both mechanisms.
+        let timestamp2 = current_timestamp();
+        let (nonce2, _) =
+            ProofOfWork::compute(16, "test-threshold-distinct", timestamp2).expect("pow");
         let distinct = SybilProof::Multi {
             proofs: vec![
                 SybilProof::ProofOfWork {
-                    nonce,
-                    input: "test-threshold".to_string(),
-                    timestamp,
+                    nonce: nonce2,
+                    input: "test-threshold-distinct".to_string(),
+                    timestamp: timestamp2,
                 },
                 SybilProof::RateLimit {
                     client_id: "client-1".to_string(),
-                    timestamp,
+                    timestamp: timestamp2,
                 },
             ],
         };

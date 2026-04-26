@@ -24,12 +24,8 @@ pub struct IssueReq {
 pub struct IssueResp {
     /// Base64url-encoded VOPRF evaluation [VERSION|A|B|DLEQ_proof] (131 bytes)
     pub token: String,
-    /// Base64url-encoded ECDSA signature over metadata (64 bytes)
-    pub sig: String,
     /// Key identifier used for issuance
     pub kid: String,
-    /// Expiration timestamp (Unix seconds)
-    pub exp: i64,
     /// Issuer identifier
     pub issuer_id: String,
     /// Optional Sybil resistance verification info
@@ -75,9 +71,7 @@ pub struct BatchIssueResp {
 pub enum TokenResult {
     Success {
         token: String,
-        sig: String,
         kid: String,
-        exp: i64,
         issuer_id: String,
     },
     Error {
@@ -87,12 +81,69 @@ pub enum TokenResult {
 }
 
 // ============================================================================
+// V5 Public Bearer Pass Issuance Types
+// ============================================================================
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicIssueReq {
+    /// RFC 9474 blinded message for a V5 public bearer pass.
+    pub blinded_msg_b64: String,
+
+    /// Optional active token key requested by the client.
+    #[serde(default)]
+    pub token_key_id: Option<String>,
+
+    /// Optional Sybil resistance proof.
+    #[serde(default)]
+    pub sybil_proof: Option<SybilProof>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PublicIssueResp {
+    /// Base64url-encoded RFC 9474 blind signature.
+    pub blind_signature_b64: String,
+    /// Strict lowercase hex SHA-256 digest of the V5 SPKI public key.
+    pub token_key_id: String,
+    /// Issuer identifier embedded in the client-finalized V5 token.
+    pub issuer_id: String,
+    /// Optional Sybil resistance verification info.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sybil_info: Option<SybilInfo>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublicBatchIssueReq {
+    pub blinded_msgs: Vec<String>,
+
+    #[serde(default)]
+    pub token_key_id: Option<String>,
+
+    #[serde(default)]
+    pub sybil_proof: Option<SybilProof>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PublicBatchIssueResp {
+    pub blind_signatures: Vec<String>,
+    pub token_key_id: String,
+    pub issuer_id: String,
+    pub successful: usize,
+    pub failed: usize,
+    pub processing_time_ms: u64,
+    pub throughput: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sybil_info: Option<SybilInfo>,
+}
+
+// ============================================================================
 // Verification Types
 // ============================================================================
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct VerifyReq {
-    /// Base64url-encoded V3 redemption token (self-contained)
+    /// Base64url-encoded V4 private-verification redemption token.
     pub token_b64: String,
 }
 
@@ -105,6 +156,14 @@ pub struct VerifyResp {
 
     #[serde(default)]
     pub verified_at: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct VerifierMetadataResp {
+    pub verifier_id: String,
+    pub audience: String,
+    /// Base64url-encoded SHA-256 scope digest clients must bind into V4 token input.
+    pub scope_digest_b64: String,
 }
 
 // ============================================================================
@@ -202,13 +261,6 @@ pub enum SybilProof {
         hmac_proof: String,       // HMAC(secret, all fields)
         timestamp: i64,           // Unix timestamp of proof generation
     },
-    FederatedTrust {
-        source_issuer_id: String, // ID of the issuer that issued the source token
-        source_token_b64: String, // Base64url-encoded token from source issuer
-        token_exp: i64,           // Expiration timestamp of source token
-        token_issued_at: Option<i64>, // When the source token was issued (for age validation)
-        trust_path: Vec<String>,  // Trust path from source to us (optional)
-    },
     /// Multiple proofs for AND/threshold combination modes
     Multi {
         proofs: Vec<SybilProof>,
@@ -227,6 +279,8 @@ pub struct KeyDiscoveryResp {
     pub valid_epochs: Vec<u32>,
     pub epoch_duration_sec: u64,
     pub voprf: VoprfKeyInfo,
+    #[serde(default)]
+    pub public: Vec<PublicKeyInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -234,5 +288,21 @@ pub struct VoprfKeyInfo {
     pub suite: String,
     pub kid: String,
     pub pubkey: String,
-    pub exp_sec: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PublicKeyInfo {
+    pub token_key_id: String,
+    pub token_type: String,
+    pub rfc9474_variant: String,
+    pub modulus_bits: u16,
+    pub pubkey_spki_b64: String,
+    pub issuer_id: String,
+    pub valid_from: i64,
+    pub valid_until: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    pub spend_policy: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_uses: Option<u32>,
 }

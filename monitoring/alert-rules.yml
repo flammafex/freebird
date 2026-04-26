@@ -155,16 +155,6 @@ groups:
           summary: "High token verification failure rate"
           description: "More than 5% of verification attempts are failing"
 
-      - alert: ClockSkewDetected
-        expr: freebird_verification_clock_skew_rejections > 0
-        for: 5m
-        labels:
-          severity: warning
-          component: verification
-        annotations:
-          summary: "Clock skew causing verification failures"
-          description: "{{ $value }} verification(s) rejected due to clock skew"
-
       # ====================================================================
       # Redis Alerts
       # ====================================================================

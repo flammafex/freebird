@@ -45,8 +45,6 @@ pub struct AdminState {
     pub invitation_system: Arc<InvitationSystem>,
     /// Reference to the multi-key VOPRF core
     pub multi_key_voprf: Arc<MultiKeyVoprfCore>,
-    /// Reference to the federation store
-    pub federation_store: crate::federation_store::FederationStore,
     /// Reference to the audit log
     pub audit_log: Arc<AuditLog>,
     /// Admin API key for authentication
@@ -289,17 +287,6 @@ pub enum SybilModeSettings {
         new_user_wait_secs: u64,
         persistence_path: String,
     },
-    FederatedTrust {
-        enabled: bool,
-        max_depth: u32,
-        min_paths: u32,
-        require_direct: bool,
-        min_trust_level: u8,
-        cache_ttl: String,
-        cache_ttl_secs: u64,
-        trusted_roots_count: usize,
-        blocked_issuers_count: usize,
-    },
     WebAuthn {
         max_proof_age: Option<String>,
         max_proof_age_secs: Option<i64>,
@@ -426,20 +413,6 @@ impl SybilConfigSummary {
                         .to_string(),
                 },
             ),
-            "federated_trust" => (
-                "Federated Trust - cross-issuer trust verification".to_string(),
-                SybilModeSettings::FederatedTrust {
-                    enabled: config.federated_trust_enabled,
-                    max_depth: config.federated_trust_max_depth,
-                    min_paths: config.federated_trust_min_paths,
-                    require_direct: config.federated_trust_require_direct,
-                    min_trust_level: config.federated_trust_min_trust_level,
-                    cache_ttl: format_duration(config.federated_trust_cache_ttl_secs),
-                    cache_ttl_secs: config.federated_trust_cache_ttl_secs,
-                    trusted_roots_count: config.federated_trust_trusted_roots.len(),
-                    blocked_issuers_count: config.federated_trust_blocked_issuers.len(),
-                },
-            ),
             "webauthn" => (
                 "WebAuthn - hardware-backed authentication".to_string(),
                 SybilModeSettings::WebAuthn {
@@ -540,32 +513,6 @@ pub struct CleanupKeysResponse {
 pub struct ForceRemoveKeyResponse {
     pub ok: bool,
     pub kid: String,
-    pub message: String,
-}
-
-/// Request to add a vouch
-#[derive(Debug, Deserialize)]
-pub struct AddVouchRequest {
-    pub vouch: freebird_common::federation::Vouch,
-}
-
-/// Request to add a revocation
-#[derive(Debug, Deserialize)]
-pub struct AddRevocationRequest {
-    pub revocation: freebird_common::federation::Revocation,
-}
-
-/// Response for vouch operations
-#[derive(Debug, Serialize)]
-pub struct VouchResponse {
-    pub ok: bool,
-    pub message: String,
-}
-
-/// Response for revocation operations
-#[derive(Debug, Serialize)]
-pub struct RevocationResponse {
-    pub ok: bool,
     pub message: String,
 }
 
@@ -952,9 +899,7 @@ async fn verify_api_key_with_rate_limit(
     let provided_key = headers
         .get("x-admin-key")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| {
-            AdminError::Unauthorized
-        })?;
+        .ok_or_else(|| AdminError::Unauthorized)?;
 
     if !constant_time_key_verify(&state.api_key, provided_key) {
         state.rate_limiter.record_failure(ip).await;
@@ -1891,143 +1836,6 @@ pub async fn force_remove_key_handler(
 }
 
 // ============================================================================
-// Federation Management Handlers
-// ============================================================================
-
-/// Add a vouch to the federation store
-async fn add_vouch_handler(
-    State(state): State<Arc<AdminState>>,
-    headers: HeaderMap,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
-    Json(req): Json<AddVouchRequest>,
-) -> Result<Json<VouchResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
-    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
-
-    state
-        .federation_store
-        .add_vouch(req.vouch.clone())
-        .await
-        .map_err(|e| AdminError::InvalidRequest(e.to_string()))?;
-
-    info!("Admin: added vouch for {}", req.vouch.vouched_issuer_id);
-
-    Ok(Json(VouchResponse {
-        ok: true,
-        message: format!(
-            "Vouch for {} added successfully",
-            req.vouch.vouched_issuer_id
-        ),
-    }))
-}
-
-/// Remove a vouch from the federation store
-async fn remove_vouch_handler(
-    State(state): State<Arc<AdminState>>,
-    headers: HeaderMap,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
-    Path(issuer_id): Path<String>,
-) -> Result<Json<VouchResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
-    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
-
-    state
-        .federation_store
-        .remove_vouch(&issuer_id)
-        .await
-        .map_err(|e| AdminError::UserNotFound(e.to_string()))?;
-
-    info!("Admin: removed vouch for {}", issuer_id);
-
-    Ok(Json(VouchResponse {
-        ok: true,
-        message: format!("Vouch for {} removed successfully", issuer_id),
-    }))
-}
-
-/// List all vouches
-async fn list_vouches_handler(
-    State(state): State<Arc<AdminState>>,
-    headers: HeaderMap,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
-) -> Result<Json<Vec<freebird_common::federation::Vouch>>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
-    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
-
-    let vouches = state.federation_store.get_vouches().await;
-
-    Ok(Json(vouches))
-}
-
-/// Add a revocation to the federation store
-async fn add_revocation_handler(
-    State(state): State<Arc<AdminState>>,
-    headers: HeaderMap,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
-    Json(req): Json<AddRevocationRequest>,
-) -> Result<Json<RevocationResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
-    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
-
-    state
-        .federation_store
-        .add_revocation(req.revocation.clone())
-        .await
-        .map_err(|e| AdminError::InvalidRequest(e.to_string()))?;
-
-    info!(
-        "Admin: added revocation for {}",
-        req.revocation.revoked_issuer_id
-    );
-
-    Ok(Json(RevocationResponse {
-        ok: true,
-        message: format!(
-            "Revocation for {} added successfully",
-            req.revocation.revoked_issuer_id
-        ),
-    }))
-}
-
-/// Remove a revocation from the federation store
-async fn remove_revocation_handler(
-    State(state): State<Arc<AdminState>>,
-    headers: HeaderMap,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
-    Path(issuer_id): Path<String>,
-) -> Result<Json<RevocationResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
-    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
-
-    state
-        .federation_store
-        .remove_revocation(&issuer_id)
-        .await
-        .map_err(|e| AdminError::UserNotFound(e.to_string()))?;
-
-    info!("Admin: removed revocation for {}", issuer_id);
-
-    Ok(Json(RevocationResponse {
-        ok: true,
-        message: format!("Revocation for {} removed successfully", issuer_id),
-    }))
-}
-
-/// List all revocations
-async fn list_revocations_handler(
-    State(state): State<Arc<AdminState>>,
-    headers: HeaderMap,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
-) -> Result<Json<Vec<freebird_common::federation::Revocation>>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
-    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
-
-    let revocations = state.federation_store.get_revocations().await;
-
-    Ok(Json(revocations))
-}
-
-// ============================================================================
 // Export Handlers
 // ============================================================================
 
@@ -2437,7 +2245,6 @@ pub async fn webauthn_stats_handler(
 pub fn admin_router(
     invitation_system: Arc<InvitationSystem>,
     multi_key_voprf: Arc<MultiKeyVoprfCore>,
-    federation_store: crate::federation_store::FederationStore,
     audit_log: Arc<AuditLog>,
     api_key: String,
     behind_proxy: bool,
@@ -2449,7 +2256,6 @@ pub fn admin_router(
     let state = Arc::new(AdminState {
         invitation_system,
         multi_key_voprf,
-        federation_store,
         audit_log,
         api_key,
         session_key,
@@ -2467,7 +2273,6 @@ pub fn admin_router(
 pub fn admin_router(
     invitation_system: Arc<InvitationSystem>,
     multi_key_voprf: Arc<MultiKeyVoprfCore>,
-    federation_store: crate::federation_store::FederationStore,
     audit_log: Arc<AuditLog>,
     api_key: String,
     behind_proxy: bool,
@@ -2478,7 +2283,6 @@ pub fn admin_router(
     let state = Arc::new(AdminState {
         invitation_system,
         multi_key_voprf,
-        federation_store,
         audit_log,
         api_key,
         session_key,
@@ -2541,31 +2345,6 @@ fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
         )
         .route("/export/users", axum::routing::get(export_users_handler))
         .route("/export/audit", axum::routing::get(export_audit_handler))
-        // Federation management routes
-        .route(
-            "/federation/vouches",
-            axum::routing::get(list_vouches_handler),
-        )
-        .route(
-            "/federation/vouches",
-            axum::routing::post(add_vouch_handler),
-        )
-        .route(
-            "/federation/vouches/:issuer_id",
-            axum::routing::delete(remove_vouch_handler),
-        )
-        .route(
-            "/federation/revocations",
-            axum::routing::get(list_revocations_handler),
-        )
-        .route(
-            "/federation/revocations",
-            axum::routing::post(add_revocation_handler),
-        )
-        .route(
-            "/federation/revocations/:issuer_id",
-            axum::routing::delete(remove_revocation_handler),
-        )
         // WebAuthn admin routes
         .route(
             "/webauthn/credentials",

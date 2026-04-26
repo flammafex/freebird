@@ -20,7 +20,7 @@ We've accepted total surveillance as the price of functional systems. This is a 
 
 ## The Solution
 
-Freebird uses **VOPRF (Verifiable Oblivious Pseudorandom Function)** cryptography to enable:
+Freebird uses blind issuance cryptography to enable:
 
 - ✅ **Prove you're authorized without revealing who you are**
 - ✅ **Rate limiting without tracking**
@@ -28,7 +28,7 @@ Freebird uses **VOPRF (Verifiable Oblivious Pseudorandom Function)** cryptograph
 - ✅ **Spam prevention without surveillance**
 - ✅ **One person, one vote—anonymously**
 
-This isn't just "privacy-preserving rate limiting." It's a new primitive for authorization that makes identity optional rather than mandatory.
+The current prototype has two token modes: V4 private-verification tokens for verifier-bound privacy, and V5 public bearer passes for public-key verification by trusted communities.
 
 ---
 ## 🖥️ System Requirements
@@ -80,10 +80,10 @@ Resources depend on your anticipated user base and Sybil resistance complexity.
 │  User   │                    │ Issuer  │                    │ Verifier │
 └────┬────┘                    └────┬────┘                    └────┬─────┘
      │                              │                              │
-     │  1. Blind(input)             │                              │
+     │  1. Blind token input        │                              │
      ├──────────────────────────────►                              │
      │                              │                              │
-     │  2. Evaluate(blinded) + DLEQ │                              │
+     │  2. Blind-sign / evaluate    │                              │
      │◄──────────────────────────────                              │
      │                              │                              │
      │  3. Finalize → token         │                              │
@@ -97,19 +97,21 @@ Resources depend on your anticipated user base and Sybil resistance complexity.
 
 ### Cryptographic Properties
 
-- **Unlinkability**: Mathematical guarantee via VOPRF—issuer cannot correlate token issuance with usage.
+- **Unlinkability**: Blind issuance prevents the issuer from seeing the final token it signs.
 - **Unforgeability**: Only the issuer's private key can create valid tokens.
-- **Verifiability**: DLEQ proofs (client-side) ensure correct evaluation; ECDSA signatures (verifier-side) authenticate token metadata.
+- **Two Verification Modes**: V4 uses private VOPRF verification; V5 uses public RFC 9474 blind RSA signatures.
 - **Single-Use**: Nullifier-based replay protection ensures tokens are spent exactly once.
 
 ### Implementation Status
 
 **Core Features:**
 - ✅ **P-256 VOPRF** with DLEQ proofs
+- ✅ **V4 Private Option**: Verifier-bound private verification with local authenticator recomputation
+- ✅ **V5 Public Option**: RFC 9474 public bearer passes with strict `single_use` key metadata
 - ✅ **Batch Issuance**: High-throughput parallel issuance using `rayon`
 - ✅ **Key Rotation**: Zero-downtime rotation with grace periods for deprecated keys
 - ✅ **Storage Backends**: In-memory (dev) and Redis (prod) support
-- ✅ **Multi-Issuer Federation**: Signature-based tokens enable verifiers to authenticate tokens from multiple issuers (see [`FEDERATION.md`](docs/FEDERATION.md))
+- ✅ **Explicit Issuer Trust**: Verifiers accept only configured issuers, with V4 private keys or V5 public key metadata (see [`FEDERATION.md`](docs/FEDERATION.md))
 - ✅ **Unified Admin Dashboard**: Single-page UI for both issuer and verifier management
 - ✅ **Admin CLI**: `freebird-cli` command-line tool for scripting and automation
 - ✅ **Admin API**: HTTP endpoints for user management, key rotation, and stats
@@ -140,10 +142,10 @@ import { FreebirdClient } from '@freebird/sdk';
 
 const client = new FreebirdClient({
   issuerUrl: 'https://issuer.example.com',
-  verifierUrl: 'https://verifier.example.com'
+  verifierUrl: 'https://verifier.example.com' // fetches verifier scope metadata
 });
 
-// 1. Initialize (fetch keys)
+// 1. Initialize (fetch issuer keys and verifier scope)
 await client.init();
 
 // 2. Issue an anonymous token
@@ -203,14 +205,9 @@ freebird-cli invites create <user> --count 5  # Create invitations
 freebird-cli invites grant <user> --count 3   # Grant invite slots
 
 # Key Management
-freebird-cli keys list           # List signing keys
-freebird-cli keys rotate         # Rotate signing key
+freebird-cli keys list           # List VOPRF keys
+freebird-cli keys rotate         # Rotate VOPRF key
 freebird-cli keys cleanup        # Remove expired keys
-
-# Federation
-freebird-cli federation vouches  # List federation vouches
-freebird-cli federation vouch <issuer> --level 5  # Add vouch
-freebird-cli federation revocations  # List revocations
 
 # Data Export
 freebird-cli export users        # Export users to JSON
@@ -268,10 +265,6 @@ Freebird includes a modern, single-page web interface for managing your deployme
 - Comprehensive system activity logs
 - Filter by level (info, warning, error, success)
 - Search logs by keyword
-
-**🤝 Federation Tab:**
-- Manage federation relationships with other issuers
-- View trusted peers and cross-issuer policies
 
 **🔐 WebAuthn Tab:**
 - Register FIDO2 credentials and security keys
@@ -475,37 +468,35 @@ Duration fields support human-readable formats:
 | Minutes | `30m` | 30 minutes |
 | Seconds | `45s` | 45 seconds |
 | Combined | `1d12h` | 1 day and 12 hours |
-| Raw | `3600` | Seconds (backward compatible) |
+| Raw | `3600` | Seconds |
 
 ### Key Configuration Variables
 
 **Issuer:**
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ISSUER_ID` | `issuer:freebird:v1` | Unique identifier for this issuer |
+| `ISSUER_ID` | `issuer:freebird:v4` | Unique identifier for this issuer |
 | `BIND_ADDR` | `0.0.0.0:8081` | Listening address |
 | `SYBIL_RESISTANCE` | `none` | `invitation`, `pow`, `rate_limit`, `webauthn`, `combined`, etc. |
 | `ADMIN_API_KEY` | (None) | Required for Admin API (min 32 chars) |
 | `EPOCH_DURATION` | `1d` | Key rotation epoch duration |
+| `PUBLIC_BEARER_ENABLE` | `true` | Enable V5 public bearer issuance |
+| `PUBLIC_BEARER_SK_PATH` | `public_bearer_sk.der` | V5 RSA blind-signature private key |
+| `PUBLIC_BEARER_METADATA_PATH` | `public_bearer_metadata.json` | Immutable V5 public key metadata |
+| `PUBLIC_BEARER_AUDIENCE` | (None) | Optional V5 audience binding |
 
 **Verifier:**
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `ISSUER_URL` | `http://localhost:8081/.well-known/issuer` | Issuer metadata URL (comma-separated for multiple) |
+| `VERIFIER_ID` | (Required) | Stable verifier scope ID bound into V4 tokens |
+| `VERIFIER_AUDIENCE` | `VERIFIER_ID` | Application/API audience bound into V4 tokens |
 | `REDIS_URL` | (None) | Redis URL for persistent nullifier storage |
-| `MAX_CLOCK_SKEW_SECS` | `300` | Clock skew tolerance (seconds) |
+| `VERIFIER_SK_B64` | (None) | Base64url raw 32-byte key for V4 private verification |
+| `VERIFIER_SK_PATH` | (None) | File path for V4 private verification key material |
+| `VERIFIER_KEYRING_B64` | (None) | JSON map of `kid` to base64url raw keys |
 
-**Trust Policy (Federation):**
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `TRUST_POLICY_ENABLED` | `true` | Enable federation trust graph traversal |
-| `TRUST_POLICY_MAX_DEPTH` | `2` | Maximum hops in trust graph (0 = direct only) |
-| `TRUST_POLICY_MIN_PATHS` | `1` | Minimum independent trust paths required |
-| `TRUST_POLICY_REQUIRE_DIRECT` | `false` | Only accept issuers with direct vouches |
-| `TRUST_POLICY_TRUSTED_ROOTS` | (None) | Comma-separated list of always-trusted issuer IDs |
-| `TRUST_POLICY_BLOCKED_ISSUERS` | (None) | Comma-separated list of blocked issuer IDs |
-
-📖 **See [.env.example](.env.example) for the complete configuration reference** with all 60+ available options.
+📖 **See [.env.example](.env.example) for the complete configuration reference.**
 
 ---
 
@@ -513,8 +504,8 @@ Duration fields support human-readable formats:
 
 ### Guarantees
 
-- ✅ **Cryptographic Unlinkability**: The issuer creates a blind signature. Even if the issuer and verifier collude, they cannot mathematically link the issuance request to the verification request.
-- ✅ **Forward Privacy**: Key rotation ensures that if a key is eventually compromised, past sessions remain secure.
+- ✅ **Cryptographic Unlinkability**: The issuer signs blinded client input and does not see the final token.
+- ✅ **Scoped Privacy Options**: V4 binds tokens to verifier scope; V5 provides public-key verification for self-hosted communities.
 - ✅ **Replay Protection**: The verifier maintains a nullifier set (in Redis or memory) to prevent double-spending.
 - ✅ **No Phone-Home**: The system is fully self-contained.
 
@@ -538,4 +529,3 @@ Copyright 2026 The Carpocratian Church of Commonality and Equality, Inc.
 
 
 🕊️
-

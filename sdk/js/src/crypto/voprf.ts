@@ -1,5 +1,6 @@
 import { p256 } from '@noble/curves/p256';
 import { sha256 } from '@noble/hashes/sha256';
+import { sha384 } from '@noble/hashes/sha512';
 import { concatBytes, bytesToHex, hexToBytes } from '@noble/hashes/utils';
 import * as P256 from './p256.js';
 import { BlindState } from '../types.js';
@@ -9,12 +10,14 @@ const DLEQ_DST_PREFIX = new TextEncoder().encode('DLEQ-P256-v1');
 const COMPRESSED_POINT_LEN = 33;
 const TOKEN_VERSION_V1 = 0x01;
 const TOKEN_VERSION_LEN = 1;
-const TOKEN_SIGNATURE_LEN = 64;
 const PROOF_LEN = 64; // 32 bytes (c) + 32 bytes (s)
-const RAW_TOKEN_LEN_V0 = COMPRESSED_POINT_LEN * 2 + PROOF_LEN; // 130 (legacy, no version byte)
 const RAW_TOKEN_LEN_V1 = TOKEN_VERSION_LEN + COMPRESSED_POINT_LEN * 2 + PROOF_LEN; // 131
-const TOKEN_LEN_V2 = RAW_TOKEN_LEN_V1 + TOKEN_SIGNATURE_LEN; // 195 (VOPRF + signature)
-const REDEMPTION_TOKEN_VERSION_V3 = 0x03;
+const REDEMPTION_TOKEN_VERSION_V4 = 0x04;
+const REDEMPTION_TOKEN_VERSION_V5 = 0x05;
+const PRIVATE_TOKEN_LEN = 32;
+const PUBLIC_BEARER_NONCE_LEN = 32;
+const PUBLIC_BEARER_TOKEN_KEY_ID_LEN = 32;
+const PUBLIC_BEARER_MAX_SIGNATURE_LEN = 512;
 
 /**
  * Blinds the input for the VOPRF protocol.
@@ -54,24 +57,17 @@ export function finalize(
   context: Uint8Array
 ): Uint8Array {
   // 1. Decode inputs
-  const fullTokenBytes = base64UrlToBytes(tokenB64);
+  const tokenBytes = base64UrlToBytes(tokenB64);
   const pubkeyBytes = base64UrlToBytes(issuerPubkeyB64);
-  const tokenBytes =
-    fullTokenBytes.length === TOKEN_LEN_V2
-      ? fullTokenBytes.slice(0, RAW_TOKEN_LEN_V1)
-      : fullTokenBytes;
 
-  if (
-    tokenBytes.length !== RAW_TOKEN_LEN_V1 &&
-    tokenBytes.length !== RAW_TOKEN_LEN_V0
-  ) {
+  if (tokenBytes.length !== RAW_TOKEN_LEN_V1) {
     throw new Error(
-      `Invalid token length: expected one of ${RAW_TOKEN_LEN_V0}, ${RAW_TOKEN_LEN_V1}, ${TOKEN_LEN_V2}; got ${fullTokenBytes.length}`
+      `Invalid token length: expected ${RAW_TOKEN_LEN_V1}; got ${tokenBytes.length}`
     );
   }
 
-  const offset = tokenBytes.length === RAW_TOKEN_LEN_V1 ? TOKEN_VERSION_LEN : 0;
-  if (offset === TOKEN_VERSION_LEN && tokenBytes[0] !== TOKEN_VERSION_V1) {
+  const offset = TOKEN_VERSION_LEN;
+  if (tokenBytes[0] !== TOKEN_VERSION_V1) {
     throw new Error(`Unsupported token version: ${tokenBytes[0]}`);
   }
 
@@ -114,62 +110,226 @@ export function finalize(
 }
 
 /**
- * Builds a V3 redemption token for wire transmission.
- * Format: [version(1) | output(32) | kid_len(1) | kid(var) | exp(8) | issuer_id_len(1) | issuer_id(var) | sig(64)]
+ * Builds the verifier/audience scope digest clients bind into V4 tokens.
+ */
+export function buildScopeDigest(verifierId: string, audience: string): Uint8Array {
+  const verifierIdBytes = new TextEncoder().encode(verifierId);
+  const audienceBytes = new TextEncoder().encode(audience);
+  if (verifierIdBytes.length === 0 || verifierIdBytes.length > 255) {
+    throw new Error('verifier_id must be 1-255 bytes');
+  }
+  if (audienceBytes.length === 0 || audienceBytes.length > 255) {
+    throw new Error('audience must be 1-255 bytes');
+  }
+
+  return sha256(concatBytes(
+    new TextEncoder().encode('freebird:scope:v4'),
+    new Uint8Array([verifierIdBytes.length]),
+    verifierIdBytes,
+    new Uint8Array([audienceBytes.length]),
+    audienceBytes
+  ));
+}
+
+/**
+ * Builds the public input that is blindly issued and privately re-evaluated.
+ */
+export function buildPrivateTokenInput(
+  issuerId: string,
+  kid: string,
+  nonce: Uint8Array,
+  scopeDigest: Uint8Array
+): Uint8Array {
+  const issuerIdBytes = new TextEncoder().encode(issuerId);
+  const kidBytes = new TextEncoder().encode(kid);
+  if (issuerIdBytes.length === 0 || issuerIdBytes.length > 255) {
+    throw new Error('issuer_id must be 1-255 bytes');
+  }
+  if (kidBytes.length === 0 || kidBytes.length > 255) {
+    throw new Error('kid must be 1-255 bytes');
+  }
+  if (nonce.length !== PRIVATE_TOKEN_LEN) throw new Error('nonce must be 32 bytes');
+  if (scopeDigest.length !== PRIVATE_TOKEN_LEN) throw new Error('scope_digest must be 32 bytes');
+
+  return concatBytes(
+    new TextEncoder().encode('freebird:private-token-input:v4'),
+    new Uint8Array([issuerIdBytes.length]),
+    issuerIdBytes,
+    new Uint8Array([kidBytes.length]),
+    kidBytes,
+    nonce,
+    scopeDigest
+  );
+}
+
+/**
+ * Builds a V4 redemption token for wire transmission.
+ * Format: [version(1) | nonce(32) | scope_digest(32) | kid_len(1) | kid(var) | issuer_id_len(1) | issuer_id(var) | authenticator(32)]
  */
 export function buildRedemptionToken(
-  output: Uint8Array,  // 32 bytes (PRF output from finalize)
+  nonce: Uint8Array,
+  scopeDigest: Uint8Array,
   kid: string,
-  exp: bigint,         // i64
   issuerId: string,
-  sig: Uint8Array      // 64 bytes
+  authenticator: Uint8Array
 ): Uint8Array {
   const kidBytes = new TextEncoder().encode(kid);
   const issuerIdBytes = new TextEncoder().encode(issuerId);
   if (kidBytes.length === 0 || kidBytes.length > 255) throw new Error('kid must be 1-255 bytes');
   if (issuerIdBytes.length === 0 || issuerIdBytes.length > 255) throw new Error('issuer_id must be 1-255 bytes');
+  if (nonce.length !== PRIVATE_TOKEN_LEN) throw new Error('nonce must be 32 bytes');
+  if (scopeDigest.length !== PRIVATE_TOKEN_LEN) throw new Error('scope_digest must be 32 bytes');
+  if (authenticator.length !== PRIVATE_TOKEN_LEN) throw new Error('authenticator must be 32 bytes');
 
-  const buf = new Uint8Array(1 + 32 + 1 + kidBytes.length + 8 + 1 + issuerIdBytes.length + 64);
+  const buf = new Uint8Array(1 + 32 + 32 + 1 + kidBytes.length + 1 + issuerIdBytes.length + 32);
   let pos = 0;
-  buf[pos++] = REDEMPTION_TOKEN_VERSION_V3;
-  buf.set(output, pos); pos += 32;
+  buf[pos++] = REDEMPTION_TOKEN_VERSION_V4;
+  buf.set(nonce, pos); pos += 32;
+  buf.set(scopeDigest, pos); pos += 32;
   buf[pos++] = kidBytes.length;
   buf.set(kidBytes, pos); pos += kidBytes.length;
-  const expView = new DataView(buf.buffer, buf.byteOffset + pos, 8);
-  expView.setBigInt64(0, exp);
-  pos += 8;
   buf[pos++] = issuerIdBytes.length;
   buf.set(issuerIdBytes, pos); pos += issuerIdBytes.length;
-  buf.set(sig, pos);
+  buf.set(authenticator, pos);
   return buf;
 }
 
 /**
- * Parses a V3 redemption token from wire bytes.
+ * Parses a V4 redemption token from wire bytes.
  */
 export function parseRedemptionToken(bytes: Uint8Array): {
-  output: Uint8Array;
+  nonce: Uint8Array;
+  scopeDigest: Uint8Array;
   kid: string;
-  exp: bigint;
   issuerId: string;
-  sig: Uint8Array;
+  authenticator: Uint8Array;
 } {
-  if (bytes.length < 109 || bytes.length > 512) throw new Error('invalid token length');
-  if (bytes[0] !== REDEMPTION_TOKEN_VERSION_V3) throw new Error('unsupported token version');
+  if (bytes.length < 101 || bytes.length > 512) throw new Error('invalid token length');
+  if (bytes[0] !== REDEMPTION_TOKEN_VERSION_V4) throw new Error('unsupported token version');
   let pos = 1;
-  const output = bytes.slice(pos, pos + 32); pos += 32;
+  const nonce = bytes.slice(pos, pos + 32); pos += 32;
+  const scopeDigest = bytes.slice(pos, pos + 32); pos += 32;
   const kidLen = bytes[pos++];
   if (kidLen === 0 || pos + kidLen > bytes.length) throw new Error('invalid kid_len');
   const kid = new TextDecoder().decode(bytes.slice(pos, pos + kidLen)); pos += kidLen;
-  if (pos + 8 > bytes.length) throw new Error('truncated');
-  const expView = new DataView(bytes.buffer, bytes.byteOffset + pos, 8);
-  const exp = expView.getBigInt64(0); pos += 8;
   const issuerIdLen = bytes[pos++];
   if (issuerIdLen === 0 || pos + issuerIdLen > bytes.length) throw new Error('invalid issuer_id_len');
   const issuerId = new TextDecoder().decode(bytes.slice(pos, pos + issuerIdLen)); pos += issuerIdLen;
-  if (bytes.length - pos !== 64) throw new Error('invalid sig length');
-  const sig = bytes.slice(pos, pos + 64);
-  return { output, kid, exp, issuerId, sig };
+  if (bytes.length - pos !== 32) throw new Error('invalid authenticator length');
+  const authenticator = bytes.slice(pos, pos + 32);
+  return { nonce, scopeDigest, kid, issuerId, authenticator };
+}
+
+/**
+ * Computes the strict V5 token key ID: SHA-256(pubkey_spki).
+ */
+export function tokenKeyIdFromSpki(pubkeySpki: Uint8Array): Uint8Array {
+  return sha256(pubkeySpki);
+}
+
+export function tokenKeyIdToHex(tokenKeyId: Uint8Array): string {
+  if (tokenKeyId.length !== PUBLIC_BEARER_TOKEN_KEY_ID_LEN) {
+    throw new Error('token_key_id must be 32 bytes');
+  }
+  return bytesToHex(tokenKeyId);
+}
+
+export function tokenKeyIdFromHex(tokenKeyIdHex: string): Uint8Array {
+  if (!/^[0-9a-f]{64}$/.test(tokenKeyIdHex)) {
+    throw new Error('token_key_id must be 64 lowercase hex characters');
+  }
+  return hexToBytes(tokenKeyIdHex);
+}
+
+/**
+ * Builds the canonical 48-byte V5 public bearer pass message digest.
+ *
+ * Pass this digest as the message to an RFC 9474
+ * RSABSSA-SHA384-PSS-Deterministic blind-signature implementation.
+ */
+export function buildPublicBearerMessage(
+  nonce: Uint8Array,
+  tokenKeyId: Uint8Array,
+  issuerId: string
+): Uint8Array {
+  const issuerIdBytes = new TextEncoder().encode(issuerId);
+  if (nonce.length !== PUBLIC_BEARER_NONCE_LEN) throw new Error('nonce must be 32 bytes');
+  if (tokenKeyId.length !== PUBLIC_BEARER_TOKEN_KEY_ID_LEN) {
+    throw new Error('token_key_id must be 32 bytes');
+  }
+  if (issuerIdBytes.length === 0 || issuerIdBytes.length > 255) {
+    throw new Error('issuer_id must be 1-255 bytes');
+  }
+
+  return sha384(concatBytes(
+    new TextEncoder().encode('freebird:public-bearer-pass:v5'),
+    new Uint8Array([0x00]),
+    new Uint8Array([REDEMPTION_TOKEN_VERSION_V5]),
+    nonce,
+    tokenKeyId,
+    new Uint8Array([issuerIdBytes.length]),
+    issuerIdBytes
+  ));
+}
+
+/**
+ * Builds the V5 public bearer pass wire format.
+ * Format: [version(1) | nonce(32) | token_key_id(32) | issuer_id_len(1) | issuer_id(var) | sig_len(2,BE) | signature(var)]
+ */
+export function buildPublicBearerPass(
+  nonce: Uint8Array,
+  tokenKeyId: Uint8Array,
+  issuerId: string,
+  signature: Uint8Array
+): Uint8Array {
+  const issuerIdBytes = new TextEncoder().encode(issuerId);
+  if (nonce.length !== PUBLIC_BEARER_NONCE_LEN) throw new Error('nonce must be 32 bytes');
+  if (tokenKeyId.length !== PUBLIC_BEARER_TOKEN_KEY_ID_LEN) {
+    throw new Error('token_key_id must be 32 bytes');
+  }
+  if (issuerIdBytes.length === 0 || issuerIdBytes.length > 255) {
+    throw new Error('issuer_id must be 1-255 bytes');
+  }
+  if (signature.length === 0 || signature.length > PUBLIC_BEARER_MAX_SIGNATURE_LEN) {
+    throw new Error('invalid signature length');
+  }
+
+  const buf = new Uint8Array(1 + 32 + 32 + 1 + issuerIdBytes.length + 2 + signature.length);
+  let pos = 0;
+  buf[pos++] = REDEMPTION_TOKEN_VERSION_V5;
+  buf.set(nonce, pos); pos += 32;
+  buf.set(tokenKeyId, pos); pos += 32;
+  buf[pos++] = issuerIdBytes.length;
+  buf.set(issuerIdBytes, pos); pos += issuerIdBytes.length;
+  buf[pos++] = (signature.length >> 8) & 0xff;
+  buf[pos++] = signature.length & 0xff;
+  buf.set(signature, pos);
+  return buf;
+}
+
+export function parsePublicBearerPass(bytes: Uint8Array): {
+  nonce: Uint8Array;
+  tokenKeyId: Uint8Array;
+  issuerId: string;
+  signature: Uint8Array;
+} {
+  if (bytes.length < 69 || bytes.length > 835) throw new Error('invalid token length');
+  if (bytes[0] !== REDEMPTION_TOKEN_VERSION_V5) throw new Error('unsupported token version');
+  let pos = 1;
+  const nonce = bytes.slice(pos, pos + 32); pos += 32;
+  const tokenKeyId = bytes.slice(pos, pos + 32); pos += 32;
+  const issuerIdLen = bytes[pos++];
+  if (issuerIdLen === 0 || pos + issuerIdLen > bytes.length) {
+    throw new Error('invalid issuer_id_len');
+  }
+  const issuerId = new TextDecoder().decode(bytes.slice(pos, pos + issuerIdLen)); pos += issuerIdLen;
+  if (pos + 2 > bytes.length) throw new Error('invalid signature length');
+  const sigLen = (bytes[pos++] << 8) | bytes[pos++];
+  if (sigLen === 0 || sigLen > PUBLIC_BEARER_MAX_SIGNATURE_LEN || pos + sigLen !== bytes.length) {
+    throw new Error('invalid signature length');
+  }
+  const signature = bytes.slice(pos, pos + sigLen);
+  return { nonce, tokenKeyId, issuerId, signature };
 }
 
 /**
@@ -225,7 +385,9 @@ function verifyDleq(
 // --- Helpers ---
 
 function base64UrlToBytes(base64: string): Uint8Array {
-  const binString = atob(base64.replace(/-/g, '+').replace(/_/g, '/'));
+  const normalized = base64.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = normalized.padEnd(normalized.length + ((4 - normalized.length % 4) % 4), '=');
+  const binString = atob(padded);
   return Uint8Array.from(binString, (m) => m.codePointAt(0)!);
 }
 

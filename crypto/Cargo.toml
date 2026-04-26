@@ -23,6 +23,7 @@ elliptic-curve = { version = "0.13", features = ["hash2curve"] }
 sha2       = "0.10"
 rand       = "0.8"
 rand_core  = "0.6"
+blind-rsa-signatures = "0.17.1"
 
 # Helpers
 subtle         = "2.5"
@@ -46,4 +47,3 @@ rayon = "1.10"
 [[bench]]
 name = "voprf"
 harness = false
-

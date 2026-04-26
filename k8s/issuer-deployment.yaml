@@ -6,10 +6,9 @@ metadata:
 data:
   RUST_LOG: "info,freebird=debug"
   BIND_ADDR: "0.0.0.0:8081"
-  TOKEN_TTL_MIN: "10"
   REQUIRE_TLS: "true"
   BEHIND_PROXY: "true"
-  EPOCH_DURATION_SEC: "86400"
+  EPOCH_DURATION: "1d"
   EPOCH_RETENTION: "2"
   SYBIL_RESISTANCE: "invitation"
   SYBIL_INVITE_PER_USER: "5"
@@ -75,7 +74,7 @@ spec:
           command:
             - sh
             - -c
-            - mkdir -p /data/keys /data/state /data/federation && chmod 750 /data/*
+            - mkdir -p /data/keys /data/state && chmod 750 /data/*
           volumeMounts:
             - name: data
               mountPath: /data

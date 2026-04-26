@@ -758,16 +758,27 @@ mod tests {
     fn test_trust_level_at_exact_boundary() {
         // Two levels: level 0 at 0 s, level 1 at exactly 100 s
         let levels = vec![
-            TrustLevel { min_age_secs: 0, max_tokens_per_period: 1, cooldown_secs: 3600 },
-            TrustLevel { min_age_secs: 100, max_tokens_per_period: 10, cooldown_secs: 60 },
+            TrustLevel {
+                min_age_secs: 0,
+                max_tokens_per_period: 1,
+                cooldown_secs: 3600,
+            },
+            TrustLevel {
+                min_age_secs: 100,
+                max_tokens_per_period: 10,
+                cooldown_secs: 60,
+            },
         ];
-        let config = ProgressiveTrustConfig { levels, ..test_config() };
+        let config = ProgressiveTrustConfig {
+            levels,
+            ..test_config()
+        };
         // We can't easily call determine_trust_level without constructing the system,
         // but UserTrustRecord::age_secs is already tested above. Instead verify
         // the level selection logic inline with a dummy record.
         let now = 2_000i64;
-        let record_below = UserTrustRecord::new("h".to_string(), now - 99);  // age 99 s
-        let record_at = UserTrustRecord::new("h".to_string(), now - 100);    // age exactly 100 s
+        let record_below = UserTrustRecord::new("h".to_string(), now - 99); // age 99 s
+        let record_at = UserTrustRecord::new("h".to_string(), now - 100); // age exactly 100 s
 
         // Manually replicate determine_trust_level logic
         let level_for = |rec: &UserTrustRecord| -> usize {

@@ -25,10 +25,12 @@
 //! # }
 //! ```
 
-use super::{verify_timestamp_recent, SybilResistance};
+use super::{current_timestamp, verify_timestamp_recent, SybilResistance};
 use anyhow::{anyhow, Result};
 use freebird_common::api::SybilProof; // Use shared type
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 /// Proof-of-Work Sybil resistance mechanism
 ///
@@ -46,6 +48,10 @@ pub struct ProofOfWork {
 
     /// Maximum age of timestamp (prevents pre-computation)
     max_timestamp_age_secs: u64,
+
+    /// Recently accepted proof hashes, used to prevent proof replay within the
+    /// timestamp acceptance window.
+    used_proofs: Mutex<HashMap<[u8; 32], u64>>,
 }
 
 impl ProofOfWork {
@@ -63,6 +69,7 @@ impl ProofOfWork {
         Self {
             difficulty,
             max_timestamp_age_secs: 300, // 5 minutes
+            used_proofs: Mutex::new(HashMap::new()),
         }
     }
 
@@ -150,6 +157,27 @@ impl ProofOfWork {
 
         Ok(())
     }
+
+    fn reject_replay_or_record(&self, hash: &[u8], timestamp: u64) -> Result<()> {
+        let key: [u8; 32] = hash
+            .try_into()
+            .map_err(|_| anyhow!("invalid PoW hash length"))?;
+        let now = current_timestamp();
+        let min_timestamp = now.saturating_sub(self.max_timestamp_age_secs);
+
+        let mut used = self
+            .used_proofs
+            .lock()
+            .map_err(|_| anyhow!("PoW replay cache poisoned"))?;
+        used.retain(|_, accepted_at| *accepted_at >= min_timestamp);
+
+        if used.contains_key(&key) {
+            return Err(anyhow!("proof-of-work proof already used"));
+        }
+
+        used.insert(key, timestamp);
+        Ok(())
+    }
 }
 
 impl SybilResistance for ProofOfWork {
@@ -171,6 +199,9 @@ impl SybilResistance for ProofOfWork {
 
         // Verify leading zeros
         self.verify_hash(&hash)?;
+
+        // Reject duplicate successful proofs during the timestamp window.
+        self.reject_replay_or_record(&hash, timestamp)?;
 
         Ok(())
     }
@@ -265,5 +296,44 @@ mod tests {
         // Cost increases exponentially
         assert!(pow20.cost() == pow16.cost() * 16);
         assert!(pow24.cost() == pow20.cost() * 16);
+    }
+
+    /// PROTOCOL INVARIANT: a single PoW proof must not be redeemable
+    /// twice. Without a replay cache, the same (input, nonce, timestamp)
+    /// triple verifies forever within the timestamp window — meaning one
+    /// proof mints unbounded tokens, including a full batch of
+    /// MAX_BATCH_SIZE per call.
+    ///
+    /// THIS TEST MUST FAIL UNTIL `ProofOfWork::verify` records used
+    /// proofs and rejects duplicates.
+    #[test]
+    fn pow_proof_cannot_be_replayed() {
+        let difficulty = 8; // tiny — keeps test fast
+        let checker = ProofOfWork::new(difficulty);
+        let input = "replay-test";
+        let timestamp = current_timestamp();
+
+        let (nonce, _) = ProofOfWork::compute(difficulty, input, timestamp).expect("compute proof");
+        let proof = SybilProof::ProofOfWork {
+            nonce,
+            input: input.to_string(),
+            timestamp,
+        };
+
+        // First redemption: must succeed.
+        assert!(
+            checker.verify(&proof).is_ok(),
+            "first verification of a fresh proof must succeed"
+        );
+
+        // Second redemption of the SAME proof: must be rejected.
+        // Today this passes — the verifier has no nonce cache, so the
+        // attacker reuses one PoW to mint as many tokens as they like.
+        assert!(
+            checker.verify(&proof).is_err(),
+            "second verification of the same proof must be rejected; \
+             current code has no replay cache, so one PoW mints \
+             unbounded tokens (including full MAX_BATCH_SIZE batches)"
+        );
     }
 }

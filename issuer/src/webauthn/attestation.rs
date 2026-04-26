@@ -563,7 +563,7 @@ pub async fn store_audit_metadata(
                     .query_async(&mut conn)
                     .await;
 
-                debug!(key = %key, "Stored registration audit metadata");
+                debug!("Stored registration audit metadata");
             }
         }
     }

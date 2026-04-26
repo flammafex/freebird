@@ -22,8 +22,8 @@ Freebird consists of three HTTP services:
 
 | Service | Port | Purpose | Authentication |
 |---------|------|---------|----------------|
-| **Issuer** | 8081 | Issue anonymous tokens via VOPRF | Optional Sybil proof |
-| **Verifier** | 8082 | Verify tokens from one or more issuers | None (public) |
+| **Issuer** | 8081 | Issue V4 private tokens and V5 public bearer passes | Optional Sybil proof |
+| **Verifier** | 8082 | Verify V4 or V5 tokens from trusted issuers | None (public) |
 | **Admin** | 8081 | Manage invitation system | API key required |
 
 **Base URLs:**
@@ -31,9 +31,14 @@ Freebird consists of three HTTP services:
 - Verifier: `http://localhost:8082` (default)
 - Admin: `http://localhost:8081/admin` (optional)
 
-**Federation Support:**
-- Verifiers can accept tokens from multiple independent issuers
-- See [FEDERATION.md](FEDERATION.md) for multi-issuer configuration
+**Issuer Trust:**
+- Verifiers accept tokens only from explicitly configured issuer metadata URLs.
+- V4 private verification also requires verifier-side key authority for each
+  trusted issuer key.
+- Clients fetch verifier metadata before issuance and bind the verifier scope
+  into the V4 token.
+- V5 public bearer passes are verified with issuer-published RFC 9474 public
+  keys. Verifiers accept only immutable `single_use` public-key metadata.
 
 ---
 
@@ -43,7 +48,7 @@ Freebird consists of three HTTP services:
 
 **GET /.well-known/issuer**
 
-Returns public metadata about the issuer for verifier configuration and federation.
+Returns public metadata about the issuer for client issuance and verifier configuration.
 
 **Request:**
 ```bash
@@ -53,12 +58,18 @@ curl http://localhost:8081/.well-known/issuer
 **Response (200 OK):**
 ```json
 {
-  "issuer_id": "issuer:freebird:v1",
+  "issuer_id": "issuer:freebird:v4",
   "voprf": {
     "suite": "OPRF(P-256, SHA-256)-verifiable",
     "kid": "2b8d5f3a-2024-11-08",
-    "pubkey": "A3x5Y2z8B4w7C6v5D4u3E2t1F0s9G8h7I6j5K4l3M2n1",
-    "exp_sec": 600
+    "pubkey": "A3x5Y2z8B4w7C6v5D4u3E2t1F0s9G8h7I6j5K4l3M2n1"
+  },
+  "public": {
+    "token_type": "public_bearer_pass",
+    "token_key_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "rfc9474_variant": "RSABSSA-SHA384-PSS-Deterministic",
+    "modulus_bits": 2048,
+    "spend_policy": "single_use"
   }
 }
 ```
@@ -68,9 +79,9 @@ curl http://localhost:8081/.well-known/issuer
 - `voprf.suite`: Cryptographic suite identifier
 - `voprf.kid`: Key identifier for current active key
 - `voprf.pubkey`: Base64-encoded P-256 public key
-- `voprf.exp_sec`: Default token expiration in seconds
+- `public`: Active V5 public bearer pass summary, when enabled
 
-**Federation Note:** Verifiers use this endpoint to discover and verify issuer public keys.
+**Verifier Note:** V4 private verification also requires verifier-side evaluation authority for the issuer key.
 
 ---
 
@@ -88,16 +99,29 @@ curl http://localhost:8081/.well-known/keys
 **Response (200 OK):**
 ```json
 {
-  "issuer_id": "issuer:freebird:v1",
+  "issuer_id": "issuer:freebird:v4",
   "current_epoch": 42,
   "valid_epochs": [40, 41, 42],
   "epoch_duration_sec": 86400,
   "voprf": {
     "suite": "OPRF(P-256, SHA-256)-verifiable",
     "kid": "2b8d5f3a-2024-11-08",
-    "pubkey": "A3x5Y2z8B4w7C6v5D4u3E2t1F0s9G8h7I6j5K4l3M2n1",
-    "exp_sec": 600
-  }
+    "pubkey": "A3x5Y2z8B4w7C6v5D4u3E2t1F0s9G8h7I6j5K4l3M2n1"
+  },
+  "public": [
+    {
+      "token_key_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "token_type": "public_bearer_pass",
+      "rfc9474_variant": "RSABSSA-SHA384-PSS-Deterministic",
+      "modulus_bits": 2048,
+      "pubkey_spki_b64": "MIIB...",
+      "issuer_id": "issuer:freebird:v4",
+      "valid_from": 1760000000,
+      "valid_until": 1762592000,
+      "audience": "community.example",
+      "spend_policy": "single_use"
+    }
+  ]
 }
 ```
 
@@ -105,42 +129,9 @@ curl http://localhost:8081/.well-known/keys
 - `current_epoch`: Current epoch number
 - `valid_epochs`: List of epochs whose tokens the issuer currently accepts
 - `epoch_duration_sec`: Duration of each epoch in seconds
-
----
-
-### Get Federation Metadata
-
-**GET /.well-known/federation**
-
-Returns this issuer's trust graph: the list of issuers it vouches for and any revocations. Used by verifiers implementing Layer 2 trust graph federation.
-
-**Request:**
-```bash
-curl http://localhost:8081/.well-known/federation
-```
-
-**Response (200 OK):**
-```json
-{
-  "issuer_id": "issuer:example:v1",
-  "vouches": [
-    {
-      "voucher_issuer_id": "issuer:example:v1",
-      "vouched_issuer_id": "issuer:partner:v1",
-      "vouched_pubkey": "AzQ1...base64...",
-      "expires_at": 1735689600,
-      "created_at": 1704067200,
-      "trust_level": 90,
-      "signature": "r7K9...base64..."
-    }
-  ],
-  "revocations": [],
-  "updated_at": 1704067200,
-  "cache_ttl_secs": 3600
-}
-```
-
-See [FEDERATION.md](FEDERATION.md) for trust graph architecture and configuration.
+- `public`: Immutable V5 public bearer pass keys. Verifiers drop entries whose
+  `spend_policy` is not `single_use` or whose `token_key_id` does not match the
+  SHA-256 digest of `pubkey_spki_b64`.
 
 ---
 
@@ -197,10 +188,8 @@ Issues a single anonymous token via VOPRF evaluation.
 ```json
 {
   "token": "Q9w8x7y6v5u4t3s2r1q0p9o8n7m6l5k4...",
-  "sig": "Base64url-encoded-ECDSA-signature...",
   "kid": "2b8d5f3a-2024-11-08",
-  "exp": 1699454445,
-  "issuer_id": "issuer:freebird:v1",
+  "issuer_id": "issuer:freebird:v4",
   "sybil_info": {
     "required": true,
     "passed": true,
@@ -212,12 +201,75 @@ Issues a single anonymous token via VOPRF evaluation.
 **Response Fields:**
 
 - `token`: Base64url-encoded VOPRF evaluation `[VERSION|A|B|DLEQ_proof]` (131 bytes). Used by the client to verify the DLEQ proof and unblind the result. Ephemeral — discarded after client-side finalization.
-- `sig`: Base64url-encoded ECDSA signature (64 bytes) over `SHA256("freebird:token-metadata:v3" || kid_len || kid || exp || issuer_id_len || issuer_id)`. Included in the V3 redemption token sent to verifiers.
-- `kid`: Key identifier for the signing key used.
-- `exp`: Token expiration (Unix timestamp, seconds).
-- `issuer_id`: Issuer identifier. Needed by the client to build the V3 redemption token.
+- `kid`: Key identifier for the VOPRF key used.
+- `issuer_id`: Issuer identifier. Needed by the client to build the V4 redemption token.
 
-The client uses these fields to build a **V3 redemption token** — a self-contained binary format containing the unblinded PRF output, metadata, and ECDSA signature. See [How It Works](HOW_IT_WORKS.md) for protocol details.
+The client combines these fields with verifier metadata from
+`/.well-known/verifier` to build a **V4 redemption token** containing nonce,
+verifier scope digest, issuer metadata, and a private-verifiable authenticator.
+
+---
+
+### Issue Public Bearer Pass (Single)
+
+**POST /v1/public/issue**
+
+Issues a V5 public bearer pass blind signature. The client builds the V5
+message from `(nonce, token_key_id, issuer_id)`, blinds it with the public key
+from `/.well-known/keys`, and finalizes the returned blind signature locally.
+
+**Request:**
+```json
+{
+  "blinded_msg_b64": "A1b2c3d4e5f6...",
+  "token_key_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+```
+
+**Response (200 OK):**
+```json
+{
+  "blind_signature_b64": "m7T8w9x0...",
+  "token_key_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "issuer_id": "issuer:freebird:v4"
+}
+```
+
+The finalized V5 token wire format is:
+
+```text
+[VERSION=0x05][nonce(32)][token_key_id(32)][issuer_id_len(1)|issuer_id][sig_len(2,BE)|signature]
+```
+
+---
+
+### Issue Public Bearer Pass (Batch)
+
+**POST /v1/public/issue/batch**
+
+**Request:**
+```json
+{
+  "blinded_msgs": [
+    "A1b2c3d4e5f6...",
+    "B2c3d4e5f6g7..."
+  ],
+  "token_key_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+}
+```
+
+**Response:**
+```json
+{
+  "blind_signatures": ["m7T8w9x0...", "n8U9x0y1..."],
+  "token_key_id": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "issuer_id": "issuer:freebird:v4",
+  "successful": 2,
+  "failed": 0,
+  "processing_time_ms": 24,
+  "throughput": 83.33
+}
+```
 
 ---
 
@@ -247,8 +299,8 @@ Issues multiple tokens in parallel (1000+ tokens/sec).
 ```json
 {
   "results": [
-    {"status": "success", "token": "Q9w8x7y6...", "sig": "...", "kid": "2b8d5f3a", "exp": 1699454445, "issuer_id": "issuer:freebird:v1"},
-    {"status": "success", "token": "P8o7n6m5...", "sig": "...", "kid": "2b8d5f3a", "exp": 1699454445, "issuer_id": "issuer:freebird:v1"},
+    {"status": "success", "token": "Q9w8x7y6...", "kid": "2b8d5f3a", "issuer_id": "issuer:freebird:v4"},
+    {"status": "success", "token": "P8o7n6m5...", "kid": "2b8d5f3a", "issuer_id": "issuer:freebird:v4"},
     {"status": "error", "message": "invalid base64", "code": "validation_failed"}
   ],
   "successful": 2,
@@ -372,21 +424,46 @@ Get Relying Party configuration.
 
 ## Verifier API
 
-### Verify Token
+### Get Verifier Metadata
 
-**POST /v1/verify**
+**GET /.well-known/verifier**
 
-Verifies a V3 redemption token with expiration checking and replay protection. Supports tokens from multiple issuers in federation scenarios.
+Returns the verifier scope clients must bind into V4 tokens before issuance.
 
 **Request:**
+```bash
+curl http://localhost:8082/.well-known/verifier
+```
+
+**Response (200 OK):**
 ```json
 {
-  "token_b64": "AwAAAA...base64url-encoded-V3-redemption-token..."
+  "verifier_id": "verifier:example:v4",
+  "audience": "example-api",
+  "scope_digest_b64": "jm7eGvTH1xt_QpVg4Y48kylFWC8h6Xb6sULa7ppv3jE"
 }
 ```
 
 **Fields:**
-- `token_b64`: Base64url-encoded V3 redemption token. The token is self-contained — it includes the PRF output, key ID, expiration, issuer ID, and ECDSA signature.
+- `verifier_id`: Stable identifier for this verifier.
+- `audience`: Application or API audience accepted by this verifier.
+- `scope_digest_b64`: Base64url-encoded SHA-256 digest of the verifier ID and audience. Clients recompute it locally and place it in the V4 token input.
+
+### Verify Token
+
+**POST /v1/verify**
+
+Verifies a V4 redemption token with private authenticator checking and replay protection.
+
+**Request:**
+```json
+{
+  "token_b64": "BAAAAA...base64url-encoded-V4-redemption-token..."
+}
+```
+
+**Fields:**
+- `token_b64`: Base64url-encoded V4 redemption token. The token includes nonce, scope digest, key ID, issuer ID, and a private-verifiable authenticator.
 
 **Response (200 OK - Success):**
 ```json
@@ -405,24 +482,23 @@ Verifies a V3 redemption token with expiration checking and replay protection. S
 ```
 
 **Error Reasons:**
-- Token expired (`exp < current_time`)
 - Token already used (replay attack)
-- Invalid ECDSA signature
+- Invalid private authenticator
 - Unknown issuer (not in trusted issuer list)
+- Missing verifier-side private verification key
+- Token scope does not match this verifier
 - Nullifier already exists in database
-- Invalid V3 token format
+- Invalid V4 token format
 
 **Verification Flow:**
 
-The verifier processes V3 redemption tokens:
-1. Parses the self-contained V3 token (extracts output, kid, exp, issuer_id, ECDSA sig)
-2. Checks expiration with clock skew tolerance
-3. Looks up the issuer's public key using `(kid, issuer_id)`
-4. Verifies the ECDSA signature over the metadata
-5. Derives the nullifier from the PRF output
-6. Checks and records the nullifier to prevent reuse
-
-See [FEDERATION.md](FEDERATION.md) for configuration details.
+The verifier processes V4 redemption tokens:
+1. Parses nonce, scope digest, kid, issuer_id, and authenticator.
+2. Constant-time checks the token scope digest against this verifier's configured scope.
+3. Looks up the issuer-trusted private verification key for `(issuer_id, kid)`.
+4. Recomputes the VOPRF output over the V4 token input.
+5. Constant-time compares the recomputed output with the authenticator.
+6. Derives and records a verifier-scoped nullifier to prevent reuse.
 
 ---
 
@@ -430,15 +506,15 @@ See [FEDERATION.md](FEDERATION.md) for configuration details.
 
 **POST /v1/verify/batch**
 
-Verifies multiple V3 redemption tokens in a single request. Each token is checked independently; failures do not affect other tokens in the batch.
+Verifies multiple V4 redemption tokens in a single request. Each token is checked independently; failures do not affect other tokens in the batch.
 
 **Request:**
 ```json
 {
   "tokens": [
-    {"token_b64": "AwAAAA...first-token..."},
-    {"token_b64": "AwAAAA...second-token..."},
-    {"token_b64": "AwAAAA...third-token..."}
+    {"token_b64": "BAAAAA...first-token..."},
+    {"token_b64": "BAAAAA...second-token..."},
+    {"token_b64": "BAAAAA...third-token..."}
   ]
 }
 ```
@@ -448,7 +524,7 @@ Verifies multiple V3 redemption tokens in a single request. Each token is checke
 {
   "results": [
     {"status": "success", "verified_at": 1699454445},
-    {"status": "error", "message": "token expired", "code": "token_expired"},
+    {"status": "error", "message": "verification failed", "code": "verification_failed"},
     {"status": "success", "verified_at": 1699454445}
   ],
   "successful": 2,
@@ -469,7 +545,7 @@ Verifies multiple V3 redemption tokens in a single request. Each token is checke
 
 **POST /v1/check**
 
-Validates a V3 token's format, expiration, and ECDSA signature **without** recording the nullifier. The token remains valid for future use with `/v1/verify` or other services.
+Validates a V4 token's format and private authenticator **without** recording the nullifier. The token remains valid for future use with `/v1/verify` or other services.
 
 **Use Cases:**
 - Verifying a user holds a valid Day Pass before granting access
@@ -479,7 +555,7 @@ Validates a V3 token's format, expiration, and ECDSA signature **without** recor
 **Request:**
 ```json
 {
-  "token_b64": "AwAAAA...base64url-encoded-V3-redemption-token..."
+  "token_b64": "BAAAAA...base64url-encoded-V4-redemption-token..."
 }
 ```
 
@@ -618,7 +694,6 @@ Grants a user a starting allocation of invitations without requiring them to be 
 - Keys: `GET /admin/keys`, `POST /admin/keys/rotate`, `POST /admin/keys/cleanup`, `DELETE /admin/keys/:kid`
 - Audit: `GET /admin/audit`
 - Exports: `GET /admin/export/invitations`, `GET /admin/export/users`, `GET /admin/export/audit`
-- Federation: `GET /admin/federation/vouches`, `POST /admin/federation/vouches`, `DELETE /admin/federation/vouches/:issuer_id`, `GET /admin/federation/revocations`, `POST /admin/federation/revocations`
 - Save state: `POST /admin/save`
 
 ---
@@ -633,7 +708,7 @@ Grants a user a starting allocation of invitations without requiring them to be 
 | 400 | Bad Request | Invalid blinded element or malformed JSON |
 | 401 | Unauthorized | Invalid admin key or token verification failed |
 | 403 | Forbidden | Sybil proof failed or required but missing |
-| 404 | Not Found | Unknown issuer in federation |
+| 404 | Not Found | Unknown resource |
 | 500 | Internal Error | VOPRF evaluation failed or database error |
 
 **Error Response Format:**
@@ -669,34 +744,30 @@ Grants a user a starting allocation of invitations without requiring them to be 
 
 ---
 
-## Federation Configuration
+## Issuer Trust
 
 **Verifier Configuration:**
 
-To accept tokens from multiple issuers, configure the verifier with trusted issuer public keys:
+To accept tokens from issuers, configure the verifier with trusted issuer
+metadata URLs. V4 additionally needs matching private verification keys:
 
 ```bash
-# Environment variable (single issuer)
-ISSUER_URL=http://localhost:8081
-
-# Multi-issuer configuration (config file)
-# See FEDERATION.md for complete details
+ISSUER_URL=http://localhost:8081/.well-known/issuer
+VERIFIER_SK_PATH=/data/keys/issuer_sk.bin
 ```
 
-**Dynamic Issuer Discovery:**
+For rotated keys, use `VERIFIER_KEYRING_B64` to provide a JSON map from `kid`
+to raw 32-byte key material.
 
-Verifiers can dynamically discover issuers via:
-1. Manual configuration (static list)
-2. HTTPS discovery (fetch from `.well-known/issuer`)
-3. Trust graph (Layer 2 federation with cryptographic vouching)
-
-See [FEDERATION.md](FEDERATION.md) for complete federation documentation.
+V5 public bearer verification uses public key metadata from the trusted issuer's
+`/.well-known/keys` endpoint and does not need verifier-side private key
+material.
 
 ---
 
 ## Related Documentation
 
-- [Multi-Issuer Federation](FEDERATION.md) - Federation architecture and configuration
+- [Issuer Trust](FEDERATION.md) - Verifier trust and key configuration
 - [Admin API Reference](ADMIN_API.md) - Complete admin endpoint documentation
 - [Configuration Guide](CONFIGURATION.md) - Environment variables and settings
-- [How It Works](HOW_IT_WORKS.md) - VOPRF protocol details
+- [How It Works](HOW_IT_WORKS.md) - V4 private and V5 public token flows

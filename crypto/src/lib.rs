@@ -47,7 +47,9 @@
 //! run the zeroization tests in the test suite.
 
 use base64ct::{Base64UrlUnpadded, Encoding};
-use sha2::{Digest, Sha256};
+use blind_rsa_signatures::{PublicKeySha384PSSDeterministic, Signature as BlindRsaSignature};
+use sha2::{Digest, Sha256, Sha384};
+use subtle::ConstantTimeEq;
 
 // Internal VOPRF implementation (was vendor/voprf_p256)
 pub mod voprf;
@@ -85,7 +87,8 @@ impl Verifier {
     pub fn verify(&self, token_b64: &str, issuer_pubkey: &[u8]) -> Result<(), Error> {
         let token_bytes = Base64UrlUnpadded::decode_vec(token_b64)
             .map_err(|_| Error::InvalidInput("bad base64 token".into()))?;
-        self.0.verify(&token_bytes, issuer_pubkey)
+        self.0
+            .verify(&token_bytes, issuer_pubkey)
             .map_err(|_| Error::Verify)
     }
 }
@@ -125,7 +128,9 @@ impl Client {
             .map_err(|_| Error::InvalidInput("bad base64 evaluation".into()))?;
         let pk_bytes = Base64UrlUnpadded::decode_vec(issuer_pubkey_b64)
             .map_err(|_| Error::InvalidInput("bad base64 pubkey".into()))?;
-        let output = self.0.finalize(st.inner, &eval_bytes, &pk_bytes)
+        let output = self
+            .0
+            .finalize(st.inner, &eval_bytes, &pk_bytes)
             .map_err(|_| Error::Verify)?;
         Ok(Base64UrlUnpadded::encode_string(&output))
     }
@@ -148,50 +153,170 @@ impl Server {
         let eval_raw = self.0.evaluate(&blinded_raw).map_err(|_| Error::Internal)?;
         Ok(Base64UrlUnpadded::encode_string(&eval_raw))
     }
+
+    /// Evaluate a private-verification token input without blinding.
+    ///
+    /// Verifiers use this with the issuer-approved VOPRF secret to recompute a
+    /// V4 token authenticator locally at redemption time.
+    pub fn evaluate_unblinded(&self, input: &[u8]) -> Result<[u8; 32], Error> {
+        self.0
+            .evaluate_unblinded(input)
+            .map_err(|_| Error::Internal)
+    }
 }
 
-
-/// Token signature constants (for public-key metadata authentication)
-pub const TOKEN_SIGNATURE_LEN: usize = 64; // ECDSA signature (r: 32 bytes, s: 32 bytes)
-
-// V3 redemption token constants
-const REDEMPTION_TOKEN_VERSION_V3: u8 = 0x03;
-const REDEMPTION_TOKEN_MIN_LEN: usize = 1 + 32 + 1 + 1 + 8 + 1 + 1 + 64; // 109
+// V4 private-verification redemption token constants.
+pub const VOPRF_CONTEXT_V4: &[u8] = b"freebird:v4";
+pub const REDEMPTION_TOKEN_VERSION_V4: u8 = 0x04;
+pub const REDEMPTION_TOKEN_VERSION_V5: u8 = 0x05;
+pub const PRIVATE_TOKEN_NONCE_LEN: usize = 32;
+pub const PRIVATE_TOKEN_SCOPE_DIGEST_LEN: usize = 32;
+pub const PRIVATE_TOKEN_AUTHENTICATOR_LEN: usize = 32;
+pub const PUBLIC_BEARER_NONCE_LEN: usize = 32;
+pub const PUBLIC_BEARER_TOKEN_KEY_ID_LEN: usize = 32;
+pub const PUBLIC_BEARER_MESSAGE_DIGEST_LEN: usize = 48;
+pub const PUBLIC_BEARER_MAX_SIGNATURE_LEN: usize = 512;
+pub const PUBLIC_BEARER_TOKEN_TYPE: &str = "public_bearer_pass";
+pub const PUBLIC_BEARER_RFC9474_VARIANT: &str = "RSABSSA-SHA384-PSS-Deterministic";
+pub const PUBLIC_BEARER_SPEND_POLICY_SINGLE_USE: &str = "single_use";
+const REDEMPTION_TOKEN_MIN_LEN: usize = 1
+    + PRIVATE_TOKEN_NONCE_LEN
+    + PRIVATE_TOKEN_SCOPE_DIGEST_LEN
+    + 1
+    + 1
+    + 1
+    + 1
+    + PRIVATE_TOKEN_AUTHENTICATOR_LEN;
 const REDEMPTION_TOKEN_MAX_LEN: usize = 512;
+const PUBLIC_BEARER_MIN_LEN: usize =
+    1 + PUBLIC_BEARER_NONCE_LEN + PUBLIC_BEARER_TOKEN_KEY_ID_LEN + 1 + 1 + 2 + 1;
+const PUBLIC_BEARER_MAX_LEN: usize = 1
+    + PUBLIC_BEARER_NONCE_LEN
+    + PUBLIC_BEARER_TOKEN_KEY_ID_LEN
+    + 1
+    + 255
+    + 2
+    + PUBLIC_BEARER_MAX_SIGNATURE_LEN;
 
-/// V3 redemption token: the wire format clients send to verifiers.
+/// V4 redemption token: the wire format clients send to verifiers.
 ///
-/// Wire format: `[VERSION(1) | output(32) | kid_len(1) | kid(N) | exp(8) | issuer_id_len(1) | issuer_id(M) | ECDSA_sig(64)]`
+/// Wire format:
+/// `[VERSION(1) | nonce(32) | scope_digest(32) | kid_len(1) | kid(N) | issuer_id_len(1) | issuer_id(M) | authenticator(32)]`
+///
+/// The authenticator is the unblinded VOPRF output over
+/// `build_private_token_input(issuer_id, kid, nonce, scope_digest)`.
+/// Verifiers recompute it privately with a VOPRF secret authorized by the
+/// issuer-trust policy.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RedemptionToken {
-    pub output: [u8; 32],
+    pub nonce: [u8; PRIVATE_TOKEN_NONCE_LEN],
+    pub scope_digest: [u8; PRIVATE_TOKEN_SCOPE_DIGEST_LEN],
     pub kid: String,
-    pub exp: i64,
     pub issuer_id: String,
-    pub sig: [u8; 64],
+    pub authenticator: [u8; PRIVATE_TOKEN_AUTHENTICATOR_LEN],
 }
 
-/// Serialize a `RedemptionToken` into V3 wire format bytes.
+/// V5 public bearer pass.
+///
+/// Wire format:
+/// `[VERSION=0x05][nonce(32)][token_key_id(32)][issuer_id_len(1)|issuer_id][sig_len(2,BE)|signature]`
+///
+/// The signature is a finalized RFC 9474 blind RSA signature over
+/// `build_public_bearer_message_from_parts(nonce, token_key_id, issuer_id)`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublicBearerPass {
+    pub nonce: [u8; PUBLIC_BEARER_NONCE_LEN],
+    pub token_key_id: [u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN],
+    pub issuer_id: String,
+    pub signature: Vec<u8>,
+}
+
+/// Build the verifier/audience scope digest that a V4 token is bound to.
+///
+/// The verifier publishes `(verifier_id, audience)` and clients include the
+/// resulting digest in the blinded token input before issuance. Verifiers reject
+/// tokens whose digest does not match their configured scope.
+pub fn build_scope_digest(
+    verifier_id: &str,
+    audience: &str,
+) -> Result<[u8; PRIVATE_TOKEN_SCOPE_DIGEST_LEN], Error> {
+    validate_token_field("verifier_id", verifier_id)?;
+    validate_token_field("audience", audience)?;
+
+    let mut h = Sha256::new();
+    h.update(b"freebird:scope:v4");
+    h.update([verifier_id.len() as u8]);
+    h.update(verifier_id.as_bytes());
+    h.update([audience.len() as u8]);
+    h.update(audience.as_bytes());
+    let digest = h.finalize();
+    let mut out = [0u8; PRIVATE_TOKEN_SCOPE_DIGEST_LEN];
+    out.copy_from_slice(&digest);
+    Ok(out)
+}
+
+fn validate_token_field(name: &str, value: &str) -> Result<(), Error> {
+    if value.is_empty() || value.len() > 255 {
+        return Err(Error::InvalidInput(format!("{name} must be 1-255 bytes")));
+    }
+    Ok(())
+}
+
+/// Build the public input that is blindly issued and privately re-evaluated.
+pub fn build_private_token_input(
+    issuer_id: &str,
+    kid: &str,
+    nonce: &[u8; PRIVATE_TOKEN_NONCE_LEN],
+    scope_digest: &[u8; PRIVATE_TOKEN_SCOPE_DIGEST_LEN],
+) -> Result<Vec<u8>, Error> {
+    validate_token_field("kid", kid)?;
+    validate_token_field("issuer_id", issuer_id)?;
+
+    let mut input = Vec::with_capacity(
+        b"freebird:private-token-input:v4".len()
+            + 1
+            + issuer_id.len()
+            + 1
+            + kid.len()
+            + PRIVATE_TOKEN_NONCE_LEN
+            + PRIVATE_TOKEN_SCOPE_DIGEST_LEN,
+    );
+    input.extend_from_slice(b"freebird:private-token-input:v4");
+    input.push(issuer_id.len() as u8);
+    input.extend_from_slice(issuer_id.as_bytes());
+    input.push(kid.len() as u8);
+    input.extend_from_slice(kid.as_bytes());
+    input.extend_from_slice(nonce);
+    input.extend_from_slice(scope_digest);
+    Ok(input)
+}
+
+/// Serialize a `RedemptionToken` into V4 wire format bytes.
 pub fn build_redemption_token(token: &RedemptionToken) -> Result<Vec<u8>, Error> {
-    if token.kid.is_empty() || token.kid.len() > 255 {
-        return Err(Error::InvalidInput("kid must be 1-255 bytes".to_string()));
-    }
-    if token.issuer_id.is_empty() || token.issuer_id.len() > 255 {
-        return Err(Error::InvalidInput("issuer_id must be 1-255 bytes".to_string()));
-    }
-    let total_len = 1 + 32 + 1 + token.kid.len() + 8 + 1 + token.issuer_id.len() + 64;
+    validate_token_field("kid", &token.kid)?;
+    validate_token_field("issuer_id", &token.issuer_id)?;
+
+    let total_len = 1
+        + PRIVATE_TOKEN_NONCE_LEN
+        + PRIVATE_TOKEN_SCOPE_DIGEST_LEN
+        + 1
+        + token.kid.len()
+        + 1
+        + token.issuer_id.len()
+        + PRIVATE_TOKEN_AUTHENTICATOR_LEN;
     let mut buf = Vec::with_capacity(total_len);
-    buf.push(REDEMPTION_TOKEN_VERSION_V3);
-    buf.extend_from_slice(&token.output);
+    buf.push(REDEMPTION_TOKEN_VERSION_V4);
+    buf.extend_from_slice(&token.nonce);
+    buf.extend_from_slice(&token.scope_digest);
     buf.push(token.kid.len() as u8);
     buf.extend_from_slice(token.kid.as_bytes());
-    buf.extend_from_slice(&token.exp.to_be_bytes());
     buf.push(token.issuer_id.len() as u8);
     buf.extend_from_slice(token.issuer_id.as_bytes());
-    buf.extend_from_slice(&token.sig);
+    buf.extend_from_slice(&token.authenticator);
     Ok(buf)
 }
 
-/// Parse V3 wire format bytes into a `RedemptionToken`.
+/// Parse V4 wire format bytes into a `RedemptionToken`.
 pub fn parse_redemption_token(bytes: &[u8]) -> Result<RedemptionToken, Error> {
     if bytes.len() < REDEMPTION_TOKEN_MIN_LEN {
         return Err(Error::InvalidInput("token too short".to_string()));
@@ -199,13 +324,19 @@ pub fn parse_redemption_token(bytes: &[u8]) -> Result<RedemptionToken, Error> {
     if bytes.len() > REDEMPTION_TOKEN_MAX_LEN {
         return Err(Error::InvalidInput("token too large".to_string()));
     }
-    if bytes[0] != REDEMPTION_TOKEN_VERSION_V3 {
+    if bytes[0] != REDEMPTION_TOKEN_VERSION_V4 {
         return Err(Error::InvalidInput("unsupported token version".to_string()));
     }
     let mut pos = 1;
-    let output: [u8; 32] = bytes[pos..pos + 32].try_into()
-        .map_err(|_| Error::InvalidInput("bad output".to_string()))?;
-    pos += 32;
+    let nonce: [u8; PRIVATE_TOKEN_NONCE_LEN] = bytes[pos..pos + PRIVATE_TOKEN_NONCE_LEN]
+        .try_into()
+        .map_err(|_| Error::InvalidInput("bad nonce".to_string()))?;
+    pos += PRIVATE_TOKEN_NONCE_LEN;
+    let scope_digest: [u8; PRIVATE_TOKEN_SCOPE_DIGEST_LEN] = bytes
+        [pos..pos + PRIVATE_TOKEN_SCOPE_DIGEST_LEN]
+        .try_into()
+        .map_err(|_| Error::InvalidInput("bad scope_digest".to_string()))?;
+    pos += PRIVATE_TOKEN_SCOPE_DIGEST_LEN;
     let kid_len = bytes[pos] as usize;
     pos += 1;
     if kid_len == 0 || pos + kid_len > bytes.len() {
@@ -214,12 +345,6 @@ pub fn parse_redemption_token(bytes: &[u8]) -> Result<RedemptionToken, Error> {
     let kid = String::from_utf8(bytes[pos..pos + kid_len].to_vec())
         .map_err(|_| Error::InvalidInput("kid not utf8".to_string()))?;
     pos += kid_len;
-    if pos + 8 > bytes.len() {
-        return Err(Error::InvalidInput("truncated exp".to_string()));
-    }
-    let exp = i64::from_be_bytes(bytes[pos..pos + 8].try_into()
-        .map_err(|_| Error::InvalidInput("bad exp".to_string()))?);
-    pos += 8;
     if pos >= bytes.len() {
         return Err(Error::InvalidInput("truncated issuer_id_len".to_string()));
     }
@@ -231,139 +356,273 @@ pub fn parse_redemption_token(bytes: &[u8]) -> Result<RedemptionToken, Error> {
     let issuer_id = String::from_utf8(bytes[pos..pos + issuer_id_len].to_vec())
         .map_err(|_| Error::InvalidInput("issuer_id not utf8".to_string()))?;
     pos += issuer_id_len;
-    if bytes.len() - pos != 64 {
-        return Err(Error::InvalidInput("bad sig length".to_string()));
+    if bytes.len() - pos != PRIVATE_TOKEN_AUTHENTICATOR_LEN {
+        return Err(Error::InvalidInput("bad authenticator length".to_string()));
     }
-    let sig: [u8; 64] = bytes[pos..pos + 64].try_into()
-        .map_err(|_| Error::InvalidInput("bad sig".to_string()))?;
-    Ok(RedemptionToken { output, kid, exp, issuer_id, sig })
+    let authenticator: [u8; PRIVATE_TOKEN_AUTHENTICATOR_LEN] = bytes
+        [pos..pos + PRIVATE_TOKEN_AUTHENTICATOR_LEN]
+        .try_into()
+        .map_err(|_| Error::InvalidInput("bad authenticator".to_string()))?;
+    Ok(RedemptionToken {
+        nonce,
+        scope_digest,
+        kid,
+        issuer_id,
+        authenticator,
+    })
 }
 
-// ============================================================================
-// ECDSA Signature-based Metadata Authentication (V3)
-// ============================================================================
-//
-// V3 signatures cover metadata only (kid, exp, issuer_id) with domain
-// separation and length-prefixed fields. The PRF output is self-authenticating
-// via the discrete log assumption — the issuer cannot sign it because it
-// doesn't know the blinding factor `r`.
-
-/// Build the canonical metadata message for V3 ECDSA signing.
-///
-/// Format: `"freebird:token-metadata:v3" || kid_len(1) || kid || exp(8, i64 BE) || issuer_id_len(1) || issuer_id`
-pub(crate) fn build_metadata_message(kid: &str, exp: i64, issuer_id: &str) -> Vec<u8> {
-    let mut msg = Vec::new();
-    msg.extend_from_slice(b"freebird:token-metadata:v3");
-    msg.push(kid.len() as u8);
-    msg.extend_from_slice(kid.as_bytes());
-    msg.extend_from_slice(&exp.to_be_bytes());
-    msg.push(issuer_id.len() as u8);
-    msg.extend_from_slice(issuer_id.as_bytes());
-    msg
+/// Recompute and verify a V4 token authenticator using a private VOPRF key.
+pub fn verify_private_token_authenticator(
+    issuer_sk: [u8; 32],
+    ctx: &[u8],
+    token: &RedemptionToken,
+) -> Result<(), Error> {
+    let input = build_private_token_input(
+        &token.issuer_id,
+        &token.kid,
+        &token.nonce,
+        &token.scope_digest,
+    )?;
+    let server = Server::from_secret_key(issuer_sk, ctx)?;
+    let expected = server.evaluate_unblinded(&input)?;
+    if bool::from(expected.ct_eq(&token.authenticator)) {
+        Ok(())
+    } else {
+        Err(Error::Verify)
+    }
 }
 
-/// Compute ECDSA signature over token metadata using V3 message format.
+/// Deterministic replay key for V4 private-verification tokens.
 ///
-/// Signs metadata only (kid, exp, issuer_id) with domain separation.
-/// Enables multi-issuer federation: verifiers only need public keys.
+/// The verifier scope is included explicitly so shared replay stores cannot
+/// correlate unrelated verifier audiences that happen to process structurally
+/// similar tokens.
+pub fn nullifier_key_v4(
+    token: &RedemptionToken,
+    verifier_id: &str,
+    audience: &str,
+) -> Result<String, Error> {
+    validate_token_field("verifier_id", verifier_id)?;
+    validate_token_field("audience", audience)?;
+
+    let mut h = Sha256::new();
+    h.update(b"freebird:nullifier:v4");
+    h.update([verifier_id.len() as u8]);
+    h.update(verifier_id.as_bytes());
+    h.update([audience.len() as u8]);
+    h.update(audience.as_bytes());
+    h.update([token.issuer_id.len() as u8]);
+    h.update(token.issuer_id.as_bytes());
+    h.update([token.kid.len() as u8]);
+    h.update(token.kid.as_bytes());
+    h.update(token.nonce);
+    h.update(token.scope_digest);
+    h.update(token.authenticator);
+    Ok(Base64UrlUnpadded::encode_string(&h.finalize()))
+}
+
+/// Compute the V5 public token key identifier from the RFC 9474 SPKI bytes.
+pub fn token_key_id_from_spki(spki: &[u8]) -> [u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN] {
+    let digest = Sha256::digest(spki);
+    let mut out = [0u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN];
+    out.copy_from_slice(&digest);
+    out
+}
+
+/// Strict lowercase hex encoding for V5 token key identifiers.
+pub fn encode_token_key_id_hex(token_key_id: &[u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN]) -> String {
+    const LUT: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(PUBLIC_BEARER_TOKEN_KEY_ID_LEN * 2);
+    for byte in token_key_id {
+        out.push(LUT[(byte >> 4) as usize] as char);
+        out.push(LUT[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+/// Decode a strict 64-character lowercase hex V5 token key identifier.
+pub fn decode_token_key_id_hex(value: &str) -> Result<[u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN], Error> {
+    if value.len() != PUBLIC_BEARER_TOKEN_KEY_ID_LEN * 2 {
+        return Err(Error::InvalidInput(
+            "token_key_id must be 64 lowercase hex characters".to_string(),
+        ));
+    }
+
+    let mut out = [0u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN];
+    let bytes = value.as_bytes();
+    for (idx, chunk) in bytes.chunks_exact(2).enumerate() {
+        let hi = strict_lower_hex_nibble(chunk[0])
+            .ok_or_else(|| Error::InvalidInput("token_key_id must be lowercase hex".to_string()))?;
+        let lo = strict_lower_hex_nibble(chunk[1])
+            .ok_or_else(|| Error::InvalidInput("token_key_id must be lowercase hex".to_string()))?;
+        out[idx] = (hi << 4) | lo;
+    }
+    Ok(out)
+}
+
+fn strict_lower_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
+}
+
+/// Build the canonical 48-byte V5 message digest that clients blind-sign.
 ///
-/// Signature = ECDSA_Sign(issuer_sk, SHA256(build_metadata_message(kid, exp, issuer_id)))
-///
-/// # Arguments
-/// * `issuer_sk` - Issuer's ECDSA secret key (32 bytes)
-/// * `kid` - Key identifier
-/// * `exp` - Expiration timestamp (Unix seconds)
-/// * `issuer_id` - Issuer identifier
-///
-/// # Returns
-/// 64-byte ECDSA signature (r || s, each 32 bytes)
-///
-/// # Security
-/// - Uses deterministic ECDSA (RFC 6979) for reproducibility
-/// - Domain-separated message with length-prefixed fields
-/// - Same P-256 curve as VOPRF operations
-pub fn compute_token_signature(
-    issuer_sk: &[u8; 32],
-    kid: &str,
-    exp: i64,
+/// The blind-rsa-signatures crate hashes this digest again as its message
+/// input while applying RFC 9474 PSS. That matches Freebird's V5 design: this
+/// function is the protocol message, not hand-rolled padding.
+pub fn build_public_bearer_message_from_parts(
+    nonce: &[u8; PUBLIC_BEARER_NONCE_LEN],
+    token_key_id: &[u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN],
     issuer_id: &str,
-) -> Result<[u8; 64], Error> {
-    use p256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
+) -> Result<[u8; PUBLIC_BEARER_MESSAGE_DIGEST_LEN], Error> {
+    validate_token_field("issuer_id", issuer_id)?;
 
-    // Build the canonical V3 metadata message
-    let msg = build_metadata_message(kid, exp, issuer_id);
-
-    // Hash the message (we use sign_prehash to avoid double-hashing)
-    let msg_hash = Sha256::digest(&msg);
-
-    // Create signing key from secret key bytes
-    let signing_key = SigningKey::from_bytes(issuer_sk.into()).map_err(|_| Error::Internal)?;
-
-    // Sign the prehashed message (deterministic ECDSA, RFC 6979)
-    let signature: p256::ecdsa::Signature = signing_key
-        .sign_prehash(&msg_hash)
-        .map_err(|_| Error::Internal)?;
-
-    // Convert to raw 64-byte format (r || s)
-    Ok(signature.to_bytes().into())
+    let mut h = Sha384::new();
+    h.update(b"freebird:public-bearer-pass:v5");
+    h.update([0x00]);
+    h.update([REDEMPTION_TOKEN_VERSION_V5]);
+    h.update(nonce);
+    h.update(token_key_id);
+    h.update([issuer_id.len() as u8]);
+    h.update(issuer_id.as_bytes());
+    let digest = h.finalize();
+    let mut out = [0u8; PUBLIC_BEARER_MESSAGE_DIGEST_LEN];
+    out.copy_from_slice(&digest);
+    Ok(out)
 }
 
-/// Verify ECDSA signature over token metadata using V3 message format.
-///
-/// Verifies that the token metadata signature is valid using the issuer's
-/// public key. This enables federation because verifiers don't need secret keys.
-///
-/// # Arguments
-/// * `issuer_pubkey` - Issuer's public key (33 bytes, SEC1 compressed)
-/// * `received_signature` - The signature to verify (64 bytes, r || s)
-/// * `kid` - Key identifier
-/// * `exp` - Expiration timestamp (Unix seconds)
-/// * `issuer_id` - Issuer identifier
-///
-/// # Returns
-/// true if signature is valid, false otherwise
-pub fn verify_token_signature(
-    issuer_pubkey: &[u8],
-    received_signature: &[u8; 64],
-    kid: &str,
-    exp: i64,
-    issuer_id: &str,
-) -> bool {
-    use p256::ecdsa::{signature::hazmat::PrehashVerifier, VerifyingKey};
+pub fn build_public_bearer_message(
+    token: &PublicBearerPass,
+) -> Result<[u8; PUBLIC_BEARER_MESSAGE_DIGEST_LEN], Error> {
+    build_public_bearer_message_from_parts(&token.nonce, &token.token_key_id, &token.issuer_id)
+}
 
-    // Build the canonical V3 metadata message
-    let msg = build_metadata_message(kid, exp, issuer_id);
+/// Serialize a V5 public bearer pass into wire format bytes.
+pub fn build_public_bearer_pass(token: &PublicBearerPass) -> Result<Vec<u8>, Error> {
+    validate_token_field("issuer_id", &token.issuer_id)?;
+    if token.signature.is_empty() || token.signature.len() > PUBLIC_BEARER_MAX_SIGNATURE_LEN {
+        return Err(Error::InvalidInput("bad signature length".to_string()));
+    }
 
-    // Hash the message
-    let msg_hash = Sha256::digest(&msg);
+    let sig_len = u16::try_from(token.signature.len())
+        .map_err(|_| Error::InvalidInput("signature too large".to_string()))?;
+    let total_len = 1
+        + PUBLIC_BEARER_NONCE_LEN
+        + PUBLIC_BEARER_TOKEN_KEY_ID_LEN
+        + 1
+        + token.issuer_id.len()
+        + 2
+        + token.signature.len();
+    let mut buf = Vec::with_capacity(total_len);
+    buf.push(REDEMPTION_TOKEN_VERSION_V5);
+    buf.extend_from_slice(&token.nonce);
+    buf.extend_from_slice(&token.token_key_id);
+    buf.push(token.issuer_id.len() as u8);
+    buf.extend_from_slice(token.issuer_id.as_bytes());
+    buf.extend_from_slice(&sig_len.to_be_bytes());
+    buf.extend_from_slice(&token.signature);
+    Ok(buf)
+}
 
-    // Parse public key (SEC1 compressed format)
-    let verifying_key = match VerifyingKey::from_sec1_bytes(issuer_pubkey) {
-        Ok(key) => key,
-        Err(_) => return false,
-    };
+/// Parse V5 wire format bytes into a `PublicBearerPass`.
+pub fn parse_public_bearer_pass(bytes: &[u8]) -> Result<PublicBearerPass, Error> {
+    if bytes.len() < PUBLIC_BEARER_MIN_LEN {
+        return Err(Error::InvalidInput("token too short".to_string()));
+    }
+    if bytes.len() > PUBLIC_BEARER_MAX_LEN {
+        return Err(Error::InvalidInput("token too large".to_string()));
+    }
+    if bytes[0] != REDEMPTION_TOKEN_VERSION_V5 {
+        return Err(Error::InvalidInput("unsupported token version".to_string()));
+    }
 
-    // Parse signature
-    let signature = match p256::ecdsa::Signature::from_bytes(received_signature.into()) {
-        Ok(sig) => sig,
-        Err(_) => return false,
-    };
+    let mut pos = 1;
+    let nonce: [u8; PUBLIC_BEARER_NONCE_LEN] = bytes[pos..pos + PUBLIC_BEARER_NONCE_LEN]
+        .try_into()
+        .map_err(|_| Error::InvalidInput("bad nonce".to_string()))?;
+    pos += PUBLIC_BEARER_NONCE_LEN;
 
-    // Verify prehashed signature (constant-time in the underlying implementation)
-    verifying_key.verify_prehash(&msg_hash, &signature).is_ok()
+    let token_key_id: [u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN] = bytes
+        [pos..pos + PUBLIC_BEARER_TOKEN_KEY_ID_LEN]
+        .try_into()
+        .map_err(|_| Error::InvalidInput("bad token_key_id".to_string()))?;
+    pos += PUBLIC_BEARER_TOKEN_KEY_ID_LEN;
+
+    let issuer_id_len = bytes[pos] as usize;
+    pos += 1;
+    if issuer_id_len == 0 || pos + issuer_id_len > bytes.len() {
+        return Err(Error::InvalidInput("bad issuer_id_len".to_string()));
+    }
+    let issuer_id = String::from_utf8(bytes[pos..pos + issuer_id_len].to_vec())
+        .map_err(|_| Error::InvalidInput("issuer_id not utf8".to_string()))?;
+    pos += issuer_id_len;
+
+    if pos + 2 > bytes.len() {
+        return Err(Error::InvalidInput(
+            "truncated signature length".to_string(),
+        ));
+    }
+    let sig_len = u16::from_be_bytes([bytes[pos], bytes[pos + 1]]) as usize;
+    pos += 2;
+    if sig_len == 0 || sig_len > PUBLIC_BEARER_MAX_SIGNATURE_LEN || pos + sig_len != bytes.len() {
+        return Err(Error::InvalidInput("bad signature length".to_string()));
+    }
+
+    Ok(PublicBearerPass {
+        nonce,
+        token_key_id,
+        issuer_id,
+        signature: bytes[pos..pos + sig_len].to_vec(),
+    })
+}
+
+/// Verify a V5 public bearer pass signature with its RFC 9474 SPKI public key.
+pub fn verify_public_bearer_signature(
+    pubkey_spki: &[u8],
+    token: &PublicBearerPass,
+) -> Result<(), Error> {
+    if token_key_id_from_spki(pubkey_spki) != token.token_key_id {
+        return Err(Error::Verify);
+    }
+
+    let pk = PublicKeySha384PSSDeterministic::from_spki(pubkey_spki)
+        .map_err(|_| Error::InvalidInput("invalid public token key".to_string()))?;
+    let msg = build_public_bearer_message(token)?;
+    let sig = BlindRsaSignature(token.signature.clone());
+    pk.verify(&sig, None, msg).map_err(|_| Error::Verify)
+}
+
+pub fn validate_public_bearer_spki(pubkey_spki: &[u8]) -> Result<(), Error> {
+    PublicKeySha384PSSDeterministic::from_spki(pubkey_spki)
+        .map(|_| ())
+        .map_err(|_| Error::InvalidInput("invalid public token key".to_string()))
+}
+
+/// Deterministic replay key for V5 public bearer passes.
+pub fn nullifier_key_v5(token: &PublicBearerPass) -> Result<String, Error> {
+    validate_token_field("issuer_id", &token.issuer_id)?;
+
+    let mut h = Sha256::new();
+    h.update(b"freebird:nullifier:v5");
+    h.update(token.nonce);
+    h.update(token.token_key_id);
+    h.update([token.issuer_id.len() as u8]);
+    h.update(token.issuer_id.as_bytes());
+    h.update(&token.signature);
+    Ok(Base64UrlUnpadded::encode_string(&h.finalize()))
 }
 
 // ============================================================================
-// Generic Message Signatures (for Layer 2 Federation)
+// Generic Message Signatures
 // ============================================================================
-//
-// These functions provide generic ECDSA signing/verification for any message,
-// used by Layer 2 federation for vouches, revocations, and other trust signals.
 
 /// Sign an arbitrary message with an issuer's secret key
 ///
-/// This is a generic signing function used for federation messages like
-/// vouches and revocations. Uses deterministic ECDSA (RFC 6979).
+/// This is a generic signing function for deterministic ECDSA (RFC 6979).
 ///
 /// # Arguments
 /// * `secret_key` - Issuer's 32-byte secret key
@@ -389,8 +648,6 @@ pub fn sign_message(secret_key: &[u8; 32], message: &[u8]) -> Result<[u8; 64], E
 }
 
 /// Verify an arbitrary message signature with an issuer's public key
-///
-/// This is a generic verification function used for federation messages.
 ///
 /// # Arguments
 /// * `public_key` - Issuer's public key (SEC1 compressed, 33 bytes)
@@ -421,14 +678,13 @@ pub fn verify_message_signature(public_key: &[u8], message: &[u8], signature: &[
     verifying_key.verify_prehash(&msg_hash, &sig).is_ok()
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn end_to_end() {
-        let ctx = b"freebird-v1";
+        let ctx = VOPRF_CONTEXT_V4;
         let sk = [7u8; 32];
 
         let server = Server::from_secret_key(sk, ctx).unwrap();
@@ -450,269 +706,22 @@ mod tests {
         assert_eq!(out_raw.len(), 32);
 
         // nullifier determinism
-        let n1 = nullifier_key("issuer:freebird:v1", &out_cli_b64);
-        let n2 = nullifier_key("issuer:freebird:v1", &out_cli_b64);
+        let n1 = nullifier_key("issuer:freebird:v4", &out_cli_b64);
+        let n2 = nullifier_key("issuer:freebird:v4", &out_cli_b64);
         assert_eq!(n1, n2);
         assert!(!n1.is_empty());
     }
 
-    // ========================================================================
-    // V3 Metadata Signature Tests
-    // ========================================================================
-
-    #[test]
-    fn test_v3_metadata_signature_roundtrip() {
-        use p256::ecdsa::SigningKey;
-        use rand::rngs::OsRng;
-
-        let sk = SigningKey::random(&mut OsRng);
-        let sk_bytes: [u8; 32] = sk.to_bytes().into();
-        let pk_bytes = sk.verifying_key()
-            .to_encoded_point(true)
-            .as_bytes()
-            .to_vec();
-
-        let kid = "test-key-01";
-        let exp = 1700000000i64;
-        let issuer_id = "issuer-abc";
-
-        let sig = compute_token_signature(&sk_bytes, kid, exp, issuer_id).unwrap();
-        assert!(verify_token_signature(&pk_bytes, &sig, kid, exp, issuer_id));
-    }
-
-    #[test]
-    fn test_v3_metadata_signature_rejects_wrong_kid() {
-        use p256::ecdsa::SigningKey;
-        use rand::rngs::OsRng;
-
-        let sk = SigningKey::random(&mut OsRng);
-        let sk_bytes: [u8; 32] = sk.to_bytes().into();
-        let pk_bytes = sk.verifying_key()
-            .to_encoded_point(true)
-            .as_bytes()
-            .to_vec();
-
-        let sig = compute_token_signature(&sk_bytes, "key-1", 100i64, "issuer").unwrap();
-        assert!(!verify_token_signature(&pk_bytes, &sig, "key-2", 100i64, "issuer"));
-    }
-
-    #[test]
-    fn test_v3_metadata_signature_rejects_wrong_exp() {
-        use p256::ecdsa::SigningKey;
-        use rand::rngs::OsRng;
-
-        let sk = SigningKey::random(&mut OsRng);
-        let sk_bytes: [u8; 32] = sk.to_bytes().into();
-        let pk_bytes = sk.verifying_key()
-            .to_encoded_point(true)
-            .as_bytes()
-            .to_vec();
-
-        let sig = compute_token_signature(&sk_bytes, "key-1", 100i64, "issuer").unwrap();
-        assert!(!verify_token_signature(&pk_bytes, &sig, "key-1", 101i64, "issuer"));
-    }
-
-    #[test]
-    fn test_v3_metadata_signature_rejects_wrong_issuer() {
-        use p256::ecdsa::SigningKey;
-        use rand::rngs::OsRng;
-
-        let sk = SigningKey::random(&mut OsRng);
-        let sk_bytes: [u8; 32] = sk.to_bytes().into();
-        let pk_bytes = sk.verifying_key()
-            .to_encoded_point(true)
-            .as_bytes()
-            .to_vec();
-
-        let sig = compute_token_signature(&sk_bytes, "key-1", 100i64, "issuer-a").unwrap();
-        assert!(!verify_token_signature(&pk_bytes, &sig, "key-1", 100i64, "issuer-b"));
-    }
-
-    #[test]
-    fn test_signature_computation_and_verification() {
-        let sk = [7u8; 32];
-        let ctx = b"freebird-v1";
-
-        // Create server to get public key
-        let server = Server::from_secret_key(sk, ctx).unwrap();
-        let pubkey = server.public_key_sec1_compressed();
-
-        let kid = "test-kid-001";
-        let exp = 1234567890i64;
-        let issuer_id = "test-issuer";
-
-        // Compute signature
-        let signature = compute_token_signature(&sk, kid, exp, issuer_id).unwrap();
-        assert_eq!(signature.len(), 64);
-
-        // Verify signature succeeds
-        assert!(verify_token_signature(
-            &pubkey, &signature, kid, exp, issuer_id
-        ));
-
-        // Tampered kid fails
-        assert!(!verify_token_signature(
-            &pubkey,
-            &signature,
-            "wrong-kid",
-            exp,
-            issuer_id
-        ));
-
-        // Tampered exp fails
-        assert!(!verify_token_signature(
-            &pubkey,
-            &signature,
-            kid,
-            exp + 1,
-            issuer_id
-        ));
-
-        // Tampered issuer_id fails
-        assert!(!verify_token_signature(
-            &pubkey,
-            &signature,
-            kid,
-            exp,
-            "wrong-issuer"
-        ));
-
-        // Wrong signature fails
-        let wrong_signature = [0u8; 64];
-        assert!(!verify_token_signature(
-            &pubkey,
-            &wrong_signature,
-            kid,
-            exp,
-            issuer_id
-        ));
-
-        // Tampered signature fails
-        let mut bad_signature = signature;
-        bad_signature[0] ^= 1;
-        assert!(!verify_token_signature(
-            &pubkey,
-            &bad_signature,
-            kid,
-            exp,
-            issuer_id
-        ));
-    }
-
-    #[test]
-    fn test_signature_determinism() {
-        let sk = [7u8; 32];
-        let ctx = b"freebird-v1";
-        let server = Server::from_secret_key(sk, ctx).unwrap();
-        let pubkey = server.public_key_sec1_compressed();
-
-        let kid = "test-kid-001";
-        let exp = 1234567890i64;
-        let issuer_id = "test-issuer";
-
-        // Signatures should be deterministic (RFC 6979)
-        let sig1 = compute_token_signature(&sk, kid, exp, issuer_id).unwrap();
-        let sig2 = compute_token_signature(&sk, kid, exp, issuer_id).unwrap();
-        assert_eq!(sig1, sig2);
-
-        // Both should verify
-        assert!(verify_token_signature(
-            &pubkey, &sig1, kid, exp, issuer_id
-        ));
-        assert!(verify_token_signature(
-            &pubkey, &sig2, kid, exp, issuer_id
-        ));
-    }
-
-    #[test]
-    fn test_signature_different_keys() {
-        let sk1 = [7u8; 32];
-        let sk2 = [8u8; 32];
-        let ctx = b"freebird-v1";
-
-        let server1 = Server::from_secret_key(sk1, ctx).unwrap();
-        let server2 = Server::from_secret_key(sk2, ctx).unwrap();
-        let pubkey1 = server1.public_key_sec1_compressed();
-        let pubkey2 = server2.public_key_sec1_compressed();
-
-        let kid = "test-kid-001";
-        let exp = 1234567890i64;
-        let issuer_id = "test-issuer";
-
-        // Sign with key 1
-        let sig1 = compute_token_signature(&sk1, kid, exp, issuer_id).unwrap();
-
-        // Verify with key 1's public key succeeds
-        assert!(verify_token_signature(
-            &pubkey1, &sig1, kid, exp, issuer_id
-        ));
-
-        // Verify with key 2's public key fails
-        assert!(!verify_token_signature(
-            &pubkey2, &sig1, kid, exp, issuer_id
-        ));
-    }
-
-    #[test]
-    fn test_signature_invalid_pubkey() {
-        let sk = [7u8; 32];
-        let kid = "test-kid-001";
-        let exp = 1234567890i64;
-        let issuer_id = "test-issuer";
-
-        let signature = compute_token_signature(&sk, kid, exp, issuer_id).unwrap();
-
-        // Invalid public key (not a valid SEC1 compressed point)
-        let bad_pubkey = [0xFFu8; 33];
-        assert!(!verify_token_signature(
-            &bad_pubkey,
-            &signature,
-            kid,
-            exp,
-            issuer_id
-        ));
-
-        // Wrong length public key
-        let short_pubkey = [0x02u8; 32];
-        assert!(!verify_token_signature(
-            &short_pubkey,
-            &signature,
-            kid,
-            exp,
-            issuer_id
-        ));
-    }
-
-    #[test]
-    fn test_build_metadata_message_format() {
-        let kid = "k1";
-        let exp = 0x0102030405060708i64;
-        let issuer_id = "iss";
-
-        let msg = build_metadata_message(kid, exp, issuer_id);
-
-        // Verify the message format
-        let mut expected = Vec::new();
-        expected.extend_from_slice(b"freebird:token-metadata:v3");
-        expected.push(2); // kid_len
-        expected.extend_from_slice(b"k1");
-        expected.extend_from_slice(&exp.to_be_bytes());
-        expected.push(3); // issuer_id_len
-        expected.extend_from_slice(b"iss");
-
-        assert_eq!(msg, expected);
-    }
-
-    // Generic message signing tests (for Layer 2 Federation)
+    // Generic message signing tests
 
     #[test]
     fn test_generic_message_signing() {
         let sk = [42u8; 32];
-        let ctx = b"freebird-v1";
+        let ctx = VOPRF_CONTEXT_V4;
         let server = Server::from_secret_key(sk, ctx).unwrap();
         let pubkey = server.public_key_sec1_compressed();
 
-        let message = b"Hello, Federation!";
+        let message = b"Hello, signed message!";
 
         // Sign message
         let signature = sign_message(&sk, message).unwrap();
@@ -750,7 +759,7 @@ mod tests {
     #[test]
     fn test_generic_message_different_lengths() {
         let sk = [42u8; 32];
-        let ctx = b"freebird-v1";
+        let ctx = VOPRF_CONTEXT_V4;
         let server = Server::from_secret_key(sk, ctx).unwrap();
         let pubkey = server.public_key_sec1_compressed();
 
@@ -772,7 +781,7 @@ mod tests {
     #[test]
     fn test_generic_message_empty() {
         let sk = [42u8; 32];
-        let ctx = b"freebird-v1";
+        let ctx = VOPRF_CONTEXT_V4;
         let server = Server::from_secret_key(sk, ctx).unwrap();
         let pubkey = server.public_key_sec1_compressed();
 
@@ -785,7 +794,7 @@ mod tests {
     #[test]
     fn test_generic_message_invalid_signature_bytes() {
         let sk = [42u8; 32];
-        let ctx = b"freebird-v1";
+        let ctx = VOPRF_CONTEXT_V4;
         let server = Server::from_secret_key(sk, ctx).unwrap();
         let pubkey = server.public_key_sec1_compressed();
 
@@ -801,36 +810,36 @@ mod tests {
     }
 
     // ========================================================================
-    // V3 Redemption Token Tests
+    // V4 Redemption Token Tests
     // ========================================================================
 
     #[test]
-    fn test_v3_redemption_token_roundtrip() {
+    fn test_v4_redemption_token_roundtrip() {
         let token = RedemptionToken {
-            output: [0xAA; 32],
+            nonce: [0xAA; 32],
+            scope_digest: [0xCC; 32],
             kid: "test-key-01".to_string(),
-            exp: 1700000000i64,
             issuer_id: "issuer-abc".to_string(),
-            sig: [0xBB; 64],
+            authenticator: [0xBB; 32],
         };
         let bytes = build_redemption_token(&token).unwrap();
-        assert_eq!(bytes[0], 0x03); // version byte
+        assert_eq!(bytes[0], REDEMPTION_TOKEN_VERSION_V4); // version byte
         let parsed = parse_redemption_token(&bytes).unwrap();
-        assert_eq!(parsed.output, token.output);
+        assert_eq!(parsed.nonce, token.nonce);
+        assert_eq!(parsed.scope_digest, token.scope_digest);
         assert_eq!(parsed.kid, token.kid);
-        assert_eq!(parsed.exp, token.exp);
         assert_eq!(parsed.issuer_id, token.issuer_id);
-        assert_eq!(parsed.sig, token.sig);
+        assert_eq!(parsed.authenticator, token.authenticator);
     }
 
     #[test]
-    fn test_v3_redemption_token_rejects_bad_version() {
+    fn test_v4_redemption_token_rejects_bad_version() {
         let token = RedemptionToken {
-            output: [0xAA; 32],
+            nonce: [0xAA; 32],
+            scope_digest: [0xCC; 32],
             kid: "k".to_string(),
-            exp: 1i64,
             issuer_id: "i".to_string(),
-            sig: [0xBB; 64],
+            authenticator: [0xBB; 32],
         };
         let mut bytes = build_redemption_token(&token).unwrap();
         bytes[0] = 0x01; // wrong version
@@ -838,8 +847,58 @@ mod tests {
     }
 
     #[test]
-    fn test_v3_redemption_token_rejects_truncated() {
-        let bytes = vec![0x03; 50]; // too short (min 109)
+    fn test_v5_public_bearer_pass_roundtrip_and_verify() {
+        let mut rng = blind_rsa_signatures::DefaultRng;
+        let key_pair =
+            blind_rsa_signatures::KeyPairSha384PSSDeterministic::generate(&mut rng, 2048).unwrap();
+        let spki = key_pair.pk.to_spki().unwrap();
+        let token_key_id = token_key_id_from_spki(&spki);
+        let nonce = [0x42; PUBLIC_BEARER_NONCE_LEN];
+        let issuer_id = "issuer:test:v5";
+        let msg = build_public_bearer_message_from_parts(&nonce, &token_key_id, issuer_id).unwrap();
+
+        let blinding_result = key_pair.pk.blind(&mut rng, msg).unwrap();
+        let blind_sig = key_pair
+            .sk
+            .blind_sign(&blinding_result.blind_message)
+            .unwrap();
+        let sig = key_pair
+            .pk
+            .finalize(&blind_sig, &blinding_result, msg)
+            .unwrap();
+
+        let token = PublicBearerPass {
+            nonce,
+            token_key_id,
+            issuer_id: issuer_id.to_string(),
+            signature: sig.0,
+        };
+        let bytes = build_public_bearer_pass(&token).unwrap();
+        assert_eq!(bytes[0], REDEMPTION_TOKEN_VERSION_V5);
+        let parsed = parse_public_bearer_pass(&bytes).unwrap();
+        assert_eq!(parsed, token);
+
+        verify_public_bearer_signature(&spki, &parsed).unwrap();
+
+        let mut tampered = parsed.clone();
+        tampered.nonce[0] ^= 0x01;
+        assert!(verify_public_bearer_signature(&spki, &tampered).is_err());
+    }
+
+    #[test]
+    fn test_v5_token_key_id_hex_is_strict_lowercase() {
+        let token_key_id = [0xAB; PUBLIC_BEARER_TOKEN_KEY_ID_LEN];
+        let encoded = encode_token_key_id_hex(&token_key_id);
+        assert_eq!(encoded.len(), 64);
+        assert_eq!(encoded, "ab".repeat(PUBLIC_BEARER_TOKEN_KEY_ID_LEN));
+        assert_eq!(decode_token_key_id_hex(&encoded).unwrap(), token_key_id);
+        assert!(decode_token_key_id_hex(&encoded.to_uppercase()).is_err());
+        assert!(decode_token_key_id_hex("abc").is_err());
+    }
+
+    #[test]
+    fn test_v4_redemption_token_rejects_truncated() {
+        let bytes = vec![REDEMPTION_TOKEN_VERSION_V4; 50];
         assert!(parse_redemption_token(&bytes).is_err());
     }
 
@@ -847,10 +906,10 @@ mod tests {
     fn test_build_token_rejects_empty_kid() {
         let token = RedemptionToken {
             kid: "".to_string(),
-            output: [0u8; 32],
-            exp: 1,
+            nonce: [0u8; 32],
+            scope_digest: [0u8; 32],
             issuer_id: "x".to_string(),
-            sig: [0u8; 64],
+            authenticator: [0u8; 32],
         };
         assert!(build_redemption_token(&token).is_err());
     }
@@ -859,10 +918,10 @@ mod tests {
     fn test_build_token_rejects_256_byte_kid() {
         let token = RedemptionToken {
             kid: "k".repeat(256),
-            output: [0u8; 32],
-            exp: 1,
+            nonce: [0u8; 32],
+            scope_digest: [0u8; 32],
             issuer_id: "x".to_string(),
-            sig: [0u8; 64],
+            authenticator: [0u8; 32],
         };
         assert!(build_redemption_token(&token).is_err());
     }
@@ -871,10 +930,10 @@ mod tests {
     fn test_build_token_rejects_empty_issuer_id() {
         let token = RedemptionToken {
             kid: "k".to_string(),
-            output: [0u8; 32],
-            exp: 1,
+            nonce: [0u8; 32],
+            scope_digest: [0u8; 32],
             issuer_id: "".to_string(),
-            sig: [0u8; 64],
+            authenticator: [0u8; 32],
         };
         assert!(build_redemption_token(&token).is_err());
     }
@@ -883,17 +942,17 @@ mod tests {
     fn test_build_token_rejects_256_byte_issuer_id() {
         let token = RedemptionToken {
             kid: "k".to_string(),
-            output: [0u8; 32],
-            exp: 1,
+            nonce: [0u8; 32],
+            scope_digest: [0u8; 32],
             issuer_id: "i".repeat(256),
-            sig: [0u8; 64],
+            authenticator: [0u8; 32],
         };
         assert!(build_redemption_token(&token).is_err());
     }
 
     #[test]
     fn test_parse_token_rejects_too_large() {
-        let bytes = vec![0x03u8; 513];
+        let bytes = vec![REDEMPTION_TOKEN_VERSION_V4; 513];
         assert!(parse_redemption_token(&bytes).is_err());
     }
 
@@ -912,38 +971,61 @@ mod tests {
     }
 
     #[test]
-    fn test_v3_full_roundtrip_with_real_sig() {
+    fn test_scope_digest_differs_by_verifier_and_audience() {
+        let a = build_scope_digest("verifier-a", "api").unwrap();
+        let b = build_scope_digest("verifier-b", "api").unwrap();
+        let c = build_scope_digest("verifier-a", "admin").unwrap();
+        assert_ne!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn test_nullifier_v4_differs_by_verifier_scope() {
+        let token = RedemptionToken {
+            nonce: [0xAA; 32],
+            scope_digest: build_scope_digest("verifier-a", "api").unwrap(),
+            kid: "kid".to_string(),
+            issuer_id: "issuer".to_string(),
+            authenticator: [0xBB; 32],
+        };
+        let n1 = nullifier_key_v4(&token, "verifier-a", "api").unwrap();
+        let n2 = nullifier_key_v4(&token, "verifier-b", "api").unwrap();
+        let n3 = nullifier_key_v4(&token, "verifier-a", "admin").unwrap();
+        assert_ne!(n1, n2);
+        assert_ne!(n1, n3);
+    }
+
+    #[test]
+    fn test_v4_full_roundtrip_with_private_authenticator() {
         let sk = [7u8; 32];
-        let ctx = b"freebird-v1";
-        let server = Server::from_secret_key(sk, ctx).unwrap();
-        let pubkey = server.public_key_sec1_compressed();
+        let ctx = VOPRF_CONTEXT_V4;
 
         let kid = "roundtrip-kid";
-        let exp = 1700000000i64;
         let issuer_id = "roundtrip-issuer";
+        let nonce = [0xCC; 32];
+        let scope_digest = build_scope_digest("verifier:roundtrip", "default").unwrap();
 
-        // Compute a real ECDSA signature
-        let sig = compute_token_signature(&sk, kid, exp, issuer_id).unwrap();
+        let input = build_private_token_input(issuer_id, kid, &nonce, &scope_digest).unwrap();
+        let server = Server::from_secret_key(sk, ctx).unwrap();
+        let authenticator = server.evaluate_unblinded(&input).unwrap();
 
         // Build the token
         let token = RedemptionToken {
-            output: [0xCC; 32],
+            nonce,
+            scope_digest,
             kid: kid.to_string(),
-            exp,
             issuer_id: issuer_id.to_string(),
-            sig,
+            authenticator,
         };
         let bytes = build_redemption_token(&token).unwrap();
 
         // Parse it back
         let parsed = parse_redemption_token(&bytes).unwrap();
         assert_eq!(parsed.kid, kid);
-        assert_eq!(parsed.exp, exp);
         assert_eq!(parsed.issuer_id, issuer_id);
-        assert_eq!(parsed.output, [0xCC; 32]);
+        assert_eq!(parsed.nonce, nonce);
 
-        // Verify the signature
-        let valid = verify_token_signature(&pubkey, &parsed.sig, &parsed.kid, parsed.exp, &parsed.issuer_id);
-        assert!(valid, "parsed token signature should verify against issuer pubkey");
+        verify_private_token_authenticator(sk, ctx, &parsed)
+            .expect("parsed token authenticator should verify against issuer secret");
     }
 }

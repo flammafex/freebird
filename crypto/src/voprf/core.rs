@@ -144,7 +144,7 @@ impl Client {
 
     pub fn blind(&mut self, input: &[u8]) -> Result<(Vec<u8>, BlindState), Error> {
         let p = hash_to_curve(input, &self.ctx).ok_or(Error::InvalidPoint)?;
-        
+
         // Ensure blinding factor is non-zero
         let r = loop {
             let r = Scalar::random(rand::rngs::OsRng);
@@ -195,8 +195,7 @@ impl Client {
         }
 
         // Unblind: W = B * r^(-1), recovering the PRF output point H(input)^sk
-        let r_inv = Option::<Scalar>::from(st.r.invert())
-            .ok_or(Error::ZeroScalar)?;
+        let r_inv = Option::<Scalar>::from(st.r.invert()).ok_or(Error::ZeroScalar)?;
         let w = b * r_inv;
         if bool::from(w.to_affine().is_identity()) {
             return Err(Error::InvalidPoint);
@@ -241,6 +240,15 @@ impl Server {
         token.extend_from_slice(&encode_point(&b));
         token.extend_from_slice(&encode_proof(&proof));
         Ok(token)
+    }
+
+    pub fn evaluate_unblinded(&self, input: &[u8]) -> Result<[u8; 32], Error> {
+        let p = hash_to_curve(input, &self.ctx).ok_or(Error::InvalidPoint)?;
+        let w = p * self.k;
+        if bool::from(w.to_affine().is_identity()) {
+            return Err(Error::InvalidPoint);
+        }
+        Ok(prf_output(&w, &self.ctx))
     }
 }
 
@@ -414,10 +422,9 @@ mod tests {
     fn test_unblinding_produces_correct_prf_output() {
         let ctx = b"UNBLIND-TEST";
         let sk_bytes = [
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-            0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
-            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-            0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+            0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+            0x1d, 0x1e, 0x1f, 0x20,
         ];
         let server = Server::from_secret_key(sk_bytes, ctx).unwrap();
         let pk = server.public_key_sec1_compressed();

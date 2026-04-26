@@ -96,9 +96,6 @@ fn main() {
         sections.push(section);
     }
 
-    // Validate federation configuration
-    sections.push(validate_federation_config());
-
     // Print all sections
     for section in &sections {
         section.print();
@@ -122,7 +119,7 @@ fn validate_core_config() -> ValidationSection {
     let mut section = ValidationSection::new("Core Configuration");
 
     // ISSUER_ID
-    let issuer_id = env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v1".to_string());
+    let issuer_id = env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".to_string());
     section.add(CheckResult::Ok(format!("ISSUER_ID = {}", issuer_id)));
 
     // BIND_ADDR
@@ -133,23 +130,6 @@ fn validate_core_config() -> ValidationSection {
             "BIND_ADDR = {} (invalid: {})",
             bind_addr, e
         ))),
-    }
-
-    // TOKEN_TTL_MIN
-    let token_ttl = env::var("TOKEN_TTL_MIN")
-        .ok()
-        .and_then(|s| s.parse::<u64>().ok())
-        .unwrap_or(10);
-    if token_ttl < 1 || token_ttl > 24 * 60 {
-        section.add(CheckResult::Warning(format!(
-            "TOKEN_TTL_MIN = {} (will be clamped to 1-1440)",
-            token_ttl
-        )));
-    } else {
-        section.add(CheckResult::Ok(format!(
-            "TOKEN_TTL_MIN = {} minutes",
-            token_ttl
-        )));
     }
 
     // EPOCH_DURATION
@@ -596,57 +576,4 @@ fn validate_hsm_config() -> Option<ValidationSection> {
     }
 
     Some(section)
-}
-
-fn validate_federation_config() -> ValidationSection {
-    let mut section = ValidationSection::new("Federation Configuration");
-
-    let federation_path =
-        env::var("FEDERATION_DATA_PATH").unwrap_or_else(|_| "/data/federation".to_string());
-    let federation_path_obj = Path::new(&federation_path);
-
-    if federation_path_obj.exists() {
-        section.add(CheckResult::Ok(format!(
-            "FEDERATION_DATA_PATH = {} (exists)",
-            federation_path
-        )));
-    } else if let Some(parent) = federation_path_obj.parent() {
-        if parent.exists() || parent.as_os_str().is_empty() {
-            section.add(CheckResult::Ok(format!(
-                "FEDERATION_DATA_PATH = {} (will be created)",
-                federation_path
-            )));
-        } else {
-            section.add(CheckResult::Warning(format!(
-                "FEDERATION_DATA_PATH = {} (parent directory does not exist)",
-                federation_path
-            )));
-        }
-    }
-
-    // Federated trust configuration
-    let federated_enabled = env::var("SYBIL_FEDERATED_TRUST_ENABLED")
-        .map(|v| v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    if federated_enabled {
-        section.add(CheckResult::Ok(
-            "SYBIL_FEDERATED_TRUST_ENABLED = true".to_string(),
-        ));
-
-        if let Ok(roots) = env::var("SYBIL_FEDERATED_TRUST_TRUSTED_ROOTS") {
-            let count = roots.split(',').filter(|s| !s.trim().is_empty()).count();
-            section.add(CheckResult::Ok(format!(
-                "SYBIL_FEDERATED_TRUST_TRUSTED_ROOTS = {} issuer(s)",
-                count
-            )));
-        } else {
-            section.add(CheckResult::Warning(
-                "SYBIL_FEDERATED_TRUST_TRUSTED_ROOTS not set - no trusted roots configured"
-                    .to_string(),
-            ));
-        }
-    }
-
-    section
 }

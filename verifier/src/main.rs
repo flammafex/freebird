@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use axum::{
     extract::{rejection::JsonRejection, State},
     http::StatusCode,
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{
-    BatchVerifyReq, BatchVerifyResp, TokenToVerify, VerifyReq, VerifyResp, VerifyResult,
+    BatchVerifyReq, BatchVerifyResp, KeyDiscoveryResp, PublicKeyInfo, TokenToVerify,
+    VerifierMetadataResp, VerifyReq, VerifyResp, VerifyResult,
 };
 use freebird_common::logging;
 use rayon::prelude::*;
@@ -56,15 +57,17 @@ fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response:
 use freebird_verifier::routes::admin::{self, AdminState, IssuerInfo, VerifierConfig};
 use freebird_verifier::routes::admin_rate_limit::AdminRateLimiter;
 use freebird_verifier::store::{SpendStore, StoreBackend};
+use freebird_verifier::verify::{decode_token_version, verify_v4_token, verify_v5_public_token};
 
 #[derive(Clone)]
 struct AppState {
     issuers: Arc<RwLock<HashMap<String, IssuerInfo>>>,
     store: Arc<dyn SpendStore>,
-    /// Maximum acceptable clock skew in seconds (default: 300 = 5 minutes)
-    max_clock_skew_secs: i64,
+    verifier_id: String,
+    audience: String,
+    scope_digest: [u8; freebird_crypto::PRIVATE_TOKEN_SCOPE_DIGEST_LEN],
     /// Epoch configuration kept for admin display / operator observability.
-    /// V3 tokens are self-contained and do not use epoch-based MAC keys,
+    /// V4 token lifetime is controlled by verifier key acceptance policy,
     /// but operators still configure these env vars and expect them surfaced.
     #[allow(dead_code)]
     epoch_duration_sec: u64,
@@ -81,30 +84,174 @@ struct WellKnown {
 #[derive(Clone, Debug, Deserialize)]
 struct VoprfInfo {
     /// VOPRF suite identifier from the issuer well-known JSON (e.g. "P256-SHA256").
-    /// Deserialized for completeness; V3 verifier does not branch on suite name.
+    /// Deserialized for completeness; the V4 verifier does not branch on suite name.
     #[allow(dead_code)]
     suite: String,
     kid: String,
     pubkey: String,
-    exp_sec: u64,
 }
 
 // IssuerInfo is imported from freebird_verifier::routes::admin
+
+fn decode_secret_key_b64(value: &str) -> anyhow::Result<[u8; 32]> {
+    let bytes = Base64UrlUnpadded::decode_vec(value.trim()).context("base64 decode secret key")?;
+    bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow!("secret key must decode to exactly 32 bytes"))
+}
+
+fn read_secret_key_file(path: &str) -> anyhow::Result<[u8; 32]> {
+    let bytes = std::fs::read(path).with_context(|| format!("read secret key file {path}"))?;
+    if bytes.len() == 32 {
+        return bytes
+            .as_slice()
+            .try_into()
+            .map_err(|_| anyhow!("32-byte secret key copy failed"));
+    }
+
+    let text = std::str::from_utf8(&bytes)
+        .context("secret key file must be raw 32 bytes or base64url text")?;
+    decode_secret_key_b64(text)
+}
+
+fn load_default_verification_key() -> anyhow::Result<Option<[u8; 32]>> {
+    if let Ok(value) = std::env::var("VERIFIER_SK_B64") {
+        return decode_secret_key_b64(&value).map(Some);
+    }
+
+    let path = std::env::var("VERIFIER_SK_PATH")
+        .or_else(|_| std::env::var("ISSUER_SK_PATH"))
+        .ok();
+    match path {
+        Some(path) => read_secret_key_file(&path).map(Some),
+        None => Ok(None),
+    }
+}
+
+fn load_verification_keyring() -> anyhow::Result<HashMap<String, [u8; 32]>> {
+    let Some(raw) = std::env::var("VERIFIER_KEYRING_B64").ok() else {
+        return Ok(HashMap::new());
+    };
+
+    let encoded: HashMap<String, String> =
+        serde_json::from_str(&raw).context("parse VERIFIER_KEYRING_B64 JSON")?;
+    encoded
+        .into_iter()
+        .map(|(kid, key_b64)| decode_secret_key_b64(&key_b64).map(|key| (kid, key)))
+        .collect()
+}
+
+fn issuer_keys_url(issuer_url: &str) -> anyhow::Result<String> {
+    let mut url = reqwest::Url::parse(issuer_url).context("parse issuer metadata URL")?;
+    url.set_path("/.well-known/keys");
+    url.set_query(None);
+    url.set_fragment(None);
+    Ok(url.to_string())
+}
+
+async fn load_public_keys(
+    issuer_url: &str,
+    issuer_id: &str,
+) -> anyhow::Result<
+    HashMap<[u8; freebird_crypto::PUBLIC_BEARER_TOKEN_KEY_ID_LEN], admin::PublicIssuerKey>,
+> {
+    let keys_url = issuer_keys_url(issuer_url)?;
+    let res = reqwest::get(&keys_url)
+        .await?
+        .error_for_status()
+        .with_context(|| format!("issuer key discovery request failed: {keys_url}"))?;
+    let discovery: KeyDiscoveryResp = res.json().await?;
+    if discovery.issuer_id != issuer_id {
+        return Err(anyhow!(
+            "issuer key discovery returned issuer_id {}, expected {}",
+            discovery.issuer_id,
+            issuer_id
+        ));
+    }
+
+    let mut keys = HashMap::new();
+    for key_info in discovery.public {
+        match parse_public_key_info(issuer_id, key_info) {
+            Ok(key) => {
+                keys.insert(key.token_key_id, key);
+            }
+            Err(e) => warn!(?e, issuer = %issuer_id, "dropping invalid V5 public bearer key"),
+        }
+    }
+    Ok(keys)
+}
+
+fn parse_public_key_info(
+    issuer_id: &str,
+    key_info: PublicKeyInfo,
+) -> anyhow::Result<admin::PublicIssuerKey> {
+    if key_info.issuer_id != issuer_id {
+        return Err(anyhow!("public key issuer_id mismatch"));
+    }
+    if key_info.token_type != freebird_crypto::PUBLIC_BEARER_TOKEN_TYPE {
+        return Err(anyhow!("unsupported public token type"));
+    }
+    if key_info.rfc9474_variant != freebird_crypto::PUBLIC_BEARER_RFC9474_VARIANT {
+        return Err(anyhow!("unsupported RFC 9474 variant"));
+    }
+    if key_info.spend_policy != freebird_crypto::PUBLIC_BEARER_SPEND_POLICY_SINGLE_USE {
+        return Err(anyhow!("unsupported public bearer spend_policy"));
+    }
+    if matches!(key_info.max_uses, Some(max_uses) if max_uses != 1) {
+        return Err(anyhow!("unsupported public bearer max_uses"));
+    }
+    if !(2048..=4096).contains(&key_info.modulus_bits) {
+        return Err(anyhow!("unsupported public bearer modulus_bits"));
+    }
+    if key_info.valid_from >= key_info.valid_until {
+        return Err(anyhow!("invalid public bearer validity window"));
+    }
+
+    let token_key_id = freebird_crypto::decode_token_key_id_hex(&key_info.token_key_id)
+        .map_err(|_| anyhow!("invalid token_key_id"))?;
+    let pubkey_spki = Base64UrlUnpadded::decode_vec(&key_info.pubkey_spki_b64)
+        .context("base64 decode public bearer SPKI")?;
+    freebird_crypto::validate_public_bearer_spki(&pubkey_spki)
+        .map_err(|e| anyhow!("invalid public bearer SPKI: {:?}", e))?;
+    if freebird_crypto::token_key_id_from_spki(&pubkey_spki) != token_key_id {
+        return Err(anyhow!("token_key_id does not match SPKI"));
+    }
+
+    Ok(admin::PublicIssuerKey {
+        token_key_id,
+        token_key_id_hex: key_info.token_key_id,
+        pubkey_spki,
+        issuer_id: key_info.issuer_id,
+        valid_from: key_info.valid_from,
+        valid_until: key_info.valid_until,
+        audience: key_info.audience,
+    })
+}
+
+fn validate_secret_key_matches_pubkey(
+    secret_key: [u8; 32],
+    ctx: &[u8],
+    pubkey_bytes: &[u8],
+) -> anyhow::Result<()> {
+    let server = freebird_crypto::Server::from_secret_key(secret_key, ctx)
+        .map_err(|e| anyhow!("invalid verifier secret key: {:?}", e))?;
+    let derived = server.public_key_sec1_compressed();
+    if derived.as_slice() != pubkey_bytes {
+        return Err(anyhow!(
+            "verifier secret key does not match issuer metadata public key"
+        ));
+    }
+    Ok(())
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     logging::init("debug");
 
     // ---------- Configuration ----------
-    let max_clock_skew_secs = std::env::var("MAX_CLOCK_SKEW_SECS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(300); // Default: 5 minutes
-
-    info!("Clock skew tolerance: {} seconds", max_clock_skew_secs);
-
     // ---------- Epoch Configuration ----------
-    // Kept for admin config display; V3 tokens are self-contained and don't use epochs.
+    // Kept for admin config display; V4 tokens rely on key acceptance windows.
     let epoch_duration_sec = std::env::var("EPOCH_DURATION_SEC")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -144,6 +291,17 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
 
+    let verifier_id = std::env::var("VERIFIER_ID")
+        .context("VERIFIER_ID is required so V4 tokens are bound to a verifier scope")?;
+    let audience = std::env::var("VERIFIER_AUDIENCE").unwrap_or_else(|_| verifier_id.clone());
+    let scope_digest = freebird_crypto::build_scope_digest(&verifier_id, &audience)
+        .map_err(|e| anyhow!("invalid verifier scope: {:?}", e))?;
+    info!(
+        verifier_id = %verifier_id,
+        audience = %audience,
+        "Configured verifier scope"
+    );
+
     // ---------- Admin API Configuration ----------
     let admin_api_key = std::env::var("ADMIN_API_KEY").ok();
     let behind_proxy = std::env::var("BEHIND_PROXY")
@@ -160,7 +318,9 @@ async fn main() -> anyhow::Result<()> {
     let state = Arc::new(AppState {
         issuers: Arc::clone(&issuers),
         store: Arc::clone(&store),
-        max_clock_skew_secs,
+        verifier_id: verifier_id.clone(),
+        audience: audience.clone(),
+        scope_digest,
         epoch_duration_sec,
         epoch_retention,
     });
@@ -195,6 +355,7 @@ async fn main() -> anyhow::Result<()> {
 
     // ---------- Router ----------
     let mut app = Router::new()
+        .route("/.well-known/verifier", get(verifier_metadata))
         .route("/v1/verify", post(verify_with_logging))
         .route("/v1/verify/batch", post(batch_verify))
         .route("/v1/check", post(check_with_logging))
@@ -217,12 +378,13 @@ async fn main() -> anyhow::Result<()> {
                 require_tls,
                 start_time,
                 config: VerifierConfig {
-                    max_clock_skew_secs,
                     epoch_duration_sec,
                     epoch_retention,
                     refresh_interval_min,
                     store_backend: store_backend_name,
                     issuer_urls: issuer_urls_for_admin,
+                    verifier_id: verifier_id.clone(),
+                    audience: audience.clone(),
                 },
             });
 
@@ -273,114 +435,79 @@ async fn refresh_issuer_metadata(state: &Arc<AppState>, issuer_url: &str) -> any
     let wk: WellKnown = res.json().await?;
     let pubkey_bytes =
         Base64UrlUnpadded::decode_vec(&wk.voprf.pubkey).context("base64 decode pubkey")?;
+    let public_keys = match load_public_keys(issuer_url, &wk.issuer_id).await {
+        Ok(keys) => keys,
+        Err(e) => {
+            warn!(?e, issuer = %wk.issuer_id, "V5 public bearer key discovery failed");
+            HashMap::new()
+        }
+    };
+
+    let ctx = freebird_crypto::VOPRF_CONTEXT_V4.to_vec();
+    let mut keyring = load_verification_keyring()?;
+    let verification_key = if let Some(key) = keyring.remove(&wk.voprf.kid) {
+        validate_secret_key_matches_pubkey(key, &ctx, &pubkey_bytes)?;
+        Some(key)
+    } else if let Some(key) = load_default_verification_key()? {
+        validate_secret_key_matches_pubkey(key, &ctx, &pubkey_bytes)?;
+        Some(key)
+    } else {
+        warn!(
+            issuer = %wk.issuer_id,
+            kid = %wk.voprf.kid,
+            "issuer metadata refreshed without a private verification key; V4 tokens from this issuer will fail verification"
+        );
+        None
+    };
 
     let kid_for_log = wk.voprf.kid.clone();
-    let ctx_len = b"freebird:v1".len();
+    let ctx_len = ctx.len();
+    let mut issuers = state.issuers.write().await;
+    let mut deprecated_verification_keys = issuers
+        .get(&wk.issuer_id)
+        .map(|info| info.deprecated_verification_keys.clone())
+        .unwrap_or_default();
+    if let Some(previous) = issuers.get(&wk.issuer_id) {
+        if previous.kid != wk.voprf.kid {
+            if let Some(previous_key) = previous.verification_key {
+                deprecated_verification_keys.insert(previous.kid.clone(), previous_key);
+            }
+        }
+    }
+    for (kid, key) in keyring {
+        if kid != wk.voprf.kid {
+            deprecated_verification_keys.insert(kid, key);
+        }
+    }
+
+    let has_private_key = verification_key.is_some();
+    let public_key_count = public_keys.len();
     let info = IssuerInfo {
         pubkey_bytes,
         kid: wk.voprf.kid,
-        ctx: b"freebird:v1".to_vec(),
-        exp_sec: wk.voprf.exp_sec,
+        ctx,
+        verification_key,
+        deprecated_verification_keys,
+        public_keys,
         last_refreshed: Some(Instant::now()),
     };
 
-    let mut issuers = state.issuers.write().await;
     issuers.insert(wk.issuer_id.clone(), info);
-    info!(issuer = %wk.issuer_id, kid = %kid_for_log, ctx_len, "updated issuer metadata");
+    info!(issuer = %wk.issuer_id, kid = %kid_for_log, ctx_len, has_private_key, public_key_count, "updated issuer metadata");
     Ok(())
-}
-
-// ============================================================================
-// V3 Token Verification Core
-// ============================================================================
-
-/// Parse a V3 redemption token from a base64url-encoded string, look up
-/// the issuer, verify expiration, and verify the ECDSA signature.
-///
-/// Returns `(parsed_token, issuer_info)` on success.
-fn verify_v3_token(
-    token_b64: &str,
-    issuers: &HashMap<String, IssuerInfo>,
-    max_clock_skew_secs: i64,
-) -> Result<(freebird_crypto::RedemptionToken, IssuerInfo), (StatusCode, String)> {
-    // 1) Decode base64url to get raw bytes
-    let token_bytes = Base64UrlUnpadded::decode_vec(token_b64).map_err(|e| {
-        error!("Failed to decode token: {:?}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            "invalid token encoding".to_string(),
-        )
-    })?;
-
-    // 2) Parse V3 redemption token
-    let parsed = freebird_crypto::parse_redemption_token(&token_bytes).map_err(|e| {
-        error!("Failed to parse V3 token: {:?}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            format!("invalid token format: {:?}", e),
-        )
-    })?;
-
-    // 3) Check expiration (with clock skew tolerance)
-    let now = time::OffsetDateTime::now_utc().unix_timestamp();
-
-    if now > parsed.exp + max_clock_skew_secs {
-        let expired_by = now - parsed.exp;
-        warn!(
-            "Token expired: expired_by={}s (tolerance={}s)",
-            expired_by, max_clock_skew_secs
-        );
-        return Err((StatusCode::UNAUTHORIZED, "token expired".to_string()));
-    }
-
-    // 4) Look up issuer pubkey using (kid, issuer_id) from the token
-    let issuer = issuers.get(&parsed.issuer_id).ok_or_else(|| {
-        error!("Issuer not found: {}", parsed.issuer_id);
-        (StatusCode::UNAUTHORIZED, "verification failed".to_string())
-    })?;
-
-    // Also check for tokens with expiration too far in the future
-    if parsed.exp > now + issuer.exp_sec as i64 + max_clock_skew_secs {
-        warn!(
-            "Token expiration too far in future: exp={}, max_expected={}",
-            parsed.exp,
-            now + issuer.exp_sec as i64
-        );
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "invalid token expiration".to_string(),
-        ));
-    }
-
-    debug!(
-        "Token not expired (exp in {}s), issuer={}, kid={}",
-        parsed.exp - now,
-        parsed.issuer_id,
-        parsed.kid
-    );
-
-    // 5) Verify ECDSA signature over metadata
-    let sig_valid = freebird_crypto::verify_token_signature(
-        &issuer.pubkey_bytes,
-        &parsed.sig,
-        &parsed.kid,
-        parsed.exp,
-        &parsed.issuer_id,
-    );
-
-    if !sig_valid {
-        error!("Signature verification failed - token metadata tampered or invalid");
-        return Err((StatusCode::UNAUTHORIZED, "verification failed".to_string()));
-    }
-
-    debug!("Signature verified - token metadata authentic");
-
-    Ok((parsed, issuer.clone()))
 }
 
 // ============================================================================
 // Verification handlers
 // ============================================================================
+
+async fn verifier_metadata(State(st): State<Arc<AppState>>) -> Json<VerifierMetadataResp> {
+    Json(VerifierMetadataResp {
+        verifier_id: st.verifier_id.clone(),
+        audience: st.audience.clone(),
+        scope_digest_b64: Base64UrlUnpadded::encode_string(&st.scope_digest),
+    })
+}
 
 // Wrapper to catch and log JSON deserialization errors
 async fn verify_with_logging(
@@ -390,10 +517,7 @@ async fn verify_with_logging(
     info!("/v1/verify request received");
 
     match result {
-        Ok(Json(req)) => {
-            debug!("Full request: {:?}", req);
-            verify(state, Json(req)).await
-        }
+        Ok(Json(req)) => verify(state, Json(req)).await,
         Err(rejection) => {
             error!("JSON deserialization failed: {}", rejection);
             Err((
@@ -404,49 +528,63 @@ async fn verify_with_logging(
     }
 }
 
-// ---------- Verification handler (V3 self-contained tokens) ----------
+// ---------- Verification handler ----------
 #[instrument(name = "verify_token", skip_all)]
 async fn verify(
     State(st): State<Arc<AppState>>,
     Json(req): Json<VerifyReq>,
 ) -> Result<Json<VerifyResp>, (StatusCode, String)> {
-    info!("Starting V3 token verification");
-
-    // 1) Parse and verify the V3 token (expiration + ECDSA signature)
-    let issuers = st.issuers.read().await;
-    let (parsed, issuer) = verify_v3_token(&req.token_b64, &issuers, st.max_clock_skew_secs)?;
-    drop(issuers);
-
+    let version = decode_token_version(&req.token_b64)?;
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let (spend_key, ttl) = match version {
+        freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 => {
+            info!("Starting V4 token verification");
+            let issuers = st.issuers.read().await;
+            let (parsed, _issuer) = verify_v4_token(&req.token_b64, &issuers, &st.scope_digest)?;
+            drop(issuers);
+            let null_key =
+                freebird_crypto::nullifier_key_v4(&parsed, &st.verifier_id, &st.audience).map_err(
+                    |e| {
+                        error!(error = ?e, "failed to derive V4 nullifier");
+                        (StatusCode::BAD_REQUEST, "verification failed".to_string())
+                    },
+                )?;
+            (format!("freebird:spent:v4:{null_key}"), None)
+        }
+        freebird_crypto::REDEMPTION_TOKEN_VERSION_V5 => {
+            info!("Starting V5 public bearer verification");
+            let issuers = st.issuers.read().await;
+            let (parsed, key) = verify_v5_public_token(&req.token_b64, &issuers, &st.audience)?;
+            drop(issuers);
+            let null_key = freebird_crypto::nullifier_key_v5(&parsed).map_err(|e| {
+                error!(error = ?e, "failed to derive V5 nullifier");
+                (StatusCode::BAD_REQUEST, "verification failed".to_string())
+            })?;
+            (
+                format!("freebird:spent:v5:{null_key}"),
+                Some(ttl_until(key.valid_until, now)),
+            )
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "unsupported token version".to_string(),
+            ))
+        }
+    };
 
-    // 2) Derive nullifier from unblinded PRF output
-    let output_b64 = Base64UrlUnpadded::encode_string(&parsed.output);
-    let null_key = freebird_crypto::nullifier_key(&parsed.issuer_id, &output_b64);
-    let spend_key = format!("freebird:spent:{}:{}", parsed.issuer_id, null_key);
-    debug!("Checking replay with key: {}", spend_key);
-
-    // 3) Replay / spend tracking
-    let spent = st
-        .store
-        .mark_spent(&spend_key, Duration::from_secs(issuer.exp_sec))
-        .await
-        .map_err(|e| {
-            error!(%spend_key, "store error: {e}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "store error".into())
-        })?;
+    debug!("Checking replay for token");
+    let spent = st.store.mark_spent(&spend_key, ttl).await.map_err(|e| {
+        error!("store error while recording token spend: {e}");
+        (StatusCode::INTERNAL_SERVER_ERROR, "store error".into())
+    })?;
 
     if !spent {
-        warn!(%spend_key, "replay detected (token already used)");
+        warn!("replay detected (token already used)");
         return Err((StatusCode::UNAUTHORIZED, "verification failed".into()));
     }
 
-    // 4) Success
-    info!(
-        "Token verified successfully: issuer={}, kid={}, nullifier={}",
-        parsed.issuer_id,
-        parsed.kid,
-        &null_key[..16]
-    );
+    info!("Token verified successfully");
 
     Ok(Json(VerifyResp {
         ok: true,
@@ -464,10 +602,7 @@ async fn check_with_logging(
     info!("/v1/check request received");
 
     match result {
-        Ok(Json(req)) => {
-            debug!("Full request: {:?}", req);
-            check(state, Json(req)).await
-        }
+        Ok(Json(req)) => check(state, Json(req)).await,
         Err(rejection) => {
             error!("JSON deserialization failed: {}", rejection);
             Err((
@@ -480,8 +615,8 @@ async fn check_with_logging(
 
 /// Check token validity WITHOUT consuming/recording the nullifier.
 ///
-/// This endpoint validates the token's V3 format, expiration, and ECDSA
-/// signature but does NOT mark it as spent. Use this for:
+/// This endpoint validates the token's V4 format and private authenticator but
+/// does NOT mark it as spent. Use this for:
 /// - Verifying a user holds a valid Day Pass
 /// - Checking token validity before a multi-step operation
 /// - Rate-limiting based on token possession without consumption
@@ -492,11 +627,24 @@ async fn check(
     State(st): State<Arc<AppState>>,
     Json(req): Json<VerifyReq>,
 ) -> Result<Json<VerifyResp>, (StatusCode, String)> {
-    info!("Starting V3 token check (no consumption)");
-
-    // Parse and verify the V3 token (expiration + ECDSA signature)
+    let version = decode_token_version(&req.token_b64)?;
     let issuers = st.issuers.read().await;
-    let (parsed, _issuer) = verify_v3_token(&req.token_b64, &issuers, st.max_clock_skew_secs)?;
+    match version {
+        freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 => {
+            info!("Starting V4 token check (no consumption)");
+            verify_v4_token(&req.token_b64, &issuers, &st.scope_digest)?;
+        }
+        freebird_crypto::REDEMPTION_TOKEN_VERSION_V5 => {
+            info!("Starting V5 public bearer check (no consumption)");
+            verify_v5_public_token(&req.token_b64, &issuers, &st.audience)?;
+        }
+        _ => {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "unsupported token version".to_string(),
+            ))
+        }
+    }
     drop(issuers);
 
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
@@ -504,10 +652,7 @@ async fn check(
     // NOTE: We intentionally skip mark_spent() here - this is the key difference from /v1/verify
     // The token remains valid for future use with /v1/verify
 
-    info!(
-        "Token check passed (not consumed): issuer={}, kid={}",
-        parsed.issuer_id, parsed.kid
-    );
+    info!("Token check passed (not consumed)");
 
     Ok(Json(VerifyResp {
         ok: true,
@@ -522,6 +667,10 @@ const MAX_BATCH_SIZE: usize = 10_000;
 /// Minimum batch size for parallel processing
 const MIN_PARALLEL_BATCH_SIZE: usize = 10;
 
+fn ttl_until(valid_until: i64, now: i64) -> Duration {
+    Duration::from_secs(valid_until.saturating_sub(now).max(1) as u64)
+}
+
 fn compute_throughput(successful: usize, total_time_ms: u64) -> f64 {
     if total_time_ms == 0 {
         0.0
@@ -530,7 +679,7 @@ fn compute_throughput(successful: usize, total_time_ms: u64) -> f64 {
     }
 }
 
-// ---------- Batch Verification Handler (V3) ----------
+// ---------- Batch Verification Handler (V4) ----------
 #[instrument(name = "batch_verify", skip_all, fields(batch_size = req.tokens.len()))]
 async fn batch_verify(
     State(st): State<Arc<AppState>>,
@@ -563,37 +712,84 @@ async fn batch_verify(
 
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let runtime_handle = tokio::runtime::Handle::current();
-    let max_clock_skew = st.max_clock_skew_secs;
 
-    // Helper function to verify a single V3 token
+    // Helper function to verify a single token
     let verify_one = |token_req: &TokenToVerify| -> VerifyResult {
-        // 1) Parse and verify the V3 token
-        let (parsed, issuer) = match verify_v3_token(
-            &token_req.token_b64,
-            &issuers_snapshot,
-            max_clock_skew,
-        ) {
-            Ok(r) => r,
+        let version = match decode_token_version(&token_req.token_b64) {
+            Ok(version) => version,
             Err((_status, msg)) => {
                 return VerifyResult::Error {
                     message: msg,
                     code: "verification_failed".to_string(),
-                };
+                }
             }
         };
 
-        // 2) Derive nullifier from unblinded PRF output
-        let output_b64 = Base64UrlUnpadded::encode_string(&parsed.output);
-        let null_key = freebird_crypto::nullifier_key(&parsed.issuer_id, &output_b64);
-        let spend_key = format!("freebird:spent:{}:{}", parsed.issuer_id, null_key);
+        let (spend_key, ttl) = match version {
+            freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 => {
+                let parsed = match verify_v4_token(
+                    &token_req.token_b64,
+                    &issuers_snapshot,
+                    &st.scope_digest,
+                ) {
+                    Ok((parsed, _issuer)) => parsed,
+                    Err((_status, msg)) => {
+                        return VerifyResult::Error {
+                            message: msg,
+                            code: "verification_failed".to_string(),
+                        };
+                    }
+                };
+                let null_key =
+                    match freebird_crypto::nullifier_key_v4(&parsed, &st.verifier_id, &st.audience)
+                    {
+                        Ok(key) => key,
+                        Err(_) => {
+                            return VerifyResult::Error {
+                                message: "verification failed".to_string(),
+                                code: "verification_failed".to_string(),
+                            };
+                        }
+                    };
+                (format!("freebird:spent:v4:{null_key}"), None)
+            }
+            freebird_crypto::REDEMPTION_TOKEN_VERSION_V5 => {
+                let (parsed, key) = match verify_v5_public_token(
+                    &token_req.token_b64,
+                    &issuers_snapshot,
+                    &st.audience,
+                ) {
+                    Ok(result) => result,
+                    Err((_status, msg)) => {
+                        return VerifyResult::Error {
+                            message: msg,
+                            code: "verification_failed".to_string(),
+                        };
+                    }
+                };
+                let null_key = match freebird_crypto::nullifier_key_v5(&parsed) {
+                    Ok(key) => key,
+                    Err(_) => {
+                        return VerifyResult::Error {
+                            message: "verification failed".to_string(),
+                            code: "verification_failed".to_string(),
+                        };
+                    }
+                };
+                (
+                    format!("freebird:spent:v5:{null_key}"),
+                    Some(ttl_until(key.valid_until, now)),
+                )
+            }
+            _ => {
+                return VerifyResult::Error {
+                    message: "unsupported token version".to_string(),
+                    code: "verification_failed".to_string(),
+                }
+            }
+        };
 
-        // 3) Check for replay
-        // Use captured runtime handle to bridge rayon and tokio.
-        let spent = runtime_handle.block_on(async {
-            st.store
-                .mark_spent(&spend_key, Duration::from_secs(issuer.exp_sec))
-                .await
-        });
+        let spent = runtime_handle.block_on(async { st.store.mark_spent(&spend_key, ttl).await });
 
         match spent {
             Ok(true) => VerifyResult::Success { verified_at: now },

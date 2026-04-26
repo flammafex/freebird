@@ -28,15 +28,14 @@ services:
     environment:
       - RUST_LOG=${RUST_LOG:-info,freebird=debug}
       - LOG_FORMAT=${LOG_FORMAT:-plain}
-      - ISSUER_ID=${ISSUER_ID:-issuer:docker:v1}
+      - ISSUER_ID=${ISSUER_ID:-issuer:docker:v4}
       - BIND_ADDR=${ISSUER_BIND_ADDR:-0.0.0.0:8081}
-      - TOKEN_TTL_MIN=${TOKEN_TTL_MIN:-10}
       - REQUIRE_TLS=${REQUIRE_TLS:-false}
       - BEHIND_PROXY=${BEHIND_PROXY:-false}
       - ADMIN_API_KEY=${ADMIN_API_KEY:-dev-admin-key-must-be-at-least-32-characters-long}
       - ISSUER_SK_PATH=${ISSUER_SK_PATH:-/data/keys/issuer_sk.bin}
       - KEY_ROTATION_STATE_PATH=${KEY_ROTATION_STATE_PATH:-/data/keys/key_rotation_state.json}
-      - EPOCH_DURATION_SEC=${EPOCH_DURATION_SEC:-86400}
+      - EPOCH_DURATION=${EPOCH_DURATION:-1d}
       - EPOCH_RETENTION=${EPOCH_RETENTION:-2}
       - SYBIL_RESISTANCE=${SYBIL_RESISTANCE:-invitation}
       - SYBIL_INVITE_PER_USER=${SYBIL_INVITE_PER_USER:-5}
@@ -104,16 +103,20 @@ services:
     # Configuration
     env_file:
       - .env
+    volumes:
+      - issuer-data:/issuer-data:ro
     environment:
       - RUST_LOG=${RUST_LOG:-info,freebird=debug}
       - LOG_FORMAT=${LOG_FORMAT:-plain}
       - BIND_ADDR=${VERIFIER_BIND_ADDR:-0.0.0.0:8082}
+      - VERIFIER_ID=${VERIFIER_ID:-verifier:docker:v4}
+      - VERIFIER_AUDIENCE=${VERIFIER_AUDIENCE:-docker}
       - ISSUER_URL=${ISSUER_URL:-http://issuer:8081/.well-known/issuer}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379}
-      - MAX_CLOCK_SKEW_SECS=${MAX_CLOCK_SKEW_SECS:-300}
       - REFRESH_INTERVAL_MIN=${REFRESH_INTERVAL_MIN:-10}
       - EPOCH_DURATION_SEC=${VERIFIER_EPOCH_DURATION_SEC:-86400}
       - EPOCH_RETENTION=${VERIFIER_EPOCH_RETENTION:-2}
+      - VERIFIER_SK_PATH=${VERIFIER_SK_PATH:-/issuer-data/keys/issuer_sk.bin}
 
     # Networking
     networks:
@@ -126,7 +129,7 @@ services:
 
     # Health checks
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/v1/check"]
+      test: ["CMD", "curl", "-f", "http://localhost:8082/.well-known/verifier"]
       interval: 30s
       timeout: 10s
       retries: 3

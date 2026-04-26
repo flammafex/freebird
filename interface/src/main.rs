@@ -93,16 +93,16 @@ fn print_help() {
 async fn normal_flow() -> Result<()> {
     let issuer_url = "http://127.0.0.1:8081";
     let verifier_url = "http://127.0.0.1:8082";
-    let ctx = b"freebird:v1";
+    let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
 
     let http = HttpClient::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
 
     // Issue token
-    let token_b64 = issue_token(&http, issuer_url, ctx).await?;
+    let token_b64 = issue_token(&http, issuer_url, verifier_url, ctx).await?;
 
-    println!("✅ Token issued (V3 self-contained redemption token)");
+    println!("✅ Token issued (V4 private-verification redemption token)");
 
     // Verify token
     let success = verify_token(&http, verifier_url, &token_b64).await?;
@@ -119,7 +119,7 @@ async fn normal_flow() -> Result<()> {
 async fn test_replay_attack() -> Result<()> {
     let issuer_url = "http://127.0.0.1:8081";
     let verifier_url = "http://127.0.0.1:8082";
-    let ctx = b"freebird:v1";
+    let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
 
     let http = HttpClient::builder()
         .timeout(Duration::from_secs(5))
@@ -127,7 +127,7 @@ async fn test_replay_attack() -> Result<()> {
 
     // Issue token
     println!("\n Step 1: Issuing fresh token...");
-    let token_b64 = issue_token(&http, issuer_url, ctx).await?;
+    let token_b64 = issue_token(&http, issuer_url, verifier_url, ctx).await?;
 
     // First verification (should succeed)
     println!("\n Step 2: First verification attempt...");
@@ -165,7 +165,7 @@ async fn test_double_spend() -> Result<()> {
 async fn test_expired_token() -> Result<()> {
     let issuer_url = "http://127.0.0.1:8081";
     let verifier_url = "http://127.0.0.1:8082";
-    let ctx = b"freebird:v1";
+    let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
 
     let http = HttpClient::builder()
         .timeout(Duration::from_secs(5))
@@ -173,17 +173,17 @@ async fn test_expired_token() -> Result<()> {
 
     // Issue token
     println!("\n Step 1: Issuing token...");
-    let token_b64 = issue_token(&http, issuer_url, ctx).await?;
-    println!("Token issued (V3 self-contained, expiration is embedded)");
+    let token_b64 = issue_token(&http, issuer_url, verifier_url, ctx).await?;
+    println!("Token issued (V4 private-verification token)");
 
-    // V3 tokens have expiration embedded, so we just verify normally.
+    // V4 tokens rely on verifier key acceptance policy, so verify normally.
     // The token's exp is set by the issuer and cannot be faked by the client.
     println!("\n Step 2: Verifying token...");
     let success = verify_token(&http, verifier_url, &token_b64).await?;
 
     if success {
         println!("Token verified successfully.");
-        println!("Note: V3 tokens embed their own expiration - it cannot be tampered with.");
+        println!("Note: V4 tokens do not carry client-controlled expiration.");
     } else {
         println!("Token verification failed.");
     }
@@ -193,13 +193,14 @@ async fn test_expired_token() -> Result<()> {
 
 async fn save_token_mode() -> Result<()> {
     let issuer_url = "http://127.0.0.1:8081";
-    let ctx = b"freebird:v1";
+    let verifier_url = "http://127.0.0.1:8082";
+    let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
 
     let http = HttpClient::builder()
         .timeout(Duration::from_secs(5))
         .build()?;
 
-    let token_b64 = issue_token(&http, issuer_url, ctx).await?;
+    let token_b64 = issue_token(&http, issuer_url, verifier_url, ctx).await?;
 
     let saved = SavedToken { token_b64 };
 
@@ -237,7 +238,7 @@ async fn load_token_mode() -> Result<()> {
 async fn stress_test(count: usize) -> Result<()> {
     let issuer_url = "http://127.0.0.1:8081";
     let verifier_url = "http://127.0.0.1:8082";
-    let ctx = b"freebird:v1";
+    let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
 
     let http = HttpClient::builder()
         .timeout(Duration::from_secs(5))
@@ -251,23 +252,21 @@ async fn stress_test(count: usize) -> Result<()> {
     for i in 1..=count {
         print!("Token {}/{}: ", i, count);
 
-        match issue_token(&http, issuer_url, ctx).await {
-            Ok(token_b64) => {
-                match verify_token(&http, verifier_url, &token_b64).await {
-                    Ok(true) => {
-                        println!("✅ SUCCESS");
-                        successes += 1;
-                    }
-                    Ok(false) => {
-                        println!("❌ REJECTED");
-                        failures += 1;
-                    }
-                    Err(e) => {
-                        println!("❌ ERROR: {}", e);
-                        failures += 1;
-                    }
+        match issue_token(&http, issuer_url, verifier_url, ctx).await {
+            Ok(token_b64) => match verify_token(&http, verifier_url, &token_b64).await {
+                Ok(true) => {
+                    println!("✅ SUCCESS");
+                    successes += 1;
                 }
-            }
+                Ok(false) => {
+                    println!("❌ REJECTED");
+                    failures += 1;
+                }
+                Err(e) => {
+                    println!("❌ ERROR: {}", e);
+                    failures += 1;
+                }
+            },
             Err(e) => {
                 println!("❌ ISSUE FAILED: {}", e);
                 failures += 1;
@@ -285,14 +284,65 @@ async fn stress_test(count: usize) -> Result<()> {
 async fn issue_token(
     http: &HttpClient,
     issuer_url: &str,
+    verifier_url: &str,
     ctx: &[u8],
 ) -> Result<String> {
-    // Initialize OPRF client
-    let mut client = Client::new(ctx);
+    // Get issuer metadata first; V4 binds the issuer/kid into the blinded input.
+    let wk: serde_json::Value = http
+        .get(format!("{issuer_url}/.well-known/issuer"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
 
-    // Random input
-    let mut input = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut input);
+    let issuer_id = wk["issuer_id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing issuer_id"))?
+        .to_string();
+    let kid = wk["voprf"]["kid"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing kid"))?
+        .to_string();
+    let pubkey_b64 = wk["voprf"]["pubkey"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing pubkey"))?
+        .to_string();
+    let issuer_pubkey_bytes = Base64UrlUnpadded::decode_vec(&pubkey_b64)?;
+
+    // Get verifier metadata so the token is bound to this verifier/audience.
+    let verifier_meta: serde_json::Value = http
+        .get(format!("{verifier_url}/.well-known/verifier"))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let verifier_id = verifier_meta["verifier_id"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing verifier_id"))?;
+    let audience = verifier_meta["audience"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing audience"))?;
+    let scope_digest_b64 = verifier_meta["scope_digest_b64"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing scope_digest_b64"))?;
+    let scope_digest_vec = Base64UrlUnpadded::decode_vec(scope_digest_b64)?;
+    let scope_digest: [u8; freebird_crypto::PRIVATE_TOKEN_SCOPE_DIGEST_LEN] = scope_digest_vec
+        .try_into()
+        .map_err(|_| anyhow!("scope_digest must be 32 bytes"))?;
+    let expected_scope = freebird_crypto::build_scope_digest(verifier_id, audience)
+        .map_err(|e| anyhow!("{:?}", e))?;
+    if scope_digest != expected_scope {
+        return Err(anyhow!("verifier scope metadata is inconsistent"));
+    }
+
+    // Initialize OPRF client with a random nonce and verifier-bound scope.
+    let mut client = Client::new(ctx);
+    let mut nonce = [0u8; freebird_crypto::PRIVATE_TOKEN_NONCE_LEN];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    let input = freebird_crypto::build_private_token_input(&issuer_id, &kid, &nonce, &scope_digest)
+        .map_err(|e| anyhow!("{:?}", e))?;
 
     // Blind
     let (blinded_bytes, blind_state) = client.blind(&input).map_err(|e| anyhow!("{:?}", e))?;
@@ -312,39 +362,23 @@ async fn issue_token(
         .json()
         .await?;
 
-    // Get issuer metadata
-    let wk: serde_json::Value = http
-        .get(format!("{issuer_url}/.well-known/issuer"))
-        .send()
-        .await?
-        .error_for_status()?
-        .json()
-        .await?;
+    if issue_resp.kid != kid || issue_resp.issuer_id != issuer_id {
+        return Err(anyhow!("issuer metadata changed during issuance"));
+    }
 
-    let pubkey_b64 = wk["voprf"]["pubkey"]
-        .as_str()
-        .ok_or_else(|| anyhow!("missing pubkey"))?;
-    let issuer_pubkey_bytes = Base64UrlUnpadded::decode_vec(pubkey_b64)?;
-
-    // Finalize: unblind the VOPRF evaluation to get the 32-byte PRF output
+    // Finalize: unblind the VOPRF evaluation to get the V4 authenticator.
     let token_bytes = Base64UrlUnpadded::decode_vec(&issue_resp.token)?;
     let output = client
         .finalize(blind_state, &token_bytes, &issuer_pubkey_bytes)
         .map_err(|e| anyhow!("{:?}", e))?;
 
-    // Decode the ECDSA signature from the issuance response
-    let sig_bytes = Base64UrlUnpadded::decode_vec(&issue_resp.sig)?;
-    let sig: [u8; 64] = sig_bytes
-        .try_into()
-        .map_err(|_| anyhow!("signature must be 64 bytes"))?;
-
-    // Build the V3 self-contained redemption token
+    // Build the V4 private-verification redemption token.
     let redemption_token = freebird_crypto::RedemptionToken {
-        output,
+        nonce,
+        scope_digest,
         kid: issue_resp.kid,
-        exp: issue_resp.exp,
         issuer_id: issue_resp.issuer_id,
-        sig,
+        authenticator: output,
     };
 
     let token_wire = freebird_crypto::build_redemption_token(&redemption_token)
@@ -353,12 +387,8 @@ async fn issue_token(
     Ok(Base64UrlUnpadded::encode_string(&token_wire))
 }
 
-async fn verify_token(
-    http: &HttpClient,
-    verifier_url: &str,
-    token_b64: &str,
-) -> Result<bool> {
-    // V3: just send the self-contained token
+async fn verify_token(http: &HttpClient, verifier_url: &str, token_b64: &str) -> Result<bool> {
+    // V4: just send the private-verification redemption token
     let resp = http
         .post(format!("{verifier_url}/v1/verify"))
         .json(&VerifyReq {
@@ -374,4 +404,3 @@ async fn verify_token(
         Ok(false)
     }
 }
-

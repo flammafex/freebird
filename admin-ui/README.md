@@ -36,10 +36,6 @@ The admin UI automatically detects whether it's running on an issuer or verifier
 - Filter by level (info, warning, error, success)
 - Search logs by keyword
 
-**Federation Tab:**
-- Manage federation relationships with other issuers
-- View trusted peers and cross-issuer policies
-
 **Sybil Configuration Tab:**
 - View and modify Sybil resistance settings
 - Configure invitation limits, cooldowns, and expiration

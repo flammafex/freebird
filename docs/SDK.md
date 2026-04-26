@@ -1,338 +1,216 @@
-# 📦 Freebird SDK Documentation
+# Freebird SDK
 
-The Freebird SDK provides a TypeScript/JavaScript client for issuing and verifying anonymous tokens using the VOPRF protocol.
+The TypeScript SDK supports the V4 private option directly and exposes V5 public-option helpers for applications that provide an RFC 9474 RSA blind-signature implementation.
 
 ---
 
-## Installation
+## Install
 
 ```bash
 npm install @freebird/sdk
 ```
 
-**Requirements:**
-- Node.js 18+ (for `fetch` and `crypto` API support)
-- Modern browsers (Edge, Chrome, Firefox, Safari)
+Requirements:
 
----
+- Node.js 18+ or a modern browser;
+- global `fetch`;
+- Web Crypto `crypto.getRandomValues()`.
 
-## Quick Start
+## V4 Private Option
+
+V4 is the default high-privacy flow exposed by `issueToken()`.
 
 ```typescript
 import { FreebirdClient } from '@freebird/sdk';
 
-// 1. Configure
 const client = new FreebirdClient({
   issuerUrl: 'https://issuer.example.com',
-  verifierUrl: 'https://verifier.example.com' // Optional, for verification
+  verifierUrl: 'https://verifier.example.com'
 });
 
-async function main() {
-  // 2. Initialize (fetches server public key)
-  await client.init();
+await client.init();
 
-  // 3. Issue an anonymous token
-  try {
-    const token = await client.issueToken();
-    console.log('Got token:', token.tokenValue);
-    console.log('Expires at:', new Date(token.expiration * 1000));
+const token = await client.issueToken();
+console.log(token.version);    // 4
+console.log(token.tokenValue); // base64url V4 redemption token
 
-    // 4. Verify (optional client-side check)
-    const isValid = await client.verifyToken(token);
-    console.log('Token valid:', isValid);
-
-  } catch (e) {
-    console.error('Issuance failed:', e);
-  }
-}
-
-main();
+const ok = await client.verifyToken(token);
 ```
 
----
+`init()` fetches:
 
-## API Reference
+- issuer metadata from `/.well-known/issuer`;
+- verifier scope metadata from `/.well-known/verifier`.
 
-### `FreebirdClient`
+`issueToken()`:
 
-The main entry point for the SDK.
+1. generates a nonce;
+2. builds the V4 verifier-bound token input;
+3. blinds the input with the P-256 VOPRF client;
+4. sends `POST /v1/oprf/issue`;
+5. verifies the DLEQ proof;
+6. unblinds the authenticator;
+7. returns a base64url V4 redemption token.
 
-#### `constructor(config: ClientConfig)`
+## V5 Public Option
 
-Creates a new client instance.
+The SDK includes V5 message and token codecs plus an issuer request helper. It does not implement RSA blinding itself.
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `issuerUrl` | `string` | (Required) Base URL of the Freebird Issuer service. |
-| `verifierUrl` | `string` | (Optional) Base URL of the Freebird Verifier service. Required only if you call `verifyToken()`. |
+Use an RFC 9474 `RSABSSA-SHA384-PSS-Deterministic` implementation to blind and finalize the V5 message.
 
 ```typescript
+import { FreebirdClient, crypto as freebirdCrypto } from '@freebird/sdk';
+
 const client = new FreebirdClient({
-  issuerUrl: 'http://localhost:8081',
-  verifierUrl: 'http://localhost:8082'
+  issuerUrl: 'https://issuer.example.com',
+  verifierUrl: 'https://verifier.example.com'
 });
+
+const keys = await client.getKeyDiscoveryMetadata();
+const publicKey = keys.public.find((key) =>
+  key.token_type === 'public_bearer_pass' &&
+  key.rfc9474_variant === 'RSABSSA-SHA384-PSS-Deterministic' &&
+  key.spend_policy === 'single_use'
+);
+
+if (!publicKey) throw new Error('No public bearer key available');
+
+const nonce = globalThis.crypto.getRandomValues(new Uint8Array(32));
+const tokenKeyId = freebirdCrypto.tokenKeyIdFromHex(publicKey.token_key_id);
+const message = freebirdCrypto.buildPublicBearerMessage(
+  nonce,
+  tokenKeyId,
+  publicKey.issuer_id
+);
+
+// Use an RFC 9474 library here:
+// const { blindedMsg, blindState } = rsaBlind(publicKey.pubkey_spki_b64, message);
+
+const issueResp = await client.issuePublicBlindSignature(
+  blindedMsg,
+  undefined,
+  publicKey.token_key_id
+);
+
+// const signature = rsaFinalize(issueResp.blind_signature_b64, blindState, message);
+const tokenBytes = freebirdCrypto.buildPublicBearerPass(
+  nonce,
+  tokenKeyId,
+  issueResp.issuer_id,
+  signature
+);
 ```
 
-#### `init(): Promise<void>`
-
-Fetches the issuer's metadata (public key, key ID, supported cipher suites) from `/.well-known/issuer`.
-
-**Note:** You must await `init()` before issuing tokens. If you call `issueToken()` without initializing, it will attempt to auto-initialize, but explicit initialization is best practice.
-
-#### `issueToken(proof?: SybilProof): Promise<FreebirdToken>`
-
-Performs the full VOPRF issuance flow:
-1. Generates random input and blinds it.
-2. Sends blinded input (+ optional Sybil proof) to Issuer.
-3. Verifies the DLEQ proof (confirms issuer honesty).
-4. Unblinds the evaluation to obtain the PRF output.
-5. Builds a self-contained V3 redemption token from the output + metadata + ECDSA signature.
-6. Returns the usable token.
-
-**Parameters:**
-- `proof` (Optional): A `SybilProof` object if the issuer requires it (e.g. Invitation code, PoW, WebAuthn).
-
-**Returns:**
-- A `FreebirdToken` object ready for use.
-
-**Throws:**
-- Error if the issuer rejects the request (400/401/403).
-- Error if the cryptographic verification (DLEQ) fails.
-
-#### `verifyToken(token: FreebirdToken): Promise<boolean>`
-
-Sends the V3 redemption token to the configured Verifier. The token is self-contained — the verifier extracts all needed fields (expiration, issuer ID, ECDSA signature) from the token itself.
-
-**Returns:**
-- `true` if valid and fresh.
-- `false` if expired, invalid ECDSA signature, or already spent.
-
----
-
-## Types
-
-### `FreebirdToken`
-
-The standard token object used by applications.
+The resulting base64url token can be sent to the same verifier endpoint:
 
 ```typescript
-interface FreebirdToken {
-  /** Base64url-encoded V3 redemption token (self-contained) */
-  tokenValue: string;
+const tokenValue = bytesToBase64Url(tokenBytes);
+await fetch('https://verifier.example.com/v1/verify', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ token_b64: tokenValue })
+});
 
-  /** Unix timestamp (seconds) when this token expires (extracted for convenience) */
-  expiration: number;
-
-  /** The ID of the issuer that signed this token (extracted for convenience) */
-  issuerId: string;
+function bytesToBase64Url(bytes: Uint8Array): string {
+  const bin = String.fromCharCode(...bytes);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 ```
 
-The `tokenValue` is a self-contained V3 redemption token containing the unblinded PRF output, key ID, expiration, issuer ID, and ECDSA signature. It can be sent directly to the verifier without any additional fields.
+## Client API
 
-### `SybilProof`
+### `new FreebirdClient(config)`
 
-A union type representing the different proofs you can provide to the issuer.
+| Field | Required | Description |
+|-------|----------|-------------|
+| `issuerUrl` | yes | Base issuer URL, without trailing endpoint path. |
+| `verifierUrl` | for V4 convenience | Base verifier URL used to fetch V4 scope and verify tokens. |
+| `verifierId` | alternative | Verifier scope ID when `verifierUrl` is not available. |
+| `audience` | alternative | Verifier audience when `verifierUrl` is not available. |
 
-#### 1. Invitation
-Used for invite-only communities.
+### `init(): Promise<void>`
 
-```typescript
-const proof = {
-  type: 'invitation',
-  code: 'Abc123XyZ...',       // The invitation code
-  signature: '304502...'      // The cryptographic signature provided with the code
-};
-```
+Initializes issuer metadata and V4 verifier metadata.
 
-#### 2. WebAuthn (Passkey)
-Used for hardware-backed "Proof of Humanity".
+### `issueToken(proof?: SybilProof): Promise<FreebirdToken>`
 
-```typescript
-const proof = {
-  type: 'webauthn',
-  username: 'alice',
-  auth_proof: 'base64...',    // Returned from /webauthn/authenticate/finish
-  timestamp: 1699454445       // Authentication timestamp
-};
-```
+Issues a V4 private-verification token.
 
-#### 3. Proof of Work
-Used for permissionless spam prevention.
+### `getKeyDiscoveryMetadata(): Promise<KeyDiscoveryMetadata>`
 
-```typescript
-const proof = {
-  type: 'proof_of_work',
-  nonce: 12345,
-  input: 'challenge_string',
-  timestamp: 1699454445
-};
-```
+Fetches issuer key metadata from `/.well-known/keys`, including V5 public bearer keys.
 
-#### 4. Rate Limit
-Used for IP/Fingerprint throttling.
+### `issuePublicBlindSignature(blindedMsg, proof?, tokenKeyId?): Promise<PublicIssueResponse>`
 
-```typescript
-const proof = {
-  type: 'rate_limit',
-  client_id: 'hashed_id',
-  timestamp: 1699454445
-};
-```
+Calls `POST /v1/public/issue` for a V5 blind signature.
 
-#### 5. Registered User
-Used for users already in the system (e.g., instance owner). Bypasses the invitation requirement for existing database users.
+`blindedMsg` can be a `Uint8Array` or an already base64url-encoded string.
 
-```typescript
-const proof = {
-  type: 'registered_user',
-  user_id: 'alice'
-};
-```
+### `verifyToken(token): Promise<boolean>`
 
-#### 6. Progressive Trust
-Used for time-based reputation building.
+Calls `/v1/verify` with `token.tokenValue`. The verifier handles V4 and V5 dispatch by token version.
 
-```typescript
-const proof = {
-  type: 'progressive_trust',
-  user_id_hash: 'blake3-hash',   // Blake3(username + salt)
-  first_seen: 1699000000,
-  tokens_issued: 10,
-  last_issuance: 1699454445,
-  hmac_proof: 'base64url...'
-};
-```
-
-#### 7. Multi-Party Vouching
-Used when multiple users must vouch for the requester.
-
-```typescript
-const proof = {
-  type: 'multi_party_vouching',
-  vouchee_id_hash: 'blake3-hash',
-  vouches: [
-    {
-      voucher_id: 'alice',
-      vouchee_id: 'bob',
-      timestamp: 1699454445,
-      signature: 'base64url...',
-      voucher_pubkey_b64: 'base64url...'
-    }
-  ],
-  hmac_proof: 'base64url...',
-  timestamp: 1699454445
-};
-```
-
----
-
-## Error Handling
-
-All SDK methods throw standard `Error` objects on failure. The error message contains a human-readable description.
-
-```typescript
-try {
-  const token = await client.issueToken(proof);
-} catch (e: unknown) {
-  if (e instanceof Error) {
-    // Issuer rejected the request (HTTP 400/401/403)
-    if (e.message.includes('403')) {
-      console.error('Sybil proof rejected');
-    }
-    // DLEQ proof verification failure (issuer misbehavior)
-    if (e.message.includes('DLEQ')) {
-      console.error('Issuer cheated: DLEQ proof invalid');
-    }
-  }
-}
-```
-
-**Common errors:**
-
-| Condition | Typical message |
-|-----------|----------------|
-| Invalid sybil proof | `"Issuer returned 403: Sybil resistance proof failed"` |
-| No sybil proof provided when required | `"Issuer returned 403: Sybil resistance proof required"` |
-| DLEQ verification fails | `"DLEQ proof verification failed"` |
-| Network error | `"fetch failed"` or `"NetworkError"` |
-| Token already spent | `"Verifier returned 401: token already spent"` |
-| Token expired | `"Verifier returned 401: token expired"` |
-
----
-
-## Low-Level Crypto API
-
-The SDK exports low-level cryptographic primitives for advanced use cases. These are available as `crypto.*` from the package root.
+## Low-Level Crypto Helpers
 
 ```typescript
 import { crypto } from '@freebird/sdk';
 ```
 
-### `crypto.blind(input, context)`
+V4:
 
-Blinds a byte array for the VOPRF protocol. Returns the blinded element and a `BlindState` needed for finalization.
+- `crypto.blind(input, context)`
+- `crypto.finalize(state, evaluationB64, issuerPubkeyB64, context)`
+- `crypto.buildScopeDigest(verifierId, audience)`
+- `crypto.buildPrivateTokenInput(issuerId, kid, nonce, scopeDigest)`
+- `crypto.buildRedemptionToken(nonce, scopeDigest, kid, issuerId, authenticator)`
+- `crypto.parseRedemptionToken(bytes)`
 
-```typescript
-const { blinded, state } = crypto.blind(
-  new TextEncoder().encode('my-secret-input'),
-  new TextEncoder().encode('freebird-voprf-v1')
-);
-// blinded: Uint8Array — 33-byte SEC1 compressed P-256 point
-// state: BlindState — contains scalar r and point P for finalization
-```
+V5:
 
-### `crypto.finalize(state, evaluationB64, kid, exp, issuerId)`
+- `crypto.tokenKeyIdFromSpki(pubkeySpki)`
+- `crypto.tokenKeyIdToHex(tokenKeyId)`
+- `crypto.tokenKeyIdFromHex(tokenKeyIdHex)`
+- `crypto.buildPublicBearerMessage(nonce, tokenKeyId, issuerId)`
+- `crypto.buildPublicBearerPass(nonce, tokenKeyId, issuerId, signature)`
+- `crypto.parsePublicBearerPass(bytes)`
 
-Finalizes the VOPRF by unblinding the server's evaluation and building the V3 redemption token.
-
-```typescript
-const token = await crypto.finalize(
-  state,
-  serverEvaluationBase64,  // from IssueResp.token
-  kid,                     // from IssueResp.kid
-  exp,                     // from IssueResp.exp
-  issuerId                 // from IssueResp.issuer_id
-);
-```
-
-### `crypto.buildRedemptionToken(output, kid, exp, issuerId, sig)`
-
-Assembles a V3 redemption token from its components. Used after unblinding.
+## Types
 
 ```typescript
-const tokenBytes = crypto.buildRedemptionToken(output, kid, exp, issuerId, sig);
+interface FreebirdToken {
+  tokenValue: string;
+  issuerId: string;
+  version?: 4 | 5;
+  kid?: string;
+  tokenKeyId?: string;
+}
 ```
 
-### `crypto.parseRedemptionToken(bytes)`
+V4 tokens include `kid`. V5 tokens include `tokenKeyId`.
 
-Parses a V3 redemption token binary back into its components.
+`SybilProof` supports:
 
-```typescript
-const { output, kid, exp, issuerId, sig } = crypto.parseRedemptionToken(tokenBytes);
-```
+- `proof_of_work`
+- `rate_limit`
+- `invitation`
+- `registered_user`
+- `webauthn`
+- `progressive_trust`
+- `proof_of_diversity`
+- `multi_party_vouching`
+- `multi`
+- `none`
 
----
+## Error Handling
 
-## Browser vs. Node.js Differences
+SDK methods throw `Error` with human-readable messages for:
 
-The SDK uses `@noble/curves` and `@noble/hashes` for all elliptic curve and hash operations. These are pure-JavaScript implementations with no native dependencies and work identically in both environments.
+- issuer metadata fetch failure;
+- verifier metadata fetch failure;
+- missing V4 verifier scope;
+- issuer rejection of Sybil proof;
+- DLEQ verification failure;
+- public bearer key metadata absence;
+- verifier rejection or replay.
 
-**Fetch:** The SDK uses the global `fetch` API, available in:
-- Node.js 18+ (built-in)
-- All modern browsers (Chrome, Firefox, Safari, Edge)
-- For older Node.js: use `node-fetch` as a polyfill
-
-**Random scalar generation:** Uses `crypto.getRandomValues()` (Web Crypto API) — available in Node.js 15+ and all modern browsers.
-
-**Module format:** The package ships both ESM and CJS bundles (via `tsup`). Import style:
-
-```typescript
-// ESM (recommended)
-import { FreebirdClient } from '@freebird/sdk';
-
-// CommonJS
-const { FreebirdClient } = require('@freebird/sdk');
-```
-
-**WASM/native:** No WASM or native bindings are used. The SDK is pure TypeScript/JavaScript.
+Tokens are bearer credentials. Use HTTPS and store tokens as sensitive data.

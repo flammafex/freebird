@@ -2,7 +2,7 @@
 use crate::multi_key_voprf::MultiKeyVoprfCore;
 use crate::AppStateWithSybil;
 use axum::{extract::State, Json};
-use freebird_common::api::{KeyDiscoveryResp, VoprfKeyInfo};
+use freebird_common::api::{KeyDiscoveryResp, PublicKeyInfo, VoprfKeyInfo};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -11,6 +11,8 @@ use std::sync::Arc;
 pub struct WellKnown {
     issuer_id: String,
     voprf: VoprfInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    public: Option<PublicModeInfo>,
 }
 
 #[derive(Serialize)]
@@ -18,7 +20,15 @@ struct VoprfInfo {
     suite: String,
     kid: String,
     pubkey: String,
-    exp_sec: u64,
+}
+
+#[derive(Serialize)]
+struct PublicModeInfo {
+    token_type: String,
+    token_key_id: String,
+    rfc9474_variant: String,
+    modulus_bits: u16,
+    spend_policy: String,
 }
 
 // Define the type alias for the state we injected in startup.rs
@@ -36,8 +46,11 @@ pub async fn well_known_handler(State((state, voprf)): State<SharedState>) -> Js
             suite: "OPRF(P-256, SHA-256)-verifiable".into(),
             kid: active_kid,
             pubkey: active_pubkey,
-            exp_sec: state.exp_sec,
         },
+        public: state
+            .public_issuer
+            .as_ref()
+            .map(|issuer| public_mode_info(issuer.metadata())),
     })
 }
 
@@ -63,33 +76,21 @@ pub async fn keys_handler(State((state, voprf)): State<SharedState>) -> Json<Key
             suite: "OPRF(P-256, SHA-256)-verifiable".into(),
             kid: active_kid,
             pubkey: active_pubkey,
-            exp_sec: state.exp_sec,
         },
+        public: state
+            .public_issuer
+            .as_ref()
+            .map(|issuer| vec![issuer.metadata().clone()])
+            .unwrap_or_default(),
     })
 }
 
-/// Federation metadata endpoint (Layer 2 Federation)
-///
-/// Returns information about which issuers this issuer trusts (vouches)
-/// and which it has revoked. This enables ActivityPub-style federation
-/// where verifiers can traverse trust graphs to make authorization decisions.
-pub async fn federation_handler(
-    State((state, _voprf)): State<SharedState>,
-) -> Json<freebird_common::federation::FederationMetadata> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-
-    // Load vouches and revocations from storage
-    let vouches = state.federation_store.get_vouches().await;
-    let revocations = state.federation_store.get_revocations().await;
-
-    Json(freebird_common::federation::FederationMetadata {
-        issuer_id: state.issuer_id.clone(),
-        vouches,
-        revocations,
-        updated_at: now,
-        cache_ttl_secs: Some(3600), // 1 hour cache
-    })
+fn public_mode_info(metadata: &PublicKeyInfo) -> PublicModeInfo {
+    PublicModeInfo {
+        token_type: metadata.token_type.clone(),
+        token_key_id: metadata.token_key_id.clone(),
+        rfc9474_variant: metadata.rfc9474_variant.clone(),
+        modulus_bits: metadata.modulus_bits,
+        spend_policy: metadata.spend_policy.clone(),
+    }
 }
