@@ -198,4 +198,4 @@ The admin UI communicates with its service via the same `X-Admin-Key` header use
 5. **Docs**: If you change an API type in `freebird-common`, update `docs/API.md` and `docs/FEDERATION.md` as appropriate. If you change env vars, update `docs/CONFIGURATION.md` and `.env.example`.
 6. **Pull request**: Open a PR against `main`. Describe what changed and why.
 
-The GitHub Actions workflow builds an x86_64 Docker image on every push to `main`. Pre-built images are published to `ghcr.io/flammafex/freebird`.
+The GitHub Actions workflow builds a multi-arch Docker image on every push to `main`. Pre-built images are published to `ghcr.io/flammafex/freebird`.

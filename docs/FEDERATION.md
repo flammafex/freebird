@@ -24,6 +24,16 @@ The verifier fetches:
 - `/.well-known/issuer` for issuer ID and active VOPRF metadata;
 - `/.well-known/keys` for VOPRF key discovery and V5 public bearer key metadata.
 
+## Metadata Refresh
+
+The verifier refreshes issuer metadata every 10 minutes. If refresh fails, it retries with exponential backoff (up to 5× the base interval).
+
+The issuer metadata URL must use HTTPS. The verifier refuses to refresh metadata from HTTP URLs:
+
+```
+issuer metadata URL must use HTTPS: {url}
+```
+
 ## V4 Private Trust
 
 V4 private verification requires explicit issuer trust plus private verification authority.
