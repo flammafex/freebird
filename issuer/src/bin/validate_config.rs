@@ -511,7 +511,7 @@ fn validate_webauthn_config() -> Option<ValidationSection> {
     if let Ok(redis_url) = env::var("WEBAUTHN_REDIS_URL") {
         section.add(CheckResult::Ok(format!(
             "WEBAUTHN_REDIS_URL = {}",
-            redis_url.split('@').last().unwrap_or(&redis_url) // Hide credentials
+            redis_url.split('@').next_back().unwrap_or(&redis_url) // Hide credentials
         )));
     }
 

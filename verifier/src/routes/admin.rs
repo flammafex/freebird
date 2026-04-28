@@ -290,6 +290,7 @@ pub fn admin_router(state: Arc<AdminState>) -> Router {
         .route("/health", get(health_handler))
         .route("/stats", get(stats_handler))
         .route("/config", get(config_handler))
+        .route("/metrics", get(metrics_handler))
         .route("/issuers", get(list_issuers_handler))
         .route("/issuers/{issuer_id}", get(get_issuer_handler))
         .route("/issuers/{issuer_id}/refresh", post(refresh_issuer_handler))
@@ -701,4 +702,47 @@ pub async fn cache_clear_handler(
             "Cache clearing is disabled for safety. Restart the service to clear in-memory cache."
                 .to_string(),
     }))
+}
+
+/// Prometheus metrics endpoint
+pub async fn metrics_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+) -> Result<String, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key(&headers, &state, client_ip).await?;
+
+    let issuers = state.issuers.read().await;
+    let uptime = state.start_time.elapsed().as_secs();
+
+    let mut output = String::new();
+
+    macro_rules! metric {
+        ($name:expr, $type:expr, $help:expr, $value:expr) => {
+            output.push_str(&format!(
+                "# HELP {} {}\n# TYPE {} {}\n{} {}\n",
+                $name, $help, $name, $type, $name, $value
+            ));
+        };
+    }
+
+    metric!(
+        "freebird_verifier_uptime_seconds",
+        "gauge",
+        "Verifier uptime in seconds",
+        uptime
+    );
+    metric!(
+        "freebird_verifier_issuers_loaded",
+        "gauge",
+        "Number of trusted issuers loaded",
+        issuers.len()
+    );
+
+    output.push_str(&freebird_common::metrics::encode_metrics());
+
+    info!("Admin: retrieved Prometheus metrics");
+
+    Ok(output)
 }

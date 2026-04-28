@@ -56,7 +56,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tower_governor = "0.5"
 tower = "0.4"
-tower-http = { version = "0.5", features = ["trace", "timeout", "set-header", "util", "request-id", "catch-panic"] }
+tower-http = { version = "0.5", features = ["trace", "timeout", "set-header", "util", "request-id", "catch-panic", "cors"] }
 # WebAuthn dependencies (conditional on feature flag)
 webauthn-rs = { version = "0.5.3", optional = true }
 url = { version = "2", optional = true }
@@ -67,7 +67,11 @@ redis = { version = "0.24", features = ["aio", "tokio-comp"], optional = true }
 reqwest = { version = "0.12.24", features = ["json"] }
 clap = { version = "4", features = ["derive", "env"] }
 colored = "2"
+prometheus = "0.13"
+lazy_static = "1.4"
+lru = "0.12"
 
 [dev-dependencies]
 serial_test = "3"
 tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }

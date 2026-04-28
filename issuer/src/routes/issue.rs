@@ -121,7 +121,7 @@ pub async fn handle(
     Json(req): Json<IssueReq>,
 ) -> Result<Json<IssueResp>, (StatusCode, String)> {
     tracing::Span::current()
-        .record("kid", &state.kid.as_str())
+        .record("kid", state.kid.as_str())
         .record("sybil_configured", state.sybil_checker.is_some());
 
     info!(

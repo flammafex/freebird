@@ -103,9 +103,9 @@ pub fn parse_duration(input: &str) -> Result<u64, ParseDurationError> {
     // Parse combined duration string (e.g., "1d12h30m")
     let mut total_secs: u64 = 0;
     let mut current_num = String::new();
-    let mut chars = input.chars().peekable();
+    let chars = input.chars().peekable();
 
-    while let Some(c) = chars.next() {
+    for c in chars {
         if c.is_ascii_digit() {
             current_num.push(c);
         } else if c.is_ascii_alphabetic() {

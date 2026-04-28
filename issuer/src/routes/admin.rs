@@ -881,7 +881,7 @@ async fn verify_api_key_with_rate_limit(
         let provided_key = headers
             .get("x-admin-key")
             .and_then(|v| v.to_str().ok())
-            .ok_or_else(|| AdminError::Unauthorized)?;
+            .ok_or(AdminError::Unauthorized)?;
 
         if !constant_time_key_verify(&state.api_key, provided_key) {
             warn!("Invalid admin API key provided from unknown IP");
@@ -899,7 +899,7 @@ async fn verify_api_key_with_rate_limit(
     let provided_key = headers
         .get("x-admin-key")
         .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| AdminError::Unauthorized)?;
+        .ok_or(AdminError::Unauthorized)?;
 
     if !constant_time_key_verify(&state.api_key, provided_key) {
         state.rate_limiter.record_failure(ip).await;
@@ -1055,7 +1055,6 @@ pub async fn metrics_handler(
 
     let mut output = String::new();
 
-    // Helper to add a metric
     macro_rules! metric {
         ($name:expr, $type:expr, $help:expr, $value:expr) => {
             output.push_str(&format!(
@@ -1130,6 +1129,9 @@ pub async fn metrics_handler(
         "# HELP freebird_info Freebird instance information\n# TYPE freebird_info gauge\nfreebird_info{{sybil_mode=\"{}\"}} 1\n",
         state.config_summary.sybil_config.mode
     ));
+
+    // Append Prometheus histogram/counter metrics from the shared registry
+    output.push_str(&freebird_common::metrics::encode_metrics());
 
     info!("Admin: retrieved Prometheus metrics");
 

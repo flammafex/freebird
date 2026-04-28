@@ -13,6 +13,7 @@ use freebird_common::api::{
     VerifierMetadataResp, VerifyReq, VerifyResp, VerifyResult,
 };
 use freebird_common::logging;
+use freebird_common::metrics::{self, MetricsMiddleware};
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::{
@@ -24,6 +25,7 @@ use std::{
 use tokio::{net::TcpListener, sync::RwLock, time::sleep};
 use tower::ServiceBuilder;
 use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -157,7 +159,14 @@ async fn load_public_keys(
     HashMap<[u8; freebird_crypto::PUBLIC_BEARER_TOKEN_KEY_ID_LEN], admin::PublicIssuerKey>,
 > {
     let keys_url = issuer_keys_url(issuer_url)?;
-    let res = reqwest::get(&keys_url)
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("build HTTP client")?;
+    let url = reqwest::Url::parse(&keys_url).context("parse keys URL")?;
+    let res = client
+        .get(url)
+        .send()
         .await?
         .error_for_status()
         .with_context(|| format!("issuer key discovery request failed: {keys_url}"))?;
@@ -248,6 +257,7 @@ fn validate_secret_key_matches_pubkey(
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     logging::init("debug");
+    metrics::register_metrics();
 
     // ---------- Configuration ----------
     // ---------- Epoch Configuration ----------
@@ -268,7 +278,7 @@ async fn main() -> anyhow::Result<()> {
     } else {
         (StoreBackend::InMemory, "memory".to_string())
     };
-    let store = backend.build().await;
+    let store = backend.build().await?;
 
     // ---------- Issuer metadata refresh ----------
     // Support multiple issuer URLs (comma-separated) with backward compatibility
@@ -303,7 +313,14 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // ---------- Admin API Configuration ----------
-    let admin_api_key = std::env::var("ADMIN_API_KEY").ok();
+    let admin_api_key = match std::env::var("ADMIN_API_KEY") {
+        Ok(key) if key.len() >= 32 => key,
+        Ok(key) => anyhow::bail!(
+            "ADMIN_API_KEY must be at least 32 characters, got {}",
+            key.len()
+        ),
+        Err(_) => anyhow::bail!("ADMIN_API_KEY must be set (minimum 32 characters)"),
+    };
     let behind_proxy = std::env::var("BEHIND_PROXY")
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false);
@@ -355,55 +372,70 @@ async fn main() -> anyhow::Result<()> {
 
     // ---------- Router ----------
     let mut app = Router::new()
+        .route("/health", get(health_handler))
         .route("/.well-known/verifier", get(verifier_metadata))
         .route("/v1/verify", post(verify_with_logging))
         .route("/v1/verify/batch", post(batch_verify))
         .route("/v1/check", post(check_with_logging))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::OPTIONS,
+                ])
+                .allow_headers([axum::http::header::CONTENT_TYPE])
+                .max_age(Duration::from_secs(86400)),
+        )
+        .layer(freebird_common::rate_limit::PublicRateLimitLayer::default())
         .with_state(state);
 
-    // ---------- Admin Router (optional) ----------
-    if let Some(api_key) = admin_api_key {
-        if api_key.len() >= 32 {
-            let require_tls = std::env::var("REQUIRE_TLS")
-                .map(|v| v == "true" || v == "1")
-                .unwrap_or(false);
-            let session_key = admin::derive_session_key(&api_key);
-            let admin_state = Arc::new(AdminState {
-                issuers: Arc::clone(&issuers),
-                store: Arc::clone(&store),
-                api_key,
-                session_key,
-                rate_limiter: AdminRateLimiter::new(),
-                behind_proxy,
-                require_tls,
-                start_time,
-                config: VerifierConfig {
-                    epoch_duration_sec,
-                    epoch_retention,
-                    refresh_interval_min,
-                    store_backend: store_backend_name,
-                    issuer_urls: issuer_urls_for_admin,
-                    verifier_id: verifier_id.clone(),
-                    audience: audience.clone(),
-                },
-            });
+    let require_tls = std::env::var("REQUIRE_TLS")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+    let session_key = admin::derive_session_key(&admin_api_key);
+    let admin_state = Arc::new(AdminState {
+        issuers: Arc::clone(&issuers),
+        store: Arc::clone(&store),
+        api_key: admin_api_key,
+        session_key,
+        rate_limiter: AdminRateLimiter::new(),
+        behind_proxy,
+        require_tls,
+        start_time,
+        config: VerifierConfig {
+            epoch_duration_sec,
+            epoch_retention,
+            refresh_interval_min,
+            store_backend: store_backend_name,
+            issuer_urls: issuer_urls_for_admin,
+            verifier_id: verifier_id.clone(),
+            audience: audience.clone(),
+        },
+    });
 
-            let admin_router = admin::admin_router(admin_state);
-            app = app.nest("/admin", admin_router);
-            info!("Admin API enabled at /admin");
-        } else {
-            warn!("ADMIN_API_KEY is too short (minimum 32 characters), admin API disabled");
+    let rate_limiter_clone = Arc::clone(&admin_state);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300));
+        loop {
+            interval.tick().await;
+            rate_limiter_clone.rate_limiter.cleanup_expired().await;
         }
-    } else {
-        info!("Admin API disabled (no ADMIN_API_KEY set)");
-    }
+    });
+
+    let admin_router = admin::admin_router(admin_state);
+    app = app.nest("/admin", admin_router);
+    info!("Admin API enabled at /admin");
 
     // Outermost layers: catch panics before they escape handlers, then emit
     // HTTP tracing spans for every inbound request.
     let app = app.layer(
         ServiceBuilder::new()
             .layer(CatchPanicLayer::custom(handle_panic))
-            .layer(TraceLayer::new_for_http()),
+            .layer(TraceLayer::new_for_http())
+            .layer(MetricsMiddleware)
+            .layer(freebird_common::tls_enforcement::TlsEnforcementLayer::new()),
     );
 
     // ---------- Serve ----------
@@ -428,7 +460,17 @@ async fn main() -> anyhow::Result<()> {
 #[instrument(skip(state), fields(url = %issuer_url))]
 async fn refresh_issuer_metadata(state: &Arc<AppState>, issuer_url: &str) -> anyhow::Result<()> {
     info!(%issuer_url, "fetching issuer metadata");
-    let res = reqwest::get(issuer_url)
+    let url = reqwest::Url::parse(issuer_url).context("parse issuer metadata URL")?;
+    if url.scheme() != "https" {
+        anyhow::bail!("issuer metadata URL must use HTTPS: {}", issuer_url);
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("build HTTP client")?;
+    let res = client
+        .get(url)
+        .send()
         .await?
         .error_for_status()
         .context("issuer metadata request failed")?;
@@ -837,6 +879,14 @@ async fn batch_verify(
         failed,
         processing_time_ms: total_time_ms,
         throughput,
+    }))
+}
+
+// ---------- Health check handler ----------
+async fn health_handler() -> Json<serde_json::Value> {
+    Json(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
     }))
 }
 

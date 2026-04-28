@@ -24,35 +24,22 @@ use super::store::CredentialStore;
 /// Derive a proof verification key from the RP ID and server secret
 ///
 /// Security: This function derives a key for HMAC-based proof verification.
-/// - When WEBAUTHN_PROOF_SECRET is set, uses it as entropy (RECOMMENDED)
-/// - Without secret, falls back to deterministic derivation (INSECURE for production)
+/// Requires WEBAUTHN_PROOF_SECRET to be set (enforced at startup).
 ///
 /// NOTE: This derivation MUST match gate.rs for proof verification to work.
 fn derive_proof_key(rp_id: &str) -> [u8; 32] {
-    // Check for configured secret
-    let (secret_bytes, has_secret) = if let Ok(secret) = std::env::var("WEBAUTHN_PROOF_SECRET") {
-        // Derive initial key from secret
-        let mut key_hasher = blake3::Hasher::new();
-        key_hasher.update(b"webauthn:secret:key:v1:");
-        key_hasher.update(secret.as_bytes());
-        (*key_hasher.finalize().as_bytes(), true)
-    } else {
-        // Derive a deterministic but unique-per-deployment key from RP ID
-        // This is NOT secure but provides some isolation between deployments
-        let mut key_hasher = blake3::Hasher::new();
-        key_hasher.update(b"webauthn:deterministic:key:v1:");
-        key_hasher.update(rp_id.as_bytes());
-        key_hasher.update(b":insecure-fallback");
-        (*key_hasher.finalize().as_bytes(), false)
-    };
+    let secret = std::env::var("WEBAUTHN_PROOF_SECRET").expect("WEBAUTHN_PROOF_SECRET must be set");
 
-    // Now use the derived key for the final proof key derivation
+    // Derive key from secret
+    let mut key_hasher = blake3::Hasher::new();
+    key_hasher.update(b"webauthn:secret:key:v1:");
+    key_hasher.update(secret.as_bytes());
+    let secret_bytes = *key_hasher.finalize().as_bytes();
+
+    // Use the derived key for the final proof key derivation
     let mut hasher = blake3::Hasher::new_keyed(&secret_bytes);
     hasher.update(b"webauthn:proof:key:v1:");
     hasher.update(rp_id.as_bytes());
-    if !has_secret {
-        hasher.update(b":deterministic");
-    }
 
     *hasher.finalize().as_bytes()
 }

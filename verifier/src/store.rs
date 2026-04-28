@@ -5,11 +5,30 @@ use async_trait::async_trait;
 use redis::{aio::ConnectionLike, AsyncCommands, Script};
 use std::{
     collections::HashMap,
+    fmt,
     sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
+
+/// Error types for store operations.
+#[derive(Debug)]
+pub enum StoreError {
+    Connection(String),
+    Configuration(String),
+}
+
+impl fmt::Display for StoreError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            StoreError::Connection(msg) => write!(f, "Store connection error: {msg}"),
+            StoreError::Configuration(msg) => write!(f, "Store configuration error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for StoreError {}
 
 //
 // ─── REDIS LUA SCRIPT ────────────────────────────────────────────────
@@ -106,33 +125,16 @@ impl SpendStore for InMemoryStore {
 // ─── REDIS BACKEND ──────────────────────────────────────────────────
 //
 pub struct RedisStore {
-    client: redis::Client,
+    pool: deadpool_redis::Pool,
 }
 
 impl RedisStore {
     pub fn new(url: &str) -> Result<Self> {
-        let client =
-            redis::Client::open(url).with_context(|| format!("connect redis @ {}", url))?;
-        Ok(Self { client })
-    }
-
-    async fn get_conn(&self) -> Result<redis::aio::Connection> {
-        let mut backoff_ms = 200u64;
-        for attempt in 1..=3 {
-            match self.client.get_async_connection().await {
-                Ok(conn) => return Ok(conn),
-                Err(e) if attempt < 3 => {
-                    warn!(
-                        attempt,
-                        "redis connect failed: {e}; retrying in {backoff_ms}ms"
-                    );
-                    tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
-                    backoff_ms *= 2;
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
-        unreachable!()
+        let cfg = deadpool_redis::Config::from_url(url);
+        let pool = cfg
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))
+            .with_context(|| format!("create redis pool @ {}", url))?;
+        Ok(Self { pool })
     }
 }
 
@@ -140,8 +142,8 @@ impl RedisStore {
 impl SpendStore for RedisStore {
     async fn mark_spent(&self, key: &str, ttl: Option<Duration>) -> Result<bool> {
         let ttl_secs = ttl.map(|ttl| ttl.as_secs().max(1) as usize);
-        let mut conn = self.get_conn().await?;
-        let fresh = mark_spent_atomic(&mut conn, key, ttl_secs).await?;
+        let mut conn = self.pool.get().await?;
+        let fresh = mark_spent_atomic(&mut *conn, key, ttl_secs).await?;
 
         if fresh {
             info!(ttl = ?ttl_secs, "marked spent (redis)");
@@ -161,15 +163,18 @@ pub enum StoreBackend {
 }
 
 impl StoreBackend {
-    pub async fn build(self) -> Arc<dyn SpendStore> {
+    pub async fn build(self) -> Result<Arc<dyn SpendStore>, StoreError> {
         match self {
             StoreBackend::InMemory => {
                 info!("using InMemory spend store");
-                Arc::new(InMemoryStore::default())
+                Ok(Arc::new(InMemoryStore::default()))
             }
             StoreBackend::Redis(url) => {
                 info!(%url, "using Redis spend store");
-                Arc::new(RedisStore::new(&url).expect("connect redis"))
+                let store = RedisStore::new(&url).map_err(|e| {
+                    StoreError::Connection(format!("Failed to connect to Redis: {e}"))
+                })?;
+                Ok(Arc::new(store))
             }
         }
     }

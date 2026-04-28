@@ -71,13 +71,15 @@ pub struct ProofOfDiversityConfig {
 
 impl Default for ProofOfDiversityConfig {
     fn default() -> Self {
+        let mut salt = [0u8; 32];
+        OsRng.fill_bytes(&mut salt);
         Self {
             min_score: 40,
             persistence_path: PathBuf::from("proof_of_diversity.json"),
             autosave_interval_secs: 300,
             hmac_secret: None,
             hmac_secret_path: PathBuf::from("proof_of_diversity_secret.bin"),
-            fingerprint_salt: String::from("default-salt-change-in-production"),
+            fingerprint_salt: hex::encode(salt),
             allow_insecure_deterministic: false,
         }
     }
@@ -389,9 +391,13 @@ impl ProofOfDiversitySystem {
         let data = serde_json::to_string_pretty(&*records)
             .context("Failed to serialize diversity state")?;
 
-        tokio::fs::write(&self.config.persistence_path, data)
+        let tmp_path = self.config.persistence_path.with_extension("tmp");
+        tokio::fs::write(&tmp_path, data)
             .await
-            .context("Failed to write diversity state")?;
+            .context("Failed to write diversity state temp file")?;
+        tokio::fs::rename(&tmp_path, &self.config.persistence_path)
+            .await
+            .context("Failed to rename diversity state temp file")?;
 
         *self.dirty.write().await = false;
 

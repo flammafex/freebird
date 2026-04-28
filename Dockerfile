@@ -101,6 +101,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libssl3 \
+    curl \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Create non-root user with explicit UID/GID
@@ -109,6 +110,10 @@ RUN groupadd -r -g 1000 freebird && useradd -r -u 1000 -g freebird freebird
 # Copy binary from build stage
 COPY --from=verifier-builder /app/target/release/freebird-verifier /usr/local/bin/freebird-verifier
 RUN chmod 755 /usr/local/bin/freebird-verifier
+
+# Copy validation script
+COPY scripts/validate-env.sh /app/scripts/validate-env.sh
+RUN chmod +x /app/scripts/validate-env.sh
 
 # Set secure defaults
 ENV BIND_ADDR=0.0.0.0:8082 \
@@ -119,6 +124,9 @@ LABEL org.opencontainers.image.title="Freebird Verifier" \
       org.opencontainers.image.description="Privacy-preserving authorization - Verifier component" \
       org.opencontainers.image.vendor="Freebird" \
       org.opencontainers.image.documentation="https://github.com/flammafex/freebird"
+
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://localhost:8082/health || exit 1
 
 # Security: disable unnecessary capabilities
 RUN setcap -r /usr/sbin/setcap || true

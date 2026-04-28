@@ -22,6 +22,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use freebird_common::metrics::{self, MetricsMiddleware};
 use p256::ecdsa::SigningKey;
 use rand::rngs::OsRng;
 #[cfg(unix)]
@@ -31,6 +32,7 @@ use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::catch_panic::CatchPanicLayer;
+use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
@@ -172,6 +174,28 @@ fn parse_progressive_trust_levels(levels: &[String]) -> Result<Vec<sybil_resista
 
 impl Application {
     pub async fn build(config: Config) -> Result<Self> {
+        if config.sybil_config.progressive_trust_salt == "default-salt-change-in-production" {
+            bail!("Insecure default salt detected for SYBIL_PROGRESSIVE_TRUST_SALT");
+        }
+        if config.sybil_config.proof_of_diversity_fingerprint_salt
+            == "default-salt-change-in-production"
+        {
+            bail!("Insecure default salt detected for SYBIL_PROOF_OF_DIVERSITY_SALT");
+        }
+        if config.sybil_config.multi_party_vouching_salt == "default-salt-change-in-production" {
+            bail!("Insecure default salt detected for SYBIL_MULTI_PARTY_VOUCHING_SALT");
+        }
+
+        let admin_api_key = match config.admin_api_key {
+            Some(key) if key.len() >= 32 => key,
+            Some(key) => bail!(
+                "ADMIN_API_KEY must be at least 32 characters, got {}",
+                key.len()
+            ),
+            None => bail!("ADMIN_API_KEY must be set (minimum 32 characters)"),
+        };
+
+        metrics::register_metrics();
         // ... [Keys, VOPRF, WebAuthn setup code remains the same] ...
         // ... [Sybil setup code remains the same] ...
 
@@ -240,6 +264,11 @@ impl Application {
                 "🔐 Initializing WebAuthn subsystem for RP: {}",
                 wa_conf.rp_id
             );
+
+            // Security: Enforce WEBAUTHN_PROOF_SECRET when WebAuthn is enabled
+            if std::env::var("WEBAUTHN_PROOF_SECRET").is_err() {
+                bail!("WEBAUTHN_PROOF_SECRET must be set when WebAuthn is enabled");
+            }
 
             let ctx = webauthn::WebAuthnCtx::new(
                 wa_conf.rp_id.clone(),
@@ -693,7 +722,19 @@ impl Application {
                 "/v1/public/issue/batch",
                 post(routes::public_issue::handle_batch),
             )
-            .layer(DefaultBodyLimit::max(64 * 1024));
+            .layer(
+                CorsLayer::new()
+                    .allow_origin(Any)
+                    .allow_methods([
+                        axum::http::Method::GET,
+                        axum::http::Method::POST,
+                        axum::http::Method::OPTIONS,
+                    ])
+                    .allow_headers([axum::http::header::CONTENT_TYPE])
+                    .max_age(Duration::from_secs(86400)),
+            )
+            .layer(DefaultBodyLimit::max(64 * 1024))
+            .layer(freebird_common::rate_limit::PublicRateLimitLayer::default());
 
         // --- CRITICAL FIX: SHADOWING ---
         // Use `let app` to shadow the variable, allowing the type change from Router<S> to Router<()>
@@ -706,51 +747,44 @@ impl Application {
             app = app.nest("/webauthn", webauthn::router(wa.clone()));
         }
 
-        if let Some(key) = config.admin_api_key {
-            if key.len() >= 32 {
-                if let Some(inv_sys) = invitation_system {
-                    // Create config summary for admin API
-                    #[cfg(feature = "human-gate-webauthn")]
-                    let webauthn_enabled = webauthn_state.is_some();
-                    #[cfg(not(feature = "human-gate-webauthn"))]
-                    let webauthn_enabled = false;
+        if let Some(inv_sys) = invitation_system {
+            #[cfg(feature = "human-gate-webauthn")]
+            let webauthn_enabled = webauthn_state.is_some();
+            #[cfg(not(feature = "human-gate-webauthn"))]
+            let webauthn_enabled = false;
 
-                    let config_summary = routes::admin::ConfigSummary {
-                        issuer_id: config.issuer_id.clone(),
-                        sybil_config: routes::admin::SybilConfigSummary::from_config(
-                            &config.sybil_config,
-                        ),
-                        epoch_duration_secs: config.epoch_duration_sec,
-                        epoch_retention: config.epoch_retention,
-                        require_tls: config.require_tls,
-                        behind_proxy: config.behind_proxy,
-                        webauthn_enabled,
-                    };
+            let config_summary = routes::admin::ConfigSummary {
+                issuer_id: config.issuer_id.clone(),
+                sybil_config: routes::admin::SybilConfigSummary::from_config(&config.sybil_config),
+                epoch_duration_secs: config.epoch_duration_sec,
+                epoch_retention: config.epoch_retention,
+                require_tls: config.require_tls,
+                behind_proxy: config.behind_proxy,
+                webauthn_enabled,
+            };
 
-                    #[cfg(feature = "human-gate-webauthn")]
-                    let admin = routes::admin_router(
-                        inv_sys,
-                        voprf.clone(),
-                        audit_log.clone(),
-                        key,
-                        config.behind_proxy,
-                        config.require_tls,
-                        webauthn_state.as_ref().map(|ws| ws.cred_store.clone()),
-                        config_summary,
-                    );
-                    #[cfg(not(feature = "human-gate-webauthn"))]
-                    let admin = routes::admin_router(
-                        inv_sys,
-                        voprf.clone(),
-                        audit_log.clone(),
-                        key,
-                        config.behind_proxy,
-                        config.require_tls,
-                        config_summary,
-                    );
-                    app = app.nest("/admin", admin);
-                }
-            }
+            #[cfg(feature = "human-gate-webauthn")]
+            let admin = routes::admin_router(
+                inv_sys,
+                voprf.clone(),
+                audit_log.clone(),
+                admin_api_key,
+                config.behind_proxy,
+                config.require_tls,
+                webauthn_state.as_ref().map(|ws| ws.cred_store.clone()),
+                config_summary,
+            );
+            #[cfg(not(feature = "human-gate-webauthn"))]
+            let admin = routes::admin_router(
+                inv_sys,
+                voprf.clone(),
+                audit_log.clone(),
+                admin_api_key,
+                config.behind_proxy,
+                config.require_tls,
+                config_summary,
+            );
+            app = app.nest("/admin", admin);
         }
 
         // Outermost layers: catch panics before they escape handlers, then
@@ -758,7 +792,9 @@ impl Application {
         let app = app.layer(
             ServiceBuilder::new()
                 .layer(CatchPanicLayer::custom(handle_panic))
-                .layer(TraceLayer::new_for_http()),
+                .layer(TraceLayer::new_for_http())
+                .layer(MetricsMiddleware)
+                .layer(freebird_common::tls_enforcement::TlsEnforcementLayer::new()),
         );
 
         let listener = TcpListener::bind(config.bind_addr)

@@ -7,8 +7,9 @@
 //! by tracking failed authentication attempts per IP address and temporarily blocking
 //! IPs that exceed the allowed failure threshold.
 
-use std::collections::HashMap;
+use lru::LruCache;
 use std::net::IpAddr;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -77,7 +78,7 @@ impl IpAttemptRecord {
 #[derive(Clone)]
 pub struct AdminRateLimiter {
     config: AdminRateLimitConfig,
-    attempts: Arc<RwLock<HashMap<IpAddr, IpAttemptRecord>>>,
+    attempts: Arc<RwLock<LruCache<IpAddr, IpAttemptRecord>>>,
 }
 
 impl AdminRateLimiter {
@@ -90,16 +91,18 @@ impl AdminRateLimiter {
     pub fn with_config(config: AdminRateLimitConfig) -> Self {
         Self {
             config,
-            attempts: Arc::new(RwLock::new(HashMap::new())),
+            attempts: Arc::new(RwLock::new(LruCache::new(
+                NonZeroUsize::new(10000).unwrap(),
+            ))),
         }
     }
 
     /// Check if an IP is allowed to attempt authentication
     /// Returns Ok(()) if allowed, Err with seconds until unblock if blocked
     pub async fn check_allowed(&self, ip: IpAddr) -> Result<(), u64> {
-        let attempts = self.attempts.read().await;
+        let mut attempts = self.attempts.write().await;
 
-        if let Some(record) = attempts.get(&ip) {
+        if let Some(record) = attempts.get_mut(&ip) {
             if let Some(blocked_until) = record.blocked_until {
                 let now = Instant::now();
                 if now < blocked_until {
@@ -117,7 +120,13 @@ impl AdminRateLimiter {
     pub async fn record_failure(&self, ip: IpAddr) -> bool {
         let mut attempts = self.attempts.write().await;
 
-        let record = attempts.entry(ip).or_insert_with(IpAttemptRecord::new);
+        let record = match attempts.get_mut(&ip) {
+            Some(r) => r,
+            None => {
+                attempts.push(ip, IpAttemptRecord::new());
+                attempts.get_mut(&ip).unwrap()
+            }
+        };
 
         // Reset window if expired
         record.maybe_reset_window(self.config.window_duration);
@@ -149,7 +158,7 @@ impl AdminRateLimiter {
     /// Record a successful authentication (resets failure count)
     pub async fn record_success(&self, ip: IpAddr) {
         let mut attempts = self.attempts.write().await;
-        attempts.remove(&ip);
+        attempts.pop(&ip);
     }
 
     /// Clean up expired records (should be called periodically)
@@ -157,16 +166,24 @@ impl AdminRateLimiter {
         let mut attempts = self.attempts.write().await;
         let now = Instant::now();
 
-        attempts.retain(|_, record| {
-            // Keep if blocked and block hasn't expired
-            if let Some(blocked_until) = record.blocked_until {
-                if now < blocked_until {
-                    return true;
+        let keys_to_remove: Vec<IpAddr> = attempts
+            .iter()
+            .filter(|(_, record)| {
+                // Keep if blocked and block hasn't expired
+                if let Some(blocked_until) = record.blocked_until {
+                    if now < blocked_until {
+                        return true;
+                    }
                 }
-            }
-            // Keep if window hasn't expired
-            record.window_start.elapsed() < self.config.window_duration
-        });
+                // Keep if window hasn't expired
+                record.window_start.elapsed() < self.config.window_duration
+            })
+            .map(|(ip, _)| *ip)
+            .collect();
+
+        for key in keys_to_remove {
+            attempts.pop(&key);
+        }
     }
 
     /// Get the number of currently tracked IPs (for monitoring)
@@ -177,7 +194,7 @@ impl AdminRateLimiter {
     /// Get the number of currently blocked IPs (for monitoring)
     pub async fn blocked_ip_count(&self) -> usize {
         let attempts = self.attempts.read().await;
-        attempts.values().filter(|r| r.is_blocked()).count()
+        attempts.iter().filter(|(_, r)| r.is_blocked()).count()
     }
 }
 

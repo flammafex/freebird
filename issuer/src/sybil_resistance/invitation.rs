@@ -16,7 +16,7 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use p256::ecdsa::{signature::Signer, signature::Verifier, Signature, SigningKey, VerifyingKey};
 use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -833,18 +833,28 @@ impl InvitationSystem {
         }
 
         if ban_tree {
-            // Find all users invited by this user (recursively)
+            const MAX_BAN_DEPTH: usize = 100;
+            let mut queue = VecDeque::new();
+            let mut visited = HashSet::new();
             let mut to_ban = Vec::new();
 
-            for invitation in state.invitations.values() {
-                if invitation.inviter_id == user_id {
-                    if let Some(ref invitee_id) = invitation.invitee_id {
-                        to_ban.push(invitee_id.clone());
+            queue.push_back((user_id.to_string(), 0usize));
+            visited.insert(user_id.to_string());
+
+            while let Some((current_id, depth)) = queue.pop_front() {
+                for invitation in state.invitations.values() {
+                    if invitation.inviter_id == current_id {
+                        if let Some(ref invitee_id) = invitation.invitee_id {
+                            if !visited.contains(invitee_id) && depth < MAX_BAN_DEPTH {
+                                visited.insert(invitee_id.clone());
+                                queue.push_back((invitee_id.clone(), depth + 1));
+                                to_ban.push(invitee_id.clone());
+                            }
+                        }
                     }
                 }
             }
 
-            // Ban invitees
             for invitee_id in to_ban {
                 if let Some(inviter) = state.inviters.get_mut(&invitee_id) {
                     inviter.banned = true;

@@ -11,6 +11,9 @@
 // limitations under the License.
 pub mod api;
 pub mod duration;
+pub mod metrics;
+pub mod rate_limit;
+pub mod tls_enforcement;
 pub mod logging {
     use std::sync::Once;
     use tracing::level_filters::LevelFilter;

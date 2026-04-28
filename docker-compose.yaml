@@ -32,7 +32,7 @@ services:
       - BIND_ADDR=${ISSUER_BIND_ADDR:-0.0.0.0:8081}
       - REQUIRE_TLS=${REQUIRE_TLS:-false}
       - BEHIND_PROXY=${BEHIND_PROXY:-false}
-      - ADMIN_API_KEY=${ADMIN_API_KEY:-dev-admin-key-must-be-at-least-32-characters-long}
+      - ADMIN_API_KEY=${ADMIN_API_KEY}
       - ISSUER_SK_PATH=${ISSUER_SK_PATH:-/data/keys/issuer_sk.bin}
       - KEY_ROTATION_STATE_PATH=${KEY_ROTATION_STATE_PATH:-/data/keys/key_rotation_state.json}
       - EPOCH_DURATION=${EPOCH_DURATION:-1d}
@@ -96,6 +96,9 @@ services:
     container_name: freebird-verifier
     restart: unless-stopped
 
+    # Run validation script before starting
+    entrypoint: ["/bin/sh", "-c", "scripts/validate-env.sh && exec freebird-verifier"]
+
     # Port bindings - production: use reverse proxy instead
     ports:
       - "${VERIFIER_BIND_ADDR:-127.0.0.1:8082}:8082"
@@ -129,9 +132,9 @@ services:
 
     # Health checks
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8082/.well-known/verifier"]
+      test: ["CMD", "curl", "-f", "http://localhost:8082/health"]
       interval: 30s
-      timeout: 10s
+      timeout: 5s
       retries: 3
       start_period: 15s
 

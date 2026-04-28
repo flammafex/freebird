@@ -49,7 +49,7 @@
 //! # }
 //! ```
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use elliptic_curve::subtle::ConstantTimeEq;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -166,6 +166,12 @@ pub struct MultiKeyVoprfCore {
 }
 
 impl MultiKeyVoprfCore {
+    /// Minimum grace period for key rotation (1 hour)
+    #[cfg(test)]
+    const MIN_GRACE_PERIOD_SECS: u64 = 1;
+    #[cfg(not(test))]
+    const MIN_GRACE_PERIOD_SECS: u64 = 3600;
+
     /// Create a new multi-key VOPRF core with an initial active key
     ///
     /// # Arguments
@@ -295,7 +301,24 @@ impl MultiKeyVoprfCore {
         new_kid: String,
         grace_period_secs: Option<u64>,
     ) -> Result<()> {
-        let grace_period = grace_period_secs.unwrap_or(self.default_grace_period_secs);
+        // Validate and apply minimum grace period
+        let grace_period = match grace_period_secs {
+            Some(v) => {
+                if v < Self::MIN_GRACE_PERIOD_SECS {
+                    bail!(
+                        "grace period must be at least {} seconds (got {})",
+                        Self::MIN_GRACE_PERIOD_SECS,
+                        v
+                    );
+                }
+                v
+            }
+            None => {
+                // Use default but clamp to minimum if somehow smaller
+                self.default_grace_period_secs
+                    .max(Self::MIN_GRACE_PERIOD_SECS)
+            }
+        };
         let now_ts = now();
         let expires_at = now_ts + grace_period;
 
@@ -758,6 +781,46 @@ mod tests {
                     kid2
                 );
             }
+        }
+
+        #[tokio::test]
+        async fn test_rotate_key_minimum_grace_period() {
+            let ctx = b"test";
+            let sk1 = [1u8; 32];
+            let sk2 = [2u8; 32];
+
+            let mut core =
+                MultiKeyVoprfCore::new(sk1, "pubkey1".to_string(), "key-2024-01".to_string(), ctx)
+                    .unwrap();
+
+            // Test: grace period below minimum fails
+            let result = core
+                .rotate_key(
+                    sk2,
+                    "pubkey2".to_string(),
+                    "key-2024-02".to_string(),
+                    Some(300), // 5 minutes - below 1 hour minimum
+                )
+                .await;
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("grace period must be at least"));
+
+            // Test: grace period at minimum succeeds
+            core.rotate_key(
+                sk2,
+                "pubkey2".to_string(),
+                "key-2024-02".to_string(),
+                Some(3600), // exactly 1 hour
+            )
+            .await
+            .unwrap();
+
+            // Verify both keys work
+            assert!(core.verify_with_kid("token", "key-2024-01").await.is_ok());
+            assert!(core.verify_with_kid("token", "key-2024-02").await.is_ok());
         }
     }
 }

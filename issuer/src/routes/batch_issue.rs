@@ -1,8 +1,8 @@
 // issuer/src/routes/batch_issue.rs
-//! High-performance batch token issuance with parallel processing
+//! High-performance batch token issuance with concurrent processing
 //!
 //! This module implements batch token issuance optimized for throughput:
-//! - Parallel VOPRF evaluation using rayon
+//! - Concurrent VOPRF evaluation using tokio JoinSet
 //! - Efficient error handling with partial success
 //! - Memory-efficient processing with minimal allocations
 //! - Comprehensive performance metrics
@@ -10,17 +10,17 @@
 //! # Performance Characteristics
 //!
 //! - Target: 1000+ tokens/second on modern hardware (4+ cores)
-//! - Parallel processing scales linearly with CPU cores
+//! - Concurrent processing scales with async task scheduling
 //! - Memory usage: ~1KB per token (temporary allocations)
 //! - Latency: ~10ms baseline + ~1ms per 100 tokens (p95)
 //!
 //! # Architecture
 //!
 //! ```text
-//! Request → Validation → Sybil Check → Parallel VOPRF → Response
-//!              ↓             ↓              ↓              ↓
-//!           Decode      Single Proof   Rayon Pool     Aggregate
-//!           Verify      Verification   Batched Eval   Results
+//! Request → Validation → Sybil Check → Concurrent VOPRF → Response
+//!              ↓             ↓              ↓                ↓
+//!           Decode      Single Proof   JoinSet          Aggregate
+//!           Verify      Verification   Eval Tasks       Results
 //! ```
 
 use crate::multi_key_voprf::MultiKeyVoprfCore;
@@ -33,7 +33,6 @@ use axum::{
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{BatchIssueReq, BatchIssueResp, SybilInfo, TokenResult};
-use rayon::prelude::*;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -154,7 +153,7 @@ async fn evaluate_token(
 // /
 // / 1. **Fast-path validation**: Reject bad requests early
 // / 2. **Single Sybil check**: One proof for entire batch
-// / 3. **Parallel VOPRF**: Use rayon for CPU-bound crypto operations
+// / 3. **Concurrent VOPRF**: Use tokio JoinSet for async crypto operations
 // / 4. **Minimal allocations**: Pre-allocate result vectors
 // / 5. **Async-aware**: Properly integrate with tokio runtime
 // /
@@ -171,7 +170,7 @@ async fn evaluate_token(
 // /       ↓
 // / Handler (validates request, checks Sybil)
 // /       ↓
-// / Rayon Threadpool (parallel VOPRF)
+// / tokio::task::JoinSet (concurrent VOPRF)
 // /       ↓
 // / Results aggregation
 // / ```
@@ -306,39 +305,55 @@ pub async fn handle_batch(
         }
         results
     } else {
-        // Parallel processing for larger batches
-        debug!("using parallel processing for batch (n={})", batch_size);
+        // Concurrent processing for larger batches
+        debug!("using concurrent processing for batch (n={})", batch_size);
 
-        // Step 1: Validate all inputs in parallel (fast, CPU-bound)
+        // Step 1: Validate all inputs sequentially (fast)
         let validated: Vec<_> = req
             .blinded_elements
-            .par_iter()
+            .iter()
             .map(|b| validate_blinded_element(b))
             .collect();
 
-        // Step 2: Process valid tokens
-        // Note: We need to handle async evaluation in a blocking context
-        // We use tokio::runtime::Handle to bridge rayon and tokio
-        let runtime_handle = tokio::runtime::Handle::current();
+        // Step 2: Process valid tokens concurrently using tokio JoinSet
+        let mut results_with_idx = Vec::with_capacity(batch_size);
+        let mut join_set = tokio::task::JoinSet::new();
 
-        validated
-            .into_par_iter()
-            .enumerate()
-            .map(|(idx, validation_result)| {
-                match validation_result {
-                    Ok(_) => {
-                        // Use blocking task to await async evaluation
-                        runtime_handle.block_on(async {
-                            evaluate_token(&voprf, &req.blinded_elements[idx], &issuer_id).await
-                        })
-                    }
-                    Err(e) => TokenResult::Error {
-                        message: e,
-                        code: "validation_failed".to_string(),
-                    },
+        for (idx, validation_result) in validated.into_iter().enumerate() {
+            match validation_result {
+                Ok(_) => {
+                    let voprf = Arc::clone(&voprf);
+                    let blinded_b64 = req.blinded_elements[idx].clone();
+                    let issuer_id = issuer_id.clone();
+                    join_set.spawn(async move {
+                        (idx, evaluate_token(&voprf, &blinded_b64, &issuer_id).await)
+                    });
                 }
-            })
-            .collect()
+                Err(e) => {
+                    results_with_idx.push((
+                        idx,
+                        TokenResult::Error {
+                            message: e,
+                            code: "validation_failed".to_string(),
+                        },
+                    ));
+                }
+            }
+        }
+
+        while let Some(res) = join_set.join_next().await {
+            let (idx, token_result) = res.map_err(|e| {
+                error!("JoinSet task panicked: {:?}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("task failed: {}", e),
+                )
+            })?;
+            results_with_idx.push((idx, token_result));
+        }
+
+        results_with_idx.sort_by_key(|(idx, _)| *idx);
+        results_with_idx.into_iter().map(|(_, r)| r).collect()
     };
 
     let voprf_time_ms = voprf_start.elapsed().as_millis() as u64;

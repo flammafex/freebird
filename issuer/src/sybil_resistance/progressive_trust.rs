@@ -257,7 +257,7 @@ impl ProgressiveTrustSystem {
                     path = ?config.hmac_secret_path,
                     "Generated and persisted new HMAC secret"
                 );
-                return Ok(secret);
+                Ok(secret)
             }
             Err(e) => {
                 error!(
@@ -275,13 +275,13 @@ impl ProgressiveTrustSystem {
                          enabling cross-deployment proof forgery."
                     );
                     // Return the generated secret even if not persisted
-                    return Ok(secret);
+                    Ok(secret)
                 } else {
-                    return Err(anyhow!(
+                    Err(anyhow!(
                         "Failed to persist HMAC secret and insecure deterministic mode is disabled. \
                          Either provide hmac_secret in config, ensure hmac_secret_path is writable, \
                          or set allow_insecure_deterministic=true for testing."
-                    ));
+                    ))
                 }
             }
         }
@@ -459,9 +459,13 @@ impl ProgressiveTrustSystem {
         let data = serde_json::to_string_pretty(&*users)
             .context("Failed to serialize progressive trust state")?;
 
-        tokio::fs::write(&self.config.persistence_path, data)
+        let tmp_path = self.config.persistence_path.with_extension("tmp");
+        tokio::fs::write(&tmp_path, data)
             .await
-            .context("Failed to write progressive trust state")?;
+            .context("Failed to write progressive trust state temp file")?;
+        tokio::fs::rename(&tmp_path, &self.config.persistence_path)
+            .await
+            .context("Failed to rename progressive trust state temp file")?;
 
         *self.dirty.write().await = false;
 

@@ -7,7 +7,7 @@
 //! Requires multiple existing users to vouch for a new user, providing
 //! social consensus-based Sybil resistance through collective accountability.
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{SybilProof, VouchProof};
 use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
@@ -222,7 +222,7 @@ impl MultiPartyVouchingSystem {
             .as_secs() as i64;
 
         let public_key_b64 = base64ct::Base64UrlUnpadded::encode_string(
-            &public_key.to_encoded_point(false).as_bytes(),
+            public_key.to_encoded_point(false).as_bytes(),
         );
 
         let record = VoucherRecord {
@@ -493,8 +493,15 @@ impl MultiPartyVouchingSystem {
 
         let state = MultiPartyVouchingState { vouchers, pending };
 
-        let json = serde_json::to_string_pretty(&state)?;
-        tokio_fs::write(&self.config.persistence_path, json).await?;
+        let json = serde_json::to_string_pretty(&state)
+            .context("Failed to serialize multi-party vouching state")?;
+        let tmp_path = self.config.persistence_path.with_extension("tmp");
+        tokio_fs::write(&tmp_path, json)
+            .await
+            .context("Failed to write multi-party vouching state temp file")?;
+        tokio_fs::rename(&tmp_path, &self.config.persistence_path)
+            .await
+            .context("Failed to rename multi-party vouching state temp file")?;
         Ok(())
     }
 

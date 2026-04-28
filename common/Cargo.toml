@@ -25,3 +25,10 @@ base64ct = { version = "1.6", features = ["alloc"] }
 
 freebird-crypto = { version = "0.5.0", path = "../crypto" }
 
+# Metrics
+prometheus = "0.13"
+lazy_static = "1.4"
+axum = "0.7"
+tower = "0.4"
+futures-util = "0.3"
+

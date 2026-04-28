@@ -3,6 +3,8 @@
 
 use anyhow::{Context, Result};
 use freebird_common::duration::env_duration;
+use rand::rngs::OsRng;
+use rand::RngCore;
 use std::env;
 use std::fmt;
 use std::net::SocketAddr;
@@ -214,7 +216,7 @@ impl HsmConfig {
         let mode_str = env::var("HSM_MODE").unwrap_or_else(|_| "storage".to_string());
         let mode = match mode_str.to_lowercase().as_str() {
             "full" => HsmMode::Full,
-            "storage" | _ => HsmMode::Storage,
+            _ => HsmMode::Storage,
         };
 
         // Get required HSM configuration
@@ -288,7 +290,7 @@ impl SybilConfig {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| "progressive_trust_secret.bin".into()),
             progressive_trust_salt: env::var("SYBIL_PROGRESSIVE_TRUST_SALT")
-                .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
+                .unwrap_or_else(|_| generate_random_salt()),
             progressive_trust_allow_insecure: env_bool("SYBIL_PROGRESSIVE_TRUST_ALLOW_INSECURE"),
             // Proof of Diversity
             proof_of_diversity_min_score: env_u32("SYBIL_PROOF_OF_DIVERSITY_MIN_SCORE", 40) as u8,
@@ -306,7 +308,7 @@ impl SybilConfig {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| "proof_of_diversity_secret.bin".into()),
             proof_of_diversity_fingerprint_salt: env::var("SYBIL_PROOF_OF_DIVERSITY_SALT")
-                .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
+                .unwrap_or_else(|_| generate_random_salt()),
             proof_of_diversity_allow_insecure: env_bool("SYBIL_PROOF_OF_DIVERSITY_ALLOW_INSECURE"),
             // Multi-Party Vouching
             multi_party_vouching_required_vouchers: env_u32(
@@ -341,7 +343,7 @@ impl SybilConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|_| "multi_party_vouching_secret.bin".into()),
             multi_party_vouching_salt: env::var("SYBIL_MULTI_PARTY_VOUCHING_SALT")
-                .unwrap_or_else(|_| "default-salt-change-in-production".to_string()),
+                .unwrap_or_else(|_| generate_random_salt()),
             multi_party_vouching_allow_insecure: env_bool(
                 "SYBIL_MULTI_PARTY_VOUCHING_ALLOW_INSECURE",
             ),
@@ -394,6 +396,12 @@ fn env_u32(key: &str, default: u32) -> u32 {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(default)
+}
+
+fn generate_random_salt() -> String {
+    let mut salt = [0u8; 32];
+    OsRng.fill_bytes(&mut salt);
+    hex::encode(salt)
 }
 
 #[cfg(test)]
