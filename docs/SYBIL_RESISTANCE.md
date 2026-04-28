@@ -131,7 +131,7 @@ export SYBIL_INVITE_BOOTSTRAP_USERS=admin:100
 
 ### Detailed Guide
 
-See [Configuration Reference](CONFIGURATION.md#invitation-system) for detailed settings.
+See [Configuration Reference](CONFIGURATION.md#invitation) for detailed settings.
 
 ---
 

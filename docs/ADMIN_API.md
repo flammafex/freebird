@@ -307,7 +307,7 @@ Ban a user and optionally their entire invite tree.
 
 **Parameters:**
 - `user_id` (required): User to ban
-- `ban_tree` (optional, default: false): Recursively ban all users they invited
+- `ban_tree` (optional, default: false): Recursively ban all users they invited (capped at depth 100; deeper descendants are not banned)
 
 **Example:**
 ```bash
