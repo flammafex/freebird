@@ -12,6 +12,9 @@ services:
     container_name: freebird-issuer
     restart: unless-stopped
 
+    # Run validation script before starting
+    entrypoint: ["/bin/sh", "-c", "scripts/validate-env.sh && exec freebird-issuer"]
+
     # Port bindings - production: use reverse proxy instead
     ports:
       - "${ISSUER_BIND_ADDR:-127.0.0.1:8081}:8081"
@@ -54,7 +57,7 @@ services:
 
     # Health checks for orchestration
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/.well-known/issuer"]
+      test: ["CMD", "curl", "-f", "-H", "X-Admin-Key: ${ADMIN_API_KEY}", "http://localhost:8081/admin/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -112,6 +115,7 @@ services:
       - RUST_LOG=${RUST_LOG:-info,freebird=debug}
       - LOG_FORMAT=${LOG_FORMAT:-plain}
       - BIND_ADDR=${VERIFIER_BIND_ADDR:-0.0.0.0:8082}
+      - ADMIN_API_KEY=${ADMIN_API_KEY}
       - VERIFIER_ID=${VERIFIER_ID:-verifier:docker:v4}
       - VERIFIER_AUDIENCE=${VERIFIER_AUDIENCE:-docker}
       - ISSUER_URL=${ISSUER_URL:-http://issuer:8081/.well-known/issuer}

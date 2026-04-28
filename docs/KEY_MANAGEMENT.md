@@ -385,9 +385,13 @@ curl -X POST http://localhost:8081/admin/keys/rotate \
   -H "X-Admin-Key: ${ADMIN_KEY}" \
   -d '{
     "new_kid": "emergency-key-$(date +%Y%m%d)",
-    "grace_period_secs": 0
+    "grace_period_secs": 3600
   }'
 ```
+
+> **⚠️ Note:** The minimum grace period in production is **3600 seconds (1 hour)**.
+> Values below this will be rejected with error: `"grace period must be at least 3600 seconds (got N)"`.
+> Test environments use a minimum of 1 second for convenience.
 
 **Step 3: Notify users**
 

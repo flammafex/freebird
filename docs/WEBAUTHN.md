@@ -89,7 +89,7 @@ export WEBAUTHN_CRED_TTL=1y                        # Credential TTL (optional)
 export SYBIL_RESISTANCE=webauthn                   # Enable WebAuthn gate
 export WEBAUTHN_MAX_PROOF_AGE=5m                   # Proof validity window
 
-# Security: Proof Secret (RECOMMENDED for production)
+# Security: Proof Secret (REQUIRED when WebAuthn is enabled - startup fails without it)
 export WEBAUTHN_PROOF_SECRET="your-random-secret-here"
 ```
 

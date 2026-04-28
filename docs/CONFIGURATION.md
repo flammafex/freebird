@@ -35,7 +35,7 @@ ADMIN_API_KEY=<at-least-32-characters>
 | `BIND_ADDR` | `0.0.0.0:8081` | Issuer listen address. |
 | `REQUIRE_TLS` | `false` | Reject non-HTTPS requests when behind a proxy that reports scheme. |
 | `BEHIND_PROXY` | `false` | Trust proxy headers for client IP and scheme. |
-| `ADMIN_API_KEY` | unset | Enables issuer admin endpoints when at least 32 characters. |
+| `ADMIN_API_KEY` | REQUIRED | Required for admin endpoints (≥32 characters). Both issuer and verifier fail to start without it. |
 
 ### V4 Private Option Keys
 
