@@ -39,3 +39,6 @@ issuer_sk.bin
 key_rotation_state.json
 invitations.json
 data/
+
+# Sisyphus planning artifacts
+.sisyphus/
