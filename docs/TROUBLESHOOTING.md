@@ -26,6 +26,82 @@ curl -X POST http://localhost:8082/v1/check \
   -d '{"token_b64":"<base64url-token>"}'
 ```
 
+## Startup Failures
+
+These errors prevent the issuer or verifier from starting and appear in the first few log lines.
+
+### ADMIN_API_KEY Not Set
+
+**Error:** `ADMIN_API_KEY must be set (minimum 32 characters)`
+
+**Cause:** The `ADMIN_API_KEY` environment variable is missing. Both the issuer and verifier require it to protect the admin API and dashboard.
+
+**Resolution:**
+
+```bash
+# Generate a secure key (48 base64 chars = 36 bytes raw)
+export ADMIN_API_KEY=$(openssl rand -base64 48)
+```
+
+Add the value to your `.env` file. See [CONFIGURATION.md](CONFIGURATION.md) for details.
+
+### ADMIN_API_KEY Too Short
+
+**Error:** `ADMIN_API_KEY must be at least 32 characters, got N`
+
+**Cause:** `ADMIN_API_KEY` is set but shorter than 32 characters.
+
+**Resolution:** Regenerate a longer key:
+
+```bash
+export ADMIN_API_KEY=$(openssl rand -base64 48)
+```
+
+### WebAuthn Proof Secret Missing
+
+**Error:** `WEBAUTHN_PROOF_SECRET must be set when WebAuthn is enabled`
+
+**Cause:** The issuer has WebAuthn Sybil resistance enabled but `WEBAUTHN_PROOF_SECRET` is not configured. The secret is required to sign WebAuthn proof tokens.
+
+**Resolution:**
+
+```bash
+export WEBAUTHN_PROOF_SECRET=$(openssl rand -base64 48)
+```
+
+Add it to your `.env` and restart the issuer.
+
+### Key Rotation Grace Period Too Short
+
+**Error:** `grace period must be at least 3600 seconds (got N)`
+
+**Cause:** A key rotation was requested with a grace period shorter than the minimum of 3600 seconds (1 hour). Deprecated keys must remain valid long enough for in-flight tokens to reach verifiers.
+
+**Resolution:** Use a grace period of at least 3600 seconds:
+
+```bash
+# Via CLI
+freebird-cli keys rotate --grace-period 3600
+
+# Or via the admin API
+ curl -X POST http://localhost:8081/admin/keys/rotate \
+   -H "X-Admin-Key: $ADMIN_API_KEY" \
+   -H "Content-Type: application/json" \
+   -d '{"grace_period_sec":3600}'
+```
+
+### Verifier Issuer URL Not HTTPS
+
+**Error:** `issuer metadata URL must use HTTPS: {url}`
+
+**Cause:** The verifier is configured with an HTTP issuer URL. In hardened configurations the verifier refuses to fetch issuer metadata over plain HTTP.
+
+**Resolution:** Change `ISSUER_URL` (or `ISSUER_URLS`) to use HTTPS:
+
+```bash
+export ISSUER_URL=https://issuer.example.com/.well-known/issuer
+```
+
 ## Issuer Issues
 
 ### Address Already In Use

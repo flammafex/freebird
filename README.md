@@ -108,15 +108,22 @@ Resources depend on your anticipated user base and Sybil resistance complexity.
 - ✅ **P-256 VOPRF** with DLEQ proofs
 - ✅ **V4 Private Option**: Verifier-bound private verification with local authenticator recomputation
 - ✅ **V5 Public Option**: RFC 9474 public bearer passes with strict `single_use` key metadata
-- ✅ **Batch Issuance**: High-throughput parallel issuance using `rayon`
+- ✅ **Batch Issuance**: Concurrent batch issuance via tokio JoinSet (≥10 items concurrent, <10 sequential) (see [`ADMIN_API.md`](docs/ADMIN_API.md))
 - ✅ **Key Rotation**: Zero-downtime rotation with grace periods for deprecated keys
-- ✅ **Storage Backends**: In-memory (dev) and Redis (prod) support
+- ✅ **Storage Backends**: In-memory (dev) and Redis (prod) support with atomic state writes (temp-file-rename pattern) (see [`PRODUCTION.md`](docs/PRODUCTION.md))
 - ✅ **Explicit Issuer Trust**: Verifiers accept only configured issuers, with V4 private keys or V5 public key metadata (see [`FEDERATION.md`](docs/FEDERATION.md))
 - ✅ **Unified Admin Dashboard**: Single-page UI for both issuer and verifier management
 - ✅ **Admin CLI**: `freebird-cli` command-line tool for scripting and automation
 - ✅ **Admin API**: HTTP endpoints for user management, key rotation, and stats
-- ✅ **Prometheus Metrics**: `/admin/metrics` endpoint for monitoring and alerting
-- ✅ **Config Validation**: Pre-flight configuration checker
+- ✅ **Prometheus Metrics**: `/admin/metrics` endpoint for monitoring and alerting (see [`PRODUCTION.md`](docs/PRODUCTION.md))
+- ✅ **Config Validation**: Pre-flight configuration checker and environment validation (`validate-env.sh`) (see [`PRODUCTION.md`](docs/PRODUCTION.md))
+- ✅ **Public Rate Limiting**: 30 req/sec per IP for public endpoints (see [`API.md`](docs/API.md))
+- ✅ **Admin Rate Limiter**: LRU eviction cache with 10k capacity for admin endpoints (see [`ADMIN_API.md`](docs/ADMIN_API.md))
+- ✅ **TLS Enforcement**: `REQUIRE_TLS` middleware for production security (see [`PRODUCTION.md`](docs/PRODUCTION.md))
+- ✅ **CORS Middleware**: Configurable cross-origin resource sharing (see [`PRODUCTION.md`](docs/PRODUCTION.md))
+- ✅ **HTTPS-Only Metadata**: Verifier refreshes issuer metadata exclusively over HTTPS (see [`FEDERATION.md`](docs/FEDERATION.md))
+- ✅ **Health Endpoints**: Public `/health` and admin `/admin/health` status checks (see [`API.md`](docs/API.md))
+- ✅ **Admin Key Derivation**: HMAC-based admin key derivation via HKDF (see [`SECURITY.md`](docs/SECURITY.md))
 
 **Sybil Resistance Mechanisms:**
 - ✅ **Invitation System**: Cryptographically signed invites with ban-trees and reputation tracking

@@ -130,6 +130,8 @@ services:
     depends_on:
       - redis
 
+> **HTTPS-only metadata:** The verifier refuses to fetch issuer metadata over HTTP. `ISSUER_URL` must use the `https://` scheme or the verifier will log `"issuer metadata URL must use HTTPS"` and skip the refresh. See [Federation](FEDERATION.md) for details.
+
   redis:
     image: redis:alpine
     restart: always
@@ -248,6 +250,10 @@ sudo systemctl status freebird-verifier
 sudo journalctl -u freebird-issuer -f
 sudo journalctl -u freebird-verifier -f
 ```
+
+### Startup Validation
+
+Run `scripts/validate-env.sh` before starting services to catch configuration errors early. The script checks that `ADMIN_API_KEY` is at least 32 characters and not the insecure default, that `REQUIRE_TLS=true`, and that `REDIS_URL` is set. It exits with code 1 if any check fails, blocking startup until the issue is fixed. See [Configuration](CONFIGURATION.md) for details on each variable.
 
 ---
 
@@ -406,14 +412,17 @@ verifier.example.com {
 ### Health Checks
 
 ```bash
-# Issuer health
-curl [https://issuer.example.com/.well-known/issuer](https://issuer.example.com/.well-known/issuer)
+# Verifier public health (no auth required)
+curl https://verifier.example.com/health
+# → {"status": "ok", "version": "..."}
 
-# Admin API health
-curl [https://issuer.example.com/admin/health](https://issuer.example.com/admin/health) \
+# Issuer admin health (requires API key)
+curl https://issuer.example.com/admin/health \
   -H "X-Admin-Key: ${ADMIN_KEY}"
 
-# Verifier implicit health (attempt verification)
+# Verifier admin health (requires API key)
+curl https://verifier.example.com/admin/health \
+  -H "X-Admin-Key: ${ADMIN_KEY}"
 ```
 
 ### Prometheus Metrics
@@ -608,6 +617,14 @@ See [Security Model](SECURITY.md) for complete threat model.
 □ Log monitoring and alerting active
 □ Regular security audits scheduled
 ```
+
+### Runtime Security Features
+
+- **TLS enforcement** — When `REQUIRE_TLS=true`, the middleware rejects non-HTTPS requests with HTTP 400 and a JSON error. See [Configuration](CONFIGURATION.md) for the `BEHIND_PROXY` setting when running behind a reverse proxy.
+- **CORS** — Both issuer and verifier apply permissive CORS headers (`Access-Control-Allow-Origin: *`) on public endpoints so browser-based clients can connect. Admin endpoints are not CORS-enabled.
+- **Public rate limiting** — Public endpoints are limited to 30 requests per second per IP. Excess requests receive HTTP 429 with a `Retry-After: 1` header. See [API](API.md) for details.
+- **Atomic state writes** — Sensitive files (keys, invitations) are written to a temporary file with mode `0600`, synced to disk, and renamed into place. This prevents partial writes from leaving corrupted state on crash. See [Key Management](KEY_MANAGEMENT.md) for the write pattern.
+- **Prometheus metrics** — Request latency and error counters are collected automatically by a Tower middleware and exposed at `GET /admin/metrics` (requires `X-Admin-Key`). See [Monitoring & Alerting](#monitoring--alerting) above.
 
 ---
 

@@ -13,6 +13,7 @@ Complete HTTP API reference for Freebird issuer and verifier services.
 5. [Admin API](#admin-api)
 6. [Error Handling](#error-handling)
 7. [Authentication](#authentication)
+8. [Rate Limiting](#rate-limiting)
 
 ---
 
@@ -449,6 +450,25 @@ curl http://localhost:8082/.well-known/verifier
 - `audience`: Application or API audience accepted by this verifier.
 - `scope_digest_b64`: Base64url-encoded SHA-256 digest of the verifier ID and audience. Clients recompute it locally and place it in the V4 token input.
 
+### Health Check
+
+**GET /health**
+
+Returns the verifier service health status. No authentication required.
+
+**Request:**
+```bash
+curl http://localhost:8082/health
+```
+
+**Response (200 OK):**
+```json
+{
+  "status": "ok",
+  "version": "0.1.0"
+}
+```
+
 ### Verify Token
 
 **POST /v1/verify**
@@ -631,6 +651,35 @@ Sets `freebird_session` cookie with `Max-Age=0` to clear it.
 
 ---
 
+### Health Check
+
+**GET /admin/health**
+
+Returns the service health status. Requires admin API key.
+
+**Issuer Response (200 OK):**
+```json
+{
+  "service": "issuer",
+  "status": "ok",
+  "uptime_seconds": 0,
+  "invitation_system_status": "operational"
+}
+```
+
+**Verifier Response (200 OK):**
+```json
+{
+  "service": "verifier",
+  "status": "ok",
+  "uptime_seconds": 42,
+  "store_backend": "redis",
+  "issuers_loaded": 1
+}
+```
+
+---
+
 ### Bootstrap: Register Instance Owner
 
 **POST /admin/register-owner**
@@ -741,6 +790,15 @@ Grants a user a starting allocation of invitations without requiring them to be 
 - All endpoints require `X-Admin-Key` header
 - Key must be at least 32 characters
 - Set via `ADMIN_API_KEY` environment variable
+
+---
+
+## Rate Limiting
+
+Public endpoints are rate-limited to **30 requests per second per IP address**.
+Exceeding this limit returns HTTP 429 with a `Retry-After: 1` header.
+
+Admin endpoints have separate rate limiting; see [Admin API Reference](ADMIN_API.md).
 
 ---
 
