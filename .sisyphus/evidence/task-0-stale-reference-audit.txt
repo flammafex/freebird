@@ -1,0 +1,20 @@
+=== T0: Cross-Reference Grep Audit Results ===
+
+CONFIRMED STALE REFERENCES:
+1. README.md: "rayon" for batch issuance (line ~112) → should be "tokio JoinSet"
+2. CONTRIBUTING.md: "x86_64 Docker image" (line ~201) → should be "multi-arch"
+3. KEY_MANAGEMENT.md: "grace_period_secs": 0 (emergency rotation example) → min 3600
+4. WEBAUTHN.md: "RECOMMENDED for production" for WEBAUTHN_PROOF_SECRET → should be REQUIRED
+5. CONFIGURATION.md: "unset" default for ADMIN_API_KEY, "enables issuer admin endpoints" → should be REQUIRED (≥32 chars)
+6. docker-compose.yaml: Issuer healthcheck uses /.well-known/issuer → should use /admin/health (requires auth)
+7. docker-compose.yaml: Verifier service missing ADMIN_API_KEY env var
+8. .env.example: Commented salts use "change-in-production" but are commented out; code auto-generates if not set
+
+CROSS-REFERENCES FOUND:
+- ADMIN_API_KEY mentioned correctly in: API.md, PRODUCTION.md, QUICKSTART.md, ADMIN_API.md, README.md (all say required/set)
+- Only CONFIGURATION.md incorrectly describes it as optional/unset
+- grace_period_secs: 604800 and 1209600 in ADMIN_API.md (correct, no change needed)
+- grace_period_secs: 604800 in KEY_MANAGEMENT.md (correct)
+- Only grace_period_secs: 0 in KEY_MANAGEMENT.md is wrong
+
+VERIFIER HEALTHCHECK: Already uses /health (correct)

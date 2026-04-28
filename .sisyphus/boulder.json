@@ -1,0 +1,49 @@
+{
+  "active_plan": "/Users/sibyl/dev/freebird/.sisyphus/plans/doc-fixes.md",
+  "started_at": "2026-04-28T04:39:23.099Z",
+  "session_ids": [
+    "ses_22f262439ffeMefr5vUPJOP62A"
+  ],
+  "session_origins": {
+    "ses_22f262439ffeMefr5vUPJOP62A": "direct"
+  },
+  "plan_name": "doc-fixes",
+  "agent": "atlas",
+  "task_sessions": {
+    "todo:0": {
+      "task_key": "todo:0",
+      "task_label": "0",
+      "task_title": "Cross-Reference Grep Audit (Pre-flight)",
+      "session_id": "ses_22d9ae497ffenkbUUXmnjSBA2R",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-28T04:44:31.551Z"
+    },
+    "todo:6": {
+      "task_key": "todo:6",
+      "task_label": "6",
+      "task_title": "Add /health endpoint and rate limiting to API.md",
+      "session_id": "ses_22c201f2dffe2hZaobyH5WHKkk",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-low",
+      "updated_at": "2026-04-28T11:42:10.191Z"
+    },
+    "todo:11": {
+      "task_key": "todo:11",
+      "task_label": "11",
+      "task_title": "Fix CONTRIBUTING.md — x86_64 → multi-arch",
+      "session_id": "ses_22c162e2affefM6I4WASAO4XaL",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-04-28T11:47:14.797Z"
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "**Plan Compliance Audit** — `oracle`",
+      "session_id": "ses_22c0ca1a3ffe3dNJJbNhYTOkgZ",
+      "agent": "oracle",
+      "updated_at": "2026-04-28T11:58:52.416Z"
+    }
+  }
+}
