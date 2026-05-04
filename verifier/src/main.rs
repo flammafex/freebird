@@ -461,7 +461,10 @@ async fn main() -> anyhow::Result<()> {
 async fn refresh_issuer_metadata(state: &Arc<AppState>, issuer_url: &str) -> anyhow::Result<()> {
     info!(%issuer_url, "fetching issuer metadata");
     let url = reqwest::Url::parse(issuer_url).context("parse issuer metadata URL")?;
-    if url.scheme() != "https" {
+    let require_tls = std::env::var("REQUIRE_TLS")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+    if require_tls && url.scheme() != "https" {
         anyhow::bail!("issuer metadata URL must use HTTPS: {}", issuer_url);
     }
     let client = reqwest::Client::builder()

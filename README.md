@@ -1,538 +1,290 @@
-# 🕊️ Freebird
+# Freebird
 
-**Authorization without identity. Privacy without compromise.**
+Freebird is a Rust workspace for privacy-preserving token issuance and
+verification. The issuer evaluates blinded client requests, the client finalizes
+the result into a bearer token, and the verifier checks that token while
+recording a nullifier so the same token cannot be spent twice.
 
-Freebird is infrastructure for a world without surveillance. It provides cryptographic proof of authorization without revealing identity—separating "can you?" from "who are you?" for the first time in a practical, deployable way.
+The current source tree supports two token modes:
 
-Think of it as anonymous digital cash for the internet. Users receive unforgeable, unlinkable tokens that prove authorization while revealing nothing about their identity.
+- V4 private-verification tokens using a P-256 VOPRF.
+- V5 public bearer passes using RFC 9474 blind RSA signatures.
 
----
+The `freebird-interface` binary exercises the V4 flow against local services on
+`127.0.0.1:8081` and `127.0.0.1:8082`.
 
-## The Problem
+## Workspace
 
-Every online interaction today demands identity:
-- **Rate limiting requires tracking users**
-- **Access control requires accounts**
-- **Spam prevention requires surveillance**
-- **Resource allocation requires registration**
+| Path | Purpose |
+| --- | --- |
+| `issuer` | Axum issuer service, admin CLI, config validator, key rotation, Sybil gates. |
+| `verifier` | Axum verifier service, issuer metadata refresh, nullifier storage, admin UI. |
+| `interface` | Local V4 token test client. |
+| `crypto` | VOPRF, redemption-token, blind-RSA, and provider primitives. |
+| `common` | Shared API types, metrics, logging, rate limits, TLS enforcement. |
+| `integration_tests` | Cross-crate protocol and storage regression tests. |
+| `sdk/js` | TypeScript client SDK and examples. |
+| `docker-compose.yaml`, `Dockerfile`, `k8s`, `server-configs` | Deployment assets. |
 
-We've accepted total surveillance as the price of functional systems. This is a false choice.
+## Prerequisites
 
-## The Solution
+- Rust stable with Cargo.
+- `curl` for the smoke checks below.
+- Redis is optional for local source testing. Without `REDIS_URL`, the verifier
+  uses in-memory nullifier storage.
+- Node.js is only needed for the TypeScript SDK.
 
-Freebird uses blind issuance cryptography to enable:
-
-- ✅ **Prove you're authorized without revealing who you are**
-- ✅ **Rate limiting without tracking**
-- ✅ **Access control without accounts**
-- ✅ **Spam prevention without surveillance**
-- ✅ **One person, one vote—anonymously**
-
-The current prototype has two token modes: V4 private-verification tokens for verifier-bound privacy, and V5 public bearer passes for public-key verification by trusted communities.
-
----
-## 🖥️ System Requirements
-
-Freebird is lightweight but has specific architectural requirements for security in production environments.
-
-### Hardware Sizing
-
-Resources depend on your anticipated user base and Sybil resistance complexity.
-
-| Deployment Size | Users | CPU | RAM | Disk |
-|-----------------|-------|-----|-----|------|
-| **Small** | < 1k | 2 vCPU | 1.5 GB | 10 GB SSD |
-| **Medium** | 10k | 4 vCPU | 3 GB | 20 GB SSD |
-| **Large** | 10k+ | 8+ vCPU | 6 GB+ | High-Perf SSD |
-
-* **CPU:** Primary bottleneck is cryptographic operations (P-256 scalar multiplication).
-* **RAM:** Includes overhead for Issuer, Verifier, and Redis.
-* **Disk:** State files are small (~1KB/user), but SSDs are recommended for database latency.
-
-### Network Architecture
-
-* **Development:** Issuer and Verifier can run on the same host (e.g., via Docker Compose).
-* **Production:** Issuer and Verifier **MUST** be deployed on separate infrastructure (different servers or VPCs) to prevent timing attacks and ensure user anonymity.
-* **Time Sync:** System clocks must be synchronized via NTP. The default skew tolerance is 300 seconds (5 minutes).
-
-### Software Environment
-
-* **Container Runtime:** Docker & Docker Compose (Recommended).
-* **Operating System:** Linux (Debian Bookworm is the reference OS).
-* **Dependencies:**
-    * **Redis:** Required for the Verifier (replay protection) and WebAuthn storage in production.
-    * **Reverse Proxy:** Nginx, Caddy, or Cloud LB required for TLS termination.
-    * **Entropy:** System must provide sufficient entropy (>1000 available) for key generation.
-
-### Build Requirements
-
-* **Docker:** Recommended for deployment
-* **Rust 1.70+:** If building from source
-* **System Entropy:** > 1000 (check with `cat /proc/sys/kernel/random/entropy_avail`)
----
-
-## Technical Implementation
-
-### Architecture
-
-```text
-┌─────────┐                    ┌─────────┐                    ┌──────────┐
-│  User   │                    │ Issuer  │                    │ Verifier │
-└────┬────┘                    └────┬────┘                    └────┬─────┘
-     │                              │                              │
-     │  1. Blind token input        │                              │
-     ├──────────────────────────────►                              │
-     │                              │                              │
-     │  2. Blind-sign / evaluate    │                              │
-     │◄──────────────────────────────                              │
-     │                              │                              │
-     │  3. Finalize → token         │                              │
-     │                              │                              │
-     │  4. Present anonymous token  │                              │
-     ├──────────────────────────────┼──────────────────────────────►
-     │                              │                              │
-     │  5. ✓ Authorized (or ✗)      │                              │
-     ◄──────────────────────────────┼───────────────────────────────
-```
-
-### Cryptographic Properties
-
-- **Unlinkability**: Blind issuance prevents the issuer from seeing the final token it signs.
-- **Unforgeability**: Only the issuer's private key can create valid tokens.
-- **Two Verification Modes**: V4 uses private VOPRF verification; V5 uses public RFC 9474 blind RSA signatures.
-- **Single-Use**: Nullifier-based replay protection ensures tokens are spent exactly once.
-
-### Implementation Status
-
-**Core Features:**
-- ✅ **P-256 VOPRF** with DLEQ proofs
-- ✅ **V4 Private Option**: Verifier-bound private verification with local authenticator recomputation
-- ✅ **V5 Public Option**: RFC 9474 public bearer passes with strict `single_use` key metadata
-- ✅ **Batch Issuance**: Concurrent batch issuance via tokio JoinSet (≥10 items concurrent, <10 sequential) (see [`ADMIN_API.md`](docs/ADMIN_API.md))
-- ✅ **Key Rotation**: Zero-downtime rotation with grace periods for deprecated keys
-- ✅ **Storage Backends**: In-memory (dev) and Redis (prod) support with atomic state writes (temp-file-rename pattern) (see [`PRODUCTION.md`](docs/PRODUCTION.md))
-- ✅ **Explicit Issuer Trust**: Verifiers accept only configured issuers, with V4 private keys or V5 public key metadata (see [`FEDERATION.md`](docs/FEDERATION.md))
-- ✅ **Unified Admin Dashboard**: Single-page UI for both issuer and verifier management
-- ✅ **Admin CLI**: `freebird-cli` command-line tool for scripting and automation
-- ✅ **Admin API**: HTTP endpoints for user management, key rotation, and stats
-- ✅ **Prometheus Metrics**: `/admin/metrics` endpoint for monitoring and alerting (see [`PRODUCTION.md`](docs/PRODUCTION.md))
-- ✅ **Config Validation**: Pre-flight configuration checker and environment validation (`validate-env.sh`) (see [`PRODUCTION.md`](docs/PRODUCTION.md))
-- ✅ **Public Rate Limiting**: 30 req/sec per IP for public endpoints (see [`API.md`](docs/API.md))
-- ✅ **Admin Rate Limiter**: LRU eviction cache with 10k capacity for admin endpoints (see [`ADMIN_API.md`](docs/ADMIN_API.md))
-- ✅ **TLS Enforcement**: `REQUIRE_TLS` middleware for production security (see [`PRODUCTION.md`](docs/PRODUCTION.md))
-- ✅ **CORS Middleware**: Configurable cross-origin resource sharing (see [`PRODUCTION.md`](docs/PRODUCTION.md))
-- ✅ **HTTPS-Only Metadata**: Verifier refreshes issuer metadata exclusively over HTTPS (see [`FEDERATION.md`](docs/FEDERATION.md))
-- ✅ **Health Endpoints**: Public `/health` and admin `/admin/health` status checks (see [`API.md`](docs/API.md))
-- ✅ **Admin Key Derivation**: HMAC-based admin key derivation via HKDF (see [`SECURITY.md`](docs/SECURITY.md))
-
-**Sybil Resistance Mechanisms:**
-- ✅ **Invitation System**: Cryptographically signed invites with ban-trees and reputation tracking
-- ✅ **Proof of Work**: Configurable computational cost
-- ✅ **Rate Limiting**: IP or fingerprint-based throttling
-- ✅ **WebAuthn/FIDO2**: Hardware-backed "Proof of Humanity" with attestation policies, discoverable credentials, and credential management
-- ✅ **Combined**: Stack multiple mechanisms for defense-in-depth
-
----
-
-## 📦 Client SDKs
-
-Freebird includes a fully typed TypeScript/JavaScript SDK for browser and Node.js environments.
-
-### JavaScript / TypeScript
+## Build And Test
 
 ```bash
-npm install @freebird/sdk
+cargo build --workspace
+cargo test --workspace
 ```
 
-```typescript
-import { FreebirdClient } from '@freebird/sdk';
+Redis-specific integration tests skip themselves when Redis is not reachable at
+`REDIS_URL` or `redis://127.0.0.1:6379`.
 
-const client = new FreebirdClient({
-  issuerUrl: 'https://issuer.example.com',
-  verifierUrl: 'https://verifier.example.com' // fetches verifier scope metadata
-});
-
-// 1. Initialize (fetch issuer keys and verifier scope)
-await client.init();
-
-// 2. Issue an anonymous token
-const token = await client.issueToken();
-console.log('Got token:', token.tokenValue);
-
-// 3. Verify (or send to third-party)
-const isValid = await client.verifyToken(token);
-```
-
----
-
-## 🖥️ Command-Line Interface
-
-Freebird includes `freebird-cli`, a command-line tool for managing your deployment programmatically.
-
-### Installation
+To check the JavaScript SDK:
 
 ```bash
-# From source
-cargo install --path issuer --bin freebird-cli
-
-# Or use the Docker image
-docker run --rm freebird/cli --help
+cd sdk/js
+npm install
+npm run lint
+npm test
 ```
 
-### Configuration
+## Local Source Round Trip
+
+Use this workflow when you want to build from source and run
+`freebird-interface`.
+
+The interface currently uses fixed local URLs:
+
+- issuer: `http://127.0.0.1:8081`
+- verifier: `http://127.0.0.1:8082`
+
+For this local flow, run with `REQUIRE_TLS=false` and disable Sybil resistance so
+the interface can request tokens without an invitation, proof of work, or
+WebAuthn proof.
+
+### 1. Start The Issuer
+
+From the repository root:
 
 ```bash
-# Set connection details via environment
-export FREEBIRD_ISSUER_URL=http://localhost:8081
-export FREEBIRD_ADMIN_KEY=your-admin-key
-
-# Or pass via CLI flags
-freebird-cli --url http://localhost:8081 --key your-admin-key <command>
+ADMIN_API_KEY=local-admin-key-must-be-at-least-32-chars \
+BIND_ADDR=127.0.0.1:8081 \
+ISSUER_ID=issuer:local:v4 \
+ISSUER_SK_PATH=issuer_sk.bin \
+KEY_ROTATION_STATE_PATH=key_rotation_state.json \
+SYBIL_RESISTANCE=none \
+REQUIRE_TLS=false \
+cargo run -p freebird-issuer --bin freebird-issuer
 ```
 
-### Commands
+Leave this process running.
+
+The issuer creates `issuer_sk.bin` if it does not already exist. The verifier
+must read the same key file for V4 private verification.
+
+### 2. Start The Verifier
+
+Open a second terminal in the repository root:
 
 ```bash
-# System
-freebird-cli health              # Check issuer health
-freebird-cli stats               # Show statistics
-freebird-cli config              # Show configuration
-freebird-cli metrics             # Show Prometheus metrics
-freebird-cli audit               # View audit log
-
-# User Management
-freebird-cli users list          # List all users
-freebird-cli users get <id>      # Get user details
-freebird-cli users ban <id>      # Ban a user
-freebird-cli users ban <id> --tree  # Ban user and their invite tree
-
-# Invitations
-freebird-cli invites list        # List invitations
-freebird-cli invites create <user> --count 5  # Create invitations
-freebird-cli invites grant <user> --count 3   # Grant invite slots
-
-# Key Management
-freebird-cli keys list           # List VOPRF keys
-freebird-cli keys rotate         # Rotate VOPRF key
-freebird-cli keys cleanup        # Remove expired keys
-
-# Data Export
-freebird-cli export users        # Export users to JSON
-freebird-cli export invitations  # Export invitations to JSON
-freebird-cli export audit        # Export audit log to JSON
+ADMIN_API_KEY=local-admin-key-must-be-at-least-32-chars \
+BIND_ADDR=127.0.0.1:8082 \
+VERIFIER_ID=verifier:local:v4 \
+VERIFIER_AUDIENCE=local \
+ISSUER_URL=http://127.0.0.1:8081/.well-known/issuer \
+VERIFIER_SK_PATH=issuer_sk.bin \
+REFRESH_INTERVAL_MIN=1 \
+REQUIRE_TLS=false \
+cargo run -p freebird-verifier --bin freebird-verifier
 ```
 
-### Output Formats
+Leave this process running. The verifier should log that issuer metadata was
+updated. If it logs that no private verification key is available, check
+`VERIFIER_SK_PATH`.
+
+### 3. Check The Services
+
+In a third terminal:
 
 ```bash
-# Table output (default)
-freebird-cli users list
-
-# JSON output (for scripting)
-freebird-cli --format json users list
-
-# Compact output
-freebird-cli --format compact stats
+curl http://127.0.0.1:8081/.well-known/issuer
+curl http://127.0.0.1:8082/.well-known/verifier
+curl http://127.0.0.1:8082/health
 ```
 
----
-
-## 🖥️ Unified Admin Dashboard
-
-Freebird includes a modern, single-page web interface for managing your deployment. The UI automatically detects which service it's connected to (issuer or verifier) and shows the appropriate features.
-
-### Issuer Features
-
-**📊 Dashboard Tab:**
-- Real-time system statistics (users, invitations, redemptions)
-- Interactive activity charts with Canvas visualization
-- Monitor banned users and system health
-
-**👥 User Management Tab:**
-- Search and filter users
-- View detailed user profiles with reputation scores
-- Interactive invitation tree visualization
-- Ban users individually or recursively (entire invite tree)
-
-**🎫 Invitations Tab:**
-- Create cryptographically signed invitation codes
-- Grant invitation quota to users
-- Track redemption status and expiration
-
-**🔑 Key Management Tab:**
-- View active and deprecated cryptographic keys
-- Rotate keys with configurable grace periods
-- Clean up expired keys
-
-**⚙️ Sybil Configuration Tab:**
-- View current Sybil resistance mode and settings
-- Monitor resistance mechanism statistics
-
-**📋 Audit Logs Tab:**
-- Comprehensive system activity logs
-- Filter by level (info, warning, error, success)
-- Search logs by keyword
-
-**🔐 WebAuthn Tab:**
-- Register FIDO2 credentials and security keys
-- Manage biometric authentication
-
-### Verifier Features
-
-**📊 Dashboard Tab:**
-- Verification statistics and epoch information
-- Uptime and store backend status
-- Trusted issuer count
-
-**🔗 Trusted Issuers Tab:**
-- View all configured trusted issuers
-- Inspect issuer details (public key, context, expiration)
-- Trigger issuer metadata refresh
-
-**💾 Cache Tab:**
-- Replay cache statistics
-- Cache backend status
-- Cache management operations
-
-### Access
-
-```
-# Issuer Admin
-http://localhost:8081/admin
-
-# Verifier Admin
-http://localhost:8082/admin
-```
-
-**Authentication:** Requires the `ADMIN_API_KEY` from your `.env` file (minimum 32 characters).
-
-### Architecture
-
-- **Zero dependencies**: Single HTML file with embedded CSS and JavaScript
-- **No build step**: Served directly from the binary
-- **Service detection**: Automatically adapts to issuer or verifier
-- **Modern UI**: Clean, responsive design with dark mode support
-- **Secure**: API key stored in browser localStorage only
-
-📖 **[Complete Admin Dashboard Documentation →](admin-ui/README.md)**
-
----
-
-## 📊 Prometheus Metrics
-
-Freebird exposes metrics in Prometheus text exposition format for monitoring and alerting integration.
-
-### Endpoint
+### 4. Run The Interface
 
 ```bash
-curl -H "X-Admin-Key: $ADMIN_API_KEY" http://localhost:8081/admin/metrics
+cargo run -p freebird-interface
 ```
 
-### Available Metrics
+Expected result: a fresh V4 token is issued by the issuer and accepted once by
+the verifier.
 
-| Metric | Type | Description |
-|--------|------|-------------|
-| `freebird_users_total` | Gauge | Total registered users |
-| `freebird_users_banned` | Gauge | Number of banned users |
-| `freebird_invitations_total` | Gauge | Total invitations created |
-| `freebird_invitations_redeemed` | Gauge | Total invitations redeemed |
-| `freebird_invitations_pending` | Gauge | Pending invitations |
-| `freebird_keys_total` | Gauge | Total signing keys |
-| `freebird_keys_active` | Gauge | Active signing keys |
-| `freebird_keys_deprecated` | Gauge | Deprecated signing keys |
-| `freebird_keys_expiring_soon` | Gauge | Keys expiring within 7 days |
-| `freebird_info` | Info | Instance metadata with `sybil_mode` label |
-
-### Prometheus Configuration
-
-```yaml
-# prometheus.yml
-scrape_configs:
-  - job_name: 'freebird'
-    static_configs:
-      - targets: ['localhost:8081']
-    metrics_path: /admin/metrics
-    authorization:
-      type: 'Bearer'
-      credentials: 'your-admin-api-key'
-```
-
----
-
-## Quick Start
-
-### 🐳 Docker (Recommended)
-
-The fastest way to get Freebird running is with Docker.
-
-**Option A: Use pre-built images from GitHub Container Registry (no Rust needed):**
+Useful interface modes:
 
 ```bash
-# Pull the latest pre-built image
-docker pull ghcr.io/flammafex/freebird:latest
-
-# Or run the full stack with docker-compose using the pre-built image
-git clone https://github.com/flammafex/freebird.git
-cd freebird
-cp .env.example .env
-docker compose up
+cargo run -p freebird-interface -- --replay
+cargo run -p freebird-interface -- --double-spend
+cargo run -p freebird-interface -- --stress 10
+cargo run -p freebird-interface -- --save
+cargo run -p freebird-interface -- --load
 ```
 
-**Option B: Build from source:**
+`--replay` and `--double-spend` should show that the first verification succeeds
+and the second use of the same token is rejected.
+
+## Why These Local Settings Matter
+
+- `ADMIN_API_KEY` is required by both services and must be at least 32
+  characters.
+- `SYBIL_RESISTANCE=none` is needed for the local interface. If the issuer uses
+  `invitation`, `pow`, `webauthn`, or another Sybil mode, `/v1/oprf/issue`
+  expects a matching `sybil_proof`.
+- `VERIFIER_ID` and `VERIFIER_AUDIENCE` define the verifier scope. V4 clients
+  bind this scope into the token before issuance.
+- `VERIFIER_SK_PATH=issuer_sk.bin` lets the verifier validate V4 private tokens
+  from the local issuer. V5 public bearer verification uses public key discovery
+  instead.
+- `REQUIRE_TLS=false` is for local development. With `REQUIRE_TLS=true`, inbound
+  HTTP requests are rejected unless a reverse proxy supplies
+  `X-Forwarded-Proto: https`, and verifier issuer metadata URLs must be HTTPS.
+
+## HTTP API
+
+Issuer public endpoints:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/.well-known/issuer` | Issuer ID, active VOPRF key, and V5 public mode summary. |
+| `GET` | `/.well-known/keys` | Key discovery, active epoch, valid epochs, V5 public keys. |
+| `POST` | `/v1/oprf/issue` | Issue one V4 VOPRF evaluation for a blinded element. |
+| `POST` | `/v1/oprf/issue/batch` | Batch V4 issuance. |
+| `POST` | `/v1/public/issue` | Issue one V5 blind RSA signature. |
+| `POST` | `/v1/public/issue/batch` | Batch V5 public bearer issuance. |
+
+Verifier public endpoints:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Basic verifier health. |
+| `GET` | `/.well-known/verifier` | Verifier ID, audience, and scope digest. |
+| `POST` | `/v1/check` | Validate a token without consuming it. |
+| `POST` | `/v1/verify` | Validate and consume a token. Reuse is rejected. |
+| `POST` | `/v1/verify/batch` | Batch verify and consume tokens. |
+
+Admin endpoints live under `/admin` and require `X-Admin-Key:
+<ADMIN_API_KEY>` or a login session cookie. The verifier always mounts its admin
+router. The issuer currently mounts its admin router when the invitation system
+is configured.
+
+## Configuration Reference
+
+Common service variables:
+
+| Variable | Service | Default | Notes |
+| --- | --- | --- | --- |
+| `ADMIN_API_KEY` | both | none | Required, minimum 32 characters. |
+| `BIND_ADDR` | both | issuer `0.0.0.0:8081`, verifier `0.0.0.0:8082` | Listen address. |
+| `REQUIRE_TLS` | both | `false` | Set `true` in production behind TLS. |
+| `BEHIND_PROXY` | both | `false` | Trust forwarded client IP and proto headers. |
+| `RUST_LOG` | both | set by logging init | Standard tracing filter. |
+
+Issuer variables:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `ISSUER_ID` | `issuer:freebird:v4` | Embedded in issued tokens and metadata. |
+| `ISSUER_SK_PATH` | `issuer_sk.bin` | V4 issuer secret key path. Created if missing. |
+| `KEY_ROTATION_STATE_PATH` | `key_rotation_state.json` | V4 key rotation state. |
+| `KID` | derived | Optional key ID override; mismatched values are corrected with the derived prefix. |
+| `EPOCH_DURATION` | `1d` | Human-readable duration accepted. |
+| `EPOCH_RETENTION` | `2` | Number of previous epochs accepted. |
+| `SYBIL_RESISTANCE` | `none` | `none`, `invitation`, `pow`, `rate_limit`, `progressive_trust`, `proof_of_diversity`, `multi_party_vouching`, `webauthn`, or `combined`. |
+| `PUBLIC_BEARER_ENABLE` | `true` | Enables V5 public bearer issuer. |
+| `PUBLIC_BEARER_SK_PATH` | `public_bearer_sk.der` | V5 RSA private key path. |
+| `PUBLIC_BEARER_METADATA_PATH` | `public_bearer_metadata.json` | V5 key metadata path. |
+| `PUBLIC_BEARER_VALIDITY` | `30d` | V5 key validity window. |
+| `PUBLIC_BEARER_AUDIENCE` | none | Optional V5 audience binding. |
+
+Verifier variables:
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `VERIFIER_ID` | none | Required. V4 tokens are bound to this verifier ID. |
+| `VERIFIER_AUDIENCE` | `VERIFIER_ID` | Audience used in the verifier scope digest. |
+| `ISSUER_URL` / `ISSUER_URLS` | `http://127.0.0.1:8081/.well-known/issuer` | One issuer URL or comma-separated issuer URLs. HTTPS is required when `REQUIRE_TLS=true`. |
+| `VERIFIER_SK_PATH` | none | V4 private verification key. Usually the issuer key file for local testing. |
+| `VERIFIER_SK_B64` | none | Base64url raw 32-byte V4 key alternative. |
+| `VERIFIER_KEYRING_B64` | none | JSON map of `kid` to base64url raw 32-byte keys for rotation windows. |
+| `REDIS_URL` | none | Enables Redis nullifier storage. Without it, storage is in-memory. |
+| `REFRESH_INTERVAL_MIN` | `10` | Issuer metadata refresh interval. |
+| `EPOCH_DURATION_SEC` | `86400` | Verifier display/config value. |
+| `EPOCH_RETENTION` | `2` | Verifier display/config value. |
+
+## Docker And Deployment Assets
+
+The repository includes a multi-stage `Dockerfile`, `docker-compose.yaml`,
+Kubernetes manifests, reverse-proxy examples, monitoring rules, and validation
+scripts. Treat those as deployment-oriented assets, not as the easiest way to
+run the local interface.
+
+For production:
+
+- Use real TLS and set `REQUIRE_TLS=true`.
+- Use a high-entropy `ADMIN_API_KEY` from a secret manager.
+- Use Redis for verifier nullifier storage.
+- Keep issuer key material on protected storage or an HSM-backed path.
+- Do not use `SYBIL_RESISTANCE=none` for a public issuer.
+
+## Admin CLI
+
+The issuer package includes `freebird-cli`. Use it when the issuer is running
+with invitation support, because that is when the issuer admin router is
+mounted:
 
 ```bash
-git clone https://github.com/flammafex/freebird.git
-cd freebird
-
-# Copy and optionally customize the environment configuration
-cp .env.example .env
-
-# Start all services (Issuer, Verifier, Redis)
-docker compose up --build
+cargo run -p freebird-issuer --bin freebird-cli -- \
+  --url http://127.0.0.1:8081 \
+  --key local-admin-key-must-be-at-least-32-chars \
+  health
 ```
 
-**That's it!** Freebird is now running:
-- **Issuer:** http://localhost:8081
-- **Verifier:** http://localhost:8082
-- **🖥️ Web Admin Dashboard:** http://localhost:8081/admin (Full-featured UI for system management)
-- **Admin API:** http://localhost:8081/admin/* (REST API, requires `ADMIN_API_KEY`)
+Run with `--help` to see health, stats, config, users, invites, keys, export,
+metrics, and audit commands.
 
-**Verify deployment:**
-```bash
-curl http://localhost:8081/.well-known/issuer
-```
+## Troubleshooting
 
-📖 **[Read the complete Docker Quickstart Guide →](docs/QUICKSTART.md)**
+`freebird-interface` cannot connect:
 
-The guide includes:
-- Detailed configuration options
-- API examples (cURL, TypeScript SDK, Rust CLI)
-- Troubleshooting common issues
-- Production deployment checklist
+- Confirm the issuer is on `127.0.0.1:8081` and the verifier is on
+  `127.0.0.1:8082`.
+- Confirm both services were started from the repository root or point
+  `ISSUER_SK_PATH` and `VERIFIER_SK_PATH` at the same file.
 
-### 🦀 Build from Source
+Token issuance returns an authorization or Sybil error:
 
-```bash
-# Prerequisites: Rust 1.70+
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+- Use `SYBIL_RESISTANCE=none` for the local interface, or provide a matching
+  `sybil_proof` from a custom client.
 
-# Build all components
-cargo build --release
+Verification always fails:
 
-# Terminal 1: Start Issuer
-./target/release/freebird-issuer
+- Check verifier logs for issuer metadata refresh errors.
+- Check that `VERIFIER_ID` and `VERIFIER_AUDIENCE` match the metadata fetched by
+  the client.
+- Check that `VERIFIER_SK_PATH` points at the issuer's V4 secret key.
 
-# Terminal 2: Start Verifier
-./target/release/freebird-verifier
+HTTP requests fail with `tls_required`:
 
-# Terminal 3: Run the CLI Interface to test the flow
-./target/release/freebird-interface --stress 5
-```
+- You started a service with `REQUIRE_TLS=true`. Use HTTPS through a reverse
+  proxy or set `REQUIRE_TLS=false` for local development.
 
----
+The second use of a token fails:
 
-## Configuration
-
-Freebird is configured via environment variables. For Docker deployments, use the `.env` file.
-
-### Quick Configuration
-
-```bash
-# Copy the example configuration
-cp .env.example .env
-
-# Edit with your preferred editor
-nano .env
-
-# Validate configuration before starting
-freebird-validate-config
-```
-
-The `.env.example` file contains **all** available configuration options with detailed comments and sensible defaults.
-
-### Configuration Validation
-
-Before starting Freebird, validate your configuration:
-
-```bash
-source .env && freebird-validate-config
-```
-
-This checks for:
-- Missing required variables
-- Invalid duration formats
-- Missing key files
-- Common configuration errors
-
-### Human-Readable Duration Format
-
-Duration fields support human-readable formats:
-
-| Format | Example | Description |
-|--------|---------|-------------|
-| Days | `30d` | 30 days |
-| Hours | `24h` | 24 hours |
-| Minutes | `30m` | 30 minutes |
-| Seconds | `45s` | 45 seconds |
-| Combined | `1d12h` | 1 day and 12 hours |
-| Raw | `3600` | Seconds |
-
-### Key Configuration Variables
-
-**Issuer:**
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ISSUER_ID` | `issuer:freebird:v4` | Unique identifier for this issuer |
-| `BIND_ADDR` | `0.0.0.0:8081` | Listening address |
-| `SYBIL_RESISTANCE` | `none` | `invitation`, `pow`, `rate_limit`, `webauthn`, `combined`, etc. |
-| `ADMIN_API_KEY` | (None) | Required for Admin API (min 32 chars) |
-| `EPOCH_DURATION` | `1d` | Key rotation epoch duration |
-| `PUBLIC_BEARER_ENABLE` | `true` | Enable V5 public bearer issuance |
-| `PUBLIC_BEARER_SK_PATH` | `public_bearer_sk.der` | V5 RSA blind-signature private key |
-| `PUBLIC_BEARER_METADATA_PATH` | `public_bearer_metadata.json` | Immutable V5 public key metadata |
-| `PUBLIC_BEARER_AUDIENCE` | (None) | Optional V5 audience binding |
-
-**Verifier:**
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ISSUER_URL` | `http://localhost:8081/.well-known/issuer` | Issuer metadata URL (comma-separated for multiple) |
-| `VERIFIER_ID` | (Required) | Stable verifier scope ID bound into V4 tokens |
-| `VERIFIER_AUDIENCE` | `VERIFIER_ID` | Application/API audience bound into V4 tokens |
-| `REDIS_URL` | (None) | Redis URL for persistent nullifier storage |
-| `VERIFIER_SK_B64` | (None) | Base64url raw 32-byte key for V4 private verification |
-| `VERIFIER_SK_PATH` | (None) | File path for V4 private verification key material |
-| `VERIFIER_KEYRING_B64` | (None) | JSON map of `kid` to base64url raw keys |
-
-📖 **See [.env.example](.env.example) for the complete configuration reference.**
-
----
-
-## Security Model
-
-### Guarantees
-
-- ✅ **Cryptographic Unlinkability**: The issuer signs blinded client input and does not see the final token.
-- ✅ **Scoped Privacy Options**: V4 binds tokens to verifier scope; V5 provides public-key verification for self-hosted communities.
-- ✅ **Replay Protection**: The verifier maintains a nullifier set (in Redis or memory) to prevent double-spending.
-- ✅ **No Phone-Home**: The system is fully self-contained.
-
-### Not Protected Against
-
-- **Token Theft**: Bearer tokens can be stolen if sent over insecure channels (use TLS!).
-- **Network Correlation**: An observer seeing a request enter the issuer and immediately exit to the verifier might correlate them via timing (use Tor/mixnets for network anonymity).
-- **Quantum Adversaries**: Relies on the hardness of the Discrete Log Problem on P-256.
-
----
-
-## License
-
-**Apache License 2.0**
-
-Copyright 2026 The Carpocratian Church of Commonality and Equality, Inc.
-
----
-
-**"Surveillance is not safety. Privacy is not crime. Authorization is not identity."**
-
-
-🕊️
+- That is expected. `/v1/verify` consumes the token by recording its nullifier.
+  Use `/v1/check` when you need a non-consuming validity check.
