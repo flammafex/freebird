@@ -1,5 +1,6 @@
-use crate::routes::batch_issue::MAX_BATCH_SIZE;
+use crate::routes::batch_issue::{batch_request_binding, MAX_BATCH_SIZE};
 use crate::routes::issue::extract_client_data;
+use crate::sybil_resistance::SybilRequestContext;
 use crate::AppStateWithSybil;
 use axum::{
     extract::{ConnectInfo, State},
@@ -43,8 +44,19 @@ pub async fn handle(
         )
     })?;
 
-    let _client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
-    let sybil_info = verify_sybil(&state, req.sybil_proof.as_ref())?;
+    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
+    let sybil_info = verify_sybil(
+        &state,
+        req.sybil_proof.as_ref(),
+        SybilRequestContext {
+            client_data: Some(client_data),
+            request_binding: Some(format!(
+                "freebird:public-issue:v1:{}:{}",
+                state.issuer_id, req.blinded_msg_b64
+            )),
+            allow_registered_user: false,
+        },
+    )?;
     validate_requested_key(&public_issuer, req.token_key_id.as_deref())?;
     let blinded_msg = decode_blinded_msg(&req.blinded_msg_b64, public_issuer.modulus_bytes())?;
 
@@ -105,8 +117,20 @@ pub async fn handle_batch(
         )
     })?;
 
-    let _client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
-    let sybil_info = verify_sybil(&state, req.sybil_proof.as_ref())?;
+    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
+    let sybil_info = verify_sybil(
+        &state,
+        req.sybil_proof.as_ref(),
+        SybilRequestContext {
+            client_data: Some(client_data),
+            request_binding: Some(batch_request_binding(
+                "public-issue-batch",
+                &state.issuer_id,
+                &req.blinded_msgs,
+            )),
+            allow_registered_user: false,
+        },
+    )?;
     validate_requested_key(&public_issuer, req.token_key_id.as_deref())?;
 
     let mut blind_signatures = Vec::with_capacity(batch_size);
@@ -141,11 +165,12 @@ pub async fn handle_batch(
 fn verify_sybil(
     state: &AppStateWithSybil,
     proof: Option<&SybilProof>,
+    ctx: SybilRequestContext,
 ) -> Result<Option<SybilInfo>, (StatusCode, String)> {
     match (&state.sybil_checker, proof) {
         (Some(checker), Some(proof)) => {
             debug!("verifying Sybil proof for V5 public issuance");
-            checker.verify(proof).map_err(|e| {
+            checker.verify_with_context(proof, &ctx).map_err(|e| {
                 warn!("Sybil resistance check failed: {}", e);
                 (
                     StatusCode::FORBIDDEN,

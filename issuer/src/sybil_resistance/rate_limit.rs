@@ -34,7 +34,7 @@
 //! # }
 //! ```
 
-use super::{current_timestamp, verify_timestamp_recent, SybilResistance}; // Remove SybilProof from here if unused in module logic
+use super::{current_timestamp, verify_timestamp_recent, SybilRequestContext, SybilResistance}; // Remove SybilProof from here if unused in module logic
 use anyhow::{anyhow, Result};
 use base64ct::Encoding;
 use freebird_common::api::SybilProof; // Use shared type
@@ -131,6 +131,42 @@ impl SybilResistance for RateLimit {
         // Check rate limit
         self.check_rate_limit(client_id, timestamp)?;
 
+        Ok(())
+    }
+
+    fn verify_with_context(&self, proof: &SybilProof, ctx: &SybilRequestContext) -> Result<()> {
+        let (client_id, timestamp) = match proof {
+            SybilProof::RateLimit {
+                client_id,
+                timestamp,
+            } => (client_id.as_str(), *timestamp),
+            _ => return Err(anyhow!("expected RateLimit proof")),
+        };
+
+        verify_timestamp_recent(timestamp, self.max_timestamp_age_secs)?;
+
+        let observed = ctx
+            .client_data
+            .as_ref()
+            .ok_or_else(|| anyhow!("server-observed client data required for rate limiting"))?;
+        let expected_client_id = match (&observed.ip_addr, &observed.fingerprint) {
+            (Some(ip), Some(fingerprint)) => client_id_from_fingerprint(ip, fingerprint),
+            (Some(ip), None) => client_id_from_ip(ip),
+            (None, Some(fingerprint)) => client_id_from_fingerprint("", fingerprint),
+            (None, None) => {
+                return Err(anyhow!(
+                    "server-observed IP or fingerprint required for rate limiting"
+                ))
+            }
+        };
+
+        if !client_id.is_empty() && client_id != expected_client_id {
+            return Err(anyhow!(
+                "rate limit client_id does not match observed request"
+            ));
+        }
+
+        self.check_rate_limit(&expected_client_id, timestamp)?;
         Ok(())
     }
 
@@ -255,6 +291,34 @@ mod tests {
         // Both should succeed (different clients)
         assert!(limiter.verify(&proof1).is_ok());
         assert!(limiter.verify(&proof2).is_ok());
+    }
+
+    #[test]
+    fn test_rate_limit_context_uses_observed_client_id() {
+        let limiter = RateLimit::new(Duration::from_secs(60));
+        let timestamp = current_timestamp();
+        let ctx = SybilRequestContext {
+            client_data: Some(
+                crate::sybil_resistance::ClientData::from_ip_and_fingerprint(
+                    "203.0.113.10",
+                    "ua-hash",
+                ),
+            ),
+            ..Default::default()
+        };
+        let expected = client_id_from_fingerprint("203.0.113.10", "ua-hash");
+
+        let proof = SybilProof::RateLimit {
+            client_id: expected,
+            timestamp,
+        };
+        assert!(limiter.verify_with_context(&proof, &ctx).is_ok());
+
+        let forged = SybilProof::RateLimit {
+            client_id: "attacker-chosen-id".to_string(),
+            timestamp: timestamp + 61,
+        };
+        assert!(limiter.verify_with_context(&forged, &ctx).is_err());
     }
 
     #[test]

@@ -25,12 +25,14 @@
 //! # }
 //! ```
 
-use super::{current_timestamp, verify_timestamp_recent, SybilResistance};
+use super::{
+    memory_replay_store, verify_timestamp_recent, ReplayStore, SybilRequestContext, SybilResistance,
+};
 use anyhow::{anyhow, Result};
 use freebird_common::api::SybilProof; // Use shared type
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Proof-of-Work Sybil resistance mechanism
 ///
@@ -49,9 +51,7 @@ pub struct ProofOfWork {
     /// Maximum age of timestamp (prevents pre-computation)
     max_timestamp_age_secs: u64,
 
-    /// Recently accepted proof hashes, used to prevent proof replay within the
-    /// timestamp acceptance window.
-    used_proofs: Mutex<HashMap<[u8; 32], u64>>,
+    replay_store: Arc<dyn ReplayStore>,
 }
 
 impl ProofOfWork {
@@ -69,7 +69,16 @@ impl ProofOfWork {
         Self {
             difficulty,
             max_timestamp_age_secs: 300, // 5 minutes
-            used_proofs: Mutex::new(HashMap::new()),
+            replay_store: memory_replay_store(),
+        }
+    }
+
+    pub fn with_replay_store(difficulty: u32, replay_store: Arc<dyn ReplayStore>) -> Self {
+        assert!(difficulty > 0 && difficulty <= 256, "invalid difficulty");
+        Self {
+            difficulty,
+            max_timestamp_age_secs: 300,
+            replay_store,
         }
     }
 
@@ -158,25 +167,15 @@ impl ProofOfWork {
         Ok(())
     }
 
-    fn reject_replay_or_record(&self, hash: &[u8], timestamp: u64) -> Result<()> {
+    fn reject_replay_or_record(&self, hash: &[u8]) -> Result<()> {
         let key: [u8; 32] = hash
             .try_into()
             .map_err(|_| anyhow!("invalid PoW hash length"))?;
-        let now = current_timestamp();
-        let min_timestamp = now.saturating_sub(self.max_timestamp_age_secs);
-
-        let mut used = self
-            .used_proofs
-            .lock()
-            .map_err(|_| anyhow!("PoW replay cache poisoned"))?;
-        used.retain(|_, accepted_at| *accepted_at >= min_timestamp);
-
-        if used.contains_key(&key) {
-            return Err(anyhow!("proof-of-work proof already used"));
-        }
-
-        used.insert(key, timestamp);
-        Ok(())
+        self.replay_store.mark_once(
+            "pow",
+            &hex::encode(key),
+            Duration::from_secs(self.max_timestamp_age_secs),
+        )
     }
 }
 
@@ -201,9 +200,24 @@ impl SybilResistance for ProofOfWork {
         self.verify_hash(&hash)?;
 
         // Reject duplicate successful proofs during the timestamp window.
-        self.reject_replay_or_record(&hash, timestamp)?;
+        self.reject_replay_or_record(&hash)?;
 
         Ok(())
+    }
+
+    fn verify_with_context(&self, proof: &SybilProof, ctx: &SybilRequestContext) -> Result<()> {
+        let input = match proof {
+            SybilProof::ProofOfWork { input, .. } => input,
+            _ => return Err(anyhow!("expected ProofOfWork proof")),
+        };
+
+        if let Some(expected) = &ctx.request_binding {
+            if input != expected {
+                return Err(anyhow!("proof-of-work input is not bound to this request"));
+            }
+        }
+
+        self.verify(proof)
     }
 
     fn supports(&self, proof: &SybilProof) -> bool {
@@ -220,6 +234,7 @@ impl SybilResistance for ProofOfWork {
 mod tests {
     use super::*;
     use crate::sybil_resistance::current_timestamp;
+
     #[test]
     fn test_pow_difficulty_16() {
         let difficulty = 16; // ~65k hashes
@@ -335,5 +350,32 @@ mod tests {
              current code has no replay cache, so one PoW mints \
              unbounded tokens (including full MAX_BATCH_SIZE batches)"
         );
+    }
+
+    #[test]
+    fn pow_proof_must_match_request_binding_when_context_provided() {
+        let difficulty = 8;
+        let checker = ProofOfWork::new(difficulty);
+        let timestamp = current_timestamp();
+        let binding = "freebird:issue:v1:test-issuer:blinded-message";
+
+        let (nonce, _) = ProofOfWork::compute(difficulty, binding, timestamp).expect("compute");
+        let proof = SybilProof::ProofOfWork {
+            nonce,
+            input: binding.to_string(),
+            timestamp,
+        };
+
+        let ctx = SybilRequestContext {
+            request_binding: Some(binding.to_string()),
+            ..Default::default()
+        };
+        assert!(checker.verify_with_context(&proof, &ctx).is_ok());
+
+        let wrong_ctx = SybilRequestContext {
+            request_binding: Some("freebird:issue:v1:test-issuer:other".to_string()),
+            ..Default::default()
+        };
+        assert!(checker.verify_with_context(&proof, &wrong_ctx).is_err());
     }
 }

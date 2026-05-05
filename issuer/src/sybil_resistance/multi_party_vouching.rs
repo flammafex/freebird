@@ -24,7 +24,7 @@ use subtle::ConstantTimeEq;
 use tokio::fs as tokio_fs;
 use tokio::sync::RwLock;
 
-use super::SybilResistance;
+use super::{memory_replay_store, ReplayStore, SybilResistance};
 
 /// Configuration for Multi-Party Vouching system
 #[derive(Debug, Clone)]
@@ -70,6 +70,23 @@ pub struct VoucherRecord {
     pub public_key_b64: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoucherSummary {
+    pub voucher_id_hash: String,
+    pub vouched_for: Vec<String>,
+    pub last_vouch_time: i64,
+    pub successful_vouches: u32,
+    pub problematic_vouches: u32,
+    pub first_seen: i64,
+    pub public_key_b64: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingVouchSummary {
+    pub vouchee_id_hash: String,
+    pub vouches: Vec<VouchProof>,
+}
+
 /// Multi-Party Vouching System
 pub struct MultiPartyVouchingSystem {
     config: MultiPartyVouchingConfig,
@@ -77,11 +94,19 @@ pub struct MultiPartyVouchingSystem {
     pending_vouches: Arc<RwLock<HashMap<String, Vec<VouchProof>>>>,
     hmac_key: [u8; 32],
     dirty: Arc<RwLock<bool>>,
+    replay_store: Arc<dyn ReplayStore>,
 }
 
 impl MultiPartyVouchingSystem {
     /// Create a new Multi-Party Vouching system
     pub async fn new(config: MultiPartyVouchingConfig) -> Result<Arc<Self>> {
+        Self::new_with_replay_store(config, memory_replay_store()).await
+    }
+
+    pub async fn new_with_replay_store(
+        config: MultiPartyVouchingConfig,
+        replay_store: Arc<dyn ReplayStore>,
+    ) -> Result<Arc<Self>> {
         // Load or create a per-deployment secret, then derive HMAC key from it.
         let secret = Self::load_or_generate_secret(&config)?;
         let hmac_key = Self::derive_hmac_key(&secret, &config);
@@ -92,6 +117,7 @@ impl MultiPartyVouchingSystem {
             pending_vouches: Arc::new(RwLock::new(HashMap::new())),
             hmac_key,
             dirty: Arc::new(RwLock::new(false)),
+            replay_store,
         });
 
         // Load existing state if available
@@ -204,7 +230,7 @@ impl MultiPartyVouchingSystem {
     }
 
     /// Hash a user ID with salt
-    fn hash_user_id(&self, user_id: &str) -> String {
+    pub fn hash_user_id(&self, user_id: &str) -> String {
         let mut hasher = blake3::Hasher::new();
         hasher.update(b"multi_party_vouching:user:");
         hasher.update(self.config.user_id_salt.as_bytes());
@@ -238,6 +264,66 @@ impl MultiPartyVouchingSystem {
         self.vouchers.write().await.insert(user_id_hash, record);
         *self.dirty.write().await = true;
         Ok(())
+    }
+
+    pub async fn remove_voucher(&self, user_id: &str) -> Result<()> {
+        let user_id_hash = self.hash_user_id(user_id);
+        let removed = self.vouchers.write().await.remove(&user_id_hash);
+        if removed.is_none() {
+            return Err(anyhow!("Voucher not found"));
+        }
+        *self.dirty.write().await = true;
+        Ok(())
+    }
+
+    pub async fn list_vouchers(&self) -> Vec<VoucherSummary> {
+        let mut vouchers: Vec<VoucherSummary> = self
+            .vouchers
+            .read()
+            .await
+            .iter()
+            .map(|(voucher_id_hash, record)| {
+                let mut vouched_for: Vec<String> = record.vouched_for.iter().cloned().collect();
+                vouched_for.sort();
+                VoucherSummary {
+                    voucher_id_hash: voucher_id_hash.clone(),
+                    vouched_for,
+                    last_vouch_time: record.last_vouch_time,
+                    successful_vouches: record.successful_vouches,
+                    problematic_vouches: record.problematic_vouches,
+                    first_seen: record.first_seen,
+                    public_key_b64: record.public_key_b64.clone(),
+                }
+            })
+            .collect();
+        vouchers.sort_by_key(|voucher| std::cmp::Reverse(voucher.first_seen));
+        vouchers
+    }
+
+    pub async fn list_pending_vouches(&self) -> Vec<PendingVouchSummary> {
+        let mut pending: Vec<PendingVouchSummary> = self
+            .pending_vouches
+            .read()
+            .await
+            .iter()
+            .map(|(vouchee_id_hash, vouches)| PendingVouchSummary {
+                vouchee_id_hash: vouchee_id_hash.clone(),
+                vouches: vouches.clone(),
+            })
+            .collect();
+        pending.sort_by(|a, b| a.vouchee_id_hash.cmp(&b.vouchee_id_hash));
+        pending
+    }
+
+    pub async fn clear_pending_vouches(&self, vouchee_id: &str) -> Result<usize> {
+        let vouchee_id_hash = self.hash_user_id(vouchee_id);
+        let removed = self.pending_vouches.write().await.remove(&vouchee_id_hash);
+        let count = removed.map(|vouches| vouches.len()).unwrap_or(0);
+        if count == 0 {
+            return Err(anyhow!("No vouches found"));
+        }
+        *self.dirty.write().await = true;
+        Ok(count)
     }
 
     /// Submit a vouch for a new user
@@ -350,6 +436,15 @@ impl MultiPartyVouchingSystem {
         &self,
         vouchee_id: &str,
     ) -> Result<(String, Vec<VouchProof>, String)> {
+        let (vouchee_id_hash, vouches, hmac_proof, _timestamp) =
+            self.generate_proof_with_timestamp(vouchee_id).await?;
+        Ok((vouchee_id_hash, vouches, hmac_proof))
+    }
+
+    pub async fn generate_proof_with_timestamp(
+        &self,
+        vouchee_id: &str,
+    ) -> Result<(String, Vec<VouchProof>, String, i64)> {
         let vouchee_id_hash = self.hash_user_id(vouchee_id);
         let vouches = self.check_vouches(vouchee_id).await?;
         let now = std::time::SystemTime::now()
@@ -360,7 +455,7 @@ impl MultiPartyVouchingSystem {
         // Compute HMAC proof
         let hmac_proof = self.compute_hmac_proof(&vouchee_id_hash, &vouches, now);
 
-        Ok((vouchee_id_hash, vouches, hmac_proof))
+        Ok((vouchee_id_hash, vouches, hmac_proof, now))
     }
 
     /// Compute HMAC proof
@@ -428,6 +523,11 @@ impl MultiPartyVouchingSystem {
             return Err(anyhow!("Proof timestamp is outside allowed window"));
         }
         Ok(())
+    }
+
+    fn reject_replay_or_record(&self, proof_id: &str) -> Result<()> {
+        self.replay_store
+            .mark_once("multi_party_vouching", proof_id, Duration::from_secs(300))
     }
 
     /// Validate a single vouch entry in isolation:
@@ -573,6 +673,8 @@ impl SybilResistance for MultiPartyVouchingSystem {
                 if !bool::from(hmac_proof.as_bytes().ct_eq(expected_hmac.as_bytes())) {
                     return Err(anyhow!("Invalid HMAC proof"));
                 }
+
+                self.reject_replay_or_record(hmac_proof)?;
 
                 Ok(())
             }
@@ -1016,6 +1118,42 @@ mod tests {
             hmac_proof: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string(),
             timestamp: ts,
         };
+        assert!(system.verify(&proof).is_err());
+
+        cleanup(&config);
+    }
+
+    #[tokio::test]
+    async fn test_valid_vouching_proof_cannot_be_replayed() {
+        let config = test_config("replay");
+        let system = MultiPartyVouchingSystem::new(config.clone()).await.unwrap();
+
+        let sk = SigningKey::random(&mut OsRng);
+        system
+            .add_voucher("alice".to_string(), VerifyingKey::from(&sk))
+            .await
+            .unwrap();
+
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let msg = format!("vouch:{}:{}", system.hash_user_id("bob"), ts);
+        system
+            .submit_vouch("alice", "bob", sk.sign(msg.as_bytes()), ts)
+            .await
+            .unwrap();
+
+        let (id, vouches, hmac, proof_ts) =
+            system.generate_proof_with_timestamp("bob").await.unwrap();
+        let proof = SybilProof::MultiPartyVouching {
+            vouchee_id_hash: id,
+            vouches,
+            hmac_proof: hmac,
+            timestamp: proof_ts,
+        };
+
+        assert!(system.verify(&proof).is_ok());
         assert!(system.verify(&proof).is_err());
 
         cleanup(&config);

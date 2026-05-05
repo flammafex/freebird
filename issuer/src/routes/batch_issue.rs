@@ -25,6 +25,7 @@
 
 use crate::multi_key_voprf::MultiKeyVoprfCore;
 use crate::routes::issue::extract_client_data;
+use crate::sybil_resistance::SybilRequestContext;
 use crate::AppStateWithSybil;
 use axum::{
     extract::{ConnectInfo, State},
@@ -33,6 +34,7 @@ use axum::{
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{BatchIssueReq, BatchIssueResp, SybilInfo, TokenResult};
+use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -68,6 +70,26 @@ fn compute_throughput(successful: usize, total_time_ms: u64) -> f64 {
     } else {
         (successful as f64 / total_time_ms as f64) * 1000.0
     }
+}
+
+pub(crate) fn batch_request_binding(
+    route_scope: &str,
+    issuer_id: &str,
+    blinded_elements: &[String],
+) -> String {
+    let mut hasher = Sha256::new();
+    for element in blinded_elements {
+        hasher.update((element.len() as u64).to_le_bytes());
+        hasher.update(element.as_bytes());
+    }
+    let digest = hasher.finalize();
+    format!(
+        "freebird:{}:v1:{}:{}:{}",
+        route_scope,
+        issuer_id,
+        blinded_elements.len(),
+        Base64UrlUnpadded::encode_string(&digest[..16])
+    )
 }
 
 impl BatchMetrics {
@@ -224,14 +246,23 @@ pub async fn handle_batch(
 
     // --- SYBIL RESISTANCE CHECK ---
     let sybil_start = Instant::now();
-    let _client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
+    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
 
     let sybil_info = match (&state.sybil_checker, &req.sybil_proof) {
         // Case 1: Sybil configured + proof provided → VERIFY
         (Some(checker), Some(proof)) => {
             debug!("verifying Sybil proof for batch of {}", batch_size);
 
-            match checker.verify(proof) {
+            let sybil_ctx = SybilRequestContext {
+                client_data: Some(client_data.clone()),
+                request_binding: Some(batch_request_binding(
+                    "issue-batch",
+                    &state.issuer_id,
+                    &req.blinded_elements,
+                )),
+                allow_registered_user: false,
+            };
+            match checker.verify_with_context(proof, &sybil_ctx) {
                 Ok(()) => {
                     info!("✅ Sybil resistance check passed for batch");
                     Some(SybilInfo {
@@ -429,9 +460,12 @@ mod tests {
 
     #[test]
     fn test_batch_size_limits() {
-        assert!(MAX_BATCH_SIZE > 1000, "should support large batches");
+        let max_batch_size = std::hint::black_box(MAX_BATCH_SIZE);
+        let min_parallel_batch_size = std::hint::black_box(MIN_PARALLEL_BATCH_SIZE);
+
+        assert!(max_batch_size > 1000, "should support large batches");
         assert!(
-            MIN_PARALLEL_BATCH_SIZE >= 10,
+            min_parallel_batch_size >= 10,
             "parallel overhead threshold should be reasonable"
         );
     }

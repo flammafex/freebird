@@ -18,7 +18,7 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use tracing::{debug, error, info, instrument, warn};
 
 use crate::multi_key_voprf::MultiKeyVoprfCore;
-use crate::sybil_resistance::ClientData; // Keep ClientData local to issuer/sybil if not in common
+use crate::sybil_resistance::{ClientData, SybilRequestContext}; // Keep ClientData local to issuer/sybil if not in common
 use crate::AppStateWithSybil;
 use freebird_common::api::{IssueReq, IssueResp, SybilInfo};
 
@@ -148,10 +148,17 @@ pub async fn handle(
 
             // Note: For invitation proofs, the client_data will be used
             // internally by the invitation system for invitee ID generation.
-            // For other proof types (PoW, RateLimit), it's ignored.
-            //
-            // Future enhancement: Pass client_data through SybilResistance trait
-            match checker.verify(proof) {
+            // Request context keeps public issuance checks tied to server-observed
+            // request data where each Sybil mechanism supports it.
+            let sybil_ctx = SybilRequestContext {
+                client_data: Some(client_data.clone()),
+                request_binding: Some(format!(
+                    "freebird:issue:v1:{}:{}",
+                    state.issuer_id, req.blinded_element_b64
+                )),
+                allow_registered_user: false,
+            };
+            match checker.verify_with_context(proof, &sybil_ctx) {
                 Ok(()) => {
                     info!("✅ Sybil resistance check passed");
                     Some(SybilInfo {

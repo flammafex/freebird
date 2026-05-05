@@ -29,6 +29,7 @@ pub mod progressive_trust;
 pub mod proof_of_diversity;
 pub mod proof_of_work;
 pub mod rate_limit;
+pub mod replay_store;
 
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
 #[cfg(feature = "human-gate-webauthn")]
@@ -39,9 +40,24 @@ pub use progressive_trust::{ProgressiveTrustConfig, ProgressiveTrustSystem, Trus
 pub use proof_of_diversity::{ProofOfDiversityConfig, ProofOfDiversitySystem};
 pub use proof_of_work::ProofOfWork;
 pub use rate_limit::RateLimit;
+pub use replay_store::{memory_replay_store, replay_store_from_env, ReplayStore};
+
+#[derive(Debug, Clone, Default)]
+pub struct SybilRequestContext {
+    pub client_data: Option<ClientData>,
+    /// Public token issuance can optionally bind external challenge-based
+    /// mechanisms to the issued request. Most mechanisms ignore this today.
+    pub request_binding: Option<String>,
+    /// Internal/admin callers may opt into the historical RegisteredUser
+    /// bypass. Public issuance routes leave this false.
+    pub allow_registered_user: bool,
+}
 
 pub trait SybilResistance: Send + Sync {
     fn verify(&self, proof: &SybilProof) -> Result<()>; // Keep as fn, not async fn
+    fn verify_with_context(&self, proof: &SybilProof, _ctx: &SybilRequestContext) -> Result<()> {
+        self.verify(proof)
+    }
     fn supports(&self, proof: &SybilProof) -> bool;
     fn cost(&self) -> u64; // Add back the cost method
 }
@@ -91,6 +107,21 @@ impl SybilResistance for CombinedSybilResistance {
         }
         Ok(())
     }
+    fn verify_with_context(&self, proof: &SybilProof, ctx: &SybilRequestContext) -> Result<()> {
+        let mut supported_count = 0;
+        for mechanism in &self.mechanisms {
+            if mechanism.supports(proof) {
+                supported_count += 1;
+                mechanism.verify_with_context(proof, ctx)?;
+            }
+        }
+        if supported_count == 0 {
+            return Err(anyhow!(
+                "proof type not supported by any configured mechanism"
+            ));
+        }
+        Ok(())
+    }
     fn supports(&self, proof: &SybilProof) -> bool {
         self.mechanisms.iter().any(|m| m.supports(proof))
     }
@@ -118,6 +149,21 @@ impl SybilResistance for CombinedOr {
             if mechanism.supports(proof) {
                 supported_count += 1;
                 mechanism.verify(proof)?;
+            }
+        }
+        if supported_count == 0 {
+            return Err(anyhow!(
+                "proof type not supported by any configured mechanism"
+            ));
+        }
+        Ok(())
+    }
+    fn verify_with_context(&self, proof: &SybilProof, ctx: &SybilRequestContext) -> Result<()> {
+        let mut supported_count = 0;
+        for mechanism in &self.mechanisms {
+            if mechanism.supports(proof) {
+                supported_count += 1;
+                mechanism.verify_with_context(proof, ctx)?;
             }
         }
         if supported_count == 0 {
@@ -168,6 +214,38 @@ impl SybilResistance for CombinedAnd {
                     for proof in proofs {
                         if mechanism.supports(proof) {
                             mechanism.verify(proof)?;
+                            verified = true;
+                            break;
+                        }
+                    }
+                    if !verified {
+                        return Err(anyhow!("missing proof for one or more required mechanisms"));
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(anyhow!(
+                "AND combination requires Multi proof with all mechanisms"
+            )),
+        }
+    }
+
+    fn verify_with_context(&self, proof: &SybilProof, ctx: &SybilRequestContext) -> Result<()> {
+        match proof {
+            SybilProof::Multi { proofs } => {
+                if proofs.len() != self.mechanisms.len() {
+                    return Err(anyhow!(
+                        "expected {} proofs for AND combination, got {}",
+                        self.mechanisms.len(),
+                        proofs.len()
+                    ));
+                }
+
+                for mechanism in &self.mechanisms {
+                    let mut verified = false;
+                    for proof in proofs {
+                        if mechanism.supports(proof) {
+                            mechanism.verify_with_context(proof, ctx)?;
                             verified = true;
                             break;
                         }
@@ -243,6 +321,45 @@ impl SybilResistance for CombinedThreshold {
                     }
                     if mechanism_passed[idx] {
                         continue;
+                    }
+                }
+
+                let passed = mechanism_passed.iter().filter(|&&ok| ok).count();
+                if passed >= self.threshold {
+                    Ok(())
+                } else {
+                    Err(anyhow!(
+                        "threshold not met: passed {}/{}, need {} (errors: {})",
+                        passed,
+                        self.mechanisms.len(),
+                        self.threshold,
+                        errors.join("; ")
+                    ))
+                }
+            }
+            _ => Err(anyhow!("threshold combination requires Multi proof")),
+        }
+    }
+
+    fn verify_with_context(&self, proof: &SybilProof, ctx: &SybilRequestContext) -> Result<()> {
+        match proof {
+            SybilProof::Multi { proofs } => {
+                let mut mechanism_passed = vec![false; self.mechanisms.len()];
+                let mut errors = Vec::new();
+
+                for (idx, mechanism) in self.mechanisms.iter().enumerate() {
+                    for proof in proofs {
+                        if mechanism.supports(proof) {
+                            match mechanism.verify_with_context(proof, ctx) {
+                                Ok(()) => {
+                                    mechanism_passed[idx] = true;
+                                    break;
+                                }
+                                Err(e) => {
+                                    errors.push(format!("{}", e));
+                                }
+                            }
+                        }
                     }
                 }
 

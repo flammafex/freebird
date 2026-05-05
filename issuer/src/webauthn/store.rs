@@ -947,12 +947,8 @@ mod tests {
     async fn test_in_memory_store() {
         let store = InMemoryCredStore::new();
 
-        // Create a mock credential
-        let cred_id = vec![1, 2, 3, 4];
-        let user_id_hash = "user123".to_string();
-
-        // Note: Creating a real Passkey requires complex setup, so this is just a structure test
-        // In real tests, you'd use webauthn-rs test utilities
+        // Creating a real Passkey requires webauthn-rs test utilities; this
+        // only verifies the empty in-memory store path.
         assert_eq!(store.count_credentials().await.unwrap(), 0);
     }
 }

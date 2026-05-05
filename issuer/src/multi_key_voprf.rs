@@ -167,9 +167,6 @@ pub struct MultiKeyVoprfCore {
 
 impl MultiKeyVoprfCore {
     /// Minimum grace period for key rotation (1 hour)
-    #[cfg(test)]
-    const MIN_GRACE_PERIOD_SECS: u64 = 1;
-    #[cfg(not(test))]
     const MIN_GRACE_PERIOD_SECS: u64 = 3600;
 
     /// Create a new multi-key VOPRF core with an initial active key
@@ -636,13 +633,20 @@ mod tests {
         let core =
             MultiKeyVoprfCore::new(sk1, "pubkey1".to_string(), "key-old".to_string(), ctx).unwrap();
 
-        // Rotate with very short grace period (1 second for testing)
-        core.rotate_key(sk2, "pubkey2".to_string(), "key-new".to_string(), Some(1))
-            .await
-            .unwrap();
+        core.rotate_key(
+            sk2,
+            "pubkey2".to_string(),
+            "key-new".to_string(),
+            Some(3600),
+        )
+        .await
+        .unwrap();
 
-        // Wait for expiration
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        // Force expiry without weakening the production minimum grace-period policy.
+        {
+            let mut deprecated = core.deprecated_keys.write().await;
+            deprecated.get_mut("key-old").unwrap().metadata.expires_at = now() - 1;
+        }
 
         // Cleanup
         let removed = core.cleanup_expired_keys().await.unwrap();
@@ -782,45 +786,45 @@ mod tests {
                 );
             }
         }
+    }
 
-        #[tokio::test]
-        async fn test_rotate_key_minimum_grace_period() {
-            let ctx = b"test";
-            let sk1 = [1u8; 32];
-            let sk2 = [2u8; 32];
+    #[tokio::test]
+    async fn test_rotate_key_minimum_grace_period() {
+        let ctx = b"test";
+        let sk1 = [1u8; 32];
+        let sk2 = [2u8; 32];
 
-            let mut core =
-                MultiKeyVoprfCore::new(sk1, "pubkey1".to_string(), "key-2024-01".to_string(), ctx)
-                    .unwrap();
+        let core =
+            MultiKeyVoprfCore::new(sk1, "pubkey1".to_string(), "key-2024-01".to_string(), ctx)
+                .unwrap();
 
-            // Test: grace period below minimum fails
-            let result = core
-                .rotate_key(
-                    sk2,
-                    "pubkey2".to_string(),
-                    "key-2024-02".to_string(),
-                    Some(300), // 5 minutes - below 1 hour minimum
-                )
-                .await;
-            assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("grace period must be at least"));
-
-            // Test: grace period at minimum succeeds
-            core.rotate_key(
+        // Test: grace period below minimum fails
+        let result = core
+            .rotate_key(
                 sk2,
                 "pubkey2".to_string(),
                 "key-2024-02".to_string(),
-                Some(3600), // exactly 1 hour
+                Some(300), // 5 minutes - below 1 hour minimum
             )
-            .await
-            .unwrap();
+            .await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("grace period must be at least"));
 
-            // Verify both keys work
-            assert!(core.verify_with_kid("token", "key-2024-01").await.is_ok());
-            assert!(core.verify_with_kid("token", "key-2024-02").await.is_ok());
-        }
+        // Test: grace period at minimum succeeds
+        core.rotate_key(
+            sk2,
+            "pubkey2".to_string(),
+            "key-2024-02".to_string(),
+            Some(3600), // exactly 1 hour
+        )
+        .await
+        .unwrap();
+
+        // Verify both keys work
+        assert!(core.verify_with_kid("token", "key-2024-01").await.is_ok());
+        assert!(core.verify_with_kid("token", "key-2024-02").await.is_ok());
     }
 }

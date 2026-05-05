@@ -208,7 +208,6 @@ async fn test_memory_n_way_race_duplicate_submissions() -> Result<()> {
     for _ in 0..N_WAY {
         let store = store.clone();
         let key = key.clone();
-        let ttl = ttl;
         let barrier = barrier.clone();
         let success_count = success_count.clone();
         let replay_count = replay_count.clone();

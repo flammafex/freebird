@@ -302,21 +302,25 @@ fn contains_cbor_string(data: &[u8], needle: &str) -> bool {
     // Look for short string encoding (len < 24)
     if len < 24 {
         let header = 0x60 + len as u8;
-        for i in 0..data.len().saturating_sub(len + 1) {
-            if data[i] == header && &data[i + 1..i + 1 + len] == needle_bytes {
-                return true;
+        if data.len() >= len + 1 {
+            for i in 0..=data.len() - (len + 1) {
+                if data[i] == header && &data[i + 1..i + 1 + len] == needle_bytes {
+                    return true;
+                }
             }
         }
     }
 
     // Look for 1-byte length encoding
     if len < 256 {
-        for i in 0..data.len().saturating_sub(len + 2) {
-            if data[i] == 0x78
-                && data[i + 1] == len as u8
-                && &data[i + 2..i + 2 + len] == needle_bytes
-            {
-                return true;
+        if data.len() >= len + 2 {
+            for i in 0..=data.len() - (len + 2) {
+                if data[i] == 0x78
+                    && data[i + 1] == len as u8
+                    && &data[i + 2..i + 2 + len] == needle_bytes
+                {
+                    return true;
+                }
             }
         }
     }

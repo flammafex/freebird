@@ -95,11 +95,10 @@ fn bench_verify(c: &mut Criterion) {
 
     group.bench_function("single", |b| {
         b.iter(|| {
-            black_box(
-                verifier
-                    .verify(black_box(&eval_b64), black_box(&pk))
-                    .unwrap(),
-            )
+            verifier
+                .verify(black_box(&eval_b64), black_box(&pk))
+                .unwrap();
+            black_box(())
         });
     });
 

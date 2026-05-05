@@ -182,7 +182,7 @@ mod tests {
         let b = (ProjectivePoint::from(a) * k).to_affine();
 
         let mut proof = prove(&k, &g, &y, &a, &b, &mut rng, None);
-        proof.s = proof.s + Scalar::ONE;
+        proof.s += Scalar::ONE;
         assert!(!verify(&g, &y, &a, &b, &proof, None));
     }
 

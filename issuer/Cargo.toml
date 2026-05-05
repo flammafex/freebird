@@ -1,6 +1,6 @@
 [package]
 name = "freebird-issuer"
-version = "0.5.0"
+version = "0.5.1"
 edition = "2021"
 description = "Token issuer service for the Freebird privacy-preserving authentication system"
 license = "MIT OR Apache-2.0"
@@ -28,12 +28,11 @@ human-gate-webauthn = [
     "dep:url",
     "dep:uuid",
     "dep:chrono",
-    "dep:redis",
 ]
 
 [dependencies]
-freebird-common = { version = "0.5.0", path = "../common" }
-freebird-crypto = { version = "0.5.0", path = "../crypto", features = ["voprf-p256"] }
+freebird-common = { version = "0.5.1", path = "../common" }
+freebird-crypto = { version = "0.5.1", path = "../crypto", features = ["voprf-p256"] }
 axum = "0.7"
 rayon = "1.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "fs"] }  # Added "fs" feature
@@ -63,7 +62,7 @@ url = { version = "2", optional = true }
 uuid = { version = "1", features = ["v4", "serde"], optional = true }
 chrono = { version = "0.4", optional = true }
 async-trait = "0.1"  # For async trait implementations
-redis = { version = "0.24", features = ["aio", "tokio-comp"], optional = true }
+redis = { version = "0.24", features = ["aio", "tokio-comp"] }
 reqwest = { version = "0.12.24", features = ["json"] }
 clap = { version = "4", features = ["derive", "env"] }
 colored = "2"

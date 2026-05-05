@@ -11,7 +11,8 @@ use crate::{
     sybil_resistance::{
         self,
         invitation::{InvitationConfig, InvitationSystem},
-        CombinedAnd, CombinedOr, CombinedThreshold, ProofOfWork, RateLimit, SybilResistance,
+        replay_store_from_env, CombinedAnd, CombinedOr, CombinedThreshold, ProofOfWork, RateLimit,
+        SybilResistance,
     },
     AppStateWithSybil,
 };
@@ -310,15 +311,22 @@ impl Application {
         );
         info!("✅ Audit log initialized");
 
+        let sybil_replay_store =
+            replay_store_from_env().context("Failed to initialize Sybil replay store")?;
+
         // 4. Sybil Resistance Setup
         let mut invitation_system: Option<Arc<InvitationSystem>> = None;
+        let mut multi_party_vouching_system: Option<
+            Arc<sybil_resistance::MultiPartyVouchingSystem>,
+        > = None;
         let sybil_checker: Option<Arc<dyn SybilResistance>> = match config
             .sybil_config
             .mode
             .as_str()
         {
-            "pow" | "proof_of_work" => Some(Arc::new(ProofOfWork::new(
+            "pow" | "proof_of_work" => Some(Arc::new(ProofOfWork::with_replay_store(
                 config.sybil_config.pow_difficulty,
+                sybil_replay_store.clone(),
             ))),
             "rate_limit" => Some(Arc::new(RateLimit::new(Duration::from_secs(
                 config.sybil_config.rate_limit_secs,
@@ -358,9 +366,10 @@ impl Application {
                 if let Some(wa) = &webauthn_state {
                     info!("✅ Sybil resistance: WebAuthn");
                     // Use the new path
-                    Some(Arc::new(webauthn::WebAuthnGate::new(
+                    Some(Arc::new(webauthn::WebAuthnGate::with_replay_store(
                         wa.clone(),
                         config.sybil_config.webauthn_max_proof_age,
+                        sybil_replay_store.clone(),
                     )))
                 } else {
                     warn!("⚠️  WebAuthn Sybil resistance selected but not configured");
@@ -454,10 +463,14 @@ impl Application {
                         .multi_party_vouching_allow_insecure,
                 };
 
-                let sys = sybil_resistance::MultiPartyVouchingSystem::new(mpv_config)
-                    .await
-                    .context("Failed to initialize Multi-Party Vouching system")?;
+                let sys = sybil_resistance::MultiPartyVouchingSystem::new_with_replay_store(
+                    mpv_config,
+                    sybil_replay_store.clone(),
+                )
+                .await
+                .context("Failed to initialize Multi-Party Vouching system")?;
 
+                multi_party_vouching_system = Some(sys.clone());
                 info!("✅ Sybil resistance: Multi-Party Vouching");
                 Some(sys)
             }
@@ -476,8 +489,9 @@ impl Application {
 
                     match mechanism_name {
                         "pow" | "proof_of_work" => {
-                            mechanisms.push(Arc::new(ProofOfWork::new(
+                            mechanisms.push(Arc::new(ProofOfWork::with_replay_store(
                                 config.sybil_config.pow_difficulty,
+                                sybil_replay_store.clone(),
                             )));
                         }
                         "rate_limit" => {
@@ -508,15 +522,20 @@ impl Application {
                             let sys = InvitationSystem::load_or_create(signing_key, inv_conf)
                                 .await
                                 .context("Failed to load invitation system for combined mode")?;
-                            mechanisms.push(Arc::new(sys));
+                            let sys_arc = Arc::new(sys);
+                            invitation_system = Some(sys_arc.clone());
+                            mechanisms.push(sys_arc);
                         }
                         #[cfg(feature = "human-gate-webauthn")]
                         "webauthn" => {
                             if let Some(wa) = &webauthn_state {
-                                mechanisms.push(Arc::new(webauthn::WebAuthnGate::new(
-                                    wa.clone(),
-                                    config.sybil_config.webauthn_max_proof_age,
-                                )));
+                                mechanisms.push(Arc::new(
+                                    webauthn::WebAuthnGate::with_replay_store(
+                                        wa.clone(),
+                                        config.sybil_config.webauthn_max_proof_age,
+                                        sybil_replay_store.clone(),
+                                    ),
+                                ));
                             } else {
                                 warn!("⚠️  WebAuthn requested in combined mode but not configured, skipping");
                             }
@@ -628,11 +647,16 @@ impl Application {
                                     .multi_party_vouching_allow_insecure,
                             };
 
-                            let sys = sybil_resistance::MultiPartyVouchingSystem::new(mpv_config)
+                            let sys =
+                                sybil_resistance::MultiPartyVouchingSystem::new_with_replay_store(
+                                    mpv_config,
+                                    sybil_replay_store.clone(),
+                                )
                                 .await
                                 .context(
                                     "Failed to initialize Multi-Party Vouching for combined mode",
                                 )?;
+                            multi_party_vouching_system = Some(sys.clone());
                             mechanisms.push(sys);
                         }
                         unknown => {
@@ -687,6 +711,36 @@ impl Application {
             }
             _ => None,
         };
+
+        if invitation_system.is_none() {
+            let inv_conf = InvitationConfig {
+                invites_per_user: config.sybil_config.invite_per_user,
+                invite_cooldown_secs: config.sybil_config.invite_cooldown_secs,
+                invite_expires_secs: config.sybil_config.invite_expires_secs,
+                new_user_can_invite_after_secs: config.sybil_config.invite_new_user_wait_secs,
+                persistence_path: config.sybil_config.invite_persistence_path.clone(),
+                autosave_interval_secs: config.sybil_config.invite_autosave_interval_secs,
+            };
+            let signing_key = load_or_generate_invitation_signing_key(
+                &config.sybil_config.invite_signing_key_path,
+            )
+            .context("Failed to load invitation signing key for admin")?;
+            let sys = InvitationSystem::load_or_create(signing_key, inv_conf)
+                .await
+                .context("Failed to load invitation system for admin")?;
+
+            if let Some(bootstrap) = &config.sybil_config.bootstrap_users {
+                for entry in bootstrap.split(',') {
+                    if let Some((uid, count_str)) = entry.split_once(':') {
+                        if let Ok(count) = count_str.parse::<u32>() {
+                            sys.add_bootstrap_user(uid.to_string(), count).await;
+                        }
+                    }
+                }
+            }
+
+            invitation_system = Some(Arc::new(sys));
+        }
 
         // 5. App State & Router
         let state = Arc::new(AppStateWithSybil {
@@ -766,6 +820,7 @@ impl Application {
             #[cfg(feature = "human-gate-webauthn")]
             let admin = routes::admin_router(
                 inv_sys,
+                multi_party_vouching_system.clone(),
                 voprf.clone(),
                 audit_log.clone(),
                 admin_api_key,
@@ -777,6 +832,7 @@ impl Application {
             #[cfg(not(feature = "human-gate-webauthn"))]
             let admin = routes::admin_router(
                 inv_sys,
+                multi_party_vouching_system.clone(),
                 voprf.clone(),
                 audit_log.clone(),
                 admin_api_key,

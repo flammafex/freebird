@@ -2,15 +2,17 @@
 use anyhow::{anyhow, Context, Result};
 use base64ct::Encoding;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use super::handlers::WebAuthnState;
-use crate::sybil_resistance::SybilResistance; // Trait still lives in common/sybil
+use crate::sybil_resistance::{memory_replay_store, ReplayStore, SybilResistance};
 use freebird_common::api::SybilProof;
 
 pub struct WebAuthnGate {
     max_proof_age: i64,
     proof_key: [u8; 32],
+    replay_store: Arc<dyn ReplayStore>,
 }
 
 impl WebAuthnGate {
@@ -28,7 +30,18 @@ impl WebAuthnGate {
         Self {
             max_proof_age,
             proof_key,
+            replay_store: memory_replay_store(),
         }
+    }
+
+    pub fn with_replay_store(
+        state: Arc<WebAuthnState>,
+        max_proof_age: Option<i64>,
+        replay_store: Arc<dyn ReplayStore>,
+    ) -> Self {
+        let mut gate = Self::new(state, max_proof_age);
+        gate.replay_store = replay_store;
+        gate
     }
 
     /// Derive a proof verification key from the RP ID and server secret
@@ -91,6 +104,14 @@ impl WebAuthnGate {
         hasher.update(&timestamp.to_le_bytes());
         base64ct::Base64UrlUnpadded::encode_string(hasher.finalize().as_bytes())
     }
+
+    fn reject_replay_or_record(&self, proof: &str) -> Result<()> {
+        self.replay_store.mark_once(
+            "webauthn",
+            proof,
+            Duration::from_secs(self.max_proof_age.max(1) as u64),
+        )
+    }
 }
 
 impl SybilResistance for WebAuthnGate {
@@ -139,6 +160,8 @@ impl SybilResistance for WebAuthnGate {
                     );
                     return Err(anyhow!("Invalid authentication proof"));
                 }
+
+                self.reject_replay_or_record(auth_proof)?;
 
                 debug!(
                     username = %username,

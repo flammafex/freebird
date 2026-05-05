@@ -10,7 +10,7 @@
 //! - JSON-based persistence (survives restarts)
 //! - Strong invitee ID generation with cryptographic random nonce
 
-use super::{current_timestamp, SybilProof, SybilResistance};
+use super::{current_timestamp, SybilProof, SybilRequestContext, SybilResistance};
 use anyhow::{anyhow, bail, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use p256::ecdsa::{signature::Signer, signature::Verifier, Signature, SigningKey, VerifyingKey};
@@ -393,7 +393,7 @@ impl InvitationSystem {
         }
 
         // Sort by creation time descending
-        invites.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        invites.sort_by_key(|invite| std::cmp::Reverse(invite.created_at));
 
         // Apply offset and limit
         invites.into_iter().skip(offset).take(limit).collect()
@@ -451,7 +451,7 @@ impl InvitationSystem {
     pub async fn get_all_invitations(&self) -> Vec<Invitation> {
         let state = self.state.read().await;
         let mut invites: Vec<Invitation> = state.invitations.values().cloned().collect();
-        invites.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        invites.sort_by_key(|invite| std::cmp::Reverse(invite.created_at));
         invites
     }
 
@@ -471,7 +471,7 @@ impl InvitationSystem {
                 )
             })
             .collect();
-        users.sort_by(|a, b| b.3.cmp(&a.3)); // Sort by joined_at descending
+        users.sort_by_key(|user| std::cmp::Reverse(user.3)); // Sort by joined_at descending
         users
     }
 
@@ -868,6 +868,49 @@ impl InvitationSystem {
         self.mark_dirty().await;
     }
 
+    /// Remove a ban from a user.
+    pub async fn unban_user(&self, user_id: &str) -> Result<()> {
+        let mut state = self.state.write().await;
+        let inviter = state
+            .inviters
+            .get_mut(user_id)
+            .ok_or_else(|| anyhow!("user not found"))?;
+
+        inviter.banned = false;
+        if inviter.reputation == 0.0 {
+            inviter.reputation = 1.0;
+        }
+
+        drop(state);
+        self.mark_dirty().await;
+        info!(user_id = %user_id, "unbanned user");
+        Ok(())
+    }
+
+    /// Revoke a pending invitation. Redeemed invitations are kept for audit.
+    pub async fn revoke_invitation(&self, code: &str) -> Result<Invitation> {
+        let mut state = self.state.write().await;
+        let invitation = state
+            .invitations
+            .get(code)
+            .cloned()
+            .ok_or_else(|| anyhow!("invitation not found"))?;
+
+        if invitation.redeemed {
+            bail!("cannot revoke a redeemed invitation");
+        }
+
+        state.invitations.remove(code);
+        if let Some(inviter) = state.inviters.get_mut(&invitation.inviter_id) {
+            inviter.invites_sent.retain(|sent| sent != code);
+        }
+
+        drop(state);
+        self.mark_dirty().await;
+        info!(code = %code, "revoked invitation");
+        Ok(invitation)
+    }
+
     /// Grant invites to a user (for reputation rewards, etc.)
     pub async fn grant_invites(&self, user_id: &str, count: u32) -> Result<()> {
         let mut state = self.state.write().await;
@@ -1033,7 +1076,7 @@ impl InvitationSystem {
             .collect();
 
         // Sort by joined_at descending (newest first)
-        users.sort_by(|a, b| b.3.cmp(&a.3));
+        users.sort_by_key(|user| std::cmp::Reverse(user.3));
 
         // Apply pagination and remove join timestamp from result
         users
@@ -1150,6 +1193,50 @@ impl SybilResistance for InvitationSystem {
                         }
 
                         debug!(user_id = %user_id, "registered user verified");
+                        Ok(())
+                    }
+                    _ => bail!("expected Invitation or RegisteredUser proof"),
+                }
+            })
+        })
+    }
+
+    fn verify_with_context(&self, proof: &SybilProof, ctx: &SybilRequestContext) -> Result<()> {
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                match proof {
+                    SybilProof::Invitation { code, signature } => {
+                        let signature = Base64UrlUnpadded::decode_vec(signature)
+                            .context("invalid signature encoding")?;
+
+                        debug!(code = %code, "processing invitation proof");
+                        let _inviter_id = self.verify_invitation(code, &signature).await?;
+                        let _invitee_id = self
+                            .redeem_invitation(code, ctx.client_data.clone())
+                            .await?;
+
+                        if let Err(e) = self.save().await {
+                            error!("Failed to persist invitation redemption: {:?}", e);
+                        } else {
+                            info!(code = %code, "invitation redeemed and persisted to disk");
+                        }
+
+                        Ok(())
+                    }
+                    SybilProof::RegisteredUser { .. } if !ctx.allow_registered_user => {
+                        bail!("RegisteredUser proofs are not accepted for public issuance")
+                    }
+                    SybilProof::RegisteredUser { user_id } => {
+                        let state = self.state.read().await;
+                        if !state.inviters.contains_key(user_id) {
+                            bail!("user not found: {}", user_id);
+                        }
+                        if let Some(inviter) = state.inviters.get(user_id) {
+                            if inviter.banned {
+                                bail!("user is banned");
+                            }
+                        }
                         Ok(())
                     }
                     _ => bail!("expected Invitation or RegisteredUser proof"),
@@ -1355,6 +1442,20 @@ mod tests {
             "error should indicate invitation was already used, got: {}",
             err_msg
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn test_registered_user_rejected_for_public_issuance_context() {
+        let system = setup().await;
+        system.add_bootstrap_user("admin".into(), 10).await;
+
+        let proof = SybilProof::RegisteredUser {
+            user_id: "admin".to_string(),
+        };
+        let ctx = SybilRequestContext::default();
+
+        assert!(system.verify(&proof).is_ok());
+        assert!(system.verify_with_context(&proof, &ctx).is_err());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

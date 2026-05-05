@@ -13,6 +13,25 @@ The current source tree supports two token modes:
 The `freebird-interface` binary exercises the V4 flow against local services on
 `127.0.0.1:8081` and `127.0.0.1:8082`.
 
+## Project Documents
+
+- [Security Policy](SECURITY.md): vulnerability reporting, production baseline,
+  and known limitations.
+- [Architecture](docs/architecture.md): issuer, verifier, client, storage, and
+  token flows.
+- [Threat Model](docs/threat-model.md): security goals, assumptions, non-goals,
+  and current gaps.
+- [Sybil Modes](docs/sybil-modes.md): what each admission gate resists, where it
+  is weak, and how combined modes behave.
+- [Admin Operations](docs/admin-operations.md): issuer operator workflows for
+  invitations, vouching, WebAuthn, keys, and audit.
+- [Client Proofs](docs/client-proofs.md): attaching PoW, invitation, WebAuthn,
+  and vouching Sybil proofs to issuance requests.
+- [Production Deployment](docs/production-deployment.md): Redis replay stores,
+  TLS/proxy settings, persistence, and preflight checks.
+- [Audit Logging](docs/audit-logging.md): audit fields, retention model, privacy
+  impact, and limitations.
+
 ## Workspace
 
 | Path | Purpose |
@@ -180,8 +199,19 @@ Verifier public endpoints:
 
 Admin endpoints live under `/admin` and require `X-Admin-Key:
 <ADMIN_API_KEY>` or a login session cookie. The verifier always mounts its admin
-router. The issuer currently mounts its admin router when the invitation system
-is configured.
+router. The issuer mounts its admin router for all Sybil modes and includes
+operator endpoints for invitation state, user bans, key rotation, audit export,
+WebAuthn credential/policy review, and multi-party vouching state.
+
+Issuer operator workflows:
+
+| Area | Endpoints |
+| --- | --- |
+| Invitation users | `GET /admin/users`, `GET /admin/users/:user_id`, `POST /admin/bootstrap/add`, `POST /admin/invites/grant`, `POST /admin/users/ban`, `POST /admin/users/unban` |
+| Invitation codes | `GET /admin/invitations`, `POST /admin/invitations/create`, `GET /admin/invitations/:code`, `DELETE /admin/invitations/:code` |
+| Multi-party vouching | `GET/POST /admin/vouching/vouchers`, `DELETE /admin/vouching/vouchers/:user_id`, `POST /admin/vouching/vouches`, `GET/DELETE /admin/vouching/pending`, `POST /admin/vouching/mark-successful`, `POST /admin/vouching/mark-problematic` |
+| WebAuthn | `GET /admin/webauthn/policy`, `GET /admin/webauthn/stats`, `GET /admin/webauthn/credentials`, `DELETE /admin/webauthn/credentials/:cred_id` |
+| Keys and audit | `GET /admin/keys`, `POST /admin/keys/rotate`, `POST /admin/keys/cleanup`, `DELETE /admin/keys/:kid`, `GET /admin/audit`, `GET /admin/export/audit` |
 
 ## Configuration Reference
 
@@ -206,6 +236,9 @@ Issuer variables:
 | `EPOCH_DURATION` | `1d` | Human-readable duration accepted. |
 | `EPOCH_RETENTION` | `2` | Number of previous epochs accepted. |
 | `SYBIL_RESISTANCE` | `none` | `none`, `invitation`, `pow`, `rate_limit`, `progressive_trust`, `proof_of_diversity`, `multi_party_vouching`, `webauthn`, or `combined`. |
+| `SYBIL_REPLAY_STORE` | `memory` | Replay store for accepted PoW, WebAuthn, and vouching proofs. Use `redis` for public multi-instance or restart-safe issuers. |
+| `SYBIL_REPLAY_REDIS_URL` | none | Redis URL for `SYBIL_REPLAY_STORE=redis`; falls back to `REDIS_URL`. |
+| `SYBIL_REPLAY_KEY_PREFIX` | `freebird:sybil:replay` | Redis key prefix for Sybil replay records. |
 | `PUBLIC_BEARER_ENABLE` | `true` | Enables V5 public bearer issuer. |
 | `PUBLIC_BEARER_SK_PATH` | `public_bearer_sk.der` | V5 RSA private key path. |
 | `PUBLIC_BEARER_METADATA_PATH` | `public_bearer_metadata.json` | V5 key metadata path. |
@@ -239,14 +272,14 @@ For production:
 - Use real TLS and set `REQUIRE_TLS=true`.
 - Use a high-entropy `ADMIN_API_KEY` from a secret manager.
 - Use Redis for verifier nullifier storage.
+- Use `SYBIL_REPLAY_STORE=redis` for issuer Sybil proof replay protection.
 - Keep issuer key material on protected storage or an HSM-backed path.
 - Do not use `SYBIL_RESISTANCE=none` for a public issuer.
 
 ## Admin CLI
 
 The issuer package includes `freebird-cli`. Use it when the issuer is running
-with invitation support, because that is when the issuer admin router is
-mounted:
+and you need scripted access to issuer admin routes:
 
 ```bash
 cargo run -p freebird-issuer --bin freebird-cli -- \
@@ -271,6 +304,8 @@ Token issuance returns an authorization or Sybil error:
 
 - Use `SYBIL_RESISTANCE=none` for the local interface, or provide a matching
   `sybil_proof` from a custom client.
+- For proof-of-work, the proof input must match the request binding documented
+  in [Sybil Modes](docs/sybil-modes.md).
 
 Verification always fails:
 

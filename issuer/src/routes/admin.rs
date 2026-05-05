@@ -20,6 +20,9 @@ use crate::audit::{AuditEntry, AuditLog};
 use crate::multi_key_voprf::{KeyInfo, KeyStats, MultiKeyVoprfCore};
 use crate::routes::admin_rate_limit::AdminRateLimiter;
 use crate::sybil_resistance::invitation::{InvitationFilter, InvitationStats, InvitationSystem};
+use crate::sybil_resistance::multi_party_vouching::{
+    MultiPartyVouchingSystem, PendingVouchSummary, VoucherSummary,
+};
 use axum::{
     extract::{ConnectInfo, Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -27,7 +30,7 @@ use axum::{
     Json,
 };
 use base64ct::Encoding;
-use p256::ecdsa::SigningKey;
+use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -43,6 +46,8 @@ use tracing::{info, warn};
 pub struct AdminState {
     /// Reference to the invitation system
     pub invitation_system: Arc<InvitationSystem>,
+    /// Optional multi-party vouching system
+    pub multi_party_vouching: Option<Arc<MultiPartyVouchingSystem>>,
     /// Reference to the multi-key VOPRF core
     pub multi_key_voprf: Arc<MultiKeyVoprfCore>,
     /// Reference to the audit log
@@ -152,6 +157,19 @@ pub struct BanUserResponse {
     pub ok: bool,
     pub user_id: String,
     pub banned_count: u32,
+}
+
+/// Request to unban a user
+#[derive(Debug, Deserialize)]
+pub struct UnbanUserRequest {
+    pub user_id: String,
+}
+
+/// Response after unbanning a user
+#[derive(Debug, Serialize)]
+pub struct UnbanUserResponse {
+    pub ok: bool,
+    pub user_id: String,
 }
 
 /// Request to add a bootstrap user
@@ -591,6 +609,67 @@ pub struct GetInvitationResponse {
     pub expires_at: u64,
     /// Whether this invitation has been redeemed
     pub redeemed: bool,
+}
+
+/// Response after revoking a pending invitation
+#[derive(Debug, Serialize)]
+pub struct RevokeInvitationResponse {
+    pub ok: bool,
+    pub code: String,
+    pub inviter_id: String,
+}
+
+/// Request to add a multi-party voucher
+#[derive(Debug, Deserialize)]
+pub struct AddVoucherRequest {
+    pub user_id: String,
+    pub public_key_b64: String,
+}
+
+/// Response after adding/removing a voucher
+#[derive(Debug, Serialize)]
+pub struct VoucherMutationResponse {
+    pub ok: bool,
+    pub user_id: String,
+    pub voucher_id_hash: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListVouchersResponse {
+    pub vouchers: Vec<VoucherSummary>,
+    pub total: usize,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ListPendingVouchesResponse {
+    pub pending: Vec<PendingVouchSummary>,
+    pub total: usize,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SubmitVouchRequest {
+    pub voucher_id: String,
+    pub vouchee_id: String,
+    pub signature_b64: String,
+    pub timestamp: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SubmitVouchResponse {
+    pub ok: bool,
+    pub vouchee_id_hash: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct VoucheeRequest {
+    pub vouchee_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClearPendingVouchesResponse {
+    pub ok: bool,
+    pub vouchee_id: String,
+    pub removed_count: usize,
 }
 
 /// Parameters for listing users with pagination
@@ -1245,6 +1324,41 @@ pub async fn ban_user_handler(
     }))
 }
 
+pub async fn unban_user_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    Json(req): Json<UnbanUserRequest>,
+) -> Result<Json<UnbanUserResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+    validate_user_id(&req.user_id)?;
+
+    state
+        .invitation_system
+        .unban_user(&req.user_id)
+        .await
+        .map_err(|e| {
+            let err_msg = e.to_string();
+            if err_msg.contains("not found") {
+                AdminError::UserNotFound(req.user_id.clone())
+            } else {
+                AdminError::Internal(err_msg)
+            }
+        })?;
+
+    info!(user_id = %req.user_id, "Admin: unbanned user");
+    state
+        .audit_log
+        .log(AuditEntry::success("user_unbanned").with_user(&req.user_id))
+        .await;
+
+    Ok(Json(UnbanUserResponse {
+        ok: true,
+        user_id: req.user_id,
+    }))
+}
+
 pub async fn add_bootstrap_user_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -1633,6 +1747,47 @@ pub async fn get_invitation_handler(
     }))
 }
 
+pub async fn revoke_invitation_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    Path(code): Path<String>,
+) -> Result<Json<RevokeInvitationResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
+    let invitation = state
+        .invitation_system
+        .revoke_invitation(&code)
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("not found") {
+                AdminError::InvitationNotFound
+            } else if msg.contains("redeemed") {
+                AdminError::InvalidRequest(msg)
+            } else {
+                AdminError::Internal(msg)
+            }
+        })?;
+
+    info!(code = %code, "Admin: revoked invitation");
+    state
+        .audit_log
+        .log(
+            AuditEntry::warning("invitation_revoked")
+                .with_user(invitation.inviter_id())
+                .with_details(format!("Revoked invitation {}", code)),
+        )
+        .await;
+
+    Ok(Json(RevokeInvitationResponse {
+        ok: true,
+        code,
+        inviter_id: invitation.inviter_id().to_string(),
+    }))
+}
+
 // ============================================================================
 // Audit Log Handlers
 // ============================================================================
@@ -1835,6 +1990,218 @@ pub async fn force_remove_key_handler(
         kid,
         message: "Key forcibly removed. Tokens issued with this key are now invalid.".to_string(),
     }))
+}
+
+// ============================================================================
+// Multi-Party Vouching Handlers
+// ============================================================================
+
+fn require_vouching_system(
+    state: &AdminState,
+) -> Result<Arc<MultiPartyVouchingSystem>, AdminError> {
+    state.multi_party_vouching.clone().ok_or_else(|| {
+        AdminError::InvalidRequest("multi-party vouching is not configured".to_string())
+    })
+}
+
+pub async fn list_vouchers_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+) -> Result<Json<ListVouchersResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+    let system = require_vouching_system(&state)?;
+
+    let vouchers = system.list_vouchers().await;
+    let total = vouchers.len();
+    Ok(Json(ListVouchersResponse { vouchers, total }))
+}
+
+pub async fn add_voucher_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    Json(req): Json<AddVoucherRequest>,
+) -> Result<Json<VoucherMutationResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+    validate_user_id(&req.user_id)?;
+    let system = require_vouching_system(&state)?;
+
+    let public_key_bytes = base64ct::Base64UrlUnpadded::decode_vec(&req.public_key_b64)
+        .map_err(|_| AdminError::InvalidRequest("invalid public_key_b64".to_string()))?;
+    let public_key = VerifyingKey::from_sec1_bytes(&public_key_bytes)
+        .map_err(|_| AdminError::InvalidRequest("invalid voucher public key".to_string()))?;
+
+    system
+        .add_voucher(req.user_id.clone(), public_key)
+        .await
+        .map_err(|e| AdminError::Internal(e.to_string()))?;
+    let voucher_id_hash = system.hash_user_id(&req.user_id);
+
+    info!(user_id = %req.user_id, "Admin: added voucher");
+    state
+        .audit_log
+        .log(AuditEntry::success("voucher_added").with_user(&req.user_id))
+        .await;
+
+    Ok(Json(VoucherMutationResponse {
+        ok: true,
+        user_id: req.user_id,
+        voucher_id_hash,
+    }))
+}
+
+pub async fn remove_voucher_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    Path(user_id): Path<String>,
+) -> Result<Json<VoucherMutationResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+    validate_user_id(&user_id)?;
+    let system = require_vouching_system(&state)?;
+
+    let voucher_id_hash = system.hash_user_id(&user_id);
+    system.remove_voucher(&user_id).await.map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("not found") || msg.contains("Voucher") {
+            AdminError::UserNotFound(user_id.clone())
+        } else {
+            AdminError::Internal(msg)
+        }
+    })?;
+
+    warn!(user_id = %user_id, "Admin: removed voucher");
+    state
+        .audit_log
+        .log(AuditEntry::warning("voucher_removed").with_user(&user_id))
+        .await;
+
+    Ok(Json(VoucherMutationResponse {
+        ok: true,
+        user_id,
+        voucher_id_hash,
+    }))
+}
+
+pub async fn submit_vouch_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    Json(req): Json<SubmitVouchRequest>,
+) -> Result<Json<SubmitVouchResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+    validate_user_id(&req.voucher_id)?;
+    validate_user_id(&req.vouchee_id)?;
+    let system = require_vouching_system(&state)?;
+
+    let signature_bytes = base64ct::Base64UrlUnpadded::decode_vec(&req.signature_b64)
+        .map_err(|_| AdminError::InvalidRequest("invalid signature_b64".to_string()))?;
+    let signature = Signature::from_slice(&signature_bytes)
+        .map_err(|_| AdminError::InvalidRequest("invalid ECDSA signature".to_string()))?;
+
+    let proof = system
+        .submit_vouch(&req.voucher_id, &req.vouchee_id, signature, req.timestamp)
+        .await
+        .map_err(|e| AdminError::InvalidRequest(e.to_string()))?;
+
+    info!(voucher_id = %req.voucher_id, vouchee_id = %req.vouchee_id, "Admin: submitted vouch");
+    state
+        .audit_log
+        .log(
+            AuditEntry::success("vouch_submitted")
+                .with_user(&req.voucher_id)
+                .with_details(format!("Vouched for {}", req.vouchee_id)),
+        )
+        .await;
+
+    Ok(Json(SubmitVouchResponse {
+        ok: true,
+        vouchee_id_hash: proof.vouchee_id,
+    }))
+}
+
+pub async fn list_pending_vouches_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+) -> Result<Json<ListPendingVouchesResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+    let system = require_vouching_system(&state)?;
+
+    let pending = system.list_pending_vouches().await;
+    let total = pending.len();
+    Ok(Json(ListPendingVouchesResponse { pending, total }))
+}
+
+pub async fn clear_pending_vouches_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    Json(req): Json<VoucheeRequest>,
+) -> Result<Json<ClearPendingVouchesResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+    validate_user_id(&req.vouchee_id)?;
+    let system = require_vouching_system(&state)?;
+
+    let removed_count = system
+        .clear_pending_vouches(&req.vouchee_id)
+        .await
+        .map_err(|e| AdminError::InvalidRequest(e.to_string()))?;
+    state
+        .audit_log
+        .log(
+            AuditEntry::warning("pending_vouches_cleared")
+                .with_user(&req.vouchee_id)
+                .with_details(format!("Removed {} pending vouch(es)", removed_count)),
+        )
+        .await;
+
+    Ok(Json(ClearPendingVouchesResponse {
+        ok: true,
+        vouchee_id: req.vouchee_id,
+        removed_count,
+    }))
+}
+
+pub async fn mark_vouching_successful_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    Json(req): Json<VoucheeRequest>,
+) -> Result<Json<serde_json::Value>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+    validate_user_id(&req.vouchee_id)?;
+    let system = require_vouching_system(&state)?;
+    system
+        .mark_successful(&req.vouchee_id)
+        .await
+        .map_err(|e| AdminError::InvalidRequest(e.to_string()))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+pub async fn mark_vouching_problematic_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    Json(req): Json<VoucheeRequest>,
+) -> Result<Json<serde_json::Value>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+    validate_user_id(&req.vouchee_id)?;
+    let system = require_vouching_system(&state)?;
+    system
+        .mark_problematic(&req.vouchee_id)
+        .await
+        .map_err(|e| AdminError::InvalidRequest(e.to_string()))?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 // ============================================================================
@@ -2091,6 +2458,18 @@ pub struct DeleteWebAuthnCredentialResponse {
     pub message: String,
 }
 
+#[derive(Debug, Serialize)]
+pub struct WebAuthnPolicyResponse {
+    pub enabled: bool,
+    pub attestation_required: bool,
+    pub policy: String,
+    pub allowed_aaguids: Vec<String>,
+    pub audit_logging: bool,
+    pub max_credentials_per_user: usize,
+    pub require_resident_key: bool,
+    pub allow_credential_revocation: bool,
+}
+
 /// List all WebAuthn credentials (admin only)
 #[cfg(feature = "human-gate-webauthn")]
 pub async fn list_webauthn_credentials_handler(
@@ -2196,6 +2575,32 @@ pub async fn webauthn_stats_handler(
     })))
 }
 
+#[cfg(feature = "human-gate-webauthn")]
+pub async fn webauthn_policy_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+) -> Result<Json<WebAuthnPolicyResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+    let config = crate::webauthn::AttestationConfig::global();
+    let mut allowed_aaguids: Vec<String> = config.allowed_aaguids.iter().cloned().collect();
+    allowed_aaguids.sort();
+    let attestation_required = std::env::var("WEBAUTHN_REQUIRE_ATTESTATION")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    Ok(Json(WebAuthnPolicyResponse {
+        enabled: state.webauthn_store.is_some(),
+        attestation_required,
+        policy: config.policy.to_string_value().to_string(),
+        allowed_aaguids,
+        audit_logging: config.audit_logging,
+        max_credentials_per_user: config.max_credentials_per_user,
+        require_resident_key: config.require_resident_key,
+        allow_credential_revocation: config.allow_credential_revocation,
+    }))
+}
+
 // Fallback handlers when WebAuthn is not enabled
 #[cfg(not(feature = "human-gate-webauthn"))]
 pub async fn list_webauthn_credentials_handler(
@@ -2239,13 +2644,35 @@ pub async fn webauthn_stats_handler(
     })))
 }
 
+#[cfg(not(feature = "human-gate-webauthn"))]
+pub async fn webauthn_policy_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+) -> Result<Json<WebAuthnPolicyResponse>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+    Ok(Json(WebAuthnPolicyResponse {
+        enabled: false,
+        attestation_required: false,
+        policy: "disabled".to_string(),
+        allowed_aaguids: vec![],
+        audit_logging: false,
+        max_credentials_per_user: 0,
+        require_resident_key: false,
+        allow_credential_revocation: false,
+    }))
+}
+
 // ============================================================================
 // Router Configuration
 // ============================================================================
 
 #[cfg(feature = "human-gate-webauthn")]
+#[allow(clippy::too_many_arguments)]
 pub fn admin_router(
     invitation_system: Arc<InvitationSystem>,
+    multi_party_vouching: Option<Arc<MultiPartyVouchingSystem>>,
     multi_key_voprf: Arc<MultiKeyVoprfCore>,
     audit_log: Arc<AuditLog>,
     api_key: String,
@@ -2257,6 +2684,7 @@ pub fn admin_router(
     let session_key = derive_session_key(&api_key);
     let state = Arc::new(AdminState {
         invitation_system,
+        multi_party_vouching,
         multi_key_voprf,
         audit_log,
         api_key,
@@ -2272,8 +2700,10 @@ pub fn admin_router(
 }
 
 #[cfg(not(feature = "human-gate-webauthn"))]
+#[allow(clippy::too_many_arguments)]
 pub fn admin_router(
     invitation_system: Arc<InvitationSystem>,
+    multi_party_vouching: Option<Arc<MultiPartyVouchingSystem>>,
     multi_key_voprf: Arc<MultiKeyVoprfCore>,
     audit_log: Arc<AuditLog>,
     api_key: String,
@@ -2284,6 +2714,7 @@ pub fn admin_router(
     let session_key = derive_session_key(&api_key);
     let state = Arc::new(AdminState {
         invitation_system,
+        multi_party_vouching,
         multi_key_voprf,
         audit_log,
         api_key,
@@ -2319,9 +2750,10 @@ fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
         )
         .route(
             "/invitations/:code",
-            axum::routing::get(get_invitation_handler),
+            axum::routing::get(get_invitation_handler).delete(revoke_invitation_handler),
         )
         .route("/users/ban", axum::routing::post(ban_user_handler))
+        .route("/users/unban", axum::routing::post(unban_user_handler))
         .route(
             "/bootstrap/add",
             axum::routing::post(add_bootstrap_user_handler),
@@ -2337,6 +2769,31 @@ fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
         .route(
             "/keys/:kid",
             axum::routing::delete(force_remove_key_handler),
+        )
+        // Multi-party vouching admin routes
+        .route(
+            "/vouching/vouchers",
+            axum::routing::get(list_vouchers_handler).post(add_voucher_handler),
+        )
+        .route(
+            "/vouching/vouchers/:user_id",
+            axum::routing::delete(remove_voucher_handler),
+        )
+        .route(
+            "/vouching/vouches",
+            axum::routing::post(submit_vouch_handler),
+        )
+        .route(
+            "/vouching/pending",
+            axum::routing::get(list_pending_vouches_handler).delete(clear_pending_vouches_handler),
+        )
+        .route(
+            "/vouching/mark-successful",
+            axum::routing::post(mark_vouching_successful_handler),
+        )
+        .route(
+            "/vouching/mark-problematic",
+            axum::routing::post(mark_vouching_problematic_handler),
         )
         // Audit log route
         .route("/audit", axum::routing::get(list_audit_handler))
@@ -2359,6 +2816,10 @@ fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
         .route(
             "/webauthn/stats",
             axum::routing::get(webauthn_stats_handler),
+        )
+        .route(
+            "/webauthn/policy",
+            axum::routing::get(webauthn_policy_handler),
         )
         .with_state(state)
 }

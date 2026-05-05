@@ -362,13 +362,18 @@ impl ProgressiveTrustSystem {
             .as_secs() as i64;
 
         let mut users = self.users.write().await;
+        let mut created = false;
         let record = users
             .entry(user_id_hash.clone())
             .or_insert_with(|| {
+                created = true;
                 debug!(username, "Creating new progressive trust record");
                 UserTrustRecord::new(user_id_hash, now)
             })
             .clone();
+        if created {
+            *self.dirty.write().await = true;
+        }
 
         Ok(record)
     }
@@ -459,7 +464,14 @@ impl ProgressiveTrustSystem {
         let data = serde_json::to_string_pretty(&*users)
             .context("Failed to serialize progressive trust state")?;
 
-        let tmp_path = self.config.persistence_path.with_extension("tmp");
+        let tmp_path = self.config.persistence_path.with_extension(format!(
+            "tmp.{}.{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
         tokio::fs::write(&tmp_path, data)
             .await
             .context("Failed to write progressive trust state temp file")?;
@@ -527,24 +539,31 @@ impl SybilResistance for ProgressiveTrustSystem {
                     .unwrap()
                     .as_secs() as i64;
 
-                // Reconstruct the record from the proof
-                let record = UserTrustRecord {
-                    user_id_hash: user_id_hash.clone(),
-                    first_seen: *first_seen,
-                    tokens_issued: *tokens_issued,
-                    last_issuance: *last_issuance,
-                    current_level: 0, // Will be recalculated
-                };
-
-                // Verify HMAC (constant-time comparison to prevent timing attacks)
-                self.verify_hmac(hmac_proof, &record)?;
-
                 if self.config.levels.is_empty() {
                     return Err(anyhow!("Progressive trust has no configured levels"));
                 }
 
+                let mut users = self
+                    .users
+                    .try_write()
+                    .map_err(|_| anyhow!("Progressive trust state is busy"))?;
+                let record = users
+                    .get_mut(user_id_hash)
+                    .ok_or_else(|| anyhow!("Unknown progressive trust user"))?;
+
+                if record.first_seen != *first_seen
+                    || record.tokens_issued != *tokens_issued
+                    || record.last_issuance != *last_issuance
+                {
+                    return Err(anyhow!(
+                        "Progressive trust proof does not match current server state"
+                    ));
+                }
+
+                self.verify_hmac(hmac_proof, record)?;
+
                 // Determine current trust level
-                let trust_level = self.determine_trust_level(&record, now);
+                let trust_level = self.determine_trust_level(record, now);
                 let level_config = &self.config.levels[trust_level];
 
                 // Check cooldown
@@ -565,6 +584,13 @@ impl SybilResistance for ProgressiveTrustSystem {
                     age_days = record.age_secs(now) / 86400,
                     "Progressive trust verification successful"
                 );
+
+                record.tokens_issued = record.tokens_issued.saturating_add(1);
+                record.last_issuance = now;
+                record.current_level = trust_level;
+                if let Ok(mut dirty) = self.dirty.try_write() {
+                    *dirty = true;
+                }
 
                 Ok(())
             }
@@ -662,6 +688,10 @@ mod tests {
 
         let proof = system.generate_proof("alice").await.unwrap();
         assert!(system.verify(&proof).is_ok());
+        assert!(
+            system.verify(&proof).is_err(),
+            "stale progressive-trust proofs must not be reusable"
+        );
 
         cleanup_test_files(&config);
     }
@@ -673,6 +703,7 @@ mod tests {
         // Create system - should generate and persist secret
         let system1 = ProgressiveTrustSystem::new(config.clone()).await.unwrap();
         let proof1 = system1.generate_proof("bob").await.unwrap();
+        system1.save_state().await.unwrap();
 
         // Verify secret file was created
         assert!(
@@ -683,7 +714,7 @@ mod tests {
         // Create second system with same config - should load same secret
         let system2 = ProgressiveTrustSystem::new(config.clone()).await.unwrap();
 
-        // Proofs should be verifiable by both systems (same HMAC key)
+        // Proofs should be verifiable by both systems when secret and state are persisted.
         assert!(
             system2.verify(&proof1).is_ok(),
             "Proof from system1 should verify on system2"

@@ -2818,6 +2818,17 @@ body > footer {
       >
         🎫 Invitations
       </button>
+      <button
+        type="button"
+        class="tab issuer-only"
+        role="tab"
+        id="tab-vouching"
+        aria-selected="false"
+        aria-controls="vouching-tab"
+        onclick="switchTab('vouching', this)"
+      >
+        🤝 Vouching
+      </button>
       <button type="button" class="tab issuer-only" role="tab"
         id="tab-keys" aria-selected="false" aria-controls="keys-tab"
         onclick="switchTab('keys', this)">
@@ -3086,6 +3097,71 @@ body > footer {
       </div>
     </div>
 
+    <!-- Vouching Tab -->
+    <div id="vouching-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-vouching" tabindex="0">
+      <h2>🤝 Multi-Party Vouching</h2>
+
+      <div class="form-section">
+        <h3>Trusted Vouchers</h3>
+        <div class="form-row">
+          <div class="form-field">
+            <label for="voucherUserId">Voucher User ID</label>
+            <input type="text" id="voucherUserId" placeholder="e.g., alice" />
+          </div>
+          <div class="form-field">
+            <label for="voucherPublicKey">P-256 Public Key</label>
+            <input type="text" id="voucherPublicKey" placeholder="base64url SEC1 compressed key" />
+          </div>
+          <button type="button" onclick="addVoucher()">Add</button>
+          <button type="button" onclick="removeVoucher()">Remove</button>
+          <button type="button" onclick="loadVouchers()">Refresh</button>
+        </div>
+        <div id="vouchersContainer" class="mt-20">
+          <p class="text-small">Click "Refresh" to load vouchers...</p>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <h3>Submit Vouch</h3>
+        <div class="form-row">
+          <div class="form-field">
+            <label for="vouchVoucherId">Voucher ID</label>
+            <input type="text" id="vouchVoucherId" />
+          </div>
+          <div class="form-field">
+            <label for="vouchVoucheeId">Vouchee ID</label>
+            <input type="text" id="vouchVoucheeId" />
+          </div>
+          <div class="form-field">
+            <label for="vouchSignature">Signature</label>
+            <input type="text" id="vouchSignature" placeholder="base64url ECDSA signature" />
+          </div>
+          <div class="form-field">
+            <label for="vouchTimestamp">Timestamp</label>
+            <input type="number" id="vouchTimestamp" />
+          </div>
+          <button type="button" onclick="submitVouch()">Submit</button>
+        </div>
+      </div>
+
+      <div class="form-section">
+        <h3>Pending Vouches</h3>
+        <div class="form-row">
+          <button type="button" onclick="loadPendingVouches()">Refresh</button>
+          <div class="form-field">
+            <label for="pendingVoucheeId">Vouchee ID</label>
+            <input type="text" id="pendingVoucheeId" />
+          </div>
+          <button type="button" onclick="clearPendingVouches()">Clear</button>
+          <button type="button" onclick="markVouchingSuccessful()">Mark Successful</button>
+          <button type="button" onclick="markVouchingProblematic()">Mark Problematic</button>
+        </div>
+        <div id="pendingVouchesContainer" class="mt-20">
+          <p class="text-small">Click "Refresh" to load pending vouches...</p>
+        </div>
+      </div>
+    </div>
+
     <!-- Keys Tab -->
     <div id="keys-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-keys" tabindex="0">
       <h2>🔑 Key Management</h2>
@@ -3177,6 +3253,18 @@ body > footer {
     <div id="webauthn-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-webauthn" tabindex="0">
       <h2>🔐 WebAuthn Management</h2>
       <p>View and manage FIDO2 credentials for passwordless authentication.</p>
+
+      <div class="form-section">
+        <h3>📜 Policy</h3>
+        <div class="form-row">
+          <button type="button" onclick="loadWebAuthnPolicy()">
+            🔄 Refresh Policy
+          </button>
+        </div>
+        <div id="webauthnPolicyContainer" class="mt-20">
+          <p class="text-small">Click "Refresh Policy" to load attestation policy...</p>
+        </div>
+      </div>
 
       <div class="form-section">
         <h3>🔑 Registered Credentials</h3>
@@ -3416,6 +3504,15 @@ body > footer {
           });
         }
 
+        async unbanUser(userId) {
+          return this.request("/users/unban", {
+            method: "POST",
+            body: JSON.stringify({
+              user_id: userId,
+            }),
+          });
+        }
+
         async createInvitations(inviterId, count) {
           return this.request("/invitations/create", {
             method: "POST",
@@ -3426,12 +3523,81 @@ body > footer {
           });
         }
 
+        async revokeInvitation(code) {
+          return this.request(`/invitations/${encodeURIComponent(code)}`, {
+            method: "DELETE",
+          });
+        }
+
         async grantInvites(userId, count) {
           return this.request("/invites/grant", {
             method: "POST",
             body: JSON.stringify({
               user_id: userId,
               count: count,
+            }),
+          });
+        }
+
+        async getVouchers() {
+          return this.request("/vouching/vouchers");
+        }
+
+        async addVoucher(userId, publicKeyB64) {
+          return this.request("/vouching/vouchers", {
+            method: "POST",
+            body: JSON.stringify({
+              user_id: userId,
+              public_key_b64: publicKeyB64,
+            }),
+          });
+        }
+
+        async removeVoucher(userId) {
+          return this.request(`/vouching/vouchers/${encodeURIComponent(userId)}`, {
+            method: "DELETE",
+          });
+        }
+
+        async submitVouch(voucherId, voucheeId, signatureB64, timestamp) {
+          return this.request("/vouching/vouches", {
+            method: "POST",
+            body: JSON.stringify({
+              voucher_id: voucherId,
+              vouchee_id: voucheeId,
+              signature_b64: signatureB64,
+              timestamp,
+            }),
+          });
+        }
+
+        async getPendingVouches() {
+          return this.request("/vouching/pending");
+        }
+
+        async clearPendingVouches(voucheeId) {
+          return this.request("/vouching/pending", {
+            method: "DELETE",
+            body: JSON.stringify({
+              vouchee_id: voucheeId,
+            }),
+          });
+        }
+
+        async markVouchingSuccessful(voucheeId) {
+          return this.request("/vouching/mark-successful", {
+            method: "POST",
+            body: JSON.stringify({
+              vouchee_id: voucheeId,
+            }),
+          });
+        }
+
+        async markVouchingProblematic(voucheeId) {
+          return this.request("/vouching/mark-problematic", {
+            method: "POST",
+            body: JSON.stringify({
+              vouchee_id: voucheeId,
             }),
           });
         }
@@ -3501,6 +3667,10 @@ body > footer {
 
         async getWebAuthnCredentials() {
           return this.request("/webauthn/credentials");
+        }
+
+        async getWebAuthnPolicy() {
+          return this.request("/webauthn/policy");
         }
 
         async deleteWebAuthnCredential(credentialId) {
@@ -3597,12 +3767,17 @@ body > footer {
           loadKeys();
         } else if (tabName === "invitations") {
           loadInvitationHistory();
+        } else if (tabName === "vouching") {
+          loadVouchers();
+          loadPendingVouches();
         } else if (tabName === "trusted-issuers") {
           loadTrustedIssuers();
         } else if (tabName === "cache") {
           loadCacheStats();
         } else if (tabName === "sybil") {
           loadSybilConfig();
+        } else if (tabName === "webauthn") {
+          loadWebAuthnPolicy();
         }
       }
 
@@ -4104,6 +4279,7 @@ body > footer {
                         <td>
                             <button type="button" class="action-btn" onclick="showUserDetails('${escapeHtml(user.user_id)}')">Details</button>
                             ${!user.banned ? `<button class="action-btn" style="background: var(--error-color); color: white;" onclick="confirmBan('${escapeHtml(user.user_id)}')">Ban</button>` : ""}
+                            ${user.banned ? `<button class="action-btn" onclick="confirmUnban('${escapeHtml(user.user_id)}')">Unban</button>` : ""}
                         </td>
                     </tr>
                 `;
@@ -4274,7 +4450,7 @@ body > footer {
                             <button style="background: var(--error-color); color: white;" onclick="confirmBan('${escapeHtml(details.user_id)}')">Ban User</button>
                             <button style="background: #c0392b; color: white;" onclick="confirmBan('${escapeHtml(details.user_id)}', true)">Ban Tree (Recursive)</button>
                         `
-                            : '<p class="status-banned">This user is banned.</p>'
+                            : `<button onclick="confirmUnban('${escapeHtml(details.user_id)}')">Unban User</button>`
                         }
                     </div>
                 `;
@@ -4305,6 +4481,21 @@ body > footer {
             showToast("error", `Failed to ban user: ${error.message}`);
           }
         }, true);
+      }
+
+      async function confirmUnban(userId) {
+        showConfirm(`Unban ${userId}?`, async () => {
+          try {
+            const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+            await api.unbanUser(userId);
+            showToast("success", `Unbanned ${userId}.`);
+            const modal = document.getElementById("userModal");
+            if (modal.open) modal.close();
+            loadUsers();
+          } catch (error) {
+            showToast("error", `Failed to unban user: ${error.message}`);
+          }
+        });
       }
 
       // ============================================================================
@@ -4496,6 +4687,7 @@ body > footer {
           html += "<th>Used By</th>";
           html += "<th>Status</th>";
           html += "<th>Expires At</th>";
+          html += "<th>Actions</th>";
           html += "</tr></thead><tbody>";
 
           invitations.forEach((invite) => {
@@ -4521,6 +4713,7 @@ body > footer {
             html += `<td class="text-mono">${usedBy}</td>`;
             html += `<td>${status}</td>`;
             html += `<td>${escapeHtml(expiresAt)}</td>`;
+            html += `<td>${!invite.redeemed ? `<button type="button" class="action-btn" onclick="confirmRevokeInvitation('${escapeHtml(invite.code)}')">Revoke</button>` : ""}</td>`;
             html += `</tr>`;
           });
 
@@ -4639,6 +4832,20 @@ body > footer {
         };
         state.invitationsPagination.currentPage = 1;
         loadInvitationHistory();
+      }
+
+      async function confirmRevokeInvitation(code) {
+        showConfirm(`Revoke invitation ${code}?`, async () => {
+          try {
+            const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+            await api.revokeInvitation(code);
+            showToast("success", "Invitation revoked.");
+            loadInvitationHistory();
+            loadDashboard();
+          } catch (error) {
+            showToast("error", `Failed to revoke invitation: ${error.message}`);
+          }
+        }, true);
       }
 
       // Export functions
@@ -5304,8 +5511,164 @@ body > footer {
       }
 
       // ============================================================================
+      // Vouching Functions
+      // ============================================================================
+
+      async function loadVouchers() {
+        const container = document.getElementById("vouchersContainer");
+        container.innerHTML = '<p><span class="spinner"></span> Loading vouchers...</p>';
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+          const response = await api.getVouchers();
+          if (!response.vouchers || response.vouchers.length === 0) {
+            container.innerHTML = '<p class="text-small">No trusted vouchers found.</p>';
+            return;
+          }
+          let html = "<table><thead><tr><th>Voucher Hash</th><th>Vouched</th><th>Successful</th><th>Problematic</th></tr></thead><tbody>";
+          response.vouchers.forEach((voucher) => {
+            html += `<tr>
+              <td><code>${escapeHtml(voucher.voucher_id_hash)}</code></td>
+              <td>${escapeHtml((voucher.vouched_for || []).length)}</td>
+              <td>${escapeHtml(voucher.successful_vouches || 0)}</td>
+              <td>${escapeHtml(voucher.problematic_vouches || 0)}</td>
+            </tr>`;
+          });
+          html += "</tbody></table>";
+          container.innerHTML = html;
+        } catch (error) {
+          container.innerHTML = `<div class="message error">Failed to load vouchers: ${escapeHtml(error.message)}</div>`;
+        }
+      }
+
+      async function addVoucher() {
+        const userId = document.getElementById("voucherUserId").value.trim();
+        const publicKey = document.getElementById("voucherPublicKey").value.trim();
+        if (!userId || !publicKey) {
+          showToast("error", "Voucher user ID and public key are required.");
+          return;
+        }
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+          await api.addVoucher(userId, publicKey);
+          showToast("success", `Added voucher ${userId}.`);
+          loadVouchers();
+        } catch (error) {
+          showToast("error", `Failed to add voucher: ${error.message}`);
+        }
+      }
+
+      async function removeVoucher() {
+        const userId = document.getElementById("voucherUserId").value.trim();
+        if (!userId) {
+          showToast("error", "Voucher user ID is required.");
+          return;
+        }
+        showConfirm(`Remove voucher ${userId}?`, async () => {
+          try {
+            const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+            await api.removeVoucher(userId);
+            showToast("success", "Voucher removed.");
+            loadVouchers();
+          } catch (error) {
+            showToast("error", `Failed to remove voucher: ${error.message}`);
+          }
+        }, true);
+      }
+
+      async function submitVouch() {
+        const voucherId = document.getElementById("vouchVoucherId").value.trim();
+        const voucheeId = document.getElementById("vouchVoucheeId").value.trim();
+        const signature = document.getElementById("vouchSignature").value.trim();
+        const timestamp = parseInt(document.getElementById("vouchTimestamp").value, 10);
+        if (!voucherId || !voucheeId || !signature || !timestamp) {
+          showToast("error", "Voucher ID, vouchee ID, signature, and timestamp are required.");
+          return;
+        }
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+          await api.submitVouch(voucherId, voucheeId, signature, timestamp);
+          showToast("success", "Vouch submitted.");
+          loadPendingVouches();
+          loadVouchers();
+        } catch (error) {
+          showToast("error", `Failed to submit vouch: ${error.message}`);
+        }
+      }
+
+      async function loadPendingVouches() {
+        const container = document.getElementById("pendingVouchesContainer");
+        container.innerHTML = '<p><span class="spinner"></span> Loading pending vouches...</p>';
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+          const response = await api.getPendingVouches();
+          if (!response.pending || response.pending.length === 0) {
+            container.innerHTML = '<p class="text-small">No pending vouches found.</p>';
+            return;
+          }
+          container.innerHTML = `<pre>${escapeHtml(JSON.stringify(response, null, 2))}</pre>`;
+        } catch (error) {
+          container.innerHTML = `<div class="message error">Failed to load pending vouches: ${escapeHtml(error.message)}</div>`;
+        }
+      }
+
+      function pendingVoucheeId() {
+        return document.getElementById("pendingVoucheeId").value.trim();
+      }
+
+      async function clearPendingVouches() {
+        const voucheeId = pendingVoucheeId();
+        if (!voucheeId) return showToast("error", "Vouchee ID is required.");
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+          await api.clearPendingVouches(voucheeId);
+          showToast("success", "Pending vouches cleared.");
+          loadPendingVouches();
+        } catch (error) {
+          showToast("error", `Failed to clear pending vouches: ${error.message}`);
+        }
+      }
+
+      async function markVouchingSuccessful() {
+        const voucheeId = pendingVoucheeId();
+        if (!voucheeId) return showToast("error", "Vouchee ID is required.");
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+          await api.markVouchingSuccessful(voucheeId);
+          showToast("success", "Marked successful.");
+          loadVouchers();
+        } catch (error) {
+          showToast("error", `Failed to mark successful: ${error.message}`);
+        }
+      }
+
+      async function markVouchingProblematic() {
+        const voucheeId = pendingVoucheeId();
+        if (!voucheeId) return showToast("error", "Vouchee ID is required.");
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+          await api.markVouchingProblematic(voucheeId);
+          showToast("success", "Marked problematic.");
+          loadVouchers();
+        } catch (error) {
+          showToast("error", `Failed to mark problematic: ${error.message}`);
+        }
+      }
+
+      // ============================================================================
       // WebAuthn Functions
       // ============================================================================
+
+      async function loadWebAuthnPolicy() {
+        const container = document.getElementById("webauthnPolicyContainer");
+        container.innerHTML = '<p><span class="spinner"></span> Loading policy...</p>';
+        try {
+          const api = new FreebirdAdminAPI(CONFIG.issuerUrl);
+          const policy = await api.getWebAuthnPolicy();
+          container.innerHTML = `<pre>${escapeHtml(JSON.stringify(policy, null, 2))}</pre>`;
+        } catch (error) {
+          container.innerHTML = `<div class="message error">Failed to load policy: ${escapeHtml(error.message)}</div>`;
+        }
+      }
 
       async function loadWebAuthnCredentials() {
         if (!state.authenticated) {

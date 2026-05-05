@@ -19,6 +19,9 @@
 //! freebird-cli users list          # List users
 //! freebird-cli users get <id>      # Get user details
 //! freebird-cli users ban <id>      # Ban a user
+//! freebird-cli invites revoke <c>  # Revoke a pending invitation
+//! freebird-cli vouching list       # List trusted vouchers
+//! freebird-cli webauthn policy     # Show WebAuthn attestation policy
 //! freebird-cli keys list           # List signing keys
 //! freebird-cli keys rotate         # Rotate signing key
 //! ```
@@ -83,6 +86,14 @@ enum Commands {
     #[command(subcommand)]
     Invites(InvitesCommands),
 
+    /// Multi-party vouching management commands
+    #[command(subcommand)]
+    Vouching(VouchingCommands),
+
+    /// WebAuthn management commands
+    #[command(subcommand)]
+    WebAuthn(WebAuthnCommands),
+
     /// Signing key management commands
     #[command(subcommand)]
     Keys(KeysCommands),
@@ -133,6 +144,22 @@ enum UsersCommands {
         /// User ID to unban
         user_id: String,
     },
+
+    /// Add a bootstrap user with an initial invite quota
+    Bootstrap {
+        /// User ID to add
+        user_id: String,
+
+        /// Initial invite quota
+        #[arg(short, long, default_value = "5")]
+        invites: u32,
+    },
+
+    /// Register the instance owner user
+    RegisterOwner {
+        /// Owner user ID
+        user_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -160,6 +187,12 @@ enum InvitesCommands {
         code: String,
     },
 
+    /// Revoke a pending invitation
+    Revoke {
+        /// Invitation code
+        code: String,
+    },
+
     /// Grant additional invite slots to a user
     Grant {
         /// User ID to grant invites to
@@ -172,12 +205,94 @@ enum InvitesCommands {
 }
 
 #[derive(Subcommand)]
+enum VouchingCommands {
+    /// List trusted vouchers
+    List,
+
+    /// Add a trusted voucher P-256 public key
+    Add {
+        /// Voucher user ID
+        user_id: String,
+
+        /// P-256 SEC1 public key, base64url without padding
+        public_key_b64: String,
+    },
+
+    /// Remove a trusted voucher
+    Remove {
+        /// Voucher user ID
+        user_id: String,
+    },
+
+    /// Submit a signed vouch
+    Submit {
+        /// Voucher user ID
+        voucher_id: String,
+
+        /// Vouchee user ID
+        vouchee_id: String,
+
+        /// P-256 ECDSA signature, base64url without padding
+        signature_b64: String,
+
+        /// Unix timestamp used in the signed vouch message
+        timestamp: i64,
+    },
+
+    /// List pending vouches
+    Pending,
+
+    /// Clear pending vouches for a user
+    ClearPending {
+        /// Vouchee user ID
+        vouchee_id: String,
+    },
+
+    /// Mark a vouched user as successful for voucher reputation
+    MarkSuccessful {
+        /// Vouchee user ID
+        vouchee_id: String,
+    },
+
+    /// Mark a vouched user as problematic for voucher reputation
+    MarkProblematic {
+        /// Vouchee user ID
+        vouchee_id: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum WebAuthnCommands {
+    /// Show active WebAuthn attestation/AAGUID policy
+    Policy,
+
+    /// Show WebAuthn credential statistics
+    Stats,
+
+    /// List registered WebAuthn credentials
+    List,
+
+    /// Delete a registered WebAuthn credential by credential ID
+    Delete {
+        /// Credential ID, base64url without padding
+        credential_id: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum KeysCommands {
     /// List all signing keys
     List,
 
     /// Rotate the signing key (create new epoch)
-    Rotate,
+    Rotate {
+        /// New key ID
+        new_kid: String,
+
+        /// Grace period for the old key in seconds
+        #[arg(long)]
+        grace_period_secs: Option<u64>,
+    },
 
     /// Clean up old keys beyond retention period
     Cleanup,
@@ -201,18 +316,25 @@ enum ExportCommands {
 struct HealthResponse {
     status: String,
     service: String,
-    version: String,
-    uptime_secs: u64,
+    uptime_seconds: u64,
+    invitation_system_status: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct StatsResponse {
-    total_users: u64,
-    active_users_24h: u64,
-    tokens_issued_24h: u64,
-    current_epoch: u32,
-    invitations_pending: u64,
-    invitations_redeemed: u64,
+    stats: InvitationStats,
+    timestamp: u64,
+    owner: Option<String>,
+    user_count: usize,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct InvitationStats {
+    total_invitations: usize,
+    redeemed_invitations: usize,
+    pending_invitations: usize,
+    total_users: usize,
+    banned_users: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -244,65 +366,70 @@ struct UsersResponse {
 #[derive(Debug, Deserialize, Serialize)]
 struct UserSummary {
     user_id: String,
-    created_at: String,
-    last_seen: Option<String>,
-    tokens_issued: u64,
-    is_banned: bool,
+    invites_remaining: u32,
+    banned: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct UserDetails {
     user_id: String,
-    created_at: String,
-    last_seen: Option<String>,
-    tokens_issued: u64,
-    is_banned: bool,
-    invited_by: Option<String>,
     invites_remaining: u32,
-    invites_used: u32,
-    trust_level: Option<u32>,
+    invites_sent: Vec<String>,
+    invites_used: Vec<String>,
+    joined_at: u64,
+    last_invite_at: u64,
+    reputation: f64,
+    banned: bool,
+    invitees: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct InvitationsResponse {
     invitations: Vec<InvitationSummary>,
-    total: u64,
+    total: usize,
+    offset: usize,
+    limit: usize,
+    has_more: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct InvitationSummary {
     code: String,
     inviter_id: String,
-    status: String,
-    created_at: String,
+    invitee_id: Option<String>,
+    created_at: u64,
+    expires_at: u64,
+    redeemed: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct KeySummary {
-    epoch: u32,
     kid: String,
-    created_at: String,
-    is_active: bool,
+    status: Value,
+    pubkey_b64: String,
+    deprecated_at: Option<u64>,
+    expires_at: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct KeysResponse {
     keys: Vec<KeySummary>,
-    current_epoch: u32,
+    stats: Value,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct AuditEntry {
-    timestamp: String,
+    timestamp: u64,
+    level: String,
     action: String,
-    actor: Option<String>,
+    user_id: Option<String>,
     details: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 struct AuditResponse {
     entries: Vec<AuditEntry>,
-    total: u64,
+    total: usize,
 }
 
 #[derive(Debug, Serialize)]
@@ -326,6 +453,43 @@ struct CreateInvitationsRequest {
 struct GrantInvitesRequest {
     user_id: String,
     count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct RotateKeyRequest {
+    new_kid: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    grace_period_secs: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct BootstrapUserRequest {
+    user_id: String,
+    invite_count: u32,
+}
+
+#[derive(Debug, Serialize)]
+struct RegisterOwnerRequest {
+    user_id: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AddVoucherRequest {
+    user_id: String,
+    public_key_b64: String,
+}
+
+#[derive(Debug, Serialize)]
+struct SubmitVouchRequest {
+    voucher_id: String,
+    vouchee_id: String,
+    signature_b64: String,
+    timestamp: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct VoucheeRequest {
+    vouchee_id: String,
 }
 
 struct ApiClient {
@@ -388,6 +552,49 @@ impl ApiClient {
             .client
             .post(&url)
             .header("X-Admin-Key", &self.admin_key)
+            .send()
+            .await
+            .context("Failed to connect to issuer")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("API error ({}): {}", status, body);
+        }
+
+        resp.json().await.context("Failed to parse response")
+    }
+
+    async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        let url = format!("{}/admin{}", self.base_url, path);
+        let resp = self
+            .client
+            .delete(&url)
+            .header("X-Admin-Key", &self.admin_key)
+            .send()
+            .await
+            .context("Failed to connect to issuer")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("API error ({}): {}", status, body);
+        }
+
+        resp.json().await.context("Failed to parse response")
+    }
+
+    async fn delete_json<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let url = format!("{}/admin{}", self.base_url, path);
+        let resp = self
+            .client
+            .delete(&url)
+            .header("X-Admin-Key", &self.admin_key)
+            .json(body)
             .send()
             .await
             .context("Failed to connect to issuer")?;
@@ -490,10 +697,8 @@ impl TableRow for UserSummary {
     fn values(&self) -> Vec<String> {
         vec![
             self.user_id.clone(),
-            self.created_at.clone(),
-            self.last_seen.clone().unwrap_or_else(|| "-".to_string()),
-            self.tokens_issued.to_string(),
-            if self.is_banned {
+            self.invites_remaining.to_string(),
+            if self.banned {
                 "Yes".red().to_string()
             } else {
                 "No".green().to_string()
@@ -507,8 +712,14 @@ impl TableRow for InvitationSummary {
         vec![
             self.code.clone(),
             self.inviter_id.clone(),
-            self.status.clone(),
-            self.created_at.clone(),
+            self.invitee_id.clone().unwrap_or_else(|| "-".to_string()),
+            if self.redeemed {
+                "Redeemed".green().to_string()
+            } else {
+                "Pending".yellow().to_string()
+            },
+            self.created_at.to_string(),
+            self.expires_at.to_string(),
         ]
     }
 }
@@ -516,14 +727,14 @@ impl TableRow for InvitationSummary {
 impl TableRow for KeySummary {
     fn values(&self) -> Vec<String> {
         vec![
-            self.epoch.to_string(),
             self.kid.clone(),
-            self.created_at.clone(),
-            if self.is_active {
-                "Yes".green().to_string()
-            } else {
-                "No".dimmed().to_string()
-            },
+            self.status.to_string(),
+            self.deprecated_at
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string()),
+            self.expires_at
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".to_string()),
         ]
     }
 }
@@ -531,9 +742,10 @@ impl TableRow for KeySummary {
 impl TableRow for AuditEntry {
     fn values(&self) -> Vec<String> {
         vec![
-            self.timestamp.clone(),
+            self.timestamp.to_string(),
+            self.level.clone(),
             self.action.clone(),
-            self.actor.clone().unwrap_or_else(|| "-".to_string()),
+            self.user_id.clone().unwrap_or_else(|| "-".to_string()),
             self.details.clone().unwrap_or_else(|| "-".to_string()),
         ]
     }
@@ -563,15 +775,23 @@ async fn main() -> Result<()> {
             if format == OutputFormat::Json {
                 println!("{}", serde_json::to_string_pretty(&health)?);
             } else {
-                let status_colored = if health.status == "healthy" {
+                let status_colored = if health.status == "healthy" || health.status == "ok" {
                     health.status.green()
                 } else {
                     health.status.red()
                 };
                 println!("{} {}", "Status:".bold(), status_colored);
                 println!("{} {}", "Service:".bold(), health.service);
-                println!("{} {}", "Version:".bold(), health.version);
-                println!("{} {}", "Uptime:".bold(), format_uptime(health.uptime_secs));
+                println!(
+                    "{} {}",
+                    "Invitation State:".bold(),
+                    health.invitation_system_status
+                );
+                println!(
+                    "{} {}",
+                    "Uptime:".bold(),
+                    format_uptime(health.uptime_seconds)
+                );
             }
         }
 
@@ -582,18 +802,24 @@ async fn main() -> Result<()> {
             } else {
                 println!("{}", "Issuer Statistics".bold().underline());
                 println!();
-                println!("{:.<25} {}", "Total Users", stats.total_users);
-                println!("{:.<25} {}", "Active (24h)", stats.active_users_24h);
-                println!("{:.<25} {}", "Tokens Issued (24h)", stats.tokens_issued_24h);
-                println!("{:.<25} {}", "Current Epoch", stats.current_epoch);
+                println!("{:.<25} {}", "Total Users", stats.stats.total_users);
+                println!("{:.<25} {}", "Redeemed Users", stats.user_count);
+                println!("{:.<25} {}", "Banned Users", stats.stats.banned_users);
                 println!(
                     "{:.<25} {}",
-                    "Pending Invitations", stats.invitations_pending
+                    "Total Invitations", stats.stats.total_invitations
                 );
                 println!(
                     "{:.<25} {}",
-                    "Redeemed Invitations", stats.invitations_redeemed
+                    "Pending Invitations", stats.stats.pending_invitations
                 );
+                println!(
+                    "{:.<25} {}",
+                    "Redeemed Invitations", stats.stats.redeemed_invitations
+                );
+                if let Some(owner) = stats.owner {
+                    println!("{:.<25} {}", "Owner", owner);
+                }
             }
         }
 
@@ -681,10 +907,7 @@ async fn main() -> Result<()> {
                     if users.users.is_empty() {
                         println!("{}", "No users found.".dimmed());
                     } else {
-                        print_table(
-                            &["User ID", "Created", "Last Seen", "Tokens", "Banned"],
-                            &users.users,
-                        );
+                        print_table(&["User ID", "Invites Remaining", "Banned"], &users.users);
                     }
                 }
             }
@@ -697,32 +920,22 @@ async fn main() -> Result<()> {
                     println!("{}", "User Details".bold().underline());
                     println!();
                     println!("{:.<25} {}", "User ID", user.user_id);
-                    println!("{:.<25} {}", "Created", user.created_at);
-                    println!(
-                        "{:.<25} {}",
-                        "Last Seen",
-                        user.last_seen.unwrap_or_else(|| "Never".to_string())
-                    );
-                    println!("{:.<25} {}", "Tokens Issued", user.tokens_issued);
+                    println!("{:.<25} {}", "Joined At", user.joined_at);
+                    println!("{:.<25} {}", "Last Invite At", user.last_invite_at);
                     println!(
                         "{:.<25} {}",
                         "Status",
-                        if user.is_banned {
+                        if user.banned {
                             "Banned".red()
                         } else {
                             "Active".green()
                         }
                     );
-                    println!(
-                        "{:.<25} {}",
-                        "Invited By",
-                        user.invited_by.unwrap_or_else(|| "N/A".to_string())
-                    );
+                    println!("{:.<25} {:.2}", "Reputation", user.reputation);
                     println!("{:.<25} {}", "Invites Remaining", user.invites_remaining);
-                    println!("{:.<25} {}", "Invites Used", user.invites_used);
-                    if let Some(level) = user.trust_level {
-                        println!("{:.<25} {}", "Trust Level", level);
-                    }
+                    println!("{:.<25} {}", "Invites Sent", user.invites_sent.len());
+                    println!("{:.<25} {}", "Invites Used", user.invites_used.len());
+                    println!("{:.<25} {}", "Invitees", user.invitees.len());
                 }
             }
 
@@ -755,6 +968,36 @@ async fn main() -> Result<()> {
                     println!("{} User {} has been unbanned", "✓".green(), user_id.bold());
                 }
             }
+
+            UsersCommands::Bootstrap { user_id, invites } => {
+                let req = BootstrapUserRequest {
+                    user_id: user_id.clone(),
+                    invite_count: invites,
+                };
+                let resp: Value = api.post("/bootstrap/add", &req).await?;
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    println!(
+                        "{} Added bootstrap user {} with {} invite slot(s)",
+                        "✓".green(),
+                        user_id.bold(),
+                        invites
+                    );
+                }
+            }
+
+            UsersCommands::RegisterOwner { user_id } => {
+                let req = RegisterOwnerRequest {
+                    user_id: user_id.clone(),
+                };
+                let resp: Value = api.post("/register-owner", &req).await?;
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    println!("{} Registered owner {}", "✓".green(), user_id.bold());
+                }
+            }
         },
 
         Commands::Invites(cmd) => match cmd {
@@ -774,7 +1017,7 @@ async fn main() -> Result<()> {
                         println!("{}", "No invitations found.".dimmed());
                     } else {
                         print_table(
-                            &["Code", "Inviter", "Status", "Created"],
+                            &["Code", "Inviter", "Invitee", "Status", "Created", "Expires"],
                             &invites.invitations,
                         );
                     }
@@ -796,11 +1039,11 @@ async fn main() -> Result<()> {
                         count,
                         inviter_id.bold()
                     );
-                    if let Some(codes) = resp.get("codes").and_then(|c| c.as_array()) {
+                    if let Some(codes) = resp.get("invitations").and_then(|c| c.as_array()) {
                         println!();
                         println!("{}", "Invitation Codes:".bold());
-                        for code in codes {
-                            if let Some(s) = code.as_str() {
+                        for invite in codes {
+                            if let Some(s) = invite.get("code").and_then(|v| v.as_str()) {
                                 println!("  {}", s.cyan());
                             }
                         }
@@ -816,6 +1059,15 @@ async fn main() -> Result<()> {
                     println!("{}", "Invitation Details".bold().underline());
                     println!();
                     println!("{}", serde_json::to_string_pretty(&invite)?);
+                }
+            }
+
+            InvitesCommands::Revoke { code } => {
+                let resp: Value = api.delete(&format!("/invitations/{}", code)).await?;
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    println!("{} Revoked invitation {}", "✓".green(), code.bold());
                 }
             }
 
@@ -838,37 +1090,184 @@ async fn main() -> Result<()> {
             }
         },
 
+        Commands::Vouching(cmd) => match cmd {
+            VouchingCommands::List => {
+                let resp: Value = api.get("/vouching/vouchers").await?;
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    println!("{}", "Trusted Vouchers".bold().underline());
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                }
+            }
+
+            VouchingCommands::Add {
+                user_id,
+                public_key_b64,
+            } => {
+                let req = AddVoucherRequest {
+                    user_id: user_id.clone(),
+                    public_key_b64,
+                };
+                let resp: Value = api.post("/vouching/vouchers", &req).await?;
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    println!("{} Added voucher {}", "✓".green(), user_id.bold());
+                }
+            }
+
+            VouchingCommands::Remove { user_id } => {
+                let resp: Value = api
+                    .delete(&format!("/vouching/vouchers/{}", user_id))
+                    .await?;
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    println!("{} Removed voucher {}", "✓".green(), user_id.bold());
+                }
+            }
+
+            VouchingCommands::Submit {
+                voucher_id,
+                vouchee_id,
+                signature_b64,
+                timestamp,
+            } => {
+                let req = SubmitVouchRequest {
+                    voucher_id: voucher_id.clone(),
+                    vouchee_id: vouchee_id.clone(),
+                    signature_b64,
+                    timestamp,
+                };
+                let resp: Value = api.post("/vouching/vouches", &req).await?;
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    println!(
+                        "{} Submitted vouch from {} for {}",
+                        "✓".green(),
+                        voucher_id.bold(),
+                        vouchee_id.bold()
+                    );
+                }
+            }
+
+            VouchingCommands::Pending => {
+                let resp: Value = api.get("/vouching/pending").await?;
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    println!("{}", "Pending Vouches".bold().underline());
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                }
+            }
+
+            VouchingCommands::ClearPending { vouchee_id } => {
+                let req = VoucheeRequest {
+                    vouchee_id: vouchee_id.clone(),
+                };
+                let resp: Value = api.delete_json("/vouching/pending", &req).await?;
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    println!(
+                        "{} Cleared pending vouches for {}",
+                        "✓".green(),
+                        vouchee_id.bold()
+                    );
+                }
+            }
+
+            VouchingCommands::MarkSuccessful { vouchee_id } => {
+                let req = VoucheeRequest {
+                    vouchee_id: vouchee_id.clone(),
+                };
+                let resp: Value = api.post("/vouching/mark-successful", &req).await?;
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    println!("{} Marked {} successful", "✓".green(), vouchee_id.bold());
+                }
+            }
+
+            VouchingCommands::MarkProblematic { vouchee_id } => {
+                let req = VoucheeRequest {
+                    vouchee_id: vouchee_id.clone(),
+                };
+                let resp: Value = api.post("/vouching/mark-problematic", &req).await?;
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    println!("{} Marked {} problematic", "✓".green(), vouchee_id.bold());
+                }
+            }
+        },
+
+        Commands::WebAuthn(cmd) => match cmd {
+            WebAuthnCommands::Policy => {
+                let resp: Value = api.get("/webauthn/policy").await?;
+                println!("{}", serde_json::to_string_pretty(&resp)?);
+            }
+            WebAuthnCommands::Stats => {
+                let resp: Value = api.get("/webauthn/stats").await?;
+                println!("{}", serde_json::to_string_pretty(&resp)?);
+            }
+            WebAuthnCommands::List => {
+                let resp: Value = api.get("/webauthn/credentials").await?;
+                println!("{}", serde_json::to_string_pretty(&resp)?);
+            }
+            WebAuthnCommands::Delete { credential_id } => {
+                let resp: Value = api
+                    .delete(&format!("/webauthn/credentials/{}", credential_id))
+                    .await?;
+                if format == OutputFormat::Json {
+                    println!("{}", serde_json::to_string_pretty(&resp)?);
+                } else {
+                    println!(
+                        "{} Deleted WebAuthn credential {}",
+                        "✓".green(),
+                        credential_id
+                    );
+                }
+            }
+        },
+
         Commands::Keys(cmd) => match cmd {
             KeysCommands::List => {
                 let keys: KeysResponse = api.get("/keys").await?;
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&keys)?);
                 } else {
-                    println!(
-                        "{} (current epoch: {})",
-                        "Signing Keys".bold().underline(),
-                        keys.current_epoch.to_string().cyan()
-                    );
+                    println!("{}", "Signing Keys".bold().underline());
+                    println!("{}", serde_json::to_string_pretty(&keys.stats)?);
                     println!();
                     if keys.keys.is_empty() {
                         println!("{}", "No keys found.".dimmed());
                     } else {
-                        print_table(&["Epoch", "Key ID", "Created", "Active"], &keys.keys);
+                        print_table(
+                            &["Key ID", "Status", "Deprecated At", "Expires At"],
+                            &keys.keys,
+                        );
                     }
                 }
             }
 
-            KeysCommands::Rotate => {
-                let resp: Value = api.post_empty("/keys/rotate").await?;
+            KeysCommands::Rotate {
+                new_kid,
+                grace_period_secs,
+            } => {
+                let req = RotateKeyRequest {
+                    new_kid,
+                    grace_period_secs,
+                };
+                let resp: Value = api.post("/keys/rotate", &req).await?;
                 if format == OutputFormat::Json {
                     println!("{}", serde_json::to_string_pretty(&resp)?);
                 } else {
                     println!("{} Key rotation complete", "✓".green());
-                    if let Some(epoch) = resp.get("new_epoch").and_then(|e| e.as_u64()) {
-                        println!("  New epoch: {}", epoch.to_string().cyan());
-                    }
-                    if let Some(kid) = resp.get("kid").and_then(|k| k.as_str()) {
-                        println!("  Key ID: {}", kid);
+                    if let Some(kid) = resp.get("new_kid").and_then(|k| k.as_str()) {
+                        println!("  New key ID: {}", kid);
                     }
                 }
             }
@@ -879,7 +1278,7 @@ async fn main() -> Result<()> {
                     println!("{}", serde_json::to_string_pretty(&resp)?);
                 } else {
                     println!("{} Key cleanup complete", "✓".green());
-                    if let Some(removed) = resp.get("removed").and_then(|r| r.as_u64()) {
+                    if let Some(removed) = resp.get("removed_count").and_then(|r| r.as_u64()) {
                         println!("  Removed {} old key(s)", removed);
                     }
                 }
@@ -911,7 +1310,10 @@ async fn main() -> Result<()> {
                 if audit.entries.is_empty() {
                     println!("{}", "No audit entries found.".dimmed());
                 } else {
-                    print_table(&["Timestamp", "Action", "Actor", "Details"], &audit.entries);
+                    print_table(
+                        &["Timestamp", "Level", "Action", "User", "Details"],
+                        &audit.entries,
+                    );
                 }
             }
         }
