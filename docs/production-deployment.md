@@ -72,6 +72,10 @@ WEBAUTHN_ATTESTATION_POLICY=direct
 WEBAUTHN_ALLOWED_AAGUIDS=<comma-separated-aaguids>
 ```
 
+When WebAuthn is enabled, the issuer serves a browser registration and
+authentication flow at `/webauthn/`. See
+[WebAuthn Browser Flow](webauthn-browser-flow.md).
+
 ## Reverse Proxy
 
 Expose public issuance and verification routes. Restrict `/admin` to an
@@ -126,3 +130,8 @@ cargo run -p freebird-interface -- \
   --pow-difficulty 20
 ```
 
+## Deployment Guides
+
+- [Release Packaging](release.md)
+- [Kubernetes Deployment](deployment-kubernetes.md)
+- [Systemd Deployment](deployment-systemd.md)

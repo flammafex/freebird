@@ -47,7 +47,7 @@ schema. Examples:
 ```json
 {
   "type": "webauthn",
-  "username": "alice",
+  "subject_hash": "opaque-subject-hash",
   "auth_proof": "base64url-proof",
   "timestamp": 1777920000
 }
@@ -74,14 +74,21 @@ For combined `and` or `threshold` modes, wrap proofs in:
 
 ## WebAuthn
 
-WebAuthn proofs are produced by the issuer WebAuthn authentication flow. A
-client should authenticate through `/webauthn/authentication/start` and
-`/webauthn/authentication/finish`, then pass the returned proof as the
-`webauthn` Sybil proof for issuance.
+WebAuthn proofs are produced by the issuer WebAuthn authentication flow. The
+proof is bound to an opaque `subject_hash`, not the local passkey label used to
+find a credential.
+
+A browser client is served at `/webauthn/`, with distinct pages at
+`/webauthn/register` and `/webauthn/authenticate`. The normal browser flow hands
+proofs back to a requesting client by callback or `postMessage`; proof JSON is
+only shown when no requesting client is present.
+
+Custom clients should authenticate through `/webauthn/authenticate/start` and
+`/webauthn/authenticate/finish`, then pass the returned proof as the `webauthn`
+Sybil proof for issuance.
 
 ## Multi-Party Vouching
 
 Vouching proofs are generated from server-side vouching state. Operators manage
 trusted vouchers and pending vouches through `/admin/vouching/*`; clients submit
 the final `multi_party_vouching` proof object during issuance.
-

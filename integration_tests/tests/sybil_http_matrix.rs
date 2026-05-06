@@ -583,7 +583,7 @@ async fn http_webauthn_proof_shape_reaches_sybil_gate_on_all_issuance_routes() -
 
     for endpoint in endpoint_requests(&app.public_issuer)? {
         let proof = SybilProof::WebAuthn {
-            username: "alice".to_string(),
+            subject_hash: "subject-hash".to_string(),
             auth_proof: Base64UrlUnpadded::encode_string(&[7u8; 32]),
             timestamp: current_timestamp_u64() as i64,
         };

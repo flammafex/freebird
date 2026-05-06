@@ -1,0 +1,40 @@
+[Unit]
+Description=Freebird Issuer
+Documentation=https://github.com/flammafex/freebird
+After=network-online.target redis.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=freebird
+Group=freebird
+EnvironmentFile=/etc/freebird/issuer.env
+ExecStart=/usr/local/bin/freebird-issuer
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=45s
+WorkingDirectory=/var/lib/freebird/issuer
+
+StateDirectory=freebird/issuer
+StateDirectoryMode=0750
+LogsDirectory=freebird
+LogsDirectoryMode=0750
+ReadWritePaths=/var/lib/freebird/issuer /var/log/freebird
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

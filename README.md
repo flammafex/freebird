@@ -27,8 +27,16 @@ The `freebird-interface` binary exercises the V4 flow against local services on
   invitations, vouching, WebAuthn, keys, and audit.
 - [Client Proofs](docs/client-proofs.md): attaching PoW, invitation, WebAuthn,
   and vouching Sybil proofs to issuance requests.
+- [WebAuthn Browser Flow](docs/webauthn-browser-flow.md): browser passkey
+  registration, authentication, and WebAuthn Sybil proof export.
 - [Production Deployment](docs/production-deployment.md): Redis replay stores,
   TLS/proxy settings, persistence, and preflight checks.
+- [Release Packaging](docs/release.md): version tags, release archives,
+  checksums, container images, and signature verification.
+- [Kubernetes Deployment](docs/deployment-kubernetes.md): hardened Kubernetes
+  manifests and production notes.
+- [Systemd Deployment](docs/deployment-systemd.md): single-host service units
+  and environment file templates.
 - [Audit Logging](docs/audit-logging.md): audit fields, retention model, privacy
   impact, and limitations.
 
@@ -275,6 +283,8 @@ For production:
 - Use `SYBIL_REPLAY_STORE=redis` for issuer Sybil proof replay protection.
 - Keep issuer key material on protected storage or an HSM-backed path.
 - Do not use `SYBIL_RESISTANCE=none` for a public issuer.
+- Pin container image versions or digests instead of `latest`.
+- Keep `/admin` on a private hostname, VPN, or explicit source allowlist.
 
 ## Admin CLI
 

@@ -19,6 +19,7 @@ COPY interface ./interface
 COPY issuer ./issuer
 COPY verifier ./verifier
 COPY integration_tests ./integration_tests
+COPY webauthn-client ./webauthn-client
 
 # Pre-cache dependencies to optimize layer caching
 RUN cargo fetch
@@ -28,9 +29,8 @@ RUN cargo fetch
 # ==============================================================================
 FROM base-builder as issuer-builder
 
-# Build only the issuer binary with optimizations
-RUN cargo build --release -p freebird-issuer \
-    && cargo build --release --bin freebird-cli
+# Build issuer operational binaries with optimizations
+RUN cargo build --release -p freebird-issuer --bins
 
 # ==============================================================================
 # Stage 3: Verifier Builder (builds ONLY verifier)
@@ -46,6 +46,9 @@ RUN cargo build --release -p freebird-verifier
 FROM debian:bookworm-slim as issuer
 
 WORKDIR /app
+ARG VERSION=unknown
+ARG VCS_REF=unknown
+ARG CREATED=unknown
 
 # Install runtime dependencies with minimal attack surface
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -65,7 +68,8 @@ RUN mkdir -p /data/keys /data/state && \
 # Copy binaries from build stage
 COPY --from=issuer-builder /app/target/release/freebird-issuer /usr/local/bin/freebird-issuer
 COPY --from=issuer-builder /app/target/release/freebird-cli /usr/local/bin/freebird-cli
-RUN chmod 755 /usr/local/bin/freebird-issuer /usr/local/bin/freebird-cli
+COPY --from=issuer-builder /app/target/release/freebird-validate-config /usr/local/bin/freebird-validate-config
+RUN chmod 755 /usr/local/bin/freebird-issuer /usr/local/bin/freebird-cli /usr/local/bin/freebird-validate-config
 
 # Set secure defaults
 ENV BIND_ADDR=0.0.0.0:8081 \
@@ -78,7 +82,12 @@ ENV BIND_ADDR=0.0.0.0:8081 \
 LABEL org.opencontainers.image.title="Freebird Issuer" \
       org.opencontainers.image.description="Privacy-preserving authorization - Issuer component" \
       org.opencontainers.image.vendor="Freebird" \
-      org.opencontainers.image.documentation="https://github.com/flammafex/freebird"
+      org.opencontainers.image.documentation="https://github.com/flammafex/freebird" \
+      org.opencontainers.image.source="https://github.com/flammafex/freebird" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${CREATED}" \
+      org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # Health check endpoint
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
@@ -96,6 +105,9 @@ CMD ["freebird-issuer"]
 FROM debian:bookworm-slim as verifier
 
 WORKDIR /app
+ARG VERSION=unknown
+ARG VCS_REF=unknown
+ARG CREATED=unknown
 
 # Install minimal runtime dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -123,7 +135,12 @@ ENV BIND_ADDR=0.0.0.0:8082 \
 LABEL org.opencontainers.image.title="Freebird Verifier" \
       org.opencontainers.image.description="Privacy-preserving authorization - Verifier component" \
       org.opencontainers.image.vendor="Freebird" \
-      org.opencontainers.image.documentation="https://github.com/flammafex/freebird"
+      org.opencontainers.image.documentation="https://github.com/flammafex/freebird" \
+      org.opencontainers.image.source="https://github.com/flammafex/freebird" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.revision="${VCS_REF}" \
+      org.opencontainers.image.created="${CREATED}" \
+      org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # Health check endpoint
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://localhost:8082/health || exit 1

@@ -36,7 +36,75 @@ spec:
     - host: issuer.example.com  # CHANGE THIS
       http:
         paths:
-          - path: /
+          - path: /.well-known/issuer
+            pathType: Exact
+            backend:
+              service:
+                name: issuer
+                port:
+                  number: 8081
+          - path: /.well-known/keys
+            pathType: Exact
+            backend:
+              service:
+                name: issuer
+                port:
+                  number: 8081
+          - path: /v1/oprf
+            pathType: Prefix
+            backend:
+              service:
+                name: issuer
+                port:
+                  number: 8081
+          - path: /v1/public
+            pathType: Prefix
+            backend:
+              service:
+                name: issuer
+                port:
+                  number: 8081
+          - path: /webauthn
+            pathType: Prefix
+            backend:
+              service:
+                name: issuer
+                port:
+                  number: 8081
+
+---
+# Admin ingress for Freebird Issuer.
+# Keep this on a private hostname or restrict it with an ingress allowlist.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: issuer-admin-ingress
+  namespace: freebird
+  labels:
+    app: freebird
+    component: issuer
+    surface: admin
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/limit-rps: "5"
+    nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,192.168.0.0/16,172.16.0.0/12"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "Strict-Transport-Security: max-age=31536000; includeSubDomains";
+      more_set_headers "X-Content-Type-Options: nosniff";
+      more_set_headers "X-Frame-Options: DENY";
+      more_set_headers "Referrer-Policy: strict-origin-when-cross-origin";
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - issuer-admin.example.com  # CHANGE THIS
+      secretName: issuer-admin-tls-cert
+  rules:
+    - host: issuer-admin.example.com  # CHANGE THIS
+      http:
+        paths:
+          - path: /admin
             pathType: Prefix
             backend:
               service:

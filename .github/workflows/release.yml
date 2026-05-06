@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to package, for example v0.5.1"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release binaries
+        run: |
+          cargo build --release -p freebird-issuer --bins
+          cargo build --release -p freebird-verifier
+          cargo build --release -p freebird-interface
+
+      - name: Package Linux x86_64 archive
+        env:
+          TAG_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${TAG_NAME#v}"
+          package="freebird-${version}-linux-x86_64"
+          mkdir -p "dist/${package}/bin" "dist/${package}/docs"
+          cp target/release/freebird-issuer "dist/${package}/bin/"
+          cp target/release/freebird-cli "dist/${package}/bin/"
+          cp target/release/freebird-validate-config "dist/${package}/bin/"
+          cp target/release/freebird-verifier "dist/${package}/bin/"
+          cp target/release/freebird-interface "dist/${package}/bin/"
+          cp README.md SECURITY.md LICENSE CHANGELOG.md "dist/${package}/"
+          cp -R docs "dist/${package}/docs/freebird"
+          cp -R deploy "dist/${package}/deploy"
+          cp -R k8s "dist/${package}/k8s"
+          cp -R server-configs "dist/${package}/server-configs"
+          cp -R webauthn-client "dist/${package}/webauthn-client"
+          tar -C dist -czf "dist/${package}.tar.gz" "${package}"
+          sha256sum "dist/${package}.tar.gz" > "dist/${package}.tar.gz.sha256"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256

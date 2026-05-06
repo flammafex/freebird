@@ -65,8 +65,10 @@ fn extract_client_ip(
 
 #[derive(Debug, Deserialize)]
 pub struct StartResidentRegistrationRequest {
-    pub username: String,
-    pub display_name: Option<String>,
+    #[serde(alias = "username")]
+    pub local_handle: String,
+    #[serde(default, alias = "display_name")]
+    pub display_label: Option<String>,
     /// Optional friendly name for the credential (e.g., "MacBook Pro")
     pub credential_name: Option<String>,
 }
@@ -99,7 +101,14 @@ pub async fn start_resident_registration(
     headers: HeaderMap,
     Json(req): Json<StartResidentRegistrationRequest>,
 ) -> Result<Json<StartResidentRegistrationResponse>, (StatusCode, String)> {
-    debug!(username = %req.username, "Starting resident key registration");
+    let local_handle = req.local_handle.trim().to_string();
+    if local_handle.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Local handle is required".to_string(),
+        ));
+    }
+    debug!("Starting resident key registration");
 
     let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy)
         .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
@@ -121,7 +130,7 @@ pub async fn start_resident_registration(
 
     // Check max credentials per user
     let config = AttestationConfig::global();
-    let user_id_hash = compute_user_id_hash(&req.username);
+    let user_id_hash = compute_user_id_hash(&local_handle);
     let existing_creds = state
         .cred_store
         .load_user_credentials(&user_id_hash)
@@ -130,7 +139,7 @@ pub async fn start_resident_registration(
 
     if existing_creds.len() >= config.max_credentials_per_user {
         warn!(
-            username = %req.username,
+            subject_hash = %user_id_hash,
             count = existing_creds.len(),
             max = config.max_credentials_per_user,
             "User has reached maximum credential limit"
@@ -173,10 +182,10 @@ pub async fn start_resident_registration(
         .webauthn
         .start_passkey_registration(
             user_uuid,
-            &req.username,
-            &req.display_name
+            &local_handle,
+            &req.display_label
                 .clone()
-                .unwrap_or_else(|| req.username.clone()),
+                .unwrap_or_else(|| local_handle.clone()),
             exclude_credentials,
         )
         .map_err(|e| {
@@ -196,7 +205,8 @@ pub async fn start_resident_registration(
             session_id.clone(),
             SessionData::Registration {
                 state: reg_state,
-                username: req.username.clone(),
+                local_handle: local_handle.clone(),
+                subject_hash: user_id_hash.clone(),
                 created_at: chrono::Utc::now().timestamp(),
                 client_ip,
             },
@@ -211,7 +221,7 @@ pub async fn start_resident_registration(
     state.rate_limiter.record_session_created(client_ip).await;
 
     info!(
-        username = %req.username,
+        subject_hash = %user_id_hash,
         session_id = %session_id,
         user_handle = %user_handle,
         "Started resident key registration"
@@ -238,7 +248,7 @@ pub struct FinishResidentRegistrationRequest {
 pub struct FinishResidentRegistrationResponse {
     pub ok: bool,
     pub cred_id: String,
-    pub user_id_hash: String,
+    pub subject_hash: String,
     pub registered_at: i64,
     pub device_type: String,
     pub backup_eligible: bool,
@@ -254,15 +264,16 @@ pub async fn finish_resident_registration(
 ) -> Result<Json<FinishResidentRegistrationResponse>, (StatusCode, String)> {
     debug!(session_id = %req.session_id, "Finishing resident key registration");
 
-    let (reg_state, username, client_ip) = {
+    let (reg_state, local_handle, subject_hash, client_ip) = {
         let mut sessions = state.sessions.write().await;
         match sessions.remove(&req.session_id) {
             Some(SessionData::Registration {
                 state,
-                username,
+                local_handle,
+                subject_hash,
                 client_ip,
                 ..
-            }) => (state, username, client_ip),
+            }) => (state, local_handle, subject_hash, client_ip),
             Some(session) => {
                 state
                     .rate_limiter
@@ -300,7 +311,6 @@ pub async fn finish_resident_registration(
     // Determine device type from attestation
     let device_type = determine_device_type(&attestation_info);
 
-    let user_id_hash = compute_user_id_hash(&username);
     let cred_id = passkey.cred_id().clone();
 
     // Extract transports from the client response (if available)
@@ -325,8 +335,8 @@ pub async fn finish_resident_registration(
         .save_with_options(
             cred_id.clone().into(),
             passkey,
-            user_id_hash.clone(),
-            username.clone(),
+            subject_hash.clone(),
+            local_handle.clone(),
             create_options,
         )
         .await
@@ -341,7 +351,7 @@ pub async fn finish_resident_registration(
     let cred_id_b64 = base64ct::Base64UrlUnpadded::encode_string(&cred_id);
 
     info!(
-        username = %username,
+        subject_hash = %subject_hash,
         cred_id = %cred_id_b64,
         device_type = %device_type,
         backup_eligible = attestation_info.flags.backup_eligible,
@@ -351,7 +361,7 @@ pub async fn finish_resident_registration(
     Ok(Json(FinishResidentRegistrationResponse {
         ok: true,
         cred_id: cred_id_b64,
-        user_id_hash,
+        subject_hash,
         registered_at: chrono::Utc::now().timestamp(),
         device_type: device_type.to_string(),
         backup_eligible: attestation_info.flags.backup_eligible,
@@ -424,7 +434,7 @@ pub async fn start_discoverable_authentication(
             format!("discoverable:{}", session_id),
             SessionData::Authentication {
                 state: create_dummy_auth_state()?,
-                username: String::new(), // Will be determined from userHandle
+                subject_hash: String::new(), // Will be determined from userHandle
                 created_at: chrono::Utc::now().timestamp(),
                 client_ip,
             },
@@ -463,7 +473,7 @@ pub struct FinishDiscoverableAuthRequest {
 pub struct FinishDiscoverableAuthResponse {
     pub ok: bool,
     pub cred_id: String,
-    pub username: String,
+    pub subject_hash: String,
     pub authenticated_at: i64,
     pub proof: String,
 }
@@ -585,10 +595,10 @@ pub async fn finish_discoverable_authentication(
     let authenticated_at = chrono::Utc::now().timestamp();
 
     // Generate proof using the same function as regular auth
-    let proof = compute_auth_proof(&state.webauthn.rp_id, &username, authenticated_at);
+    let proof = compute_auth_proof(&state.webauthn.rp_id, &user_id_hash, authenticated_at);
 
     info!(
-        username = %username,
+        subject_hash = %user_id_hash,
         cred_id = %cred_id_b64,
         "Completed discoverable authentication"
     );
@@ -596,7 +606,7 @@ pub async fn finish_discoverable_authentication(
     Ok(Json(FinishDiscoverableAuthResponse {
         ok: true,
         cred_id: cred_id_b64,
-        username,
+        subject_hash: user_id_hash,
         authenticated_at,
         proof,
     }))
@@ -788,11 +798,11 @@ pub fn admin_router(state: Arc<WebAuthnState>) -> Router {
 // Helper Functions
 // ============================================================================
 
-/// Compute user ID hash from username
+/// Compute opaque WebAuthn subject hash from a local handle.
 fn compute_user_id_hash(username: &str) -> String {
     use blake3::Hasher;
     let mut hasher = Hasher::new();
-    hasher.update(b"webauthn:user:");
+    hasher.update(b"webauthn:subject:v1:");
     hasher.update(username.as_bytes());
     hasher.finalize().to_hex().to_string()
 }
@@ -876,12 +886,12 @@ async fn store_discoverable_challenge(
 }
 
 /// Compute authentication proof (same as in handlers.rs)
-fn compute_auth_proof(rp_id: &str, username: &str, timestamp: i64) -> String {
+fn compute_auth_proof(rp_id: &str, subject_hash: &str, timestamp: i64) -> String {
     // Use the same proof derivation as handlers.rs
     let proof_key = derive_proof_key(rp_id);
     let mut hasher = blake3::Hasher::new_keyed(&proof_key);
     hasher.update(b"webauthn:auth:");
-    hasher.update(username.as_bytes());
+    hasher.update(subject_hash.as_bytes());
     hasher.update(b":");
     hasher.update(&timestamp.to_le_bytes());
     base64ct::Base64UrlUnpadded::encode_string(hasher.finalize().as_bytes())

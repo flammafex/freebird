@@ -8,14 +8,17 @@ data:
   BIND_ADDR: "0.0.0.0:8081"
   REQUIRE_TLS: "true"
   BEHIND_PROXY: "true"
+  ISSUER_ID: "issuer:k8s:v4"
   EPOCH_DURATION: "1d"
   EPOCH_RETENTION: "2"
   SYBIL_RESISTANCE: "invitation"
+  SYBIL_REPLAY_STORE: "redis"
   SYBIL_INVITE_PER_USER: "5"
-  SYBIL_INVITE_COOLDOWN_SECS: "3600"
-  SYBIL_INVITE_EXPIRES_SECS: "2592000"
-  SYBIL_INVITE_AUTOSAVE_INTERVAL_SECS: "300"
+  SYBIL_INVITE_COOLDOWN: "1h"
+  SYBIL_INVITE_EXPIRES: "30d"
+  SYBIL_INVITE_AUTOSAVE_INTERVAL: "5m"
   SYBIL_INVITE_BOOTSTRAP_USERS: "admin:100"
+  PUBLIC_BEARER_ENABLE: "true"
 
 ---
 apiVersion: v1
@@ -69,7 +72,7 @@ spec:
       # Init containers for setup
       initContainers:
         - name: setup
-          image: ghcr.io/flammafex/freebird-issuer:latest
+          image: ghcr.io/flammafex/freebird-issuer:0.5.1
           imagePullPolicy: IfNotPresent
           command:
             - sh
@@ -86,7 +89,7 @@ spec:
       # Main containers
       containers:
         - name: issuer
-          image: ghcr.io/flammafex/freebird-issuer:latest
+          image: ghcr.io/flammafex/freebird-issuer:0.5.1
           imagePullPolicy: IfNotPresent
 
           # Environment
@@ -94,21 +97,40 @@ spec:
             - configMapRef:
                 name: issuer-config
           env:
-            - name: ISSUER_ID
-              valueFrom:
-                fieldRef:
-                  fieldPath: metadata.labels['app']
             - name: ADMIN_API_KEY
               valueFrom:
                 secretKeyRef:
                   name: admin-credentials
                   key: admin-api-key
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-credentials
+                  key: password
+            - name: REDIS_URL
+              value: redis://:$(REDIS_PASSWORD)@redis:6379
+            - name: SYBIL_REPLAY_REDIS_URL
+              value: redis://:$(REDIS_PASSWORD)@redis:6379
+            - name: WEBAUTHN_REDIS_URL
+              value: redis://:$(REDIS_PASSWORD)@redis:6379
             - name: ISSUER_SK_PATH
               value: /data/keys/issuer_sk.bin
             - name: KEY_ROTATION_STATE_PATH
               value: /data/keys/key_rotation_state.json
             - name: SYBIL_INVITE_PERSISTENCE_PATH
               value: /data/state/invitations.json
+            - name: SYBIL_INVITE_SIGNING_KEY_PATH
+              value: /data/keys/invitation_signing_key.bin
+            - name: PUBLIC_BEARER_SK_PATH
+              value: /data/keys/public_bearer_sk.der
+            - name: PUBLIC_BEARER_METADATA_PATH
+              value: /data/keys/public_bearer_metadata.json
+            - name: WEBAUTHN_PROOF_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: webauthn-credentials
+                  key: proof-secret
+                  optional: true
 
           # Ports
           ports:

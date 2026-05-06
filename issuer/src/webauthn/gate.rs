@@ -96,10 +96,10 @@ impl WebAuthnGate {
 
     /// Compute the expected proof for verification
     /// Must match the computation in handlers.rs
-    fn compute_proof(&self, username: &str, timestamp: i64) -> String {
+    fn compute_proof(&self, subject_hash: &str, timestamp: i64) -> String {
         let mut hasher = blake3::Hasher::new_keyed(&self.proof_key);
         hasher.update(b"webauthn:auth:");
-        hasher.update(username.as_bytes());
+        hasher.update(subject_hash.as_bytes());
         hasher.update(b":");
         hasher.update(&timestamp.to_le_bytes());
         base64ct::Base64UrlUnpadded::encode_string(hasher.finalize().as_bytes())
@@ -118,7 +118,7 @@ impl SybilResistance for WebAuthnGate {
     fn verify(&self, proof: &SybilProof) -> Result<()> {
         match proof {
             SybilProof::WebAuthn {
-                username,
+                subject_hash,
                 auth_proof,
                 timestamp,
             } => {
@@ -150,11 +150,11 @@ impl SybilResistance for WebAuthnGate {
 
                 // CRITICAL: Verify the proof is cryptographically valid
                 // This prevents forgery - only the server can generate valid proofs
-                let expected_proof = self.compute_proof(username, *timestamp);
+                let expected_proof = self.compute_proof(subject_hash, *timestamp);
 
                 if auth_proof != &expected_proof {
                     debug!(
-                        username = %username,
+                        subject_hash = %subject_hash,
                         timestamp = timestamp,
                         "WebAuthn proof verification failed: proof mismatch"
                     );
@@ -164,7 +164,7 @@ impl SybilResistance for WebAuthnGate {
                 self.reject_replay_or_record(auth_proof)?;
 
                 debug!(
-                    username = %username,
+                    subject_hash = %subject_hash,
                     timestamp = timestamp,
                     age_secs = age,
                     "WebAuthn proof verified successfully"

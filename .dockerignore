@@ -1,5 +1,16 @@
 target/
 **/*.rs.bk
 .git/
+.github/
+.DS_Store
 .env
 data/
+*.bin
+*.der
+*.json
+!Cargo.lock
+!package.json
+!package-lock.json
+node_modules/
+dist/
+tmp/

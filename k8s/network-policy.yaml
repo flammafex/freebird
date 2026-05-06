@@ -92,6 +92,28 @@ spec:
           port: 8081
 
 ---
+# Allow issuer to communicate with redis for Sybil replay and WebAuthn storage
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: issuer-to-redis
+  namespace: freebird
+spec:
+  podSelector:
+    matchLabels:
+      component: issuer
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              component: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+
+---
 # Allow verifier to communicate with redis
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -114,11 +136,11 @@ spec:
           port: 6379
 
 ---
-# Allow redis to accept connections from verifier
+# Allow redis to accept connections from issuer and verifier
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: redis-accept-verifier
+  name: redis-accept-freebird-services
   namespace: freebird
 spec:
   podSelector:
@@ -128,6 +150,9 @@ spec:
     - Ingress
   ingress:
     - from:
+        - podSelector:
+            matchLabels:
+              component: issuer
         - podSelector:
             matchLabels:
               component: verifier
