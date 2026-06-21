@@ -39,6 +39,9 @@ issuer_sk.bin
 key_rotation_state.json
 invitations.json
 data/
+invitation_signing_key.bin
+public_bearer_metadata.json
+public_bearer_sk.der
 
 # Sisyphus planning artifacts
 .sisyphus/
