@@ -28,12 +28,10 @@ check_not_default "ADMIN_API_KEY" "dev-admin-key-must-be-at-least-32-characters-
 
 if [ "${REQUIRE_TLS:-false}" = "false" ]; then
     echo "WARNING: REQUIRE_TLS is false. Set to true in production."
-    ERRORS=$((ERRORS + 1))
 fi
 
 if [ -z "${REDIS_URL:-}" ]; then
     echo "WARNING: REDIS_URL is not set. In-memory storage will be used (data lost on restart)."
-    ERRORS=$((ERRORS + 1))
 fi
 
 if [ $ERRORS -gt 0 ]; then

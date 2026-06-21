@@ -114,7 +114,7 @@ for public deployments.
 Run:
 
 ```bash
-cargo run -p freebird-issuer --bin validate_config
+freebird-validate-config
 cargo test --workspace
 cargo test -p freebird-issuer --features human-gate-webauthn
 ```

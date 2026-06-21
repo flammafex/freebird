@@ -61,6 +61,50 @@ The `freebird-interface` binary exercises the V4 flow against local services on
   uses in-memory nullifier storage.
 - Node.js is only needed for the TypeScript SDK.
 
+## Quickstart (Docker)
+
+The fastest way to get Freebird running is with Docker Compose:
+
+```bash
+cp .env.example .env
+./launch.sh up
+```
+
+`launch.sh` checks prerequisites, creates `.env` from `.env.example` if it does
+not exist, offers to generate a secure `ADMIN_API_KEY`, pulls or builds the
+images, and waits for both services to become healthy.
+
+When it finishes, verify the services are up:
+
+```bash
+curl http://127.0.0.1:8081/.well-known/issuer
+curl http://127.0.0.1:8082/.well-known/verifier
+curl http://127.0.0.1:8082/health
+```
+
+Then run the V4 token round-trip from the interface binary:
+
+```bash
+cargo run -p freebird-interface -- \
+  --issuer-url http://127.0.0.1:8081 \
+  --verifier-url http://127.0.0.1:8082
+```
+
+Expected result: a fresh V4 token is issued by the issuer and accepted once by
+the verifier.
+
+Other useful `launch.sh` subcommands:
+
+```bash
+./launch.sh status     # show running containers
+./launch.sh logs       # follow service logs
+./launch.sh stop       # stop all services
+```
+
+The default `.env` uses `SYBIL_RESISTANCE=invitation` with a bootstrap admin
+user. For local testing without Sybil resistance, set `SYBIL_RESISTANCE=none`
+in `.env` before starting.
+
 ## Build And Test
 
 ```bash
@@ -80,15 +124,15 @@ npm run lint
 npm test
 ```
 
-## Local Source Round Trip
+## Local Source Round Trip (Without Docker)
 
 Use this workflow when you want to build from source and run
 `freebird-interface`.
 
-The interface currently uses fixed local URLs:
+The interface defaults to local URLs but accepts overrides:
 
-- issuer: `http://127.0.0.1:8081`
-- verifier: `http://127.0.0.1:8082`
+- issuer: `http://127.0.0.1:8081` (override with `--issuer-url` or `FREEBIRD_ISSUER_URL`)
+- verifier: `http://127.0.0.1:8082` (override with `--verifier-url` or `FREEBIRD_VERIFIER_URL`)
 
 For this local flow, run with `REQUIRE_TLS=false` and disable Sybil resistance so
 the interface can request tokens without an invitation, proof of work, or

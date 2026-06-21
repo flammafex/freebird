@@ -217,10 +217,18 @@ services:
         max-file: "5"
 
     # Security options
+    # Note: redis:7-alpine entrypoint uses setpriv to drop from root to the
+    # redis user, which requires SETUID/SETGID. It also chowns /data on first
+    # start, which requires CHOWN. cap_drop: ALL breaks both, so we add back
+    # only these three capabilities.
     security_opt:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
 
 volumes:
   redis-data:

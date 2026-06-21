@@ -71,6 +71,10 @@ COPY --from=issuer-builder /app/target/release/freebird-cli /usr/local/bin/freeb
 COPY --from=issuer-builder /app/target/release/freebird-validate-config /usr/local/bin/freebird-validate-config
 RUN chmod 755 /usr/local/bin/freebird-issuer /usr/local/bin/freebird-cli /usr/local/bin/freebird-validate-config
 
+# Copy validation script
+COPY scripts/validate-env.sh /app/scripts/validate-env.sh
+RUN chmod +x /app/scripts/validate-env.sh
+
 # Set secure defaults
 ENV BIND_ADDR=0.0.0.0:8081 \
     ISSUER_SK_PATH=/data/keys/issuer_sk.bin \
