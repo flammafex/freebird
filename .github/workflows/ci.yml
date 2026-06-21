@@ -61,3 +61,32 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-audit --locked
       - run: cargo audit
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure .env for smoke test
+        run: |
+          cp .env.example .env
+          # Override dev defaults that would block startup
+          sed -i 's/^ADMIN_API_KEY=.*/ADMIN_API_KEY=ci-smoke-test-key-at-least-32-chars/' .env
+          sed -i 's/^SYBIL_RESISTANCE=.*/SYBIL_RESISTANCE=none/' .env
+      - name: Build and start services
+        run: docker compose up -d --build --wait
+      - name: Verify well-known endpoints
+        run: |
+          curl -sf http://127.0.0.1:8081/.well-known/issuer | jq -e '.issuer_id'
+          curl -sf http://127.0.0.1:8082/.well-known/verifier | jq -e '.verifier_id'
+          curl -sf http://127.0.0.1:8082/health | jq -e '.status'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run interface round-trip
+        run: |
+          cargo run -p freebird-interface -- \
+            --issuer-url http://127.0.0.1:8081 \
+            --verifier-url http://127.0.0.1:8082
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
