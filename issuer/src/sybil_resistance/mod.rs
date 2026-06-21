@@ -30,6 +30,10 @@ pub mod proof_of_diversity;
 pub mod proof_of_work;
 pub mod rate_limit;
 pub mod replay_store;
+pub mod social_graph;
+
+#[cfg(test)]
+mod social_graph_replay_test;
 
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
 #[cfg(feature = "human-gate-webauthn")]
@@ -41,6 +45,7 @@ pub use proof_of_diversity::{ProofOfDiversityConfig, ProofOfDiversitySystem};
 pub use proof_of_work::ProofOfWork;
 pub use rate_limit::RateLimit;
 pub use replay_store::{memory_replay_store, replay_store_from_env, ReplayStore};
+pub use social_graph::{SocialGraphConfig, SocialGraphGate};
 
 #[derive(Debug, Clone, Default)]
 pub struct SybilRequestContext {

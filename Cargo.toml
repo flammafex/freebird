@@ -5,6 +5,7 @@ members = [
   "interface",
   "crypto",
   "common",
+  "attester",
   "integration_tests"   # <-- new
 ]
 resolver = "2"

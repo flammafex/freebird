@@ -76,6 +76,22 @@ When WebAuthn is enabled, the issuer serves a browser registration and
 authentication flow at `/webauthn/`. See
 [WebAuthn Browser Flow](webauthn-browser-flow.md).
 
+For social-graph deployments, run the Social Graph Attester service from the
+`attester/` crate on infrastructure separate from the issuer. Configure the
+issuer with the attester's public key and explicit policy IDs:
+
+```bash
+SYBIL_RESISTANCE=social_graph
+SOCIAL_GRAPH_FAIL_CLOSED=true
+SOCIAL_GRAPH_ATTESTERS_PATH=/data/config/social_graph_attesters.json
+SOCIAL_GRAPH_ACCEPTED_POLICY_IDS=clout-trust-v1
+```
+
+Never leave `SOCIAL_GRAPH_ACCEPTED_POLICY_IDS` empty. For higher-value issuance,
+prefer `SYBIL_RESISTANCE=combined` with `SYBIL_COMBINED_MODE=and` or `threshold`
+so social-graph attestations compose with another gate. See
+[Social Graph Sybil Gate](social-graph-gate.md) for the full design.
+
 ## Reverse Proxy
 
 Expose public issuance and verification routes. Restrict `/admin` to an

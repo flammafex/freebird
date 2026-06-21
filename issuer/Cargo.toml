@@ -46,6 +46,7 @@ zeroize = { version = "1", features = ["zeroize_derive"] }
 p256 = { version = "0.13", features = ["ecdsa"] }
 elliptic-curve = "0.13"
 sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
 blake3 = "1"
 hex = "0.4"  # For invitation signature serialization
 subtle = "2"  # For constant-time comparisons

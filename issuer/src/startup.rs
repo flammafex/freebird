@@ -406,6 +406,40 @@ impl Application {
                 info!("✅ Sybil resistance: Progressive Trust");
                 Some(sys)
             }
+            "social_graph" => {
+                let sg_config = sybil_resistance::SocialGraphConfig {
+                    attesters_path: config.sybil_config.social_graph_attesters_path.clone(),
+                    jwks_url: config.sybil_config.social_graph_jwks_url.clone(),
+                    key_refresh_interval: Duration::from_secs(
+                        config.sybil_config.social_graph_key_refresh_interval_secs,
+                    ),
+                    min_level: config.sybil_config.social_graph_min_level,
+                    accepted_policy_ids: config
+                        .sybil_config
+                        .social_graph_accepted_policy_ids
+                        .clone(),
+                    attestation_max_age: Duration::from_secs(
+                        config.sybil_config.social_graph_attestation_max_age_secs,
+                    ),
+                    clock_skew_secs: config.sybil_config.social_graph_clock_skew_secs,
+                    require_request_binding: config
+                        .sybil_config
+                        .social_graph_require_request_binding,
+                    require_quota_nullifier: config
+                        .sybil_config
+                        .social_graph_require_quota_nullifier,
+                    replay_ttl: Duration::from_secs(
+                        config.sybil_config.social_graph_replay_ttl_secs,
+                    ),
+                    state_path: config.sybil_config.social_graph_state_path.clone(),
+                    fail_closed: config.sybil_config.social_graph_fail_closed,
+                };
+                let gate =
+                    sybil_resistance::SocialGraphGate::new(sg_config, sybil_replay_store.clone())
+                        .context("Failed to initialize Social Graph gate")?;
+                info!("✅ Sybil resistance: Social Graph");
+                Some(gate)
+            }
             "proof_of_diversity" => {
                 let pod_config = sybil_resistance::ProofOfDiversityConfig {
                     min_score: config.sybil_config.proof_of_diversity_min_score,
@@ -577,6 +611,42 @@ impl Application {
                                     "Failed to initialize Progressive Trust for combined mode",
                                 )?;
                             mechanisms.push(sys);
+                        }
+                        "social_graph" => {
+                            let sg_config = sybil_resistance::SocialGraphConfig {
+                                attesters_path: config
+                                    .sybil_config
+                                    .social_graph_attesters_path
+                                    .clone(),
+                                jwks_url: config.sybil_config.social_graph_jwks_url.clone(),
+                                key_refresh_interval: Duration::from_secs(
+                                    config.sybil_config.social_graph_key_refresh_interval_secs,
+                                ),
+                                min_level: config.sybil_config.social_graph_min_level,
+                                accepted_policy_ids: config
+                                    .sybil_config
+                                    .social_graph_accepted_policy_ids
+                                    .clone(),
+                                attestation_max_age: Duration::from_secs(
+                                    config.sybil_config.social_graph_attestation_max_age_secs,
+                                ),
+                                clock_skew_secs: config.sybil_config.social_graph_clock_skew_secs,
+                                require_request_binding: config
+                                    .sybil_config
+                                    .social_graph_require_request_binding,
+                                require_quota_nullifier: config
+                                    .sybil_config
+                                    .social_graph_require_quota_nullifier,
+                                replay_ttl: Duration::from_secs(
+                                    config.sybil_config.social_graph_replay_ttl_secs,
+                                ),
+                                state_path: config.sybil_config.social_graph_state_path.clone(),
+                                fail_closed: config.sybil_config.social_graph_fail_closed,
+                            };
+                            mechanisms.push(sybil_resistance::SocialGraphGate::new(
+                                sg_config,
+                                sybil_replay_store.clone(),
+                            )?);
                         }
                         "proof_of_diversity" => {
                             let pod_config = sybil_resistance::ProofOfDiversityConfig {

@@ -120,6 +120,19 @@ pub struct SybilConfig {
     pub multi_party_vouching_hmac_secret_path: PathBuf,
     pub multi_party_vouching_salt: String,
     pub multi_party_vouching_allow_insecure: bool,
+    // Social Graph configuration
+    pub social_graph_attesters_path: PathBuf,
+    pub social_graph_jwks_url: Option<String>,
+    pub social_graph_key_refresh_interval_secs: u64,
+    pub social_graph_min_level: u8,
+    pub social_graph_accepted_policy_ids: Vec<String>,
+    pub social_graph_attestation_max_age_secs: u64,
+    pub social_graph_clock_skew_secs: u64,
+    pub social_graph_require_request_binding: bool,
+    pub social_graph_require_quota_nullifier: bool,
+    pub social_graph_replay_ttl_secs: u64,
+    pub social_graph_state_path: PathBuf,
+    pub social_graph_fail_closed: bool,
     // Combined mode configuration
     pub combined_mechanisms: Vec<String>, // e.g., ["pow", "rate_limit", "progressive_trust"]
     pub combined_mode: String,            // "or", "and", "threshold"
@@ -347,6 +360,51 @@ impl SybilConfig {
             multi_party_vouching_allow_insecure: env_bool(
                 "SYBIL_MULTI_PARTY_VOUCHING_ALLOW_INSECURE",
             ),
+            // Social Graph
+            social_graph_attesters_path: env::var("SOCIAL_GRAPH_ATTESTERS_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "social_graph_attesters.json".into()),
+            social_graph_jwks_url: env::var("SOCIAL_GRAPH_JWKS_URL").ok(),
+            social_graph_key_refresh_interval_secs: env_duration(
+                "SOCIAL_GRAPH_KEY_REFRESH_INTERVAL",
+                3600,
+            ),
+            social_graph_min_level: env_u32("SOCIAL_GRAPH_MIN_LEVEL", 1) as u8,
+            social_graph_accepted_policy_ids: env::var("SOCIAL_GRAPH_ACCEPTED_POLICY_IDS")
+                .ok()
+                .map(|s| {
+                    s.split(',')
+                        .map(|s| s.trim().to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            social_graph_attestation_max_age_secs: env_duration(
+                "SOCIAL_GRAPH_ATTESTATION_MAX_AGE",
+                300,
+            ),
+            social_graph_clock_skew_secs: env_duration("SOCIAL_GRAPH_CLOCK_SKEW_SECS", 30),
+            social_graph_require_request_binding: env::var("SOCIAL_GRAPH_REQUIRE_REQUEST_BINDING")
+                .map(|v| {
+                    !matches!(
+                        v.to_ascii_lowercase().as_str(),
+                        "0" | "false" | "no" | "off"
+                    )
+                })
+                .unwrap_or(true),
+            social_graph_require_quota_nullifier: env_bool("SOCIAL_GRAPH_REQUIRE_QUOTA_NULLIFIER"),
+            social_graph_replay_ttl_secs: env_duration("SOCIAL_GRAPH_REPLAY_TTL", 600),
+            social_graph_state_path: env::var("SOCIAL_GRAPH_STATE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "social_graph_state.json".into()),
+            social_graph_fail_closed: env::var("SOCIAL_GRAPH_FAIL_CLOSED")
+                .map(|v| {
+                    !matches!(
+                        v.to_ascii_lowercase().as_str(),
+                        "0" | "false" | "no" | "off"
+                    )
+                })
+                .unwrap_or(true),
             // Combined mode configuration
             combined_mechanisms: env::var("SYBIL_COMBINED_MECHANISMS")
                 .ok()

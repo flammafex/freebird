@@ -287,10 +287,22 @@ Issuer variables:
 | `KID` | derived | Optional key ID override; mismatched values are corrected with the derived prefix. |
 | `EPOCH_DURATION` | `1d` | Human-readable duration accepted. |
 | `EPOCH_RETENTION` | `2` | Number of previous epochs accepted. |
-| `SYBIL_RESISTANCE` | `none` | `none`, `invitation`, `pow`, `rate_limit`, `progressive_trust`, `proof_of_diversity`, `multi_party_vouching`, `webauthn`, or `combined`. |
-| `SYBIL_REPLAY_STORE` | `memory` | Replay store for accepted PoW, WebAuthn, and vouching proofs. Use `redis` for public multi-instance or restart-safe issuers. |
+| `SYBIL_RESISTANCE` | `none` | `none`, `invitation`, `pow`, `rate_limit`, `progressive_trust`, `proof_of_diversity`, `multi_party_vouching`, `social_graph`, `webauthn`, or `combined`. |
+| `SYBIL_REPLAY_STORE` | `memory` | Replay store for accepted PoW, WebAuthn, vouching, and social-graph proofs. Use `redis` for public multi-instance or restart-safe issuers. |
 | `SYBIL_REPLAY_REDIS_URL` | none | Redis URL for `SYBIL_REPLAY_STORE=redis`; falls back to `REDIS_URL`. |
 | `SYBIL_REPLAY_KEY_PREFIX` | `freebird:sybil:replay` | Redis key prefix for Sybil replay records. |
+| `SOCIAL_GRAPH_ATTESTERS_PATH` | `social_graph_attesters.json` | Trusted attester key config JSON; required for `SYBIL_RESISTANCE=social_graph`. |
+| `SOCIAL_GRAPH_JWKS_URL` | none | Optional JWKS URL for attester key refresh; refresh is not yet implemented. |
+| `SOCIAL_GRAPH_KEY_REFRESH_INTERVAL` | `3600` | Attester key refresh interval. |
+| `SOCIAL_GRAPH_MIN_LEVEL` | `1` | Minimum eligibility level: `1` basic, `2` standard, `3` high-value. |
+| `SOCIAL_GRAPH_ACCEPTED_POLICY_IDS` | none | Comma-separated accepted attester policy IDs; required and must not be empty. |
+| `SOCIAL_GRAPH_ATTESTATION_MAX_AGE` | `300` | Maximum attestation age. |
+| `SOCIAL_GRAPH_CLOCK_SKEW_SECS` | `30` | Allowed clock skew. |
+| `SOCIAL_GRAPH_REQUIRE_REQUEST_BINDING` | `true` | Require Cred presentation request-binding match. |
+| `SOCIAL_GRAPH_REQUIRE_QUOTA_NULLIFIER` | `false` | Require an attestation quota nullifier and replay-check it. |
+| `SOCIAL_GRAPH_REPLAY_TTL` | `600` | Replay-store TTL for accepted social-graph proofs. |
+| `SOCIAL_GRAPH_STATE_PATH` | `social_graph_state.json` | Persistent social-graph gate state path. |
+| `SOCIAL_GRAPH_FAIL_CLOSED` | `true` | Reject startup/verification if trusted attester keys are unavailable. |
 | `PUBLIC_BEARER_ENABLE` | `true` | Enables V5 public bearer issuer. |
 | `PUBLIC_BEARER_SK_PATH` | `public_bearer_sk.der` | V5 RSA private key path. |
 | `PUBLIC_BEARER_METADATA_PATH` | `public_bearer_metadata.json` | V5 key metadata path. |
@@ -360,6 +372,8 @@ Token issuance returns an authorization or Sybil error:
   `sybil_proof` from a custom client.
 - For proof-of-work, the proof input must match the request binding documented
   in [Sybil Modes](docs/sybil-modes.md).
+- For `social_graph`, check that `SOCIAL_GRAPH_ATTESTERS_PATH` points to a valid
+  attester key config and `SOCIAL_GRAPH_ACCEPTED_POLICY_IDS` is not empty.
 
 Verification always fails:
 

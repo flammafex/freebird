@@ -18,6 +18,7 @@ Configure the mode with `SYBIL_RESISTANCE`.
 | `progressive_trust` | Gradual quota increase for returning users. | Fresh identity farming is slowed, not prevented. |
 | `proof_of_diversity` | Experimental diversity scoring. | Needs careful operator workflow and privacy review. |
 | `multi_party_vouching` | Communities where trusted users can endorse others. | Requires admin curation of voucher set. |
+| `social_graph` | Communities with established trust graphs (Clout). | Requires external attester service; patient farming remains possible. |
 | `combined` | Compose multiple mechanisms. | `or` mode is only as strong as the weakest mechanism. |
 
 ## Proof Of Work
@@ -134,10 +135,46 @@ Vouching proofs are rejected on replay through the configured Sybil replay
 store. The default store is process-local memory. Use `SYBIL_REPLAY_STORE=redis`
 for restart-safe and multi-node deployments.
 
+## Social Graph
+
+`social_graph` admits users based on reputation in an external social trust graph,
+primarily Clout. It is a higher-cost admission layer, not proof-of-personhood:
+patient farming remains possible, and the Phase 1 attester is trusted.
+
+A separate Social Graph Attester service evaluates signed Clout trust edges and
+issues a short-lived `social_graph.attestation`. Cred, the user's proof agent,
+holds that attestation and presents it to the Freebird issuer as
+`SybilProof::SocialGraph`. The issuer verifies the attester signature, policy,
+expiry, Cred presentation signature, request binding, eligibility level, and
+replay state.
+
+The default Clout-oriented scoring heuristic requires:
+
+- at least 2 independent trust edges
+- at least 7 days minimum edge age
+- at least 0.3 minimum weighted score
+- a seed-rooted trust path
+- fanout capped at 20
+
+Eligibility is exposed only as coarse levels: `1` basic, `2` standard, and `3`
+high-value. The issuer sees only the attestation and Cred presentation, not the
+raw graph. The attester sees graph evidence but not which Freebird instance the
+user will present to.
+
+For bootstrapping, use `invitation` for new users and promote to `social_graph`
+after trust history accumulates. `social_graph` also composes with other gates
+through `combined` mode (`and`, `or`, or `threshold`); prefer `and` or
+`threshold` for higher-value issuance.
+
+See [Social Graph Sybil Gate](social-graph-gate.md) for the full design and
+[Social Graph Attestation Schema](social-graph-attestation-schema.md) for the
+attestation format.
+
 ## Replay Store
 
-`pow`, `webauthn`, and `multi_party_vouching` record accepted proofs in the
-Sybil replay store.
+`pow`, `webauthn`, `multi_party_vouching`, and `social_graph` record accepted
+proofs in the Sybil replay store. `social_graph` uses `mark_once` for attestation
+`jti` values and, when required, quota nullifiers.
 
 | Variable | Default | Notes |
 | --- | --- | --- |

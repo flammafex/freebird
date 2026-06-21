@@ -261,6 +261,12 @@ pub enum SybilProof {
         hmac_proof: String,       // HMAC(secret, all fields)
         timestamp: i64,           // Unix timestamp of proof generation
     },
+    SocialGraph {
+        /// The complete cred.presentation artifact as JSON string
+        attestation: String,
+        /// The presentation_signature field as hex string
+        presentation: String,
+    },
     /// Multiple proofs for AND/threshold combination modes
     Multi {
         proofs: Vec<SybilProof>,
