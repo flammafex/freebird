@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.0 - 2026-06-26
+
+- Version bump across all workspace crates.
+
 ## 0.5.1 - 2026-05-05
 
 - Added public-readiness documentation: security policy, architecture, threat

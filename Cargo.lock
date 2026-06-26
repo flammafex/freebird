@@ -158,7 +158,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "attester"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1110,7 +1110,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-common"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "axum",
  "base64ct",
@@ -1129,7 +1129,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-crypto"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1154,7 +1154,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-interface"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "base64ct",
@@ -1172,7 +1172,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-issuer"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1218,7 +1218,7 @@ dependencies = [
 
 [[package]]
 name = "freebird-verifier"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1821,7 +1821,7 @@ dependencies = [
 
 [[package]]
 name = "integration_tests"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "async-trait",
