@@ -17,6 +17,7 @@ COPY crypto ./crypto
 COPY common ./common
 COPY interface ./interface
 COPY issuer ./issuer
+COPY attester ./attester
 COPY verifier ./verifier
 COPY integration_tests ./integration_tests
 COPY webauthn-client ./webauthn-client
