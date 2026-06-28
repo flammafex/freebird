@@ -866,12 +866,14 @@ impl Application {
 
         #[cfg(feature = "human-gate-webauthn")]
         if let Some(wa) = &webauthn_state {
-            // Redirect /webauthn/ (trailing slash) to /webauthn.
+            // Serve the WebAuthn app at /webauthn/ directly.
             // axum 0.7's nest("/webauthn", ...) + inner route("/") registers
-            // "/webauthn" (no slash), so /webauthn/ 404s without this.
+            // "/webauthn" (no slash), so /webauthn/ 404s without this explicit
+            // route. We can't redirect to /webauthn because nginx's
+            // `location /webauthn/` won't match a slashless path.
             app = app.route(
                 "/webauthn/",
-                get(|| async { axum::response::Redirect::permanent("/webauthn") }),
+                get(webauthn::handlers::webauthn_app),
             );
             app = app.nest("/webauthn", webauthn::router(wa.clone()));
         }
