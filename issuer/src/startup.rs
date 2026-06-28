@@ -866,8 +866,13 @@ impl Application {
 
         #[cfg(feature = "human-gate-webauthn")]
         if let Some(wa) = &webauthn_state {
-            // Use the factory function we created in handlers.rs
-            // Note: `webauthn::router` handles the attestation check logic internally now!
+            // Redirect /webauthn/ (trailing slash) to /webauthn.
+            // axum 0.7's nest("/webauthn", ...) + inner route("/") registers
+            // "/webauthn" (no slash), so /webauthn/ 404s without this.
+            app = app.route(
+                "/webauthn/",
+                get(|| async { axum::response::Redirect::permanent("/webauthn") }),
+            );
             app = app.nest("/webauthn", webauthn::router(wa.clone()));
         }
 
