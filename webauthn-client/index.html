@@ -523,7 +523,7 @@
           credential: serializeAssertionCredential(credential),
         });
         const proof = {
-          type: "webauthn",
+          type: "web_authn",
           subject_hash: result.subject_hash,
           auth_proof: result.proof,
           timestamp: result.authenticated_at,
