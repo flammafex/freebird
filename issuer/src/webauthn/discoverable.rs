@@ -12,7 +12,7 @@
 use axum::{
     extract::{ConnectInfo, Json, Path, State},
     http::{HeaderMap, StatusCode},
-    routing::{delete, get, post},
+    routing::{get, post},
     Router,
 };
 use base64ct::Encoding;
@@ -788,8 +788,10 @@ pub fn discoverable_router(state: Arc<WebAuthnState>) -> Router {
 /// Create router for admin/credential management endpoints
 pub fn admin_router(state: Arc<WebAuthnState>) -> Router {
     Router::new()
-        .route("/credentials/:username", get(list_user_credentials))
-        .route("/credentials/:cred_id", delete(revoke_credential))
+        .route(
+            "/credentials/:id",
+            get(list_user_credentials).delete(revoke_credential),
+        )
         .route("/admin/credentials", get(admin_list_all_credentials))
         .with_state(state)
 }
