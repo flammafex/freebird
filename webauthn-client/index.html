@@ -221,8 +221,8 @@
         <a class="panel" href="/webauthn/register">
           <h2>Register Passkey</h2>
           <p>
-            Enroll a local pseudonymous passkey for this issuer. Use a local
-            handle, not a real name or email address.
+            Enroll a pseudonymous passkey for this issuer. Use a username,
+            not a real name or email address.
           </p>
         </a>
         <a class="panel" href="/webauthn/authenticate">
@@ -237,16 +237,16 @@
       <section id="registerPage" class="panel hidden">
         <h2>Register Passkey</h2>
         <p>
-          Choose a local pseudonym for this issuer. Avoid real names, email
+          Choose a username for this issuer. Avoid real names, email
           addresses, phone numbers, or public handles.
         </p>
-        <label for="localHandle">Local handle</label>
+        <label for="localHandle">Username</label>
         <input
           id="localHandle"
           autocomplete="off"
           autocapitalize="none"
           spellcheck="false"
-          placeholder="local pseudonym"
+          placeholder="username"
         />
         <label for="displayLabel">Passkey label</label>
         <input
@@ -263,17 +263,17 @@
       <section id="authenticatePage" class="panel hidden">
         <h2>Continue With Passkey</h2>
         <p>
-          Enter the local handle you used during enrollment. Freebird uses it to
+          Enter the username you used during enrollment. Freebird uses it to
           find the passkey, then returns only an opaque subject proof to the
           requesting client.
         </p>
-        <label for="authHandle">Local handle</label>
+        <label for="authHandle">Username</label>
         <input
           id="authHandle"
           autocomplete="off"
           autocapitalize="none"
           spellcheck="false"
-          placeholder="local pseudonym"
+          placeholder="username"
         />
         <div class="actions">
           <button id="authenticateButton" type="button">Continue</button>
@@ -450,7 +450,7 @@
         const localHandle = document.getElementById("localHandle").value.trim();
         const displayLabel = document.getElementById("displayLabel").value.trim();
         if (!localHandle) {
-          setStatus("Enter a local handle before registration.", "error");
+          setStatus("Enter a username before registration.", "error");
           return;
         }
 
@@ -503,7 +503,7 @@
       async function authenticate() {
         const localHandle = document.getElementById("authHandle").value.trim();
         if (!localHandle) {
-          setStatus("Enter a local handle before authentication.", "error");
+          setStatus("Enter a username before authentication.", "error");
           return;
         }
 
