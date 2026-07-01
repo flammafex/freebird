@@ -33,6 +33,10 @@ pub mod main_state {
         pub epoch_duration_sec: u64,
         /// Number of previous epochs to accept (for graceful rotation)
         pub epoch_retention: u32,
+        /// Admin API key used to authenticate privileged endpoints
+        /// (e.g. the `/v1/oprf/renew` route). `None` means admin auth is
+        /// disabled and such endpoints return 503.
+        pub admin_api_key: Option<String>,
     }
 
     impl AppStateWithSybil {

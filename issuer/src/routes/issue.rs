@@ -20,7 +20,7 @@ use tracing::{debug, error, info, instrument, warn};
 use crate::multi_key_voprf::MultiKeyVoprfCore;
 use crate::sybil_resistance::{ClientData, SybilRequestContext}; // Keep ClientData local to issuer/sybil if not in common
 use crate::AppStateWithSybil;
-use freebird_common::api::{IssueReq, IssueResp, SybilInfo};
+use freebird_common::api::{IssueReq, IssueResp, SybilInfo, SybilProof};
 
 // / Extract client information from HTTP request
 // /
@@ -255,6 +255,229 @@ pub async fn handle(
     }))
 }
 
+/// Constant-time API key verification using HMAC-then-compare.
+///
+/// Both values are HMAC'd with a fixed key to produce equal-length digests,
+/// eliminating the timing side-channel from length comparison. Mirrors the
+/// helper in `routes/admin.rs` but kept local so this module does not depend
+/// on private admin internals.
+fn constant_time_key_verify(expected: &str, provided: &str) -> bool {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    use subtle::ConstantTimeEq;
+
+    type HmacSha256 = Hmac<Sha256>;
+    let key = b"freebird-renew-key-compare";
+
+    let mut mac_expected = HmacSha256::new_from_slice(key).unwrap();
+    mac_expected.update(expected.as_bytes());
+    let h_expected = mac_expected.finalize().into_bytes();
+
+    let mut mac_provided = HmacSha256::new_from_slice(key).unwrap();
+    mac_provided.update(provided.as_bytes());
+    let h_provided = mac_provided.finalize().into_bytes();
+
+    bool::from(h_expected.ct_eq(&h_provided))
+}
+
+/// Admin-authenticated token renewal endpoint.
+///
+/// `POST /v1/oprf/renew` is the privileged counterpart to `/v1/oprf/issue`.
+/// It requires an `X-Admin-Key` header matching the server's configured
+/// `admin_api_key` and ONLY accepts `RegisteredUser` sybil proofs (setting
+/// `allow_registered_user: true` in the `SybilRequestContext`). This lets
+/// already-registered users renew their Day Passes without a fresh invitation
+/// code, while invitations still have to go through the public issue route.
+///
+/// Behavior matrix (differs from `handle`):
+/// - No `X-Admin-Key` header / `admin_api_key` unset → 401/503
+/// - Wrong admin key → 401
+/// - No sybil proof → 400 (renewal is specifically for registered users)
+/// - `Invitation` proof → 400 (use the public issue route)
+/// - `RegisteredUser` proof (valid) → ✅ issue
+/// - `RegisteredUser` proof (invalid) → 403
+#[instrument(
+    name = "renew_token",
+    skip(state, voprf, connect_info, headers),
+    fields(
+        kid = tracing::field::Empty,
+        sybil_configured = tracing::field::Empty,
+        has_proof = req.sybil_proof.is_some(),
+    )
+)]
+pub async fn renew(
+    State((state, voprf)): State<(Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>)>,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(req): Json<IssueReq>,
+) -> Result<Json<IssueResp>, (StatusCode, String)> {
+    tracing::Span::current()
+        .record("kid", state.kid.as_str())
+        .record("sybil_configured", state.sybil_checker.is_some());
+
+    info!(
+        "📥 /v1/oprf/renew entered; kid={}, has_proof={}, sybil_configured={}",
+        state.kid,
+        req.sybil_proof.is_some(),
+        state.sybil_checker.is_some()
+    );
+
+    // --- ADMIN AUTHENTICATION ---
+    let expected_key = match &state.admin_api_key {
+        Some(k) => k,
+        None => {
+            warn!("❌ renewal requested but admin_api_key is not configured");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "renewal endpoint not configured".to_string(),
+            ));
+        }
+    };
+
+    let provided_key = match headers.get("x-admin-key").and_then(|h| h.to_str().ok()) {
+        Some(k) => k,
+        None => {
+            warn!("❌ renewal request missing X-Admin-Key header");
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                "admin key required".to_string(),
+            ));
+        }
+    };
+
+    if !constant_time_key_verify(expected_key, provided_key) {
+        warn!("❌ renewal request rejected: invalid admin key");
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            "invalid admin key".to_string(),
+        ));
+    }
+
+    // --- SYBIL RESISTANCE CHECK ---
+    // The renewal endpoint ONLY accepts RegisteredUser proofs. Invitations must
+    // go through the public /v1/oprf/issue route.
+    let sybil_info = match (&state.sybil_checker, &req.sybil_proof) {
+        (Some(checker), Some(proof)) => {
+            // Reject anything that isn't a RegisteredUser proof.
+            match proof {
+                SybilProof::RegisteredUser { .. } => {}
+                SybilProof::Invitation { .. } => {
+                    warn!("❌ Invitation proof sent to renewal endpoint");
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        "invitation proofs must use the public issue route".to_string(),
+                    ));
+                }
+                _ => {
+                    warn!("❌ non-RegisteredUser proof sent to renewal endpoint");
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        "renewal endpoint only accepts RegisteredUser proofs".to_string(),
+                    ));
+                }
+            }
+
+            debug!("verifying RegisteredUser sybil proof for renewal");
+
+            let client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
+            let sybil_ctx = SybilRequestContext {
+                client_data: Some(client_data.clone()),
+                request_binding: Some(format!(
+                    "freebird:renew:v1:{}:{}",
+                    state.issuer_id, req.blinded_element_b64
+                )),
+                allow_registered_user: true,
+            };
+            match checker.verify_with_context(proof, &sybil_ctx) {
+                Ok(()) => {
+                    info!("✅ Sybil resistance check passed (renewal)");
+                    Some(SybilInfo {
+                        required: true,
+                        passed: true,
+                        cost: checker.cost(),
+                    })
+                }
+                Err(e) => {
+                    warn!("❌ Sybil resistance check failed (renewal): {}", e);
+                    return Err((
+                        StatusCode::FORBIDDEN,
+                        "Sybil resistance verification failed".to_string(),
+                    ));
+                }
+            }
+        }
+
+        // No proof → renewal is specifically for registered users, so reject.
+        (Some(_checker), None) => {
+            warn!("❌ renewal requires a RegisteredUser proof but none was provided");
+            return Err((
+                StatusCode::BAD_REQUEST,
+                "RegisteredUser proof required for renewal".to_string(),
+            ));
+        }
+
+        // Sybil resistance not configured — there is nothing to "renew" against.
+        // Reject so the endpoint can't be used to bypass issuance controls.
+        (None, _) => {
+            warn!("❌ renewal requested but Sybil resistance is not configured");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "renewal requires Sybil resistance to be configured".to_string(),
+            ));
+        }
+    };
+
+    // --- VOPRF EVALUATION (same as `handle`) ---
+    let blinded_bytes = Base64UrlUnpadded::decode_vec(&req.blinded_element_b64).map_err(|e| {
+        error!("invalid base64 for blinded_element_b64: {e:?}");
+        (StatusCode::BAD_REQUEST, "invalid base64 encoding".into())
+    })?;
+
+    if blinded_bytes.len() != 33 {
+        error!(
+            "blinded_element wrong length: got {} bytes, expected 33",
+            blinded_bytes.len()
+        );
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "blinded_element must be 33 bytes (SEC1 compressed point)".into(),
+        ));
+    }
+
+    if let Some(ctx_b64) = &req.ctx_b64 {
+        Base64UrlUnpadded::decode_vec(ctx_b64).map_err(|e| {
+            error!("ctx_b64 decode failed: {e:?}");
+            (StatusCode::BAD_REQUEST, "invalid ctx_b64 encoding".into())
+        })?;
+    }
+
+    debug!("calling voprf.evaluate_b64() (renewal)");
+    let eval_result = voprf
+        .evaluate_b64(&req.blinded_element_b64)
+        .await
+        .map_err(|e| {
+            error!("evaluate_b64 failed: {e:?}");
+            (StatusCode::BAD_REQUEST, "VOPRF evaluation failed".into())
+        })?;
+
+    let token_b64 = eval_result.token;
+    let kid_used = eval_result.kid;
+
+    debug!(
+        "✅ token renewed: kid={}, issuer_id={}, sybil_verified={}",
+        kid_used,
+        state.issuer_id,
+        sybil_info.is_some(),
+    );
+
+    Ok(Json(IssueResp {
+        token: token_b64,
+        kid: kid_used,
+        issuer_id: state.issuer_id.clone(),
+        sybil_info,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,6 +496,7 @@ mod tests {
             public_issuer: None,
             epoch_duration_sec: 86400,
             epoch_retention: 2,
+            admin_api_key: None,
         }
     }
 

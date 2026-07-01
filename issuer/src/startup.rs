@@ -824,6 +824,7 @@ impl Application {
             public_issuer: public_issuer.clone(),
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
+            admin_api_key: Some(admin_api_key.clone()),
         });
 
         let app_state = (state.clone(), voprf.clone());
@@ -837,6 +838,7 @@ impl Application {
             )
             .route("/.well-known/keys", get(routes::metadata::keys_handler))
             .route("/v1/oprf/issue", post(routes::issue::handle))
+            .route("/v1/oprf/renew", post(routes::issue::renew))
             .route(
                 "/v1/oprf/issue/batch",
                 post(routes::batch_issue::handle_batch),
