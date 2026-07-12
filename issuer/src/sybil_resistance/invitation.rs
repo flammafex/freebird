@@ -18,8 +18,9 @@ use rand::{rngs::OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
 /// Configuration for the invitation system
@@ -262,6 +263,8 @@ pub struct InvitationSystem {
     config: InvitationConfig,
     /// Flag to track if state has been modified since last save
     dirty: Arc<RwLock<bool>>,
+    save_lock: Arc<Mutex<()>>,
+    generation: Arc<AtomicU64>,
 }
 
 /// Filter criteria for listing invitations
@@ -288,6 +291,8 @@ impl InvitationSystem {
             state: Arc::new(RwLock::new(PersistedState::default())),
             config,
             dirty: Arc::new(RwLock::new(false)),
+            save_lock: Arc::new(Mutex::new(())),
+            generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -322,6 +327,8 @@ impl InvitationSystem {
             state: Arc::new(RwLock::new(state)),
             config,
             dirty: Arc::new(RwLock::new(false)),
+            save_lock: Arc::new(Mutex::new(())),
+            generation: Arc::new(AtomicU64::new(0)),
         };
 
         // Start autosave task if configured
@@ -479,6 +486,8 @@ impl InvitationSystem {
     fn start_autosave_task(&self) {
         let state = self.state.clone();
         let dirty = self.dirty.clone();
+        let save_lock = self.save_lock.clone();
+        let generation = self.generation.clone();
         let path = self.config.persistence_path.clone();
         let interval = self.config.autosave_interval_secs;
 
@@ -489,17 +498,20 @@ impl InvitationSystem {
             loop {
                 interval_timer.tick().await;
 
-                // Only save if dirty
+                let _save_guard = save_lock.lock().await;
                 let is_dirty = *dirty.read().await;
                 if !is_dirty {
                     continue;
                 }
 
                 let state_snapshot = state.read().await.clone();
+                let snapshot_generation = generation.load(Ordering::Acquire);
 
                 match Self::save_to_file(&state_snapshot, &path).await {
                     Ok(_) => {
-                        *dirty.write().await = false;
+                        if generation.load(Ordering::Acquire) == snapshot_generation {
+                            *dirty.write().await = false;
+                        }
                         debug!("Autosaved invitation state");
                     }
                     Err(e) => {
@@ -519,18 +531,38 @@ impl InvitationSystem {
         tokio::fs::write(&temp_path, json)
             .await
             .context("write temp file")?;
+        tokio::fs::File::open(&temp_path)
+            .await
+            .context("open temp file for sync")?
+            .sync_all()
+            .await
+            .context("sync temp file")?;
         tokio::fs::rename(&temp_path, path)
             .await
             .context("rename temp file")?;
+        #[cfg(unix)]
+        {
+            let parent = crate::shutdown::persistence_parent(path);
+            tokio::fs::File::open(parent)
+                .await
+                .context("open invitation directory for sync")?
+                .sync_all()
+                .await
+                .context("sync invitation directory")?;
+        }
 
         Ok(())
     }
 
     /// Explicitly save current state
     pub async fn save(&self) -> Result<()> {
+        let _save_guard = self.save_lock.lock().await;
         let state_snapshot = self.state.read().await.clone();
+        let snapshot_generation = self.generation.load(Ordering::Acquire);
         Self::save_to_file(&state_snapshot, &self.config.persistence_path).await?;
-        *self.dirty.write().await = false;
+        if self.generation.load(Ordering::Acquire) == snapshot_generation {
+            *self.dirty.write().await = false;
+        }
         info!(
             "Saved invitation state to {:?}",
             self.config.persistence_path
@@ -540,6 +572,7 @@ impl InvitationSystem {
 
     /// Mark state as dirty
     async fn mark_dirty(&self) {
+        self.generation.fetch_add(1, Ordering::AcqRel);
         *self.dirty.write().await = true;
     }
 
@@ -567,6 +600,7 @@ impl InvitationSystem {
 
     /// Add a bootstrap user with invite privileges
     pub async fn add_bootstrap_user(&self, user_id: String, invites: u32) {
+        let _save_guard = self.save_lock.lock().await;
         let mut state = self.state.write().await;
 
         if state.inviters.contains_key(&user_id) {
@@ -646,6 +680,7 @@ impl InvitationSystem {
         inviter_id: &str,
         skip_rate_limits: bool,
     ) -> Result<(String, Vec<u8>, u64)> {
+        let _save_guard = self.save_lock.lock().await;
         // Check if user can invite
         self.can_invite(inviter_id, skip_rate_limits).await?;
 
@@ -747,6 +782,7 @@ impl InvitationSystem {
         code: &str,
         client_data: Option<ClientData>,
     ) -> Result<String> {
+        let _save_guard = self.save_lock.lock().await;
         let now = current_timestamp();
 
         // Generate invitee ID with strong entropy
@@ -824,6 +860,7 @@ impl InvitationSystem {
 
     /// Ban a user and optionally their entire invite tree
     pub async fn ban_user(&self, user_id: &str, ban_tree: bool) {
+        let _save_guard = self.save_lock.lock().await;
         let mut state = self.state.write().await;
 
         if let Some(inviter) = state.inviters.get_mut(user_id) {
@@ -870,6 +907,7 @@ impl InvitationSystem {
 
     /// Remove a ban from a user.
     pub async fn unban_user(&self, user_id: &str) -> Result<()> {
+        let _save_guard = self.save_lock.lock().await;
         let mut state = self.state.write().await;
         let inviter = state
             .inviters
@@ -889,6 +927,7 @@ impl InvitationSystem {
 
     /// Revoke a pending invitation. Redeemed invitations are kept for audit.
     pub async fn revoke_invitation(&self, code: &str) -> Result<Invitation> {
+        let _save_guard = self.save_lock.lock().await;
         let mut state = self.state.write().await;
         let invitation = state
             .invitations
@@ -913,6 +952,7 @@ impl InvitationSystem {
 
     /// Grant invites to a user (for reputation rewards, etc.)
     pub async fn grant_invites(&self, user_id: &str, count: u32) -> Result<()> {
+        let _save_guard = self.save_lock.lock().await;
         let mut state = self.state.write().await;
 
         let inviter = state
@@ -964,6 +1004,7 @@ impl InvitationSystem {
     ///
     /// Returns Ok(()) if the owner was set successfully, or Err if an owner already exists
     pub async fn set_owner(&self, user_id: String) -> Result<()> {
+        let _save_guard = self.save_lock.lock().await;
         let mut state = self.state.write().await;
 
         if state.owner.is_some() {
@@ -1319,6 +1360,47 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn final_save_snapshots_after_waiting_for_autosave_lock() {
+        let path = PathBuf::from("/tmp/test_invitation_save_lock.json");
+        let _ = std::fs::remove_file(&path);
+        let key = SigningKey::random(&mut OsRng);
+        let system = Arc::new(InvitationSystem::new(
+            key.clone(),
+            InvitationConfig {
+                persistence_path: path.clone(),
+                autosave_interval_secs: 0,
+                ..Default::default()
+            },
+        ));
+        let guard = system.save_lock.lock().await;
+        let mutation = {
+            let system = Arc::clone(&system);
+            tokio::spawn(async move {
+                system
+                    .add_bootstrap_user("after-autosave-snapshot".into(), 1)
+                    .await;
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!mutation.is_finished());
+        drop(guard);
+        mutation.await.unwrap();
+        system.save().await.unwrap();
+        let loaded = InvitationSystem::load_or_create(
+            key,
+            InvitationConfig {
+                persistence_path: path.clone(),
+                autosave_interval_secs: 0,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(loaded.get_stats().await.total_users, 1);
+        let _ = std::fs::remove_file(path);
     }
 
     #[tokio::test]

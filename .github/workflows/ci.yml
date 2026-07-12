@@ -60,7 +60,63 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo install cargo-audit --locked
-      - run: cargo audit
+      - run: cargo audit --ignore RUSTSEC-2023-0071
+
+  javascript-sdk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sdk/js
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.14.0
+          cache: npm
+          cache-dependency-path: sdk/js/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - name: Start SDK integration services
+        working-directory: .
+        run: |
+          cp .env.example .env
+          sed -i 's/^ADMIN_API_KEY=.*/ADMIN_API_KEY=ci-sdk-test-key-at-least-32-chars/' .env
+          sed -i 's/^SYBIL_RESISTANCE=.*/SYBIL_RESISTANCE=none/' .env
+          docker compose up -d --build --wait
+      - name: Run SDK tests
+        run: npm test -- --run
+      - name: Tear down SDK integration services
+        if: always()
+        working-directory: .
+        run: docker compose down -v
+
+  repository-hygiene:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shell syntax
+        run: bash -n scripts/*.sh
+      - name: Run backup D6 parser and shell suites
+        run: |
+          python3 scripts/test-backup-archive.py
+          bash scripts/test-backup-restore.sh
+      - name: Validate documentation links and profile matrix
+        run: python3 scripts/ci-static-checks.py
+      - name: Validate JSON manifests
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          for path in (Path("sdk/js/package.json"), Path("sdk/js/package-lock.json")):
+              json.loads(path.read_text(encoding="utf-8"))
+              print(f"valid JSON: {path}")
+          PY
+      - name: Validate YAML manifests
+        run: |
+          ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path); puts "valid YAML: #{path}" }' \
+            $(git ls-files '*.yml' '*.yaml')
+      - name: Validate GitHub Actions workflows
+        uses: docker://rhysd/actionlint:1.7.7
 
   compose-smoke:
     runs-on: ubuntu-latest

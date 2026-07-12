@@ -164,6 +164,9 @@ pub struct VerifierMetadataResp {
     pub audience: String,
     /// Base64url-encoded SHA-256 scope digest clients must bind into V4 token input.
     pub scope_digest_b64: String,
+    /// Token families accepted by this verifier (for example `v4`, `v5`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accepted_token_versions: Option<Vec<String>>,
 }
 
 // ============================================================================

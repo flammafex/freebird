@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🕊️ Freebird - Experimental Privacy-Preserving Tokens</title>
+    <meta name="description" content="Experimental token infrastructure designed to unlink issuance from redemption. Metadata and operational limits remain in scope.">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Newsreader:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --black: #0a0a0a;
+            --white: #fafafa;
+            --red: #dc2626;
+            --gray: #525252;
+            --light-gray: #e5e5e5;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Newsreader', Georgia, serif;
+            background: var(--white);
+            color: var(--black);
+            line-height: 1.7;
+            font-size: 18px;
+        }
+
+        .surveillance-strip {
+            background: var(--red);
+            color: var(--white);
+            padding: 8px 20px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            text-align: center;
+            position: fixed;
+            top: 0;
+            width: 100%;
+            z-index: 1000;
+        }
+
+        .container {
+            max-width: 720px;
+            margin: 0 auto;
+            padding: 100px 24px 60px;
+        }
+
+        header {
+            margin-bottom: 80px;
+            border-bottom: 3px solid var(--black);
+            padding-bottom: 40px;
+        }
+
+        .logo {
+            font-size: 4rem;
+            margin-bottom: 8px;
+        }
+
+        h1 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 3rem;
+            font-weight: 700;
+            letter-spacing: -2px;
+            margin-bottom: 16px;
+        }
+
+        .tagline {
+            font-size: 1.5rem;
+            font-style: italic;
+            color: var(--gray);
+            margin-bottom: 24px;
+        }
+
+        .manifesto {
+            font-size: 1.1rem;
+            border-left: 4px solid var(--red);
+            padding-left: 20px;
+            margin: 32px 0;
+        }
+
+        h2 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1.4rem;
+            font-weight: 700;
+            margin: 60px 0 24px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        h2::before {
+            content: "/// ";
+            color: var(--red);
+        }
+
+        h3 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 1rem;
+            margin: 32px 0 16px;
+            color: var(--gray);
+        }
+
+        p {
+            margin-bottom: 20px;
+        }
+
+        strong {
+            font-weight: 700;
+        }
+
+        .redacted {
+            background: var(--black);
+            color: var(--black);
+            padding: 0 4px;
+            user-select: none;
+        }
+
+        .redacted:hover {
+            background: var(--red);
+            color: var(--white);
+        }
+
+        ul {
+            list-style: none;
+            margin: 20px 0;
+        }
+
+        ul li {
+            padding-left: 24px;
+            position: relative;
+            margin-bottom: 12px;
+        }
+
+        ul li::before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            color: var(--red);
+            font-weight: bold;
+        }
+
+        .problem-list li::before {
+            content: "✗";
+        }
+
+        .solution-list li::before {
+            content: "✓";
+            color: #16a34a;
+        }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9em;
+            background: var(--light-gray);
+            padding: 2px 6px;
+            border-radius: 2px;
+        }
+
+        pre {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            background: var(--black);
+            color: #22c55e;
+            padding: 24px;
+            overflow-x: auto;
+            margin: 24px 0;
+            border-left: 4px solid var(--red);
+        }
+
+        .diagram {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            background: var(--black);
+            color: var(--white);
+            padding: 24px;
+            overflow-x: auto;
+            margin: 24px 0;
+            line-height: 1.4;
+        }
+
+        .comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin: 32px 0;
+        }
+
+        .comparison-col {
+            padding: 20px;
+        }
+
+        .comparison-col.bad {
+            background: #fef2f2;
+            border: 2px solid var(--red);
+        }
+
+
+        .comparison-col.good {
+            background: #f0fdf4;
+            border: 2px solid #16a34a;
+        }
+
+        .comparison-col h4 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+        }
+
+        .screenshot-placeholder {
+            background: var(--light-gray);
+            border: 2px dashed var(--gray);
+            padding: 60px 24px;
+            text-align: center;
+            margin: 24px 0;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            color: var(--gray);
+        }
+
+        .screenshot-placeholder::before {
+            content: "📷";
+            display: block;
+            font-size: 2rem;
+            margin-bottom: 12px;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 24px 0;
+            font-size: 0.95rem;
+        }
+
+        th, td {
+            padding: 12px 16px;
+            text-align: left;
+            border-bottom: 1px solid var(--light-gray);
+        }
+
+        th {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            background: var(--black);
+            color: var(--white);
+        }
+
+        tr:hover {
+            background: #fafafa;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 2px 8px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.75rem;
+            border-radius: 2px;
+        }
+
+        .status.done {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .status.progress {
+            background: #fef9c3;
+            color: #854d0e;
+        }
+
+        .status.planned {
+            background: var(--light-gray);
+            color: var(--gray);
+        }
+
+        .use-cases {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            margin: 24px 0;
+        }
+
+        .use-case {
+            background: var(--light-gray);
+            padding: 16px;
+            font-size: 0.95rem;
+        }
+
+        .use-case strong {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .funding-goal {
+            background: var(--black);
+            color: var(--white);
+            padding: 24px;
+            margin: 24px 0;
+        }
+
+        .funding-goal h4 {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+            color: var(--red);
+            margin-bottom: 8px;
+        }
+
+        blockquote {
+            border-left: 4px solid var(--red);
+            padding-left: 20px;
+            margin: 32px 0;
+            font-style: italic;
+            color: var(--gray);
+        }
+
+        a {
+            color: var(--black);
+            text-decoration: underline;
+            text-decoration-thickness: 2px;
+            text-underline-offset: 2px;
+        }
+
+        a:hover {
+            color: var(--red);
+        }
+
+        .links {
+            margin: 32px 0;
+            padding: 24px;
+            background: var(--light-gray);
+        }
+
+        .links a {
+            display: inline-block;
+            margin-right: 24px;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.9rem;
+        }
+
+        footer {
+            margin-top: 80px;
+            padding-top: 40px;
+            border-top: 3px solid var(--black);
+            font-size: 0.9rem;
+            color: var(--gray);
+        }
+
+        footer a {
+            color: var(--gray);
+        }
+
+        .license {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8rem;
+            margin-top: 16px;
+        }
+
+        @media (max-width: 640px) {
+            h1 {
+                font-size: 2rem;
+            }
+
+            .comparison {
+                grid-template-columns: 1fr;
+            }
+
+            .use-cases {
+                grid-template-columns: 1fr;
+            }
+
+            .diagram {
+                font-size: 0.6rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="surveillance-strip">
+        ⚠ EXPERIMENTAL / TOKEN-LAYER PRIVACY / METADATA REMAINS IN SCOPE
+    </div>
+
+    <main class="container">
+        <header>
+        <img style="display: block; margin-left: auto; margin-right: auto;" src="church.png" width=64 alt="The Carpocratian Church presents">
+        <p style="text-align: center;"><br><b><a style="text-decoration: none;" href="https://carpocratian.org">The Carpocratian Church of<br>
+        Commonality & Equality</a></b><br><br>
+        Presents</p>
+            <div class="logo"></div>
+            <h1>🕊️ Freebird</h1>
+            <p class="tagline">Authorization tokens designed to separate issuance from redemption.</p>
+
+            <p class="manifesto">
+                Many systems bind authorization to an application identity. Freebird explores a narrower alternative: use an unforgeable, one-time token to prove permission without putting an identity in the token itself. The result is a cryptographic privacy boundary—not a promise that the surrounding system cannot correlate activity.
+            </p>
+        </header>
+
+        <section>
+            <h2>The Problem</h2>
+
+            <p>
+                The internet often binds authorization to accounts and operational records. Freebird focuses on one part of that problem: separating token issuance from later redemption.
+            </p>
+
+            <ul class="problem-list">
+                <li>Rate limiting requires tracking users</li>
+                <li>Access control requires accounts</li>
+                <li>Spam prevention requires surveillance</li>
+                <li>Resource allocation requires registration</li>
+                <li>"One person, one vote" requires identity databases</li>
+            </ul>
+
+            <p>
+                A deployment may still collect network, timing, application, admission, and audit data. The token protocol does not erase those surrounding records.
+            </p>
+
+            <div class="diagram">
+<pre>Traditional System:
+
+User ──────────────────────────▶ Server
+      "I am alice@example.com"
+      "Give me access"
+                                    │
+Server logs:                        ▼
+✗ Who you are                    Access
+✗ When you accessed              Granted
+✗ What you accessed              (maybe)
+✗ Your usage patterns
+✗ Your IP address
+✗ Everything, forever</pre>
+            </div>
+        </section>
+
+        <section>
+            <h2>Freebird's Answer</h2>
+
+            <p>
+                Freebird currently exposes <strong>two experimental token modes</strong>. V4 uses a Freebird-specific, bespoke P-256 VOPRF-like construction with DLEQ-style proofs; it is not RFC 9497 interoperable. V5 uses Blind RSA signatures described by RFC 9474 for public bearer passes. They are different implementation paths, not a certification or production-readiness claim.
+            </p>
+
+            <p>
+                Think of it as a prototype privacy layer for authorization. A finalized token can prove issuer authorization without containing an application identity; the surrounding deployment can still observe and correlate metadata.
+            </p>
+
+            <div class="diagram">
+<pre>Freebird:
+
+        ┌─────────────────────────────────────────────────────────┐
+        │                                                         │
+        │   User              Issuer              Verifier        │
+        │     │                 │                    │            │
+        │     │──[blind data]──▶│                    │            │
+        │     │                 │ signs without      │            │
+        │     │                 │ seeing content     │            │
+        │     │◀─[signed blob]──│                    │            │
+        │     │                 │                    │            │
+        │     │ unblinds to     │                    │            │
+        │     │ get token       │                    │            │
+        │     │                 │                    │            │
+        │     │──────────[anonymous token]──────────▶│            │
+        │     │                                      │            │
+        │     │                              ✓ Valid signature    │
+        │     │                              ✗ No identity        │
+        │     │                              ✗ No tracking        │
+        │                                                         │
+        └─────────────────────────────────────────────────────────┘
+
+Token boundary: The issuer evaluates a blinded request and the verifier validates the finalized token.
+Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or hosting logs, and collusion can still enable correlation.</pre>
+            </div>
+
+            <ul class="solution-list">
+                <li>Prove token authorization without putting an identity in the token</li>
+                <li>Separate issuance records from redemption records at the token layer</li>
+                <li>Support one-time redemption with configured replay storage</li>
+                <li>Compose local admission controls before issuance</li>
+                <li>Prototype privacy-preserving access flows without claiming global anonymity</li>
+            </ul>
+        </section>
+
+        <section>
+            <h2>Token Properties & Operating Limits</h2>
+
+            <p>
+                These are protocol-level properties and deployment-dependent limits—not a claim of system-wide anonymity. Freebird is pre-1.0 and has not received an external security audit.
+            </p>
+
+            <div class="comparison">
+                <div class="comparison-col bad">
+                    <h4>❌ Traditional "Privacy"</h4>
+                    <p>"We won't share your data"</p>
+                    <p>"Trust our policy"</p>
+                    <p>"We anonymize logs"</p>
+                    <p><em>Until subpoena, hack, acquisition, policy change...</em></p>
+                </div>
+                <div class="comparison-col good">
+                    <h4>✓ Freebird</h4>
+                    <p>Less identity in the token path</p>
+                    <p>Cryptographic separation to review</p>
+                    <p>Operational records still require policy</p>
+                    <p><strong>Token privacy, not total privacy</strong></p>
+                </div>
+            </div>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Property</th>
+                        <th>Guarantee</th>
+                        <th>Mechanism</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>Unlinkability</strong></td>
+                        <td>Designed to resist direct issuance-to-redemption linkage at the token layer</td>
+                        <td>Blinding; deployment and metadata limits apply</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Anonymity</strong></td>
+                        <td>Token contains no application identity by design</td>
+                        <td>Token format; surrounding systems may identify or correlate users</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Unforgeability</strong></td>
+                        <td>Can't create tokens without issuer key</td>
+                        <td>P-256 ECDLP hardness (V4) / RSA-FDH (V5)</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Replay Protection</strong></td>
+                        <td>Replay can be rejected when nullifier storage is configured correctly</td>
+                        <td>Nullifier store; in-memory state is not restart-safe</td>
+                    </tr>
+                    <tr>
+                        <td><strong>Verifiability</strong></td>
+                        <td>Clients verify correct computation</td>
+                        <td>DLEQ zero-knowledge proofs</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section>
+            <h2>Prototype Use Cases</h2>
+
+            <p>
+                Freebird is suitable today for local experiments and low-stakes prototypes. These examples are prompts for evaluation, not production endorsements or guarantees.
+            </p>
+
+            <div class="use-cases">
+                <div class="use-case">
+                    <strong>🏛️ Municipal Feedback</strong>
+                    Prototype an anonymous feedback flow; operators must still evaluate network and application metadata.
+                </div>
+                <div class="use-case">
+                    <strong>🏥 STI Testing</strong>
+                    Research concept only; do not use for clinical eligibility or sensitive healthcare decisions.
+                </div>
+                <div class="use-case">
+                    <strong>🗳️ Voting research</strong>
+                    Research concept only; Freebird does not prove unique humans or provide an election system.
+                </div>
+                <div class="use-case">
+                    <strong>📚 Library Access</strong>
+                    Prototype token-gated access while keeping library and network logging policy explicit.
+                </div>
+                <div class="use-case">
+                    <strong>🍽️ Food Banks</strong>
+                    Explore low-stakes eligibility prototypes; admission and operational records remain in scope.
+                </div>
+                <div class="use-case">
+                    <strong>📱 Public WiFi</strong>
+                    Prototype rate-limited access; IP and network metadata may still be visible to operators.
+                </div>
+                <div class="use-case">
+                    <strong>🏫 School Lunch</strong>
+                    Research concept only; do not treat a token as proof of eligibility or identity privacy.
+                </div>
+                <div class="use-case">
+                    <strong>🚨 Crisis Hotlines</strong>
+                    Research concept only; high-stakes and safety-critical deployments need separate review.
+                </div>
+            </div>
+
+        </section>
+
+        <section>
+            <h2>Configurable Admission Controls</h2>
+
+            <p>
+                Freebird includes configurable admission mechanisms to make abuse more costly or limit issuance. They are local controls, not proof of a unique human, and they do not remove operational metadata.
+            </p>
+
+            <h3>Invitation System (Trust Graphs)</h3>
+            <p>
+                Users invite others. Operators can trace invitation relationships in their admission records and cut off branches. This is local social trust, not identity-free accountability or a global anti-abuse guarantee.
+            </p>
+
+            <h3>Proof of Work</h3>
+            <p>
+                Computational cost per token. Prevents bot farms without collecting data.
+            </p>
+
+            <h3>WebAuthn / Hardware Keys</h3>
+            <p>
+                WebAuthn or hardware authenticators can gate issuance. This is not proof of humanity; credential and deployment records remain part of the operator's state.
+            </p>
+
+            <h3>Rate Limiting</h3>
+            <p>
+                IP-based throttling provides basic protection and necessarily uses network identity. It can be stacked with other mechanisms.
+            </p>
+
+            <h3>Social Graph Attestation</h3>
+            <p>
+                A separate Social Graph Attester service evaluates signed trust edges (Clout-style) and issues short-lived attestations proving a user stands within a trusted social graph, without revealing which node they are. The issuer verifies the attester's Ed25519 signature, policy, expiry, and eligibility level — never the underlying graph.
+            </p>
+
+            <h3>Progressive Trust</h3>
+            <p>
+                Trust can accumulate with configured account age and usage history. New accounts may receive limited quotas; this still uses local records and is not global anonymity.
+            </p>
+
+            <h3>Proof of Diversity</h3>
+            <p>
+                Experimental mechanism that scores requests on behavioral diversity signals to detect coordinated bot campaigns without fingerprinting individuals.
+            </p>
+
+            <h3>Multi-Party Vouching</h3>
+            <p>
+                N-of-M endorsement: a token is issued only when a quorum of existing trusted members vouch for the requester. No single party can approve or block.
+            </p>
+
+            <h3>Composable Combiners</h3>
+            <p>
+                Stack mechanisms with <code>OR</code> (any must pass), <code>AND</code> (all must pass), or <code>Threshold</code> (at least N of M). <code>OR</code> is only as strong as the easiest mechanism; <code>AND</code> is strictest. Proof replay protection and restart safety depend on the configured store.
+            </p>
+
+        </section>
+
+        <section>
+            <h2>Technical Architecture</h2>
+
+            <pre>
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Freebird System                             │
+│                                                                     │
+│   ┌──────────────┐  ┌──────────────┐  ┌────────────┐  ┌─────────┐  │
+│   │    Issuer    │  │   Verifier   │  │   Redis     │  │ Attester│  │
+│   │   (Rust)     │  │   (Rust)     │  │  (State)    │  │ (Rust)  │  │
+│   │              │  │              │  │            │  │ optional│  │
+│   │ - VOPRF eval │  │ - Token auth │  │ - Nulls    │  │ - Trust │  │
+│   │ - Blind RSA  │  │ - Multi-     │  │ - Invites  │  │   graph │  │
+│   │ - Sybil gates│  │   issuer     │  │ - WebAuthn │  │ - Scoring│ │
+│   │ - Key mgmt   │  │   federation │  │            │  │ - JWKS  │  │
+│   └──────────────┘  └──────────────┘  └────────────┘  └─────────┘  │
+│          │                  │                 │              │      │
+│          └──────────────────┴─────────────────┘              │      │
+│                             │                                 │      │
+│                    ┌────────▼────────┐                        │      │
+│                    │   TypeScript    │◀───────────────────────┘      │
+│                    │      SDK        │                               │
+│                    │                 │                               │
+│                    │ Browser/Node.js │                               │
+│                    └─────────────────┘                               │
+└─────────────────────────────────────────────────────────────────────┘</pre>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Component</th>
+                        <th>Language</th>
+                        <th>Purpose</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Core Crypto</td>
+                        <td>Rust</td>
+                        <td>VOPRF, blind RSA, DLEQ proofs, P-256 operations</td>
+                    </tr>
+                    <tr>
+                        <td>Issuer Service</td>
+                        <td>Rust</td>
+                        <td>Token issuance (VOPRF + blind RSA), key rotation, Sybil gates</td>
+                    </tr>
+                    <tr>
+                        <td>Verifier Service</td>
+                        <td>Rust</td>
+                        <td>Token validation, multi-issuer federation</td>
+                    </tr>
+                    <tr>
+                        <td>Social Graph Attester</td>
+                        <td>Rust</td>
+                        <td>Trust-graph scoring, JWKS publication, social Sybil attestations</td>
+                    </tr>
+                    <tr>
+                        <td>Client SDK</td>
+                        <td>TypeScript</td>
+                        <td>Browser/Node.js integration</td>
+                    </tr>
+                    <tr>
+                        <td>Admin CLI</td>
+                        <td>Rust</td>
+                        <td>Key management, invitation admin</td>
+                    </tr>
+                </tbody>
+            </table>
+
+        </section>
+
+        <section>
+            <h2>Current Experimental Implementation</h2>
+
+            <p>
+                These labels describe code present in the current experimental tree, not external audit, production readiness, or support for any planned profile.
+            </p>
+
+            <table>
+                <thead>
+                    <tr>
+                        <th>Feature</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>P-256 VOPRF with DLEQ proofs</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>Batch issuance (rayon parallelization)</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>Zero-downtime key rotation</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>Multi-issuer federation</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>Invitation system with ban trees</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>WebAuthn/FIDO2 integration</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>TypeScript SDK</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>Admin dashboard UI</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>Prometheus metrics</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>HSM/PKCS#11 support</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>Social Graph Attester service</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>Blind RSA / V5 public bearer passes</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>Audit logging</td>
+                        <td><span class="status done">✓ Implemented experimentally</span></td>
+                    </tr>
+                    <tr>
+                        <td>Documentation</td>
+                        <td><span class="status progress">In Progress</span></td>
+                    </tr>
+                    <tr>
+                        <td>Reference integrations</td>
+                        <td><span class="status progress">In Progress</span></td>
+                    </tr>
+                    <tr>
+                        <td>Browser playground</td>
+                        <td><span class="status planned">Planned</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <section>
+            <h2>Why Open Infrastructure Matters</h2>
+
+            <p>
+                Privacy technology that requires trusting a company is privacy theater. Freebird is <strong>infrastructure</strong>, not a service.
+            </p>
+
+            <ul>
+                <li><strong>Self-hostable:</strong> Run your own issuer. No dependencies on us.</li>
+                <li><strong>Federated:</strong> Multiple issuers can exist. Verifiers choose whom to trust.</li>
+                <li><strong>Auditable:</strong> Every line of code is public. Every cryptographic claim is verifiable.</li>
+                <li><strong>Forkable:</strong> Don't like our decisions? Fork it. The protocol is the product.</li>
+            </ul>
+
+        </section>
+
+        <section>
+            <h2>Funding Goals</h2>
+
+            <p>
+                Funding supports evaluation, documentation, test coverage, reference prototypes, and independent review of this experimental project.
+            </p>
+
+            <div class="funding-goal">
+                <h4>Documentation & Tutorials</h4>
+                <p>Lower the barrier for municipalities and community organizations. Step-by-step deployment guides. Integration cookbooks for common scenarios.</p>
+            </div>
+
+            <div class="funding-goal">
+                <h4>Reference Implementations</h4>
+                <p>Working low-stakes prototypes beyond the current demo: feedback systems and token-gated forums. These should demonstrate the limits as well as the token flow; they are not proof of production readiness.</p>
+            </div>
+
+            <div class="funding-goal">
+                <h4>Browser Playground</h4>
+                <p>Try Freebird without installing anything. Interactive demo that shows the cryptography working in real-time.</p>
+            </div>
+
+            <div class="funding-goal">
+                <h4>Security Audit</h4>
+                <p>Third-party cryptographic audit. We believe the implementation is correct—let's prove it.</p>
+            </div>
+
+            <div class="funding-goal">
+                <h4>Community Building</h4>
+                <p>Outreach to municipalities, libraries, healthcare organizations who could benefit. Help them understand that privacy-preserving systems are possible.</p>
+            </div>
+        </section>
+
+        <section>
+            <h2>Try It</h2>
+
+            <pre>
+git clone https://git.carpocratian.org/sibyl/freebird
+cd freebird
+./launch.sh up</pre>
+
+            <p>
+                The <code>launch.sh</code> helper handles <code>.env</code> setup and <code>ADMIN_API_KEY</code> generation for you. Issuer on <code>localhost:8081</code>, verifier on <code>localhost:8082</code>.
+            </p>
+
+            <pre>
+# Get a token
+curl -X POST http://localhost:8081/v1/oprf/issue \
+  -H "Content-Type: application/json" \
+  -d '{"blinded_element": "..."}'
+
+# Verify it
+curl -X POST http://localhost:8082/v1/verify \
+  -H "Content-Type: application/json" \
+  -d '{"token": "..."}'</pre>
+
+            <p>
+                Full documentation at <a href="https://git.carpocratian.org/sibyl/freebird/src/branch/main/docs">git.carpocratian.org/sibyl/freebird/docs</a>.
+            </p>
+
+        </section>
+
+        <section>
+            <h2>Standards & Prior Art</h2>
+
+            <p>
+                Freebird implements established cryptographic standards:
+            </p>
+
+            <ul>
+                <li><a href="https://datatracker.ietf.org/doc/draft-irtf-cfrg-voprf/">IETF CFRG VOPRF Draft</a> — The core protocol</li>
+                <li><a href="https://datatracker.ietf.org/doc/draft-ietf-privacypass-protocol/">Privacy Pass Protocol</a> — Related work from Cloudflare/Apple</li>
+                <li><a href="https://datatracker.ietf.org/doc/rfc9474/">RFC 9474</a> — Blind RSA signatures (V5 public bearer passes)</li>
+                <li><a href="https://datatracker.ietf.org/doc/rfc9380/">RFC 9380</a> — Hash-to-curve specification</li>
+                <li><a href="https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.186-5.pdf">FIPS 186-5</a> — P-256 curve specification</li>
+            </ul>
+
+        </section>
+
+        <footer>
+            <p>
+            <a href="https://git.carpocratian.org/sibyl/freebird">Source</a>
+            </p>
+        </footer>
+    </main>
+</body>
+</html>

@@ -47,6 +47,10 @@ impl FlakyInMemoryStore {
 
 #[async_trait]
 impl SpendStore for FlakyInMemoryStore {
+    async fn health_check(&self) -> anyhow::Result<()> {
+        self.inner.health_check().await
+    }
+
     async fn mark_spent(&self, key: &str, ttl: Option<Duration>) -> anyhow::Result<bool> {
         let mut guard = self.failures_remaining.lock().await;
         if *guard > 0 {
@@ -101,6 +105,7 @@ async fn build_issuer_state(
         public_issuer: None,
         epoch_duration_sec: 86400,
         epoch_retention: 2,
+        admin_api_key: None,
     });
     Ok((state, voprf))
 }
@@ -125,10 +130,15 @@ async fn regression_batch_issuance_emits_v4_evaluation_only() -> Result<()> {
         sybil_proof: None,
     };
 
-    let Json(resp) =
-        batch_issue::handle_batch(State((state, voprf)), None, HeaderMap::new(), Json(req))
-            .await
-            .map_err(|(s, m)| anyhow::anyhow!("batch issue failed: {} {}", s, m))?;
+    let Json(resp) = batch_issue::handle_batch(
+        State((state, voprf)),
+        None,
+        None,
+        HeaderMap::new(),
+        Json(req),
+    )
+    .await
+    .map_err(|(s, m)| anyhow::anyhow!("batch issue failed: {} {}", s, m))?;
 
     assert_eq!(resp.successful, 3);
     for r in resp.results {
@@ -155,10 +165,15 @@ async fn regression_batch_parallel_path_no_runtime_panic_under_load() -> Result<
         sybil_proof: Some(SybilProof::None),
     };
 
-    let Json(resp) =
-        batch_issue::handle_batch(State((state, voprf)), None, HeaderMap::new(), Json(req))
-            .await
-            .map_err(|(s, m)| anyhow::anyhow!("batch issue failed: {} {}", s, m))?;
+    let Json(resp) = batch_issue::handle_batch(
+        State((state, voprf)),
+        None,
+        None,
+        HeaderMap::new(),
+        Json(req),
+    )
+    .await
+    .map_err(|(s, m)| anyhow::anyhow!("batch issue failed: {} {}", s, m))?;
 
     assert_eq!(resp.successful, 256);
     assert_eq!(resp.failed, 0);

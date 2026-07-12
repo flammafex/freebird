@@ -1,12 +1,13 @@
 // issuer/src/webauthn/handlers.rs
 use axum::{
-    extract::{ConnectInfo, Json, State},
+    extract::{ConnectInfo, Extension, Json, State},
     http::{HeaderMap, StatusCode},
     response::Html,
     routing::{get, post},
     Router,
 };
 use base64ct::Encoding;
+use freebird_common::tls_enforcement::ValidatedClientIp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -77,26 +78,10 @@ fn extract_client_ip(
     connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: &HeaderMap,
     behind_proxy: bool,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Option<IpAddr> {
-    if behind_proxy {
-        // Try X-Forwarded-For first (may contain comma-separated list)
-        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-            // Take the first (leftmost) IP, which is the original client
-            if let Some(first_ip) = xff.split(',').next() {
-                if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
-                    return Some(ip);
-                }
-            }
-        }
-        // Fallback to X-Real-IP
-        if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-            if let Ok(ip) = real_ip.trim().parse::<IpAddr>() {
-                return Some(ip);
-            }
-        }
-    }
-    // Use direct connection IP
-    connect_info.map(|ci| ci.0.ip())
+    let _ = (headers, behind_proxy, connect_info);
+    validated_ip.map(|Extension(ip)| ip.0)
 }
 
 // --- State ---
@@ -253,6 +238,7 @@ pub struct StartRegistrationResponse {
 pub async fn start_registration(
     State(state): State<Arc<WebAuthnState>>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     headers: HeaderMap,
     Json(req): Json<StartRegistrationRequest>,
 ) -> Result<Json<StartRegistrationResponse>, (StatusCode, String)> {
@@ -268,7 +254,7 @@ pub async fn start_registration(
     debug!(subject_hash = %subject_hash, "Starting WebAuthn registration");
 
     // Extract client IP for rate limiting
-    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy)
+    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy, validated_ip)
         .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
     // Check rate limit before processing
@@ -497,6 +483,7 @@ pub struct StartAuthenticationResponse {
 pub async fn start_authentication(
     State(state): State<Arc<WebAuthnState>>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     headers: HeaderMap,
     Json(req): Json<StartAuthenticationRequest>,
 ) -> Result<Json<StartAuthenticationResponse>, (StatusCode, String)> {
@@ -516,7 +503,7 @@ pub async fn start_authentication(
     const MIN_RESPONSE_TIME_MS: u64 = 100;
 
     // Extract client IP for rate limiting
-    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy)
+    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy, validated_ip)
         .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
     // Check rate limit before processing
@@ -749,6 +736,7 @@ pub async fn webauthn_info(State(state): State<Arc<WebAuthnState>>) -> Json<WebA
 pub async fn start_registration_extended(
     State(state): State<Arc<WebAuthnState>>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     headers: HeaderMap,
     Json(req): Json<StartRegistrationRequest>,
 ) -> Result<Json<StartRegistrationResponse>, (StatusCode, String)> {
@@ -764,7 +752,7 @@ pub async fn start_registration_extended(
     let subject_hash = compute_subject_hash(&local_handle);
     debug!(subject_hash = %subject_hash, "Starting extended WebAuthn registration");
 
-    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy)
+    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy, validated_ip)
         .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
     // Check rate limit

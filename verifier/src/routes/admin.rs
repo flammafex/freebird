@@ -15,16 +15,18 @@
 //! All endpoints require authentication via API key in the `X-Admin-Key` header.
 //! The API key should be configured via the `ADMIN_API_KEY` environment variable.
 
+use crate::readiness::{self, MetadataStatus, StoreHealth, TokenFamily};
 use crate::routes::admin_rate_limit::AdminRateLimiter;
 use crate::store::SpendStore;
 use axum::{
-    extract::{ConnectInfo, Path, State},
+    extract::{ConnectInfo, Extension, Path, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
     routing::{get, post},
     Json, Router,
 };
 use base64ct::Encoding;
+use freebird_common::tls_enforcement::ValidatedClientIp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -98,6 +100,9 @@ pub struct AdminState {
     pub start_time: Instant,
     /// Configuration values
     pub config: VerifierConfig,
+    pub metadata: Arc<RwLock<HashMap<String, MetadataStatus>>>,
+    pub accepted_token_families: Vec<TokenFamily>,
+    pub store_health: StoreHealth,
 }
 
 /// Derive a session signing key from the admin API key using HKDF-SHA256.
@@ -152,6 +157,7 @@ pub struct VerifierConfig {
     pub refresh_interval_min: u64,
     pub store_backend: String,
     pub issuer_urls: Vec<String>,
+    pub accepted_token_versions: Vec<String>,
 }
 
 // ============================================================================
@@ -288,6 +294,7 @@ pub fn admin_router(state: Arc<AdminState>) -> Router {
         .route("/login", post(login_handler))
         .route("/logout", post(logout_handler))
         .route("/health", get(health_handler))
+        .route("/readiness", get(readiness_handler))
         .route("/stats", get(stats_handler))
         .route("/config", get(config_handler))
         .route("/metrics", get(metrics_handler))
@@ -351,25 +358,10 @@ fn extract_client_ip(
     headers: &HeaderMap,
     behind_proxy: bool,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Option<IpAddr> {
-    if behind_proxy {
-        // Try X-Forwarded-For first (may contain comma-separated list)
-        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-            // Take the first (leftmost) IP, which is the original client
-            if let Some(first_ip) = xff.split(',').next() {
-                if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
-                    return Some(ip);
-                }
-            }
-        }
-        // Fallback to X-Real-IP
-        if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-            if let Ok(ip) = real_ip.trim().parse::<IpAddr>() {
-                return Some(ip);
-            }
-        }
-    }
-    connect_info.map(|info| info.0.ip())
+    let _ = (headers, behind_proxy, connect_info);
+    validated_ip.map(|Extension(ip)| ip.0)
 }
 
 /// Verify authentication via session cookie or X-Admin-Key header with rate limiting
@@ -436,9 +428,10 @@ async fn login_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
 
     // Rate-limit login attempts by IP
     if let Some(ip) = client_ip {
@@ -489,8 +482,9 @@ pub async fn health_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<HealthResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key(&headers, &state, client_ip).await?;
 
     let issuers = state.issuers.read().await;
@@ -505,13 +499,39 @@ pub async fn health_handler(
     }))
 }
 
+/// Detailed readiness is deliberately only available behind the admin auth.
+pub async fn readiness_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
+) -> Result<Json<serde_json::Value>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
+    verify_api_key(&headers, &state, client_ip).await?;
+    let issuers = state.issuers.read().await.clone();
+    let metadata = state.metadata.read().await.clone();
+    let report = readiness::evaluate(
+        &state.store_health,
+        &issuers,
+        &metadata,
+        &state.config.issuer_urls,
+        &state.accepted_token_families,
+        std::time::Duration::from_secs(state.config.refresh_interval_min * 60),
+    )
+    .await;
+    Ok(Json(
+        serde_json::json!({"status": if report.ready() { "ready" } else { "not_ready" }, "failures": report.failures}),
+    ))
+}
+
 /// Get verification statistics
 pub async fn stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<StatsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key(&headers, &state, client_ip).await?;
 
     let issuers = state.issuers.read().await;
@@ -540,8 +560,9 @@ pub async fn config_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<ConfigResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key(&headers, &state, client_ip).await?;
 
     info!("Admin: retrieved verifier config");
@@ -562,8 +583,9 @@ pub async fn list_issuers_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<ListIssuersResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key(&headers, &state, client_ip).await?;
 
     let issuers = state.issuers.read().await;
@@ -605,9 +627,10 @@ pub async fn get_issuer_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Path(issuer_id): Path<String>,
 ) -> Result<Json<IssuerDetailsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key(&headers, &state, client_ip).await?;
 
     let issuers = state.issuers.read().await;
@@ -643,9 +666,10 @@ pub async fn refresh_issuer_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Path(issuer_id): Path<String>,
 ) -> Result<Json<IssuerRefreshResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key(&headers, &state, client_ip).await?;
 
     // Check if issuer exists
@@ -671,8 +695,9 @@ pub async fn cache_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<CacheStatsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key(&headers, &state, client_ip).await?;
 
     info!("Admin: retrieved cache stats");
@@ -688,8 +713,9 @@ pub async fn cache_clear_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<CacheClearResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key(&headers, &state, client_ip).await?;
 
     // Note: The SpendStore trait doesn't have a clear method
@@ -709,8 +735,9 @@ pub async fn metrics_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<String, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key(&headers, &state, client_ip).await?;
 
     let issuers = state.issuers.read().await;

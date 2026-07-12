@@ -6,12 +6,13 @@ since that is the filter Freebird itself satisfies.
 
 ## TL;DR
 
-Freebird occupies a narrow niche: **self-hostable, open-source, VOPRF/blind-RSA
-anonymous access tokens with built-in composable Sybil resistance.** No single
-other project fills all four of those slots.
+Freebird occupies a narrow niche: **self-hostable, open-source,
+VOPRF-like/blind-RSA anonymous access tokens with built-in composable Sybil
+resistance.** Its V4 P-256 construction is Freebird-specific and bespoke, not
+RFC 9497 interoperable. No single other project fills all four of those slots.
 
-- **Privacy Pass** gives you the same crypto but no Sybil gates and no service
-  layer.
+- **Privacy Pass** provides related standardized token protocols, but Freebird
+  V4 is not the same cryptographic protocol and does not interoperate with it.
 - **PoW captchas** (mCaptcha, Anubis, ALTCHA) give you anti-abuse gates but no
   cryptographic unlinkability.
 - **Semaphore** gives you both anonymity and Sybil resistance but is on-chain
@@ -37,9 +38,11 @@ other project fills all four of those slots.
 
 ---
 
-## Tier 1 — Same crypto family (closest functional analogs)
+## Tier 1 — Related token primitives (closest functional analogs)
 
-These share Freebird's VOPRF / blind-RSA DNA but offload everything else to you.
+These use related VOPRF, POPRF, or blind-RSA primitives but are not necessarily
+wire- or protocol-compatible with Freebird. In particular, Freebird V4 is a
+bespoke P-256 construction, not RFC 9497 VOPRF or a Privacy Pass VOPRF suite.
 Freebird's distinguishing value is the service layer (issuer + verifier HTTP
 services, key rotation, nullifier/double-spend storage, admin UI, audit
 logging) and the composable Sybil gates on top.
@@ -59,8 +62,9 @@ logging) and the composable Sybil gates on top.
   is the active lineage
 - **Language:** Go (server), TypeScript, Rust
 
-Freebird's direct ancestor. Same crypto, same single-use token model. But: no
-Sybil gates, no complete service layer, original server is dormant.
+Privacy Pass is a related standardized single-use token model, not a V4
+interoperability target. It has no built-in Sybil gates or complete Freebird
+service layer; the original server is dormant.
 
 ### Brave `poprf-ristretto`
 
@@ -303,12 +307,13 @@ deployable system.
 ## What makes Freebird unique
 
 Freebird is the only project in the upper-right quadrant of the landscape:
-**lightweight single-use tokens (Privacy Pass family) + built-in composable
-Sybil resistance + self-hostable service layer + open source.**
+**lightweight single-use tokens with Privacy-Pass-related primitives + built-in
+composable Sybil resistance + self-hostable service layer + open source.**
 
-1. **VOPRF + Blind RSA tokens** (same as Privacy Pass RFC 9578) — but with a
-   complete service layer (issuer + verifier HTTP services, key rotation, admin
-   UI, nullifier storage).
+1. **A bespoke V4 P-256 VOPRF-like construction plus V5 Blind RSA tokens** —
+   V4 is not RFC 9497 or Privacy Pass interoperable; V5 uses a separate public
+   bearer path. Both are provided with a complete service layer (issuer +
+   verifier HTTP services, key rotation, admin UI, nullifier storage).
 2. **Built-in Sybil resistance** with multiple composable gates (`invitation`,
    `pow`, `rate_limit`, `progressive_trust`, `proof_of_diversity`,
    `multi_party_vouching`, `webauthn`, `social_graph`) and combiners
@@ -318,6 +323,6 @@ Sybil resistance + self-hostable service layer + open source.**
    deployment assets (Docker, K8s, TLS enforcement, audit logging).
 
 If you want what Freebird does specifically, there isn't a drop-in alternative.
-The closest you'd get is assembling Privacy Pass's crypto (or Brave's POPRF
-library) + your own Sybil gate + your own service layer — which is essentially
-rebuilding Freebird.
+The closest alternative would combine a standardized Privacy Pass or POPRF
+library with a Sybil gate and service layer. That would be a separate design,
+not a drop-in implementation of Freebird V4.

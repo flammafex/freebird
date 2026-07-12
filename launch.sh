@@ -119,8 +119,8 @@ launch() {
 
 print_status() {
     local issuer_port verifier_port
-    issuer_port=$(grep -E '^ISSUER_BIND_ADDR=' "$ENV_FILE" 2>/dev/null | cut -d: -f2 || echo "8081")
-    verifier_port=$(grep -E '^VERIFIER_BIND_ADDR=' "$ENV_FILE" 2>/dev/null | cut -d: -f2 || echo "8082")
+    issuer_port=$(grep -E '^ISSUER_HOST_BIND_ADDR=' "$ENV_FILE" 2>/dev/null | cut -d: -f2 || echo "8081")
+    verifier_port=$(grep -E '^VERIFIER_HOST_BIND_ADDR=' "$ENV_FILE" 2>/dev/null | cut -d: -f2 || echo "8082")
     issuer_port="${issuer_port:-8081}"
     verifier_port="${verifier_port:-8082}"
 

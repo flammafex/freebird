@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo, Extension, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -21,6 +21,7 @@ use crate::multi_key_voprf::MultiKeyVoprfCore;
 use crate::sybil_resistance::{ClientData, SybilRequestContext}; // Keep ClientData local to issuer/sybil if not in common
 use crate::AppStateWithSybil;
 use freebird_common::api::{IssueReq, IssueResp, SybilInfo, SybilProof};
+use freebird_common::tls_enforcement::ValidatedClientIp;
 
 // / Extract client information from HTTP request
 // /
@@ -38,22 +39,13 @@ use freebird_common::api::{IssueReq, IssueResp, SybilInfo, SybilProof};
 // / ClientData with available client information for entropy
 pub fn extract_client_data(
     connect_info: Option<ConnectInfo<SocketAddr>>,
-    behind_proxy: bool,
+    _behind_proxy: bool,
     headers: &HeaderMap,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> ClientData {
     // Extract IP address
-    let ip_addr = if behind_proxy {
-        // Trust X-Forwarded-For header when behind proxy
-        headers
-            .get("x-forwarded-for")
-            .and_then(|h| h.to_str().ok())
-            .and_then(|header| header.split(',').next())
-            .map(|s| s.trim().to_string())
-            .or_else(|| connect_info.map(|info| info.0.ip().to_string()))
-    } else {
-        // Direct connection - use socket address
-        connect_info.map(|info| info.0.ip().to_string())
-    };
+    let _ = (connect_info, _behind_proxy);
+    let ip_addr = validated_ip.map(|Extension(ip)| ip.0.to_string());
 
     // Extract User-Agent as fingerprint
     // In production, you might want to hash this or combine multiple headers
@@ -117,6 +109,7 @@ pub async fn handle(
     State((state, voprf)): State<(Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>)>,
     // Remove: voprf: Arc<MultiKeyVoprfCore> (it's now in State)
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     headers: HeaderMap,
     Json(req): Json<IssueReq>,
 ) -> Result<Json<IssueResp>, (StatusCode, String)> {
@@ -133,7 +126,7 @@ pub async fn handle(
 
     // Extract client data for invitation-based Sybil resistance
     // This is only used if invitation system is configured
-    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
+    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers, validated_ip);
     debug!(
         "extracted client_data: has_ip={}, has_fp={}",
         client_data.ip_addr.is_some(),
@@ -308,6 +301,7 @@ fn constant_time_key_verify(expected: &str, provided: &str) -> bool {
 pub async fn renew(
     State((state, voprf)): State<(Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>)>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     headers: HeaderMap,
     Json(req): Json<IssueReq>,
 ) -> Result<Json<IssueResp>, (StatusCode, String)> {
@@ -338,19 +332,13 @@ pub async fn renew(
         Some(k) => k,
         None => {
             warn!("❌ renewal request missing X-Admin-Key header");
-            return Err((
-                StatusCode::UNAUTHORIZED,
-                "admin key required".to_string(),
-            ));
+            return Err((StatusCode::UNAUTHORIZED, "admin key required".to_string()));
         }
     };
 
     if !constant_time_key_verify(expected_key, provided_key) {
         warn!("❌ renewal request rejected: invalid admin key");
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            "invalid admin key".to_string(),
-        ));
+        return Err((StatusCode::UNAUTHORIZED, "invalid admin key".to_string()));
     }
 
     // --- SYBIL RESISTANCE CHECK ---
@@ -379,7 +367,8 @@ pub async fn renew(
 
             debug!("verifying RegisteredUser sybil proof for renewal");
 
-            let client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
+            let client_data =
+                extract_client_data(connect_info, state.behind_proxy, &headers, validated_ip);
             let sybil_ctx = SybilRequestContext {
                 client_data: Some(client_data.clone()),
                 request_binding: Some(format!(
@@ -526,7 +515,14 @@ mod tests {
         let connect_info = Some(ConnectInfo(addr));
         let headers = HeaderMap::new();
 
-        let client_data = extract_client_data(connect_info, false, &headers);
+        let client_data = extract_client_data(
+            connect_info,
+            false,
+            &headers,
+            Some(Extension(ValidatedClientIp(
+                "192.168.1.100".parse().unwrap(),
+            ))),
+        );
 
         assert!(client_data.ip_addr.is_some());
         assert_eq!(client_data.ip_addr.unwrap(), "192.168.1.100");
@@ -540,9 +536,16 @@ mod tests {
         let connect_info = Some(ConnectInfo(addr));
 
         let mut headers = HeaderMap::new();
-        headers.insert("x-forwarded-for", "203.0.113.42, 10.0.0.1".parse().unwrap());
+        headers.insert("x-forwarded-for", "203.0.113.42".parse().unwrap());
 
-        let client_data = extract_client_data(connect_info, true, &headers);
+        let client_data = extract_client_data(
+            connect_info,
+            true,
+            &headers,
+            Some(Extension(ValidatedClientIp(
+                "203.0.113.42".parse().unwrap(),
+            ))),
+        );
 
         assert!(client_data.ip_addr.is_some());
         assert_eq!(client_data.ip_addr.unwrap(), "203.0.113.42");
@@ -553,7 +556,14 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("user-agent", "Mozilla/5.0 (Test Browser)".parse().unwrap());
 
-        let client_data = extract_client_data(None, false, &headers);
+        let client_data = extract_client_data(
+            None,
+            false,
+            &headers,
+            Some(Extension(ValidatedClientIp(
+                "192.168.1.100".parse().unwrap(),
+            ))),
+        );
 
         assert!(client_data.fingerprint.is_some());
         // Fingerprint should be a hash, not the raw UA

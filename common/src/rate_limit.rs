@@ -134,21 +134,7 @@ where
 }
 
 fn extract_ip(req: &Request<Body>) -> Option<IpAddr> {
-    if let Some(connect_info) = req
-        .extensions()
-        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
-    {
-        return Some(connect_info.ip());
-    }
-
-    if let Some(header) = req.headers().get("x-forwarded-for") {
-        if let Ok(s) = header.to_str() {
-            let first = s.split(',').next().map(str::trim).unwrap_or(s);
-            if let Ok(addr) = first.parse::<std::net::IpAddr>() {
-                return Some(addr);
-            }
-        }
-    }
-
-    None
+    req.extensions()
+        .get::<crate::tls_enforcement::ValidatedClientIp>()
+        .map(|ip| ip.0)
 }

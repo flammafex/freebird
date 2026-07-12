@@ -66,6 +66,7 @@ async fn build_state(
         behind_proxy: false,
         sybil_checker,
         invitation_system: None,
+        admin_api_key: None,
         public_issuer: None,
         epoch_duration_sec: 86400,
         epoch_retention: 2,
@@ -93,7 +94,14 @@ async fn run_single(
         sybil_proof: proof,
     };
 
-    let result = issue::handle(State((state, voprf)), None, HeaderMap::new(), Json(req)).await;
+    let result = issue::handle(
+        State((state, voprf)),
+        None,
+        None,
+        HeaderMap::new(),
+        Json(req),
+    )
+    .await;
 
     Ok(match result {
         Ok(Json(resp)) => {
@@ -115,8 +123,14 @@ async fn run_batch(
         sybil_proof: proof,
     };
 
-    let result =
-        batch_issue::handle_batch(State((state, voprf)), None, HeaderMap::new(), Json(req)).await;
+    let result = batch_issue::handle_batch(
+        State((state, voprf)),
+        None,
+        None,
+        HeaderMap::new(),
+        Json(req),
+    )
+    .await;
 
     Ok(match result {
         Ok(Json(resp)) => match &resp.results[0] {

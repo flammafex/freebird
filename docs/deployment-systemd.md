@@ -3,6 +3,11 @@
 Use the systemd templates for a single-host production deployment behind a
 reverse proxy such as nginx.
 
+This guide covers the current transitional, experimental issuance API only;
+it does not implement or select a named profile. V4 key rotation is unsafe for
+production until Phase C. Keep the stable issuer key and matching verifier key
+in place until then.
+
 ## Layout
 
 Install binaries:
@@ -41,7 +46,11 @@ install -o root -g freebird -m 0640 deploy/systemd/verifier.env.example /etc/fre
 - Backups for `/var/lib/freebird`.
 
 For a single-host deployment, Redis can run locally. For public use, enable
-Redis persistence and restrict Redis to localhost or a private network.
+Redis persistence and restrict Redis to localhost or a private network. Set
+both `REDIS_URL` and `SYBIL_REPLAY_REDIS_URL`; in-memory stores are not safe.
+Verifier deployments must also set `VERIFIER_ACCEPTED_TOKEN_VERSIONS` explicitly,
+`VERIFIER_ENV=production`, and `IN_MEMORY_REPLAY_STORE=false`.
+Keep issuer keys/state and verifier data in separate directories and backups.
 
 ## Start
 
@@ -67,7 +76,25 @@ systemctl status freebird-issuer freebird-verifier
 
 Use the nginx templates in `server-configs/`. Public deployments should expose
 only public issuance, verification, metadata, and optional WebAuthn routes.
-Restrict `/admin` by VPN, private network, or explicit IP allowlist.
+The templates deliberately return 404 for `/admin`; if administration is
+required, expose it through a separate private operator ingress and allowlist
+the VPN/operator network. Keep the service ports loopback/private and configure
+`TRUSTED_PROXY_CIDRS` to the reverse proxy's immediate backend source CIDR.
+The proxy must overwrite (not append) exactly one `X-Forwarded-Proto: https`
+and one `X-Forwarded-For` client IP. Use the proxy path for readiness; liveness
+should remain process-local and must not provide a public HTTP bypass. The
+templates explicitly proxy issuer `GET /healthz` and `GET /readyz`, and
+verifier `GET /health` and `GET /ready`; these exact routes are safe health
+surfaces and carry the same strict forwarded headers. Do not substitute an
+admin or wildcard route for probes.
+
+Admin API keys are secrets: do not expose them to clients or logs, and isolate
+issuer and verifier admin access (use separate operator credentials where
+possible). Invitation configuration must use the actual parser keys:
+`SYBIL_INVITE_COOLDOWN`, `SYBIL_INVITE_EXPIRES`,
+`SYBIL_INVITE_NEW_USER_WAIT`, and `SYBIL_INVITE_AUTOSAVE_INTERVAL`; `_SECS`
+variants are ignored. PKCS#11 can store key material, but HSM-native/full
+VOPRF is unsupported.
 
 ## WebAuthn
 

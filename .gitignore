@@ -45,3 +45,6 @@ public_bearer_sk.der
 
 # Sisyphus planning artifacts
 .sisyphus/
+
+# Local deep-work planning state
+.slim/deepwork/

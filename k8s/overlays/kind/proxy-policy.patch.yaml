@@ -1,0 +1,17 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-proxy-boundary-probes
+  namespace: freebird
+spec:
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: controller
+      ports:
+        - {protocol: TCP, port: 80}
+        - {protocol: TCP, port: 443}

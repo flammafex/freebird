@@ -8,12 +8,36 @@ use rand::RngCore;
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+const HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Serialize, Deserialize)]
 struct SavedToken {
     token_b64: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReplayFixture {
+    schema_version: u32,
+    issuer_url: String,
+    verifier_url: String,
+    token_b64: String,
+    issuer_id: String,
+    kid: String,
+    issuer_voprf_pubkey_b64: String,
+    verifier_id: String,
+    audience: String,
+    scope_digest_b64: String,
+}
+
+struct IssuedToken {
+    token_b64: String,
+    fixture: ReplayFixture,
 }
 
 #[derive(Clone, Debug)]
@@ -46,6 +70,7 @@ struct ParsedCli {
     mode: String,
     stress_count: usize,
     options: ClientOptions,
+    path: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -83,6 +108,12 @@ async fn main() -> Result<()> {
             println!("⚡ STRESS TEST MODE (n={})", parsed.stress_count);
             stress_test(parsed.stress_count, &parsed.options).await?;
         }
+        "backup-fixture-create" => {
+            create_replay_fixture(&parsed.options, parsed.path.as_ref().unwrap()).await?;
+        }
+        "backup-fixture-validate-replay" => {
+            validate_replay_fixture(&parsed.options, parsed.path.as_ref().unwrap()).await?;
+        }
         _ => {
             println!("🕊️ NORMAL MODE - Fresh token issuance and verification");
             normal_flow(&parsed.options).await?;
@@ -96,10 +127,24 @@ fn parse_cli() -> Result<ParsedCli> {
     let mut options = ClientOptions::from_env();
     let mut mode: Option<String> = None;
     let mut stress_count = 5usize;
+    let mut path = None;
     let mut args = std::env::args().skip(1).peekable();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "backup-fixture" => mode = Some("backup-fixture".to_string()),
+            "create" | "validate-replay" => {
+                if mode.as_deref() != Some("backup-fixture") {
+                    return Err(anyhow!("{} must follow backup-fixture", arg));
+                }
+                mode = Some(format!("backup-fixture-{}", arg));
+            }
+            "--output" | "--input" => {
+                path = Some(PathBuf::from(
+                    args.next()
+                        .ok_or_else(|| anyhow!("{} requires a path", arg))?,
+                ));
+            }
             "--issuer-url" => {
                 options.issuer_url = args
                     .next()
@@ -149,10 +194,19 @@ fn parse_cli() -> Result<ParsedCli> {
         ));
     }
 
+    if matches!(
+        mode.as_deref(),
+        Some("backup-fixture-create") | Some("backup-fixture-validate-replay")
+    ) && path.is_none()
+    {
+        return Err(anyhow!("backup-fixture mode requires --output or --input"));
+    }
+
     Ok(ParsedCli {
         mode: mode.unwrap_or_else(|| "normal".to_string()),
         stress_count,
         options,
+        path,
     })
 }
 
@@ -170,6 +224,8 @@ fn print_help() {
     println!("  --save          Issue token and save to token.json");
     println!("  --load          Load token from token.json and try to verify");
     println!("  --stress N      Issue and verify N tokens in sequence (default: 5)");
+    println!("  backup-fixture create --output PATH   Create a spent replay fixture");
+    println!("  backup-fixture validate-replay --input PATH   Validate replay rejection");
     println!("  --help, -h      Show this help message");
     println!();
     println!("OPTIONS:");
@@ -192,9 +248,7 @@ fn print_help() {
 async fn normal_flow(options: &ClientOptions) -> Result<()> {
     let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
 
-    let http = HttpClient::builder()
-        .timeout(Duration::from_secs(5))
-        .build()?;
+    let http = HttpClient::builder().timeout(HTTP_TIMEOUT).build()?;
 
     // Issue token
     let token_b64 = issue_token(&http, options, ctx).await?;
@@ -216,9 +270,7 @@ async fn normal_flow(options: &ClientOptions) -> Result<()> {
 async fn test_replay_attack(options: &ClientOptions) -> Result<()> {
     let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
 
-    let http = HttpClient::builder()
-        .timeout(Duration::from_secs(5))
-        .build()?;
+    let http = HttpClient::builder().timeout(HTTP_TIMEOUT).build()?;
 
     // Issue token
     println!("\n Step 1: Issuing fresh token...");
@@ -260,9 +312,7 @@ async fn test_double_spend(options: &ClientOptions) -> Result<()> {
 async fn test_expired_token(options: &ClientOptions) -> Result<()> {
     let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
 
-    let http = HttpClient::builder()
-        .timeout(Duration::from_secs(5))
-        .build()?;
+    let http = HttpClient::builder().timeout(HTTP_TIMEOUT).build()?;
 
     // Issue token
     println!("\n Step 1: Issuing token...");
@@ -287,9 +337,7 @@ async fn test_expired_token(options: &ClientOptions) -> Result<()> {
 async fn save_token_mode(options: &ClientOptions) -> Result<()> {
     let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
 
-    let http = HttpClient::builder()
-        .timeout(Duration::from_secs(5))
-        .build()?;
+    let http = HttpClient::builder().timeout(HTTP_TIMEOUT).build()?;
 
     let token_b64 = issue_token(&http, options, ctx).await?;
 
@@ -309,9 +357,7 @@ async fn load_token_mode(options: &ClientOptions) -> Result<()> {
 
     println!("Loaded token from token.json");
 
-    let http = HttpClient::builder()
-        .timeout(Duration::from_secs(5))
-        .build()?;
+    let http = HttpClient::builder().timeout(HTTP_TIMEOUT).build()?;
 
     let success = verify_token(&http, &options.verifier_url, &saved.token_b64).await?;
 
@@ -327,9 +373,7 @@ async fn load_token_mode(options: &ClientOptions) -> Result<()> {
 async fn stress_test(count: usize, options: &ClientOptions) -> Result<()> {
     let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
 
-    let http = HttpClient::builder()
-        .timeout(Duration::from_secs(5))
-        .build()?;
+    let http = HttpClient::builder().timeout(HTTP_TIMEOUT).build()?;
 
     let mut successes = 0;
     let mut failures = 0;
@@ -369,6 +413,14 @@ async fn stress_test(count: usize, options: &ClientOptions) -> Result<()> {
 }
 
 async fn issue_token(http: &HttpClient, options: &ClientOptions, ctx: &[u8]) -> Result<String> {
+    Ok(issue_token_detailed(http, options, ctx).await?.token_b64)
+}
+
+async fn issue_token_detailed(
+    http: &HttpClient,
+    options: &ClientOptions,
+    ctx: &[u8],
+) -> Result<IssuedToken> {
     // Get issuer metadata first; V4 binds the issuer/kid into the blinded input.
     let wk: serde_json::Value = http
         .get(format!("{}/.well-known/issuer", options.issuer_url))
@@ -467,7 +519,22 @@ async fn issue_token(http: &HttpClient, options: &ClientOptions, ctx: &[u8]) -> 
     let token_wire = freebird_crypto::build_redemption_token(&redemption_token)
         .map_err(|e| anyhow!("{:?}", e))?;
 
-    Ok(Base64UrlUnpadded::encode_string(&token_wire))
+    let token_b64 = Base64UrlUnpadded::encode_string(&token_wire);
+    Ok(IssuedToken {
+        token_b64: token_b64.clone(),
+        fixture: ReplayFixture {
+            schema_version: 2,
+            issuer_url: options.issuer_url.clone(),
+            verifier_url: options.verifier_url.clone(),
+            token_b64,
+            issuer_id,
+            kid,
+            issuer_voprf_pubkey_b64: pubkey_b64,
+            verifier_id: verifier_id.to_string(),
+            audience: audience.to_string(),
+            scope_digest_b64: scope_digest_b64.to_string(),
+        },
+    })
 }
 
 fn build_sybil_proof(
@@ -541,6 +608,122 @@ fn has_leading_zero_bits(hash: &[u8], difficulty: u32) -> bool {
         .unwrap_or(false)
 }
 
+async fn create_replay_fixture(options: &ClientOptions, output: &PathBuf) -> Result<()> {
+    let http = HttpClient::builder().timeout(HTTP_TIMEOUT).build()?;
+    let issued = issue_token_detailed(&http, options, freebird_crypto::VOPRF_CONTEXT_V4).await?;
+    if !check_token(&http, &options.verifier_url, &issued.token_b64).await? {
+        return Err(anyhow!("fixture token failed /v1/check"));
+    }
+    if !verify_token(&http, &options.verifier_url, &issued.token_b64).await? {
+        return Err(anyhow!("fixture token failed /v1/verify"));
+    }
+    write_fixture_atomically(output, &issued.fixture)?;
+    println!("fixture created: {}", output.display());
+    Ok(())
+}
+
+async fn validate_replay_fixture(options: &ClientOptions, input: &PathBuf) -> Result<()> {
+    let bytes = std::fs::read(input)
+        .map_err(|e| anyhow!("failed to read fixture {}: {}", input.display(), e))?;
+    let fixture: ReplayFixture =
+        serde_json::from_slice(&bytes).map_err(|e| anyhow!("invalid replay fixture: {}", e))?;
+    if fixture.schema_version != 2 || fixture.token_b64.is_empty() {
+        return Err(anyhow!("invalid replay fixture schema"));
+    }
+    if fixture.issuer_url != options.issuer_url || fixture.verifier_url != options.verifier_url {
+        return Err(anyhow!(
+            "fixture endpoint binding does not match the local Compose endpoints"
+        ));
+    }
+    Base64UrlUnpadded::decode_vec(&fixture.token_b64)
+        .map_err(|e| anyhow!("invalid fixture token encoding: {e}"))?;
+
+    let http = HttpClient::builder().timeout(HTTP_TIMEOUT).build()?;
+    let issuer_meta: serde_json::Value = http
+        .get(format!("{}/.well-known/issuer", options.issuer_url))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let verifier_meta: serde_json::Value = http
+        .get(format!("{}/.well-known/verifier", options.verifier_url))
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    if issuer_meta["issuer_id"] != fixture.issuer_id
+        || issuer_meta["voprf"]["kid"] != fixture.kid
+        || issuer_meta["voprf"]["pubkey"] != fixture.issuer_voprf_pubkey_b64
+        || verifier_meta["verifier_id"] != fixture.verifier_id
+        || verifier_meta["audience"] != fixture.audience
+        || verifier_meta["scope_digest_b64"] != fixture.scope_digest_b64
+    {
+        return Err(anyhow!(
+            "fixture metadata does not match Compose discovery metadata"
+        ));
+    }
+    if !check_token(&http, &options.verifier_url, &fixture.token_b64).await? {
+        return Err(anyhow!("fixture token did not pass /v1/check"));
+    }
+    match verify_token_status(&http, &options.verifier_url, &fixture.token_b64).await? {
+        reqwest::StatusCode::UNAUTHORIZED => {
+            println!("replay rejected: 401");
+            Ok(())
+        }
+        status => Err(anyhow!("expected replay rejection 401, got {}", status)),
+    }
+}
+
+fn write_fixture_atomically(path: &PathBuf, fixture: &ReplayFixture) -> Result<()> {
+    use std::io::Write;
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    let tmp = parent.join(format!(".{}.tmp", std::process::id()));
+    let bytes = serde_json::to_vec_pretty(fixture)?;
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&tmp)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&tmp, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        anyhow!("failed to atomically write fixture: {}", e)
+    })
+}
+
+async fn check_token(http: &HttpClient, verifier_url: &str, token_b64: &str) -> Result<bool> {
+    let response = http
+        .post(format!("{verifier_url}/v1/check"))
+        .json(&VerifyReq {
+            token_b64: token_b64.to_string(),
+        })
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        return Ok(false);
+    }
+    Ok(response.json::<VerifyResp>().await?.ok)
+}
+
+async fn verify_token_status(
+    http: &HttpClient,
+    verifier_url: &str,
+    token_b64: &str,
+) -> Result<reqwest::StatusCode> {
+    Ok(http
+        .post(format!("{verifier_url}/v1/verify"))
+        .json(&VerifyReq {
+            token_b64: token_b64.to_string(),
+        })
+        .send()
+        .await?
+        .status())
+}
+
 async fn verify_token(http: &HttpClient, verifier_url: &str, token_b64: &str) -> Result<bool> {
     // V4: just send the private-verification redemption token
     let resp = http
@@ -556,5 +739,48 @@ async fn verify_token(http: &HttpClient, verifier_url: &str, token_b64: &str) ->
         Ok(verify_resp.ok)
     } else {
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    fn fixture() -> ReplayFixture {
+        ReplayFixture {
+            schema_version: 2,
+            issuer_url: "http://issuer".into(),
+            verifier_url: "http://verifier".into(),
+            token_b64: "AQ".into(),
+            issuer_id: "issuer:test".into(),
+            kid: "kid-1".into(),
+            issuer_voprf_pubkey_b64: "AQ".into(),
+            verifier_id: "verifier:test".into(),
+            audience: "test".into(),
+            scope_digest_b64: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".into(),
+        }
+    }
+
+    #[test]
+    fn replay_fixture_rejects_unknown_fields() {
+        let mut value = serde_json::to_value(fixture()).unwrap();
+        value["unexpected"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<ReplayFixture>(value).is_err());
+    }
+
+    #[test]
+    fn replay_fixture_is_atomically_written_with_restricted_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fixture.json");
+        write_fixture_atomically(&path, &fixture()).unwrap();
+        let parsed: ReplayFixture = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(parsed.schema_version, 2);
+        #[cfg(unix)]
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 }

@@ -81,6 +81,7 @@ ENV BIND_ADDR=0.0.0.0:8081 \
     ISSUER_SK_PATH=/data/keys/issuer_sk.bin \
     KEY_ROTATION_STATE_PATH=/data/keys/key_rotation_state.json \
     SYBIL_INVITE_PERSISTENCE_PATH=/data/state/invitations.json \
+    AUDIT_LOG_PATH=/data/audit_log.json \
     RUST_LOG=info
 
 # Add metadata labels for supply chain
@@ -94,9 +95,10 @@ LABEL org.opencontainers.image.title="Freebird Issuer" \
       org.opencontainers.image.created="${CREATED}" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
-# Health check endpoint
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 --start-period=10s \
-    CMD curl -f http://localhost:8081/.well-known/issuer || exit 1
+# Container health is dependency readiness only; it does not assert that a
+# trusted reverse proxy or TLS boundary exists. /healthz remains liveness.
+HEALTHCHECK --interval=10s --timeout=5s --retries=6 --start-period=20s \
+    CMD curl -fsS http://localhost:8081/readyz || exit 1
 
 USER freebird
 VOLUME ["/data"]
@@ -147,8 +149,10 @@ LABEL org.opencontainers.image.title="Freebird Verifier" \
       org.opencontainers.image.created="${CREATED}" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
-# Health check endpoint
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 CMD curl -f http://localhost:8082/health || exit 1
+# Container health is dependency readiness only; it does not assert that a
+# trusted reverse proxy or TLS boundary exists. /health remains liveness.
+HEALTHCHECK --interval=10s --timeout=5s --retries=6 --start-period=20s \
+    CMD curl -fsS http://localhost:8082/ready || exit 1
 
 # Security: disable unnecessary capabilities
 RUN setcap -r /usr/sbin/setcap || true

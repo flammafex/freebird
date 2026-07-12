@@ -7,6 +7,10 @@ core deployment has three actors:
 - issuer: checks optional admission policy and evaluates blinded requests
 - verifier: validates tokens and records nullifiers to prevent double spend
 
+The current issuance API is transitional and experimental. It is not a named
+deployment profile; see the authoritative [Profile and Claim
+Matrix](profile-claim-matrix.md) before making profile or privacy claims.
+
 The issuer does not need to know where a token will be redeemed. The verifier
 does not need to know which issuance request produced a redeemed token.
 
@@ -24,7 +28,10 @@ does not need to know which issuance request produced a redeemed token.
 
 ## V4 Private-Verification Flow
 
-V4 uses a P-256 VOPRF. It is the flow exercised by `freebird-interface`.
+V4 uses a Freebird-specific, bespoke P-256 VOPRF-like construction. It is not
+an RFC 9497 VOPRF implementation and is not interoperable with RFC 9497 or
+Privacy Pass VOPRF deployments. It is the flow exercised by
+`freebird-interface`.
 
 1. The client creates a private input and blinds it.
 2. The client sends the blinded element to `POST /v1/oprf/issue`.

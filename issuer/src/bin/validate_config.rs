@@ -162,6 +162,32 @@ fn validate_core_config() -> ValidationSection {
         ));
     }
 
+    let behind_proxy = env::var("BEHIND_PROXY")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+    if require_tls && !behind_proxy {
+        section.add(CheckResult::Error(
+            "REQUIRE_TLS=true requires BEHIND_PROXY=true and a trusted proxy boundary".into(),
+        ));
+    }
+    if behind_proxy {
+        match env::var("TRUSTED_PROXY_CIDRS") {
+            Ok(value) => {
+                match freebird_common::tls_enforcement::validate_trusted_proxy_cidrs(&value) {
+                    Ok(()) => {
+                        section.add(CheckResult::Ok("TRUSTED_PROXY_CIDRS is configured".into()))
+                    }
+                    Err(error) => section.add(CheckResult::Error(format!(
+                        "TRUSTED_PROXY_CIDRS invalid: {error}"
+                    ))),
+                }
+            }
+            _ => section.add(CheckResult::Error(
+                "BEHIND_PROXY=true requires non-empty TRUSTED_PROXY_CIDRS".into(),
+            )),
+        }
+    }
+
     // ADMIN_API_KEY
     match env::var("ADMIN_API_KEY") {
         Ok(key) if key.len() >= 32 => {
@@ -269,6 +295,32 @@ fn validate_key_config() -> ValidationSection {
         }
     }
 
+    // V4 deprecated secret keys are currently retained in memory only.  The
+    // rotation state file does not make rotation restart-safe, so surface
+    // this limitation rather than presenting the path as a production-safe
+    // rotation facility.
+    section.add(CheckResult::Warning(
+        "V4 key rotation is unsafe: deprecated V4 keys are not persisted across restart; do not rely on rotation for production".to_string(),
+    ));
+
+    let environment = env::var("FREEBIRD_ENV").unwrap_or_else(|_| "production".to_string());
+    let unsafe_rotation = env::var("ALLOW_UNSAFE_V4_ROTATION")
+        .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+        .unwrap_or(false);
+    if unsafe_rotation && environment != "development" {
+        section.add(CheckResult::Error(
+            "ALLOW_UNSAFE_V4_ROTATION=true requires FREEBIRD_ENV=development".to_string(),
+        ));
+    } else if unsafe_rotation {
+        section.add(CheckResult::Warning(
+            "Unsafe V4 admin key rotation is enabled for development".to_string(),
+        ));
+    } else {
+        section.add(CheckResult::Ok(
+            "V4 admin key rotation is disabled".to_string(),
+        ));
+    }
+
     // KID override
     if let Ok(kid) = env::var("KID") {
         section.add(CheckResult::Ok(format!("KID = {} (override)", kid)));
@@ -302,6 +354,16 @@ fn validate_sybil_config() -> ValidationSection {
                 difficulty
             )));
         }
+        "proof_of_work" => {
+            let difficulty = env::var("SYBIL_POW_DIFFICULTY")
+                .ok()
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(20);
+            section.add(CheckResult::Ok(format!(
+                "SYBIL_POW_DIFFICULTY = {} leading zero bits",
+                difficulty
+            )));
+        }
         "rate_limit" => {
             let rate_limit = freebird_common::duration::env_duration("SYBIL_RATE_LIMIT", 3600);
             section.add(CheckResult::Ok(format!(
@@ -310,6 +372,9 @@ fn validate_sybil_config() -> ValidationSection {
             )));
         }
         "progressive_trust" => {
+            section.add(CheckResult::Warning(
+                "Progressive Trust is experimental and has not been reviewed as a production Sybil boundary".to_string(),
+            ));
             validate_progressive_trust_config(&mut section);
         }
         "proof_of_diversity" => {
@@ -317,6 +382,23 @@ fn validate_sybil_config() -> ValidationSection {
         }
         "multi_party_vouching" => {
             validate_multi_party_vouching_config(&mut section);
+        }
+        "social_graph" => {
+            section.add(CheckResult::Warning(
+                "Social Graph Sybil resistance is experimental and depends on an external attester trust boundary".to_string(),
+            ));
+            validate_social_graph_config(&mut section);
+        }
+        "webauthn" => {
+            if env::var("WEBAUTHN_RP_ID").is_err() || env::var("WEBAUTHN_RP_ORIGIN").is_err() {
+                section.add(CheckResult::Error(
+                    "WEBAUTHN_RP_ID and WEBAUTHN_RP_ORIGIN are required when SYBIL_RESISTANCE=webauthn".to_string(),
+                ));
+            } else {
+                section.add(CheckResult::Ok(
+                    "WebAuthn configuration is present (feature-gated at runtime)".to_string(),
+                ));
+            }
         }
         "combined" => {
             let mechanisms = env::var("SYBIL_COMBINED_MECHANISMS")
@@ -329,14 +411,31 @@ fn validate_sybil_config() -> ValidationSection {
             section.add(CheckResult::Ok(format!("SYBIL_COMBINED_MODE = {}", mode)));
 
             // Validate salts for any combined mechanisms that use them
-            if mechanisms.contains("progressive_trust") {
+            let mechanisms: Vec<&str> = mechanisms.split(',').map(str::trim).collect();
+            if mechanisms.contains(&"progressive_trust") {
+                section.add(CheckResult::Warning(
+                    "Progressive Trust is experimental and has not been reviewed as a production Sybil boundary".to_string(),
+                ));
                 validate_progressive_trust_config(&mut section);
             }
-            if mechanisms.contains("proof_of_diversity") {
+            if mechanisms.contains(&"proof_of_diversity") {
                 validate_proof_of_diversity_config(&mut section);
             }
-            if mechanisms.contains("multi_party_vouching") {
+            if mechanisms.contains(&"multi_party_vouching") {
                 validate_multi_party_vouching_config(&mut section);
+            }
+            if mechanisms.contains(&"social_graph") {
+                section.add(CheckResult::Warning(
+                    "Social Graph Sybil resistance is experimental and depends on an external attester trust boundary".to_string(),
+                ));
+                validate_social_graph_config(&mut section);
+            }
+            if mechanisms.contains(&"webauthn")
+                && (env::var("WEBAUTHN_RP_ID").is_err() || env::var("WEBAUTHN_RP_ORIGIN").is_err())
+            {
+                section.add(CheckResult::Error(
+                    "WEBAUTHN_RP_ID and WEBAUTHN_RP_ORIGIN are required when combined includes webauthn".to_string(),
+                ));
             }
         }
         other => {
@@ -418,6 +517,35 @@ fn validate_progressive_trust_config(section: &mut ValidationSection) {
             "SYBIL_PROGRESSIVE_TRUST_SALT = [custom]".to_string(),
         ));
     }
+}
+
+fn validate_social_graph_config(section: &mut ValidationSection) {
+    let attesters_path = env::var("SOCIAL_GRAPH_ATTESTERS_PATH")
+        .unwrap_or_else(|_| "social_graph_attesters.json".to_string());
+    validate_persistence_path(section, "SOCIAL_GRAPH_ATTESTERS_PATH", &attesters_path);
+
+    match env::var("SOCIAL_GRAPH_ACCEPTED_POLICY_IDS") {
+        Ok(value) if value.split(',').any(|id| !id.trim().is_empty()) => section.add(
+            CheckResult::Ok("SOCIAL_GRAPH_ACCEPTED_POLICY_IDS = [configured]".to_string()),
+        ),
+        _ => section.add(CheckResult::Error(
+            "SOCIAL_GRAPH_ACCEPTED_POLICY_IDS is required for social_graph and must not be empty"
+                .to_string(),
+        )),
+    }
+
+    if env::var("SOCIAL_GRAPH_JWKS_URL").is_ok() {
+        section.add(CheckResult::Warning(
+            "SOCIAL_GRAPH_JWKS_URL is configured, but JWKS key refresh is not implemented; local attester keys remain authoritative".to_string(),
+        ));
+    }
+
+    let state_path = env::var("SOCIAL_GRAPH_STATE_PATH")
+        .unwrap_or_else(|_| "social_graph_state.json".to_string());
+    section.add(CheckResult::Warning(format!(
+        "SOCIAL_GRAPH_STATE_PATH = {} (local revocation state is not implemented)",
+        state_path
+    )));
 }
 
 fn validate_proof_of_diversity_config(section: &mut ValidationSection) {
@@ -569,11 +697,121 @@ fn validate_hsm_config() -> Option<ValidationSection> {
     let mode = env::var("HSM_MODE").unwrap_or_else(|_| "storage".to_string());
     if mode == "full" {
         section.add(CheckResult::Warning(
-            "HSM_MODE = full (not yet implemented, will fall back to storage)".to_string(),
+            "HSM_MODE = full is unsupported: VOPRF evaluation remains in software; HSM protects key storage only".to_string(),
         ));
     } else {
         section.add(CheckResult::Ok(format!("HSM_MODE = {}", mode)));
     }
 
     Some(section)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serial_test::serial;
+
+    fn set_mode(mode: &str) {
+        std::env::set_var("SYBIL_RESISTANCE", mode);
+        std::env::remove_var("SOCIAL_GRAPH_ACCEPTED_POLICY_IDS");
+        std::env::remove_var("SOCIAL_GRAPH_JWKS_URL");
+    }
+
+    #[test]
+    #[serial]
+    fn recognizes_social_graph_and_reports_required_policy_ids() {
+        set_mode("social_graph");
+        let section = validate_sybil_config();
+
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Warning(message) if message.contains("Social Graph") && message.contains("experimental")
+        )));
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message) if message.contains("SOCIAL_GRAPH_ACCEPTED_POLICY_IDS")
+        )));
+        std::env::remove_var("SYBIL_RESISTANCE");
+    }
+
+    #[test]
+    #[serial]
+    fn accepts_social_graph_with_policy_ids() {
+        set_mode("social_graph");
+        std::env::set_var("SOCIAL_GRAPH_ACCEPTED_POLICY_IDS", "clout-trust-v1");
+        let section = validate_sybil_config();
+
+        assert!(!section.has_errors());
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Ok(message) if message.contains("SOCIAL_GRAPH_ACCEPTED_POLICY_IDS")
+        )));
+        std::env::remove_var("SYBIL_RESISTANCE");
+        std::env::remove_var("SOCIAL_GRAPH_ACCEPTED_POLICY_IDS");
+    }
+
+    #[test]
+    #[serial]
+    fn recognizes_runtime_alias_and_experimental_progressive_trust_warning() {
+        set_mode("proof_of_work");
+        assert!(!validate_sybil_config().has_errors());
+
+        set_mode("progressive_trust");
+        let section = validate_sybil_config();
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Warning(message) if message.contains("Progressive Trust") && message.contains("experimental")
+        )));
+        std::env::remove_var("SYBIL_RESISTANCE");
+    }
+
+    #[test]
+    #[serial]
+    fn warns_for_unsupported_hsm_native_voprf() {
+        std::env::set_var("HSM_ENABLE", "true");
+        std::env::set_var("HSM_MODE", "full");
+        let section = validate_hsm_config().expect("HSM section should be present");
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Warning(message) if message.contains("unsupported") && message.contains("VOPRF")
+        )));
+        std::env::remove_var("HSM_ENABLE");
+        std::env::remove_var("HSM_MODE");
+    }
+
+    #[test]
+    #[serial]
+    fn warns_when_v4_rotation_is_not_restart_safe() {
+        let section = validate_key_config();
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Warning(message) if message.contains("V4 key rotation") && message.contains("not persisted")
+        )));
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_unsafe_v4_rotation_outside_development() {
+        std::env::set_var("ALLOW_UNSAFE_V4_ROTATION", "true");
+        std::env::set_var("FREEBIRD_ENV", "production");
+        let section = validate_key_config();
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message) if message.contains("FREEBIRD_ENV=development")
+        )));
+        std::env::remove_var("ALLOW_UNSAFE_V4_ROTATION");
+        std::env::remove_var("FREEBIRD_ENV");
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_unknown_sybil_mode() {
+        set_mode("not-a-runtime-mode");
+        let section = validate_sybil_config();
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message) if message.contains("Unknown SYBIL_RESISTANCE mode")
+        )));
+        std::env::remove_var("SYBIL_RESISTANCE");
+    }
 }

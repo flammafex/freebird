@@ -14,8 +14,13 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
 
@@ -122,7 +127,7 @@ pub struct AuditConfig {
 }
 
 fn default_audit_path() -> PathBuf {
-    PathBuf::from("audit_log.json")
+    PathBuf::from("/var/lib/freebird/issuer/audit_log.json")
 }
 
 fn default_max_entries() -> usize {
@@ -150,28 +155,63 @@ struct PersistedState {
     version: u32,
 }
 
+struct RuntimeState {
+    persisted: PersistedState,
+    generation: u64,
+}
+
 /// The main audit log system with persistence
 pub struct AuditLog {
     /// In-memory log entries
-    state: Arc<RwLock<PersistedState>>,
+    state: Arc<RwLock<RuntimeState>>,
     /// Configuration
     config: AuditConfig,
     /// Flag to track if state has been modified since last save
-    dirty: Arc<RwLock<bool>>,
+    save_lock: Arc<Mutex<()>>,
+}
+
+static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn ensure_storage_path(path: &Path) -> Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent).context("create audit parent directory")?;
+    let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let probe = parent.join(format!(
+        ".audit-writable.{}.{}",
+        std::process::id(),
+        counter
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options
+        .open(&probe)
+        .context("audit directory is not writable")?;
+    use std::io::Write;
+    file.write_all(b"audit path probe")
+        .context("write audit path probe")?;
+    file.sync_all().context("sync audit path probe")?;
+    fs::remove_file(&probe).context("remove audit path probe")?;
+    Ok(())
 }
 
 impl AuditLog {
     /// Create a new audit log system
     pub fn new(config: AuditConfig) -> Self {
         Self {
-            state: Arc::new(RwLock::new(PersistedState::default())),
+            state: Arc::new(RwLock::new(RuntimeState {
+                persisted: PersistedState::default(),
+                generation: 0,
+            })),
             config,
-            dirty: Arc::new(RwLock::new(false)),
+            save_lock: Arc::new(Mutex::new(())),
         }
     }
 
     /// Create and load from persistence file
     pub async fn load_or_create(config: AuditConfig) -> Result<Self> {
+        ensure_storage_path(&config.persistence_path).context("validate audit storage path")?;
         let state = if config.persistence_path.exists() {
             info!("Loading audit log from {:?}", config.persistence_path);
             let data = tokio::fs::read_to_string(&config.persistence_path)
@@ -187,9 +227,12 @@ impl AuditLog {
         };
 
         let system = Self {
-            state: Arc::new(RwLock::new(state)),
+            state: Arc::new(RwLock::new(RuntimeState {
+                persisted: state,
+                generation: 0,
+            })),
             config,
-            dirty: Arc::new(RwLock::new(false)),
+            save_lock: Arc::new(Mutex::new(())),
         };
 
         // Start autosave task if configured
@@ -203,7 +246,7 @@ impl AuditLog {
     /// Start background autosave task
     fn start_autosave_task(&self) {
         let state = self.state.clone();
-        let dirty = self.dirty.clone();
+        let save_lock = self.save_lock.clone();
         let path = self.config.persistence_path.clone();
         let interval = self.config.autosave_interval_secs;
 
@@ -214,18 +257,24 @@ impl AuditLog {
             loop {
                 interval_timer.tick().await;
 
-                // Only save if dirty
-                let is_dirty = *dirty.read().await;
-                if !is_dirty {
+                // Serialize the complete snapshot with the final shutdown
+                // flush. The lock must precede both snapshot and generation
+                // capture, otherwise autosave can overwrite a final flush.
+                let _save_guard = save_lock.lock().await;
+                let (state_snapshot, generation) = {
+                    let state = state.read().await;
+                    (state.persisted.clone(), state.generation)
+                };
+                if generation == 0 {
                     continue;
                 }
-
-                let state_snapshot = state.read().await.clone();
-
                 match Self::save_to_file(&state_snapshot, &path).await {
                     Ok(_) => {
-                        *dirty.write().await = false;
-                        debug!("Autosaved audit log");
+                        let mut current = state.write().await;
+                        if current.generation == generation {
+                            current.generation = 0;
+                        }
+                        debug!(generation, "Autosaved audit log");
                     }
                     Err(e) => {
                         error!("Audit log autosave failed: {:?}", e);
@@ -240,46 +289,75 @@ impl AuditLog {
         let json = serde_json::to_string_pretty(state).context("serialize audit log")?;
 
         // Atomic write: write to temp file, then rename
-        let temp_path = path.with_extension("tmp");
-        tokio::fs::write(&temp_path, json)
-            .await
-            .context("write temp file")?;
-        tokio::fs::rename(&temp_path, path)
-            .await
-            .context("rename temp file")?;
+        let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let temp_path = path.with_file_name(format!(
+            ".{}.tmp.{}.{}",
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("audit"),
+            std::process::id(),
+            counter
+        ));
+        #[cfg(unix)]
+        let parent = crate::shutdown::persistence_parent(path);
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        options.mode(0o600);
+        options.create_new(true);
+        let mut file = options.open(&temp_path).context("open audit temp file")?;
+        use std::io::Write;
+        file.write_all(json.as_bytes()).context("write temp file")?;
+        file.sync_all().context("sync audit temp file")?;
+        if let Err(error) = fs::rename(&temp_path, path) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(error).context("rename temp file");
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+                .context("set audit file permissions")?;
+        }
+        // Directory sync makes the rename durable on Unix filesystems.
+        #[cfg(unix)]
+        std::fs::File::open(parent)
+            .context("open audit directory for sync")?
+            .sync_all()
+            .context("sync audit directory")?;
 
         Ok(())
     }
 
     /// Explicitly save current state
     pub async fn save(&self) -> Result<()> {
-        let state_snapshot = self.state.read().await.clone();
+        let _save_guard = self.save_lock.lock().await;
+        let (state_snapshot, generation) = {
+            let state = self.state.read().await;
+            (state.persisted.clone(), state.generation)
+        };
         Self::save_to_file(&state_snapshot, &self.config.persistence_path).await?;
-        *self.dirty.write().await = false;
+        let mut state = self.state.write().await;
+        if state.generation == generation {
+            state.generation = 0;
+        }
         info!("Saved audit log to {:?}", self.config.persistence_path);
         Ok(())
     }
 
     /// Mark state as dirty
-    async fn mark_dirty(&self) {
-        *self.dirty.write().await = true;
-    }
-
     /// Log an audit entry
     pub async fn log(&self, entry: AuditEntry) {
         let mut state = self.state.write().await;
 
         // Add entry
-        state.entries.push(entry.clone());
+        state.persisted.entries.push(entry.clone());
 
         // Trim if over max entries
-        if self.config.max_entries > 0 && state.entries.len() > self.config.max_entries {
-            let excess = state.entries.len() - self.config.max_entries;
-            state.entries.drain(0..excess);
+        if self.config.max_entries > 0 && state.persisted.entries.len() > self.config.max_entries {
+            let excess = state.persisted.entries.len() - self.config.max_entries;
+            state.persisted.entries.drain(0..excess);
         }
-
+        state.generation = state.generation.wrapping_add(1).max(1);
         drop(state);
-        self.mark_dirty().await;
 
         debug!(
             action = %entry.action,
@@ -296,6 +374,7 @@ impl AuditLog {
 
         // Return entries in reverse order (newest first)
         state
+            .persisted
             .entries
             .iter()
             .rev()
@@ -308,7 +387,7 @@ impl AuditLog {
     /// Get total count of entries
     pub async fn count(&self) -> usize {
         let state = self.state.read().await;
-        state.entries.len()
+        state.persisted.entries.len()
     }
 
     /// Get entries filtered by level
@@ -321,6 +400,7 @@ impl AuditLog {
         let state = self.state.read().await;
 
         state
+            .persisted
             .entries
             .iter()
             .rev()
@@ -409,5 +489,144 @@ mod tests {
         assert_eq!(entry.user_id, Some("bad_user".to_string()));
         assert_eq!(entry.details, Some("Spam behavior detected".to_string()));
         assert_eq!(entry.admin_id, Some("admin1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn corrupt_audit_log_is_a_startup_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.json");
+        tokio::fs::write(&path, b"not-json").await.unwrap();
+        let result = AuditLog::load_or_create(AuditConfig {
+            persistence_path: path,
+            ..AuditConfig::default()
+        })
+        .await;
+        assert!(result.is_err());
+        assert!(result
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("deserialize audit log"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn persisted_audit_log_has_restrictive_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.json");
+        let audit = AuditLog::new(AuditConfig {
+            persistence_path: path.clone(),
+            ..AuditConfig::default()
+        });
+        audit.log(AuditEntry::info("permission_test")).await;
+        audit.save().await.unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
+
+    #[tokio::test]
+    async fn audit_storage_rejects_unwritable_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let not_a_directory = dir.path().join("parent");
+        tokio::fs::write(&not_a_directory, b"file").await.unwrap();
+        let result = AuditLog::load_or_create(AuditConfig {
+            persistence_path: not_a_directory.join("audit.json"),
+            ..AuditConfig::default()
+        })
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn late_appends_remain_dirty_after_a_save() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.json");
+        let audit = AuditLog::new(AuditConfig {
+            persistence_path: path.clone(),
+            ..AuditConfig::default()
+        });
+        audit.log(AuditEntry::info("before_save")).await;
+        audit.save().await.unwrap();
+        audit.log(AuditEntry::info("after_snapshot")).await;
+        audit.save().await.unwrap();
+
+        let loaded = AuditLog::load_or_create(AuditConfig {
+            persistence_path: path,
+            autosave_interval_secs: 0,
+            ..AuditConfig::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(loaded.count().await, 2);
+    }
+
+    #[tokio::test]
+    async fn concurrent_appends_survive_serialized_saves() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.json");
+        let audit = Arc::new(AuditLog::new(AuditConfig {
+            persistence_path: path.clone(),
+            ..AuditConfig::default()
+        }));
+        let mut tasks = Vec::new();
+        for index in 0..8 {
+            let audit = Arc::clone(&audit);
+            tasks.push(tokio::spawn(async move {
+                audit
+                    .log(AuditEntry::info(format!("concurrent_{}", index)))
+                    .await;
+            }));
+        }
+        let saver = {
+            let audit = Arc::clone(&audit);
+            tokio::spawn(async move { audit.save().await.unwrap() })
+        };
+        for task in tasks {
+            task.await.unwrap();
+        }
+        saver.await.unwrap();
+        audit.save().await.unwrap();
+
+        let loaded = AuditLog::load_or_create(AuditConfig {
+            persistence_path: path,
+            autosave_interval_secs: 0,
+            ..AuditConfig::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(loaded.count().await, 8);
+    }
+
+    #[tokio::test]
+    async fn final_save_snapshots_after_waiting_for_autosave_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("audit.json");
+        let audit = Arc::new(AuditLog::new(AuditConfig {
+            persistence_path: path.clone(),
+            autosave_interval_secs: 0,
+            ..AuditConfig::default()
+        }));
+        let guard = audit.save_lock.lock().await;
+        let pending = {
+            let audit = Arc::clone(&audit);
+            tokio::spawn(async move { audit.save().await.unwrap() })
+        };
+        audit.log(AuditEntry::info("after-autosave-snapshot")).await;
+        drop(guard);
+        pending.await.unwrap();
+        let loaded = AuditLog::load_or_create(AuditConfig {
+            persistence_path: path,
+            autosave_interval_secs: 0,
+            ..AuditConfig::default()
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            loaded.get_entries(1, 0).await[0].action,
+            "after-autosave-snapshot"
+        );
     }
 }

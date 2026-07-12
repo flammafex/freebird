@@ -54,6 +54,10 @@ impl FlakyRedisStore {
 
 #[async_trait]
 impl SpendStore for FlakyRedisStore {
+    async fn health_check(&self) -> anyhow::Result<()> {
+        self.inner.health_check().await
+    }
+
     async fn mark_spent(&self, key: &str, ttl: Option<Duration>) -> anyhow::Result<bool> {
         let mut guard = self.failures_remaining.lock().await;
         if *guard > 0 {

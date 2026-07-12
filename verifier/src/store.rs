@@ -78,6 +78,9 @@ pub async fn mark_spent_atomic<C: ConnectionLike + Send>(
 //
 #[async_trait]
 pub trait SpendStore: Send + Sync {
+    /// Check that the backing store is reachable.  Readiness must not infer
+    /// this from successful construction of a connection pool.
+    async fn health_check(&self) -> Result<()>;
     /// Attempts to mark a spend handle as used.
     /// Returns true if this is the first time (fresh),
     /// false if it was already present (replay).
@@ -98,6 +101,10 @@ pub struct InMemoryStore {
 
 #[async_trait]
 impl SpendStore for InMemoryStore {
+    async fn health_check(&self) -> Result<()> {
+        anyhow::bail!("in-memory replay store is not persistent")
+    }
+
     async fn mark_spent(&self, key: &str, ttl: Option<Duration>) -> Result<bool> {
         let mut map = self.map.write().await;
         let now = Instant::now();
@@ -140,6 +147,12 @@ impl RedisStore {
 
 #[async_trait]
 impl SpendStore for RedisStore {
+    async fn health_check(&self) -> Result<()> {
+        let mut conn = self.pool.get().await.context("get redis connection")?;
+        let _: String = redis::cmd("PING").query_async(&mut *conn).await?;
+        Ok(())
+    }
+
     async fn mark_spent(&self, key: &str, ttl: Option<Duration>) -> Result<bool> {
         let ttl_secs = ttl.map(|ttl| ttl.as_secs().max(1) as usize);
         let mut conn = self.pool.get().await?;

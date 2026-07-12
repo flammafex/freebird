@@ -56,6 +56,7 @@ fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response:
 }
 
 // Import from the library crate
+use freebird_verifier::readiness::{self, MetadataStatus, StoreHealth, TokenFamily};
 use freebird_verifier::routes::admin::{self, AdminState, IssuerInfo, VerifierConfig};
 use freebird_verifier::routes::admin_rate_limit::AdminRateLimiter;
 use freebird_verifier::store::{SpendStore, StoreBackend};
@@ -75,6 +76,11 @@ struct AppState {
     epoch_duration_sec: u64,
     #[allow(dead_code)]
     epoch_retention: u32,
+    issuer_urls: Vec<String>,
+    metadata: Arc<RwLock<HashMap<String, MetadataStatus>>>,
+    accepted_token_families: Vec<TokenFamily>,
+    refresh_interval: Duration,
+    store_health: StoreHealth,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -91,6 +97,86 @@ struct VoprfInfo {
     suite: String,
     kid: String,
     pubkey: String,
+}
+
+fn parse_accepted_token_families(raw: &str) -> anyhow::Result<Vec<TokenFamily>> {
+    let mut families = Vec::new();
+    for value in raw.split(',').map(str::trim).filter(|v| !v.is_empty()) {
+        let family = match value.to_ascii_lowercase().as_str() {
+            "v4" => TokenFamily::V4,
+            "v5" => TokenFamily::V5,
+            _ => anyhow::bail!("VERIFIER_ACCEPTED_TOKEN_VERSIONS must contain only v4 and/or v5"),
+        };
+        if !families.contains(&family) {
+            families.push(family);
+        }
+    }
+    if families.is_empty() {
+        anyhow::bail!("VERIFIER_ACCEPTED_TOKEN_VERSIONS must enable at least one token family");
+    }
+    Ok(families)
+}
+
+fn in_memory_replay_allowed(
+    store_enabled: bool,
+    environment: Option<&str>,
+    _unsafe_override: bool,
+) -> bool {
+    // An unsafe override can never turn production into a memory-backed
+    // verifier; both the explicit opt-in and development environment are
+    // mandatory.
+    store_enabled && environment == Some("development")
+}
+
+fn parse_in_memory_replay_store(raw: Option<&str>) -> anyhow::Result<bool> {
+    match raw {
+        None => Ok(false),
+        Some(value) if value.eq_ignore_ascii_case("true") => Ok(true),
+        Some(value) if value.eq_ignore_ascii_case("false") => Ok(false),
+        Some(_) => anyhow::bail!("IN_MEMORY_REPLAY_STORE must be true or false"),
+    }
+}
+
+fn select_store_backend(
+    redis_url: Option<String>,
+    memory_opt_in: bool,
+    environment: Option<&str>,
+    unsafe_override: bool,
+) -> anyhow::Result<(StoreBackend, String)> {
+    if let Some(url) = redis_url {
+        Ok((StoreBackend::Redis(url), "redis".to_string()))
+    } else if in_memory_replay_allowed(memory_opt_in, environment, unsafe_override) {
+        Ok((StoreBackend::InMemory, "memory".to_string()))
+    } else if memory_opt_in {
+        anyhow::bail!(
+            "in-memory replay requires IN_MEMORY_REPLAY_STORE=true and VERIFIER_ENV=development"
+        )
+    } else {
+        anyhow::bail!("REDIS_URL is required; development memory replay requires IN_MEMORY_REPLAY_STORE=true and VERIFIER_ENV=development")
+    }
+}
+
+fn ensure_token_family_enabled(
+    version: u8,
+    accepted: &[TokenFamily],
+) -> Result<(), (StatusCode, String)> {
+    let enabled = match version {
+        freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 => accepted.contains(&TokenFamily::V4),
+        freebird_crypto::REDEMPTION_TOKEN_VERSION_V5 => accepted.contains(&TokenFamily::V5),
+        _ => true,
+    };
+    if enabled {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::BAD_REQUEST,
+            "token family is not accepted by this verifier".into(),
+        ))
+    }
+}
+
+fn family_enabled(accepted: &[TokenFamily], family: TokenFamily) -> bool {
+    accepted.contains(&family)
 }
 
 // IssuerInfo is imported from freebird_verifier::routes::admin
@@ -273,12 +359,23 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(2); // Default: accept 2 previous epochs
 
     // ---------- Backend selection ----------
-    let (backend, store_backend_name) = if let Ok(url) = std::env::var("REDIS_URL") {
-        (StoreBackend::Redis(url), "redis".to_string())
-    } else {
-        (StoreBackend::InMemory, "memory".to_string())
-    };
+    let accepted_raw = std::env::var("VERIFIER_ACCEPTED_TOKEN_VERSIONS")
+        .context("VERIFIER_ACCEPTED_TOKEN_VERSIONS is required")?;
+    let accepted_token_families = parse_accepted_token_families(&accepted_raw)?;
+
+    let memory_opt_in =
+        parse_in_memory_replay_store(std::env::var("IN_MEMORY_REPLAY_STORE").ok().as_deref())?;
+    let (backend, store_backend_name) = select_store_backend(
+        std::env::var("REDIS_URL").ok(),
+        memory_opt_in,
+        std::env::var("VERIFIER_ENV").ok().as_deref(),
+        std::env::var("VERIFIER_ALLOW_UNSAFE").as_deref() == Ok("true"),
+    )?;
+    if store_backend_name == "memory" {
+        warn!("IN_MEMORY_REPLAY_STORE is enabled; this instance is unsafe for production");
+    }
     let store = backend.build().await?;
+    let store_health = StoreHealth::new(Arc::clone(&store));
 
     // ---------- Issuer metadata refresh ----------
     // Support multiple issuer URLs (comma-separated) with backward compatibility
@@ -300,6 +397,7 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(10);
+    let refresh_interval = Duration::from_secs(refresh_interval_min.saturating_mul(60));
 
     let verifier_id = std::env::var("VERIFIER_ID")
         .context("VERIFIER_ID is required so V4 tokens are bound to a verifier scope")?;
@@ -324,6 +422,8 @@ async fn main() -> anyhow::Result<()> {
     let behind_proxy = std::env::var("BEHIND_PROXY")
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false);
+    let tls_layer = freebird_common::tls_enforcement::TlsEnforcementLayer::from_env()
+        .map_err(|e| anyhow!(e))?;
 
     // Server start time for uptime tracking
     let start_time = Instant::now();
@@ -332,6 +432,7 @@ async fn main() -> anyhow::Result<()> {
     let issuer_urls_for_admin = issuer_urls.clone();
 
     let issuers = Arc::new(RwLock::new(HashMap::new()));
+    let metadata = Arc::new(RwLock::new(HashMap::new()));
     let state = Arc::new(AppState {
         issuers: Arc::clone(&issuers),
         store: Arc::clone(&store),
@@ -340,6 +441,11 @@ async fn main() -> anyhow::Result<()> {
         scope_digest,
         epoch_duration_sec,
         epoch_retention,
+        issuer_urls: issuer_urls.clone(),
+        metadata: Arc::clone(&metadata),
+        accepted_token_families: accepted_token_families.clone(),
+        refresh_interval,
+        store_health: store_health.clone(),
     });
 
     // Background refresh loop for all issuer URLs
@@ -373,6 +479,7 @@ async fn main() -> anyhow::Result<()> {
     // ---------- Router ----------
     let mut app = Router::new()
         .route("/health", get(health_handler))
+        .route("/ready", get(readiness_handler))
         .route("/.well-known/verifier", get(verifier_metadata))
         .route("/v1/verify", post(verify_with_logging))
         .route("/v1/verify/batch", post(batch_verify))
@@ -412,7 +519,20 @@ async fn main() -> anyhow::Result<()> {
             issuer_urls: issuer_urls_for_admin,
             verifier_id: verifier_id.clone(),
             audience: audience.clone(),
+            accepted_token_versions: accepted_token_families
+                .iter()
+                .map(|f| {
+                    match f {
+                        TokenFamily::V4 => "v4",
+                        TokenFamily::V5 => "v5",
+                    }
+                    .to_string()
+                })
+                .collect(),
         },
+        metadata,
+        accepted_token_families,
+        store_health,
     });
 
     let rate_limiter_clone = Arc::clone(&admin_state);
@@ -435,7 +555,7 @@ async fn main() -> anyhow::Result<()> {
             .layer(CatchPanicLayer::custom(handle_panic))
             .layer(TraceLayer::new_for_http())
             .layer(MetricsMiddleware)
-            .layer(freebird_common::tls_enforcement::TlsEnforcementLayer::new()),
+            .layer(tls_layer),
     );
 
     // ---------- Serve ----------
@@ -478,31 +598,41 @@ async fn refresh_issuer_metadata(state: &Arc<AppState>, issuer_url: &str) -> any
         .error_for_status()
         .context("issuer metadata request failed")?;
     let wk: WellKnown = res.json().await?;
-    let pubkey_bytes =
-        Base64UrlUnpadded::decode_vec(&wk.voprf.pubkey).context("base64 decode pubkey")?;
-    let public_keys = match load_public_keys(issuer_url, &wk.issuer_id).await {
-        Ok(keys) => keys,
-        Err(e) => {
-            warn!(?e, issuer = %wk.issuer_id, "V5 public bearer key discovery failed");
-            HashMap::new()
+    let public_keys = if family_enabled(&state.accepted_token_families, TokenFamily::V5) {
+        match load_public_keys(issuer_url, &wk.issuer_id).await {
+            Ok(keys) => keys,
+            Err(e) => {
+                warn!(?e, issuer = %wk.issuer_id, "V5 public bearer key discovery failed");
+                HashMap::new()
+            }
         }
+    } else {
+        HashMap::new()
     };
 
-    let ctx = freebird_crypto::VOPRF_CONTEXT_V4.to_vec();
-    let mut keyring = load_verification_keyring()?;
-    let verification_key = if let Some(key) = keyring.remove(&wk.voprf.kid) {
-        validate_secret_key_matches_pubkey(key, &ctx, &pubkey_bytes)?;
-        Some(key)
-    } else if let Some(key) = load_default_verification_key()? {
-        validate_secret_key_matches_pubkey(key, &ctx, &pubkey_bytes)?;
-        Some(key)
+    // Do not even parse issuer VOPRF key material or read verifier key files
+    // when V4 is disabled.  This keeps V5-only deployments independent of V4.
+    let (pubkey_bytes, ctx, keyring, verification_key) = if family_enabled(
+        &state.accepted_token_families,
+        TokenFamily::V4,
+    ) {
+        let pubkey_bytes =
+            Base64UrlUnpadded::decode_vec(&wk.voprf.pubkey).context("base64 decode pubkey")?;
+        let ctx = freebird_crypto::VOPRF_CONTEXT_V4.to_vec();
+        let mut keyring = load_verification_keyring()?;
+        let verification_key = if let Some(key) = keyring.remove(&wk.voprf.kid) {
+            validate_secret_key_matches_pubkey(key, &ctx, &pubkey_bytes)?;
+            Some(key)
+        } else if let Some(key) = load_default_verification_key()? {
+            validate_secret_key_matches_pubkey(key, &ctx, &pubkey_bytes)?;
+            Some(key)
+        } else {
+            warn!(issuer = %wk.issuer_id, kid = %wk.voprf.kid, "V4 private verification key unavailable");
+            None
+        };
+        (pubkey_bytes, ctx, keyring, verification_key)
     } else {
-        warn!(
-            issuer = %wk.issuer_id,
-            kid = %wk.voprf.kid,
-            "issuer metadata refreshed without a private verification key; V4 tokens from this issuer will fail verification"
-        );
-        None
+        (Vec::new(), Vec::new(), HashMap::new(), None)
     };
 
     let kid_for_log = wk.voprf.kid.clone();
@@ -538,6 +668,14 @@ async fn refresh_issuer_metadata(state: &Arc<AppState>, issuer_url: &str) -> any
     };
 
     issuers.insert(wk.issuer_id.clone(), info);
+    drop(issuers);
+    state.metadata.write().await.insert(
+        issuer_url.to_string(),
+        MetadataStatus {
+            issuer_id: Some(wk.issuer_id.clone()),
+            last_refresh: Some(Instant::now()),
+        },
+    );
     info!(issuer = %wk.issuer_id, kid = %kid_for_log, ctx_len, has_private_key, public_key_count, "updated issuer metadata");
     Ok(())
 }
@@ -551,6 +689,15 @@ async fn verifier_metadata(State(st): State<Arc<AppState>>) -> Json<VerifierMeta
         verifier_id: st.verifier_id.clone(),
         audience: st.audience.clone(),
         scope_digest_b64: Base64UrlUnpadded::encode_string(&st.scope_digest),
+        accepted_token_versions: Some(
+            st.accepted_token_families
+                .iter()
+                .map(|family| match family {
+                    TokenFamily::V4 => "v4".to_string(),
+                    TokenFamily::V5 => "v5".to_string(),
+                })
+                .collect(),
+        ),
     })
 }
 
@@ -580,6 +727,7 @@ async fn verify(
     Json(req): Json<VerifyReq>,
 ) -> Result<Json<VerifyResp>, (StatusCode, String)> {
     let version = decode_token_version(&req.token_b64)?;
+    ensure_token_family_enabled(version, &st.accepted_token_families)?;
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let (spend_key, ttl) = match version {
         freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 => {
@@ -673,6 +821,7 @@ async fn check(
     Json(req): Json<VerifyReq>,
 ) -> Result<Json<VerifyResp>, (StatusCode, String)> {
     let version = decode_token_version(&req.token_b64)?;
+    ensure_token_family_enabled(version, &st.accepted_token_families)?;
     let issuers = st.issuers.read().await;
     match version {
         freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 => {
@@ -748,6 +897,12 @@ async fn batch_verify(
                 batch_size, MAX_BATCH_SIZE
             ),
         ));
+    }
+
+    // Reject disabled families before taking issuer snapshots or doing crypto.
+    for token in &req.tokens {
+        let version = decode_token_version(&token.token_b64)?;
+        ensure_token_family_enabled(version, &st.accepted_token_families)?;
     }
 
     // Snapshot issuers map for parallel processing
@@ -893,6 +1048,30 @@ async fn health_handler() -> Json<serde_json::Value> {
     }))
 }
 
+/// Process liveness only.  Dependencies intentionally do not affect this endpoint.
+async fn readiness_handler(State(st): State<Arc<AppState>>) -> impl axum::response::IntoResponse {
+    let issuers = st.issuers.read().await.clone();
+    let metadata = st.metadata.read().await.clone();
+    let report = readiness::evaluate(
+        &st.store_health,
+        &issuers,
+        &metadata,
+        &st.issuer_urls,
+        &st.accepted_token_families,
+        st.refresh_interval,
+    )
+    .await;
+    if report.ready() {
+        (StatusCode::OK, Json(serde_json::json!({"status": "ready"})))
+    } else {
+        // Never expose dependency, issuer, or key details on the public endpoint.
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({"status": "not_ready"})),
+        )
+    }
+}
+
 // ---------- Graceful shutdown ----------
 async fn shutdown_signal() {
     let ctrl_c = async {
@@ -922,7 +1101,11 @@ async fn shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::compute_throughput;
+    use super::{
+        compute_throughput, ensure_token_family_enabled, family_enabled, in_memory_replay_allowed,
+        parse_accepted_token_families, parse_in_memory_replay_store, select_store_backend,
+    };
+    use freebird_verifier::readiness::TokenFamily;
 
     #[test]
     fn test_compute_throughput_zero_time() {
@@ -932,5 +1115,49 @@ mod tests {
     #[test]
     fn test_compute_throughput_normal() {
         assert_eq!(compute_throughput(500, 250), 2000.0);
+    }
+
+    #[test]
+    fn token_family_configuration_is_explicit_and_rejects_disabled() {
+        assert!(parse_accepted_token_families("").is_err());
+        let accepted = parse_accepted_token_families("v4").unwrap();
+        assert!(ensure_token_family_enabled(
+            freebird_crypto::REDEMPTION_TOKEN_VERSION_V4,
+            &accepted
+        )
+        .is_ok());
+        assert!(ensure_token_family_enabled(
+            freebird_crypto::REDEMPTION_TOKEN_VERSION_V5,
+            &accepted
+        )
+        .is_err());
+        assert!(!in_memory_replay_allowed(true, Some("production"), false));
+        assert!(!in_memory_replay_allowed(false, Some("development"), false));
+        assert!(!in_memory_replay_allowed(true, Some("production"), true));
+        assert!(in_memory_replay_allowed(true, Some("development"), false));
+    }
+
+    #[test]
+    fn refresh_only_uses_enabled_family_configuration() {
+        assert!(family_enabled(&[TokenFamily::V4], TokenFamily::V4));
+        assert!(!family_enabled(&[TokenFamily::V4], TokenFamily::V5));
+        assert!(family_enabled(&[TokenFamily::V5], TokenFamily::V5));
+        assert!(!family_enabled(&[TokenFamily::V5], TokenFamily::V4));
+    }
+
+    #[test]
+    fn parsed_backend_policy_is_fail_closed() {
+        assert!(!parse_in_memory_replay_store(None).unwrap());
+        assert!(!parse_in_memory_replay_store(Some("false")).unwrap());
+        assert!(parse_in_memory_replay_store(Some("invalid")).is_err());
+
+        assert!(select_store_backend(None, false, Some("development"), false).is_err());
+        assert!(matches!(
+            select_store_backend(None, true, Some("development"), false)
+                .unwrap()
+                .0,
+            freebird_verifier::store::StoreBackend::InMemory
+        ));
+        assert!(select_store_backend(None, true, Some("production"), true).is_err());
     }
 }

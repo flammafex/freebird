@@ -1,0 +1,47 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-issuer
+  namespace: freebird
+spec:
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: REQUIRED_PROXY_NAMESPACE
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: REQUIRED_PROXY_COMPONENT_LABEL
+      ports: [{protocol: TCP, port: 8081}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-to-verifier
+  namespace: freebird
+spec:
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: REQUIRED_PROXY_NAMESPACE
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: REQUIRED_PROXY_COMPONENT_LABEL
+      ports: [{protocol: TCP, port: 8082}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-proxy-boundary-probes
+  namespace: freebird
+spec:
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: REQUIRED_PROXY_NAMESPACE
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: REQUIRED_PROXY_COMPONENT_LABEL
+      ports: [{protocol: TCP, port: 443}]

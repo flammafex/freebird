@@ -59,6 +59,29 @@ mode means tokens may be easy to farm even if the token cryptography works.
   proxy or VPN boundary.
 - Audit logs are operational records, not tamper-evident security logs.
 
+## Temporary Audit Exceptions
+
+The following narrowly scoped exceptions are temporary maintainer-approved
+compatibility decisions; they are not security sign-offs and do not waive any
+other RustSec advisory:
+
+- **RUSTSEC-2023-0071 (`rsa`)** is currently reached through
+  `blind-rsa-signatures`. It is temporarily excepted from the CI
+  `cargo audit` exit check while the blind-RSA/RSA implementation is migrated
+  and reviewed. A crypto migration is required; this exception must be
+  removed when that migration is available and validated, or sooner if the
+  risk or dependency path changes.
+- **RUSTSEC-2024-0436 (`paste`)** is reached only through the optional
+  `freebird-crypto/pkcs11` feature and `cryptoki` 0.6. This is a temporary
+  compatibility exception: the feature is excluded by default and the
+  advisory remains visible in audit output. Upgrade work requires compilation
+  and real HSM (or equivalent SoftHSM) validation before it is accepted. The
+  exception expires when that validation-backed upgrade is completed, or must
+  be revisited sooner if PKCS#11 becomes part of a release build.
+
+CI ignores only RUSTSEC-2023-0071. These exceptions do not suppress warnings,
+yanked-package checks, or any other advisory.
+
 ## Production Baseline
 
 For an internet-exposed issuer or verifier:
@@ -74,6 +97,8 @@ For an internet-exposed issuer or verifier:
 
 See also:
 
+- [Profile and Claim Matrix](docs/profile-claim-matrix.md) for the authoritative
+  status of planned issuance profiles and limits on profile claims
 - [Architecture](docs/architecture.md)
 - [Threat Model](docs/threat-model.md)
 - [Sybil Modes](docs/sybil-modes.md)

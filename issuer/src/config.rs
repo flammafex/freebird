@@ -23,6 +23,11 @@ pub struct Config {
     pub admin_api_key: Option<String>,
     pub epoch_duration_sec: u64,
     pub epoch_retention: u32,
+    /// V4 key rotation is deliberately restricted to development environments.
+    pub allow_unsafe_v4_rotation: bool,
+    pub audit_log_path: PathBuf,
+    /// Explicit development-only mode which permits non-persistent dependencies.
+    pub unsafe_development_mode: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -159,7 +164,22 @@ impl Config {
 
         let require_tls = env_bool("REQUIRE_TLS");
         let behind_proxy = env_bool("BEHIND_PROXY");
+        if behind_proxy {
+            freebird_common::tls_enforcement::TlsEnforcementLayer::from_env()
+                .map_err(|e| anyhow::anyhow!(e))?;
+        }
         let admin_api_key = env::var("ADMIN_API_KEY").ok().filter(|k| !k.is_empty());
+        let freebird_env = env::var("FREEBIRD_ENV").unwrap_or_else(|_| "production".to_string());
+        let unsafe_development_mode = env_bool("FREEBIRD_UNSAFE_DEVELOPMENT_MODE");
+        if unsafe_development_mode && freebird_env != "development" {
+            anyhow::bail!("FREEBIRD_UNSAFE_DEVELOPMENT_MODE=true is only permitted when FREEBIRD_ENV=development");
+        }
+        let unsafe_rotation_override = env_bool("ALLOW_UNSAFE_V4_ROTATION");
+        if unsafe_rotation_override && freebird_env != "development" {
+            anyhow::bail!(
+                "ALLOW_UNSAFE_V4_ROTATION=true is only permitted when FREEBIRD_ENV=development"
+            );
+        }
 
         // Epoch configuration for key rotation (supports human-readable: "1d", "24h", etc.)
         let epoch_duration_sec = env_duration("EPOCH_DURATION", 86400); // Default: 1 day
@@ -177,6 +197,11 @@ impl Config {
             admin_api_key,
             epoch_duration_sec,
             epoch_retention,
+            allow_unsafe_v4_rotation: freebird_env == "development" && unsafe_rotation_override,
+            audit_log_path: env::var("AUDIT_LOG_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "/var/lib/freebird/issuer/audit_log.json".into()),
+            unsafe_development_mode,
         })
     }
 }
@@ -467,9 +492,75 @@ mod tests {
     use super::*;
     use serial_test::serial;
 
+    struct EnvGuard {
+        values: Vec<(&'static str, Option<String>)>,
+    }
+
+    impl EnvGuard {
+        fn new() -> Self {
+            let keys = [
+                "FREEBIRD_ENV",
+                "ALLOW_UNSAFE_V4_ROTATION",
+                "HSM_ENABLE",
+                "HSM_MODE",
+                "HSM_MODULE_PATH",
+                "HSM_SLOT",
+                "HSM_PIN",
+                "HSM_KEY_LABEL",
+            ];
+            Self {
+                values: keys
+                    .into_iter()
+                    .map(|key| (key, env::var(key).ok()))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.values {
+                match value {
+                    Some(value) => env::set_var(key, value),
+                    None => env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    fn clear_rotation_env() {
+        env::remove_var("FREEBIRD_ENV");
+        env::remove_var("ALLOW_UNSAFE_V4_ROTATION");
+    }
+
+    #[test]
+    #[serial]
+    fn v4_rotation_is_disabled_by_default() {
+        let _env = EnvGuard::new();
+        clear_rotation_env();
+        let config = Config::from_env().expect("default config should parse");
+        assert!(!config.allow_unsafe_v4_rotation);
+    }
+
+    #[test]
+    #[serial]
+    fn unsafe_v4_rotation_requires_development_environment() {
+        let _env = EnvGuard::new();
+        env::set_var("ALLOW_UNSAFE_V4_ROTATION", "true");
+        env::set_var("FREEBIRD_ENV", "production");
+        let error = Config::from_env().expect_err("production override must be rejected");
+        assert!(error.to_string().contains("only permitted"));
+
+        env::set_var("FREEBIRD_ENV", "development");
+        let config = Config::from_env().expect("development override should parse");
+        assert!(config.allow_unsafe_v4_rotation);
+        clear_rotation_env();
+    }
+
     #[test]
     #[serial]
     fn test_hsm_config_disabled_by_default() {
+        let _env = EnvGuard::new();
         // Clear HSM environment variables
         env::remove_var("HSM_ENABLE");
         env::remove_var("HSM_MODULE_PATH");
@@ -484,6 +575,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_hsm_config_storage_mode() {
+        let _env = EnvGuard::new();
         // Set HSM environment variables
         env::set_var("HSM_ENABLE", "true");
         env::set_var("HSM_MODE", "storage");
@@ -514,6 +606,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_hsm_config_full_mode() {
+        let _env = EnvGuard::new();
         env::set_var("HSM_ENABLE", "true");
         env::set_var("HSM_MODE", "full");
         env::set_var("HSM_MODULE_PATH", "/usr/lib/libykcs11.so");
@@ -536,6 +629,7 @@ mod tests {
     #[test]
     #[serial]
     fn test_hsm_config_defaults_to_storage() {
+        let _env = EnvGuard::new();
         // Clear all HSM vars first to avoid test pollution
         env::remove_var("HSM_ENABLE");
         env::remove_var("HSM_MODE");
@@ -571,6 +665,7 @@ mod tests {
     #[serial]
     #[should_panic(expected = "HSM_MODULE_PATH required")]
     fn test_hsm_config_missing_module_path() {
+        let _env = EnvGuard::new();
         env::set_var("HSM_ENABLE", "true");
         env::remove_var("HSM_MODULE_PATH");
         env::set_var("HSM_SLOT", "0");
@@ -584,6 +679,7 @@ mod tests {
     #[serial]
     #[should_panic(expected = "HSM_SLOT required")]
     fn test_hsm_config_missing_slot() {
+        let _env = EnvGuard::new();
         env::set_var("HSM_ENABLE", "true");
         env::set_var("HSM_MODULE_PATH", "/usr/lib/softhsm/libsofthsm2.so");
         env::remove_var("HSM_SLOT");

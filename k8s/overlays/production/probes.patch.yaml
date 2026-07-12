@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: issuer
+  namespace: freebird
+spec:
+  template:
+    spec:
+      containers:
+        - name: issuer
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "curl -fsS --connect-to REQUIRED_PUBLIC_ISSUER_HOST:443:REQUIRED_PROXY_SERVICE_NAME.REQUIRED_PROXY_NAMESPACE.svc.cluster.local:443 https://REQUIRED_PUBLIC_ISSUER_HOST/readyz"]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: verifier
+  namespace: freebird
+spec:
+  template:
+    spec:
+      containers:
+        - name: verifier
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "curl -fsS --connect-to REQUIRED_PUBLIC_VERIFIER_HOST:443:REQUIRED_PROXY_SERVICE_NAME.REQUIRED_PROXY_NAMESPACE.svc.cluster.local:443 https://REQUIRED_PUBLIC_VERIFIER_HOST/ready"]

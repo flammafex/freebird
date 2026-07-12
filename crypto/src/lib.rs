@@ -814,22 +814,39 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_v4_redemption_token_roundtrip() {
-        let token = RedemptionToken {
-            nonce: [0xAA; 32],
-            scope_digest: [0xCC; 32],
-            kid: "test-key-01".to_string(),
-            issuer_id: "issuer-abc".to_string(),
-            authenticator: [0xBB; 32],
-        };
-        let bytes = build_redemption_token(&token).unwrap();
-        assert_eq!(bytes[0], REDEMPTION_TOKEN_VERSION_V4); // version byte
-        let parsed = parse_redemption_token(&bytes).unwrap();
-        assert_eq!(parsed.nonce, token.nonce);
-        assert_eq!(parsed.scope_digest, token.scope_digest);
-        assert_eq!(parsed.kid, token.kid);
-        assert_eq!(parsed.issuer_id, token.issuer_id);
-        assert_eq!(parsed.authenticator, token.authenticator);
+    fn v4_wire_scope_and_nullifier_fixture() {
+        // Provenance: independently assembled from the documented V4 wire layout
+        // and SHA-256 domain separators. Do not regenerate these expectations with
+        // the functions exercised below.
+        const RAW: &[u8] = b"\x04\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f\x60\x8e\x97\xcd\x19\x7b\x62\x0c\xf3\x19\xe1\xa3\xd0\x78\x93\xe4\x07\x40\xb4\x63\x89\x6b\x2c\xca\xc9\xfc\x56\x3f\x8d\xc2\x45\xb1\x0e\x6b\x69\x64\x2d\x66\x69\x78\x74\x75\x72\x65\x2d\x30\x31\x11\x69\x73\x73\x75\x65\x72\x3a\x66\x69\x78\x74\x75\x72\x65\x3a\x76\x34\x80\x81\x82\x83\x84\x85\x86\x87\x88\x89\x8a\x8b\x8c\x8d\x8e\x8f\x90\x91\x92\x93\x94\x95\x96\x97\x98\x99\x9a\x9b\x9c\x9d\x9e\x9f";
+        const B64: &str = "BAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4fYI6XzRl7YgzzGeGj0HiT5AdAtGOJayzKyfxWP43CRbEOa2lkLWZpeHR1cmUtMDERaXNzdWVyOmZpeHR1cmU6djSAgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2enw";
+        const SCOPE: [u8; 32] = [
+            0x60, 0x8e, 0x97, 0xcd, 0x19, 0x7b, 0x62, 0x0c, 0xf3, 0x19, 0xe1, 0xa3, 0xd0, 0x78,
+            0x93, 0xe4, 0x07, 0x40, 0xb4, 0x63, 0x89, 0x6b, 0x2c, 0xca, 0xc9, 0xfc, 0x56, 0x3f,
+            0x8d, 0xc2, 0x45, 0xb1,
+        ];
+        const NULLIFIER: &str = "FQr18I1vyV8goQLiPEZdxbKYPGNby28kDkvRx__UGoM";
+
+        assert_eq!(
+            build_scope_digest("verifier:fixture", "api/v1").unwrap(),
+            SCOPE
+        );
+        assert_eq!(Base64UrlUnpadded::encode_string(RAW), B64);
+
+        let parsed = parse_redemption_token(RAW).unwrap();
+        assert_eq!(parsed.nonce, core::array::from_fn(|i| i as u8));
+        assert_eq!(parsed.scope_digest, SCOPE);
+        assert_eq!(parsed.kid, "kid-fixture-01");
+        assert_eq!(parsed.issuer_id, "issuer:fixture:v4");
+        assert_eq!(
+            parsed.authenticator,
+            core::array::from_fn(|i| 0x80 + i as u8)
+        );
+        assert_eq!(build_redemption_token(&parsed).unwrap(), RAW);
+        assert_eq!(
+            nullifier_key_v4(&parsed, "verifier:fixture", "api/v1").unwrap(),
+            NULLIFIER
+        );
     }
 
     #[test]
@@ -847,41 +864,44 @@ mod tests {
     }
 
     #[test]
-    fn test_v5_public_bearer_pass_roundtrip_and_verify() {
-        let mut rng = blind_rsa_signatures::DefaultRng;
-        let key_pair =
-            blind_rsa_signatures::KeyPairSha384PSSDeterministic::generate(&mut rng, 2048).unwrap();
-        let spki = key_pair.pk.to_spki().unwrap();
-        let token_key_id = token_key_id_from_spki(&spki);
-        let nonce = [0x42; PUBLIC_BEARER_NONCE_LEN];
-        let issuer_id = "issuer:test:v5";
-        let msg = build_public_bearer_message_from_parts(&nonce, &token_key_id, issuer_id).unwrap();
+    fn v5_wire_signature_message_and_nullifier_fixture() {
+        // The fixed SPKI and final signature were generated outside Freebird;
+        // crypto/tests/fixture-provenance.md records the exact command and inputs.
+        const SPKI_B64: &str = "MIIBUjA9BgkqhkiG9w0BAQowMKANMAsGCWCGSAFlAwQCAqEaMBgGCSqGSIb3DQEBCDALBglghkgBZQMEAgKiAwIBMAOCAQ8AMIIBCgKCAQEAoxaXGOdxdxj6I3S_lbNJ4T1CQ76A3cVJJUJECn0SiyKwKAA_FFTZQdmKq8gz3JDhrxayLXrhaoFtgTsmeMMlhPsYfyIOOzfe4khh3W-1nKhBqO5Kdr6KbVxgHkgoDWvKLXPCgSOpCG_1BAG1hJveWjd0LUAubxz3e2v5t9J_Vxddhsb9iqKylY0ZWXIsgqyEwPesqShxEb8qoJrIZ_Yi6_27Y9GR3MS6IzK5Ot0rNlEn3PCFW8phxVwofcMlxPgq_ZbdCRH_WJClQl6lWXBmL3DuSN8sMVJH4-rk9psHwrjiDciOpMvIotAEmIg1ZaTO-2DaKGRvV8oPlvXwPBp_gwIDAQAB";
+        const SIGNATURE_B64: &str = "lR5zKsB-yqyRurEsESMmslQih5gjqVIGhl55yFHpuP40_PX2hG1wCljQcSL8xSYE3k5HeXcvKQsLy4DVz7GiUCHzhEQQqDU1usXI1IPVjZIGwPbWq1R-GyMfUrw0t01IPoAzACChZ267KWuEZ-o7JI9Jk9dS8B67YAl8VZqw2Y0nZU-l0Zbt1DNpYIGX8e9Z-ASJ76WjR2AV7ANNqWIYklRrCJtqySOmDMf3SjkXL6AaYUmIYb98ENizrngKA2voJBSTsHF2FVaXKPNn9GYueYyCZNhfRWsyLQT6gjmvNHnMJWwNQc_ApNwRNKkbNZbkwQfXU-vurMEK-OkuI-C_8Q";
+        const B64: &str = "BSAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4_Qlf_qAoZ8HL_J7KNYHR-0DG0s2wD_ccSUrPfal_pgvkRaXNzdWVyOmZpeHR1cmU6djUBAJUecyrAfsqskbqxLBEjJrJUIoeYI6lSBoZeechR6bj-NPz19oRtcApY0HEi_MUmBN5OR3l3LykLC8uA1c-xolAh84REEKg1NbrFyNSD1Y2SBsD21qtUfhsjH1K8NLdNSD6AMwAgoWduuylrhGfqOySPSZPXUvAeu2AJfFWasNmNJ2VPpdGW7dQzaWCBl_HvWfgEie-lo0dgFewDTaliGJJUawibaskjpgzH90o5Fy-gGmFJiGG_fBDYs654CgNr6CQUk7BxdhVWlyjzZ_RmLnmMgmTYX0VrMi0E-oI5rzR5zCVsDUHPwKTcETSpGzWW5MEH11Pr7qzBCvjpLiPgv_E";
+        const MESSAGE: [u8; 48] = [
+            0x2d, 0x16, 0x59, 0x91, 0x2a, 0x7e, 0x91, 0x22, 0x89, 0x69, 0x58, 0x7e, 0xa7, 0x10,
+            0xdc, 0x06, 0x55, 0xf4, 0x90, 0x4e, 0xae, 0xf8, 0xc1, 0x42, 0xe9, 0x89, 0x02, 0x1e,
+            0x15, 0xe8, 0x8c, 0x93, 0xcf, 0x5b, 0x56, 0xeb, 0x0a, 0x25, 0x0d, 0xca, 0x91, 0x34,
+            0xfc, 0x0d, 0x00, 0x7c, 0x2d, 0xb5,
+        ];
+        const TOKEN_KEY_ID: [u8; 32] = [
+            0x42, 0x57, 0xff, 0xa8, 0x0a, 0x19, 0xf0, 0x72, 0xff, 0x27, 0xb2, 0x8d, 0x60, 0x74,
+            0x7e, 0xd0, 0x31, 0xb4, 0xb3, 0x6c, 0x03, 0xfd, 0xc7, 0x12, 0x52, 0xb3, 0xdf, 0x6a,
+            0x5f, 0xe9, 0x82, 0xf9,
+        ];
+        const NULLIFIER: &str = "Cv6jUH48F6Mxadrp2vmUHYnqTxSA72E5IDtDOziRTJY";
 
-        let blinding_result = key_pair.pk.blind(&mut rng, msg).unwrap();
-        let blind_sig = key_pair
-            .sk
-            .blind_sign(&blinding_result.blind_message)
-            .unwrap();
-        let sig = key_pair
-            .pk
-            .finalize(&blind_sig, &blinding_result, msg)
-            .unwrap();
-
-        let token = PublicBearerPass {
-            nonce,
-            token_key_id,
-            issuer_id: issuer_id.to_string(),
-            signature: sig.0,
-        };
-        let bytes = build_public_bearer_pass(&token).unwrap();
-        assert_eq!(bytes[0], REDEMPTION_TOKEN_VERSION_V5);
-        let parsed = parse_public_bearer_pass(&bytes).unwrap();
-        assert_eq!(parsed, token);
-
+        let spki = Base64UrlUnpadded::decode_vec(SPKI_B64).unwrap();
+        let raw = Base64UrlUnpadded::decode_vec(B64).unwrap();
+        let signature = Base64UrlUnpadded::decode_vec(SIGNATURE_B64).unwrap();
+        let parsed = parse_public_bearer_pass(&raw).unwrap();
+        assert_eq!(token_key_id_from_spki(&spki), TOKEN_KEY_ID);
+        assert_eq!(parsed.nonce, core::array::from_fn(|i| 0x20 + i as u8));
+        assert_eq!(parsed.token_key_id, TOKEN_KEY_ID);
+        assert_eq!(parsed.issuer_id, "issuer:fixture:v5");
+        assert_eq!(parsed.signature, signature);
+        assert_eq!(build_public_bearer_message(&parsed).unwrap(), MESSAGE);
+        assert_eq!(
+            Base64UrlUnpadded::encode_string(&build_public_bearer_pass(&parsed).unwrap()),
+            B64
+        );
         verify_public_bearer_signature(&spki, &parsed).unwrap();
+        assert_eq!(nullifier_key_v5(&parsed).unwrap(), NULLIFIER);
 
-        let mut tampered = parsed.clone();
-        tampered.nonce[0] ^= 0x01;
+        let mut tampered = parsed;
+        tampered.signature[0] ^= 0x01;
         assert!(verify_public_bearer_signature(&spki, &tampered).is_err());
     }
 

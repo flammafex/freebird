@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 // Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
 
+use crate::readiness::ReadinessState;
+use crate::shutdown::{flush_or_report, wait_for_signal, ShutdownCoordinator};
 #[cfg(feature = "human-gate-webauthn")]
 use crate::webauthn;
 use crate::{
@@ -28,7 +30,14 @@ use p256::ecdsa::SigningKey;
 use rand::rngs::OsRng;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
-use std::{fs, io::Write, path::Path, sync::Arc, time::Duration};
+use std::{
+    fs,
+    future::IntoFuture,
+    io::Write,
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 use time::OffsetDateTime;
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
@@ -70,6 +79,7 @@ pub struct Application {
     port: u16,
     listener: TcpListener,
     app: Router,
+    shutdown: ShutdownCoordinator,
 }
 
 fn load_or_generate_invitation_signing_key(path: &Path) -> Result<SigningKey> {
@@ -113,6 +123,17 @@ fn load_or_generate_invitation_signing_key(path: &Path) -> Result<SigningKey> {
     }
 
     fs::rename(&tmp_path, path).context("failed to persist invitation signing key")?;
+    #[cfg(unix)]
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        let directory = std::fs::File::open(parent)
+            .context("failed to open invitation key directory for sync")?;
+        directory
+            .sync_all()
+            .context("failed to sync invitation key directory")?;
+    }
     Ok(signing_key)
 }
 
@@ -186,6 +207,11 @@ impl Application {
         if config.sybil_config.multi_party_vouching_salt == "default-salt-change-in-production" {
             bail!("Insecure default salt detected for SYBIL_MULTI_PARTY_VOUCHING_SALT");
         }
+        if config.allow_unsafe_v4_rotation {
+            warn!("UNSAFE V4 admin key rotation is enabled; development only");
+        } else {
+            warn!("V4 admin key rotation is disabled (development override required)");
+        }
 
         let admin_api_key = match config.admin_api_key {
             Some(key) if key.len() >= 32 => key,
@@ -201,12 +227,9 @@ impl Application {
         // ... [Sybil setup code remains the same] ...
 
         // 1. Keys & VOPRF Setup
-        if config.key_config.sk_path != Path::new("issuer_sk.bin") {
-            std::env::set_var("ISSUER_SK_PATH", &config.key_config.sk_path);
-        }
-
-        let (sk_bytes, pubkey_b64, kid_from_key) = keys::load_or_generate_keypair_b64()
-            .context("Failed to load or generate issuer keypair")?;
+        let (sk_bytes, pubkey_b64, kid_from_key) =
+            keys::load_or_generate_keypair_b64_at(&config.key_config.sk_path)
+                .context("Failed to load or generate issuer keypair")?;
 
         let kid = config
             .key_config
@@ -300,7 +323,7 @@ impl Application {
 
         // 3. Audit Log Setup
         let audit_config = AuditConfig {
-            persistence_path: std::path::PathBuf::from("audit_log.json"),
+            persistence_path: config.audit_log_path.clone(),
             max_entries: 10000,
             autosave_interval_secs: 60,
         };
@@ -313,9 +336,16 @@ impl Application {
 
         let sybil_replay_store =
             replay_store_from_env().context("Failed to initialize Sybil replay store")?;
+        let replay_backend =
+            std::env::var("SYBIL_REPLAY_STORE").unwrap_or_else(|_| "memory".into());
+        if replay_backend.eq_ignore_ascii_case("memory") && !config.unsafe_development_mode {
+            bail!("persistent Redis replay storage is required outside development");
+        }
 
         // 4. Sybil Resistance Setup
         let mut invitation_system: Option<Arc<InvitationSystem>> = None;
+        let mut progressive_trust_system = None;
+        let mut proof_of_diversity_system = None;
         let mut multi_party_vouching_system: Option<
             Arc<sybil_resistance::MultiPartyVouchingSystem>,
         > = None;
@@ -403,6 +433,7 @@ impl Application {
                     .await
                     .context("Failed to initialize Progressive Trust system")?;
 
+                progressive_trust_system = Some(sys.clone());
                 info!("✅ Sybil resistance: Progressive Trust");
                 Some(sys)
             }
@@ -468,6 +499,7 @@ impl Application {
                     .await
                     .context("Failed to initialize Proof of Diversity system")?;
 
+                proof_of_diversity_system = Some(sys.clone());
                 info!("✅ Sybil resistance: Proof of Diversity");
                 Some(sys)
             }
@@ -610,6 +642,7 @@ impl Application {
                                 .context(
                                     "Failed to initialize Progressive Trust for combined mode",
                                 )?;
+                            progressive_trust_system = Some(sys.clone());
                             mechanisms.push(sys);
                         }
                         "social_graph" => {
@@ -680,6 +713,7 @@ impl Application {
                                 .context(
                                     "Failed to initialize Proof of Diversity for combined mode",
                                 )?;
+                            proof_of_diversity_system = Some(sys.clone());
                             mechanisms.push(sys);
                         }
                         "multi_party_vouching" => {
@@ -812,7 +846,48 @@ impl Application {
             invitation_system = Some(Arc::new(sys));
         }
 
-        // 5. App State & Router
+        // 5. Shutdown persistence registry.  These are the authoritative
+        // stores created above; stores not constructed by this configuration
+        // are intentionally not flushed.
+        let mut shutdown = ShutdownCoordinator::new();
+        {
+            let audit = Arc::clone(&audit_log);
+            shutdown.add("audit", move || {
+                let audit = Arc::clone(&audit);
+                async move { audit.save().await }
+            });
+        }
+        if let Some(store) = invitation_system.clone() {
+            shutdown.add("invitations", move || {
+                let store = Arc::clone(&store);
+                async move { store.save().await }
+            });
+        }
+        if let Some(store) = progressive_trust_system.clone() {
+            shutdown.add("progressive_trust", move || {
+                let store = Arc::clone(&store);
+                async move { store.save_state().await }
+            });
+        }
+        if let Some(store) = proof_of_diversity_system.clone() {
+            shutdown.add("proof_of_diversity", move || {
+                let store = Arc::clone(&store);
+                async move { store.save_state().await }
+            });
+        }
+        if let Some(store) = multi_party_vouching_system.clone() {
+            shutdown.add("multi_party_vouching", move || {
+                let store = Arc::clone(&store);
+                async move { store.save_state().await }
+            });
+        }
+        let rotation = Arc::clone(&voprf);
+        shutdown.add("rotation_metadata", move || {
+            let rotation = Arc::clone(&rotation);
+            async move { rotation.save_state().await }
+        });
+
+        // 6. App State & Router
         let state = Arc::new(AppStateWithSybil {
             issuer_id: config.issuer_id.clone(),
             kid: kid.clone(),
@@ -828,10 +903,58 @@ impl Application {
         });
 
         let app_state = (state.clone(), voprf.clone());
+        let readiness = ReadinessState::new(config.unsafe_development_mode);
+        let mut storage_paths = vec![
+            ("audit".to_string(), config.audit_log_path.clone()),
+            (
+                "rotation".to_string(),
+                config.key_config.rotation_state_path.clone(),
+            ),
+            (
+                "invitation".to_string(),
+                config.sybil_config.invite_persistence_path.clone(),
+            ),
+        ];
+        if progressive_trust_system.is_some() {
+            storage_paths.push((
+                "progressive_trust".to_string(),
+                config
+                    .sybil_config
+                    .progressive_trust_persistence_path
+                    .clone(),
+            ));
+        }
+        if proof_of_diversity_system.is_some() {
+            storage_paths.push((
+                "proof_of_diversity".to_string(),
+                config
+                    .sybil_config
+                    .proof_of_diversity_persistence_path
+                    .clone(),
+            ));
+        }
+        if multi_party_vouching_system.is_some() {
+            storage_paths.push((
+                "vouching".to_string(),
+                config
+                    .sybil_config
+                    .multi_party_vouching_persistence_path
+                    .clone(),
+            ));
+        }
+        readiness.spawn_checks(sybil_replay_store.clone(), storage_paths, voprf.clone());
 
         // Initialize router
         // Note: routes::metadata::well_known_handler must exist!
         let app = Router::new()
+            .route("/healthz", get(routes::liveness))
+            .route(
+                "/readyz",
+                get({
+                    let readiness = readiness.clone();
+                    move || crate::readiness::public_readiness(readiness.clone())
+                }),
+            )
             .route(
                 "/.well-known/issuer",
                 get(routes::metadata::well_known_handler),
@@ -878,7 +1001,7 @@ impl Application {
             app = app.nest("/webauthn", webauthn::router(wa.clone()));
         }
 
-        if let Some(inv_sys) = invitation_system {
+        if let Some(inv_sys) = invitation_system.clone() {
             #[cfg(feature = "human-gate-webauthn")]
             let webauthn_enabled = webauthn_state.is_some();
             #[cfg(not(feature = "human-gate-webauthn"))]
@@ -892,6 +1015,7 @@ impl Application {
                 require_tls: config.require_tls,
                 behind_proxy: config.behind_proxy,
                 webauthn_enabled,
+                allow_unsafe_v4_rotation: config.allow_unsafe_v4_rotation,
             };
 
             #[cfg(feature = "human-gate-webauthn")]
@@ -903,6 +1027,7 @@ impl Application {
                 admin_api_key,
                 config.behind_proxy,
                 config.require_tls,
+                config.allow_unsafe_v4_rotation,
                 webauthn_state.as_ref().map(|ws| ws.cred_store.clone()),
                 config_summary,
             );
@@ -915,9 +1040,10 @@ impl Application {
                 admin_api_key,
                 config.behind_proxy,
                 config.require_tls,
+                config.allow_unsafe_v4_rotation,
                 config_summary,
             );
-            app = app.nest("/admin", admin);
+            app = app.nest("/admin", admin.layer(axum::Extension(readiness.clone())));
         }
 
         // Outermost layers: catch panics before they escape handlers, then
@@ -927,7 +1053,10 @@ impl Application {
                 .layer(CatchPanicLayer::custom(handle_panic))
                 .layer(TraceLayer::new_for_http())
                 .layer(MetricsMiddleware)
-                .layer(freebird_common::tls_enforcement::TlsEnforcementLayer::new()),
+                .layer(
+                    freebird_common::tls_enforcement::TlsEnforcementLayer::from_env()
+                        .map_err(|e| anyhow::anyhow!(e))?,
+                ),
         );
 
         let listener = TcpListener::bind(config.bind_addr)
@@ -940,30 +1069,78 @@ impl Application {
             port: listener.local_addr()?.port(),
             listener,
             app,
+            shutdown,
         })
     }
 
     pub async fn run(self) -> Result<()> {
-        axum::serve(
-            self.listener,
-            self.app
-                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
-        )
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("Server error")
+        self.run_with_signal_timeout(wait_for_signal(), Duration::from_secs(30))
+            .await
     }
-}
 
-async fn shutdown_signal() {
-    tokio::signal::ctrl_c()
-        .await
-        .expect("Failed to install CTRL+C handler");
+    async fn run_with_signal_timeout<F>(self, signal: F, shutdown_timeout: Duration) -> Result<()>
+    where
+        F: std::future::Future<Output = ()> + Send,
+    {
+        let shutdown = self.shutdown;
+        let (signal_tx, signal_rx) = tokio::sync::oneshot::channel();
+        let mut server = Box::pin(
+            axum::serve(
+                self.listener,
+                self.app
+                    .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = signal_rx.await;
+            })
+            .into_future(),
+        );
+        tokio::pin!(signal);
+        let drain_result = tokio::select! {
+            result = &mut server => return result.context("Server error"),
+            _ = &mut signal => {
+                let _ = signal_tx.send(());
+                let deadline = Instant::now() + shutdown_timeout;
+                let result = tokio::time::timeout_at(deadline.into(), &mut server).await;
+                (result, deadline)
+            }
+        };
+        let (drain_result, deadline) = drain_result;
+        let drain_error = match drain_result {
+            Err(_) => {
+                tracing::error!(
+                    critical_state = "in-flight requests",
+                    "CRITICAL: issuer drain timed out"
+                );
+                Some(anyhow::anyhow!(
+                    "drain timeout: in-flight requests did not complete"
+                ))
+            }
+            Ok(Err(error)) => Some(anyhow::anyhow!("server drain error: {error}")),
+            Ok(Ok(())) => None,
+        };
+        // Ensure the listener/server future and all request resources are
+        // terminated before any persistence writer is entered.
+        drop(server);
+        let flush_result = flush_or_report(shutdown, deadline).await;
+        match (drain_error, flush_result) {
+            (Some(error), Ok(())) => Err(error).context("Server error"),
+            (Some(error), Err(flush_error)) => Err(anyhow::anyhow!(
+                "server drain: {error:#}; persistence: {flush_error:#}"
+            )),
+            (None, result) => result,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::parse_progressive_trust_levels;
+    use super::{parse_progressive_trust_levels, Application};
+    use crate::shutdown::ShutdownCoordinator;
+    use axum::{routing::get, Router};
+    use std::time::Duration;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener;
 
     #[test]
     fn parses_human_readable_progressive_trust_levels() {
@@ -985,5 +1162,88 @@ mod tests {
         assert!(parse_progressive_trust_levels(&[]).is_err());
         assert!(parse_progressive_trust_levels(&["bad".to_string()]).is_err());
         assert!(parse_progressive_trust_levels(&["10x:1:1m".to_string()]).is_err());
+    }
+
+    #[tokio::test]
+    async fn application_run_accepts_injected_shutdown_signal() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let application = Application {
+            port: listener.local_addr().unwrap().port(),
+            listener,
+            app: Router::new(),
+            shutdown: ShutdownCoordinator::new(),
+        };
+        application
+            .run_with_signal_timeout(async {}, Duration::from_secs(1))
+            .await
+            .expect("injected signal should gracefully stop the server");
+    }
+
+    #[tokio::test]
+    async fn application_reports_drain_timeout_and_drops_server_before_flush() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let application = Application {
+            port,
+            listener,
+            app: Router::new().route(
+                "/",
+                get(|| async {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                    "ok"
+                }),
+            ),
+            shutdown: ShutdownCoordinator::new(),
+        };
+        let (signal_tx, signal_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            application
+                .run_with_signal_timeout(
+                    async {
+                        let _ = signal_rx.await;
+                    },
+                    Duration::from_millis(50),
+                )
+                .await
+        });
+        let mut client = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        let _ = signal_tx.send(());
+        let error = task
+            .await
+            .unwrap()
+            .expect_err("drain timeout must fail shutdown");
+        assert!(format!("{error:#}").contains("drain timeout"));
+    }
+
+    #[tokio::test]
+    async fn application_returns_persistence_failure_after_server_lifecycle() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut shutdown = ShutdownCoordinator::new();
+        shutdown.add("injected_store", || async {
+            Err(anyhow::anyhow!("disk full"))
+        });
+        shutdown.add("second_store", || async {
+            Err(anyhow::anyhow!("permission denied"))
+        });
+        let application = Application {
+            port: listener.local_addr().unwrap().port(),
+            listener,
+            app: Router::new(),
+            shutdown,
+        };
+        let error = application
+            .run_with_signal_timeout(async {}, Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("injected_store"));
+        assert!(message.contains("second_store"));
     }
 }

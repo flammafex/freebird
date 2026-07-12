@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: issuer
+  namespace: freebird
+spec:
+  template:
+    spec:
+      containers:
+        - name: issuer
+          env:
+            - name: SSL_CERT_FILE
+              value: /etc/freebird/issuer-ca/ca.crt
+          volumeMounts:
+            - name: issuer-ca
+              mountPath: /etc/freebird/issuer-ca
+              readOnly: true
+      volumes:
+        - name: issuer-ca
+          secret:
+            secretName: issuer-ci-ca
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: verifier
+  namespace: freebird
+spec:
+  template:
+    spec:
+      containers:
+        - name: verifier
+          env:
+            - name: SSL_CERT_FILE
+              value: /etc/freebird/issuer-ca/ca.crt
+          volumeMounts:
+            - name: issuer-ca
+              mountPath: /etc/freebird/issuer-ca
+              readOnly: true
+      volumes:
+        - name: issuer-ca
+          secret:
+            secretName: issuer-ci-ca

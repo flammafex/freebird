@@ -6,6 +6,7 @@ use tracing::{info, warn};
 
 pub trait ReplayStore: Send + Sync {
     fn mark_once(&self, namespace: &str, key: &str, ttl: Duration) -> Result<()>;
+    fn health_check(&self) -> Result<()>;
 }
 
 #[derive(Default)]
@@ -37,6 +38,10 @@ impl ReplayStore for InMemoryReplayStore {
 
         entries.insert(scoped_key, expires_at);
         Ok(())
+    }
+
+    fn health_check(&self) -> Result<()> {
+        Err(anyhow!("in-memory replay store is not persistent"))
     }
 }
 
@@ -79,11 +84,20 @@ impl RedisReplayStore {
             Err(anyhow!("Sybil proof already used"))
         }
     }
+
+    fn health_check_blocking(&self) -> Result<()> {
+        let mut conn = self.client.get_connection().context("connect to Redis")?;
+        let _: String = redis::cmd("PING").query(&mut conn).context("ping Redis")?;
+        Ok(())
+    }
 }
 
 impl ReplayStore for RedisReplayStore {
     fn mark_once(&self, namespace: &str, key: &str, ttl: Duration) -> Result<()> {
         self.mark_once_blocking(namespace, key, ttl)
+    }
+    fn health_check(&self) -> Result<()> {
+        self.health_check_blocking()
     }
 }
 

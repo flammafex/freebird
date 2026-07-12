@@ -62,11 +62,13 @@ ISSUER_SK_PATH=issuer_sk.bin KEY_ROTATION_STATE_PATH=key_rotation_state.json \
 SYBIL_RESISTANCE=none REQUIRE_TLS=false \
 cargo run -p freebird-issuer --bin freebird-issuer
 
-# 2. Verifier (same ADMIN_API_KEY, VERIFIER_SK_PATH=issuer_sk.bin)
+# 2. Verifier (same ADMIN_API_KEY, explicit development-only memory replay)
 ADMIN_API_KEY=local-admin-key-must-be-at-least-32-chars \
 BIND_ADDR=127.0.0.1:8082 VERIFIER_ID=verifier:local:v4 VERIFIER_AUDIENCE=local \
 ISSUER_URL=http://127.0.0.1:8081/.well-known/issuer \
-VERIFIER_SK_PATH=issuer_sk.bin REFRESH_INTERVAL_MIN=1 REQUIRE_TLS=false \
+VERIFIER_ACCEPTED_TOKEN_VERSIONS=v4 VERIFIER_ENV=development \
+IN_MEMORY_REPLAY_STORE=true VERIFIER_SK_PATH=issuer_sk.bin \
+REFRESH_INTERVAL_MIN=1 REQUIRE_TLS=false \
 cargo run -p freebird-verifier --bin freebird-verifier
 
 # 3. Interface
@@ -91,7 +93,9 @@ cd sdk/js && npm install && npm test
 ```
 
 Redis-dependent tests (`redis_double_spend`, Sybil replay-store tests) need
-`REDIS_URL=redis://127.0.0.1:6379` or fall back to `redis://127.0.0.1:6379`.
+`REDIS_URL=redis://127.0.0.1:6379`. The verifier local command may instead use
+the explicit unsafe development pair `VERIFIER_ENV=development` and
+`IN_MEMORY_REPLAY_STORE=true`; production always requires Redis.
 
 ## Lint / security
 
@@ -116,7 +120,7 @@ docker-compose build issuer verifier
 ## Coding conventions
 
 - **Edition 2021**, workspace `resolver = "2"`, all crates versioned in
-  lockstep (currently `0.5.1`). Bump all crates together.
+  lockstep (currently `0.7.0`). Bump all crates together.
 - **License header** on source files:
   `// SPDX-License-Identifier: Apache-2.0 OR MIT`
   Manifests: `license = "MIT OR Apache-2.0"`.

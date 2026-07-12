@@ -300,18 +300,38 @@ impl Verifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand_core::{CryptoRng, Error as RngError, RngCore};
 
-    /// Test vectors from draft-irtf-cfrg-voprf-21
-    /// VOPRF(P-256, SHA-256) Test Vectors
+    struct FixedScalarRng([u8; 32]);
+
+    impl RngCore for FixedScalarRng {
+        fn next_u32(&mut self) -> u32 {
+            panic!("the DLEQ KAT requires scalar bytes")
+        }
+
+        fn next_u64(&mut self) -> u64 {
+            panic!("the DLEQ KAT requires scalar bytes")
+        }
+
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            assert_eq!(dest.len(), self.0.len());
+            dest.copy_from_slice(&self.0);
+        }
+
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), RngError> {
+            self.fill_bytes(dest);
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for FixedScalarRng {}
+
+    /// Freebird-specific randomized VOPRF round-trip coverage.
     ///
-    /// These test vectors ensure our implementation matches the IETF specification
+    /// This bespoke construction is not an RFC 9497 conformance test.
     #[test]
-    fn test_voprf_rfc_test_vectors() {
-        // Test vector from draft-irtf-cfrg-voprf-21
-        // VOPRF(P-256, SHA-256)
-        // Mode: 0x00 (Base Mode, not verifiable - we use Mode 0x01 Verifiable)
-
-        // For comprehensive testing, we verify:
+    fn freebird_voprf_roundtrip() {
+        // This verifies:
         // 1. Hash-to-curve functionality
         // 2. Point encoding/decoding
         // 3. Scalar operations
@@ -343,6 +363,120 @@ mod tests {
 
         // Verify output is 32 bytes
         assert_eq!(output.len(), 32);
+    }
+
+    #[test]
+    fn freebird_v4_voprf_known_answer() {
+        // Independently generated with the reference arithmetic recorded in
+        // crypto/tests/fixture-provenance.md; these are not RFC 9497 vectors.
+        const CONTEXT: &[u8] = b"freebird:v4";
+        const INPUT: &[u8] = b"freebird-kat-input-v1";
+        const SECRET_KEY: [u8; 32] = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+            0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+            0x1d, 0x1e, 0x1f, 0x20,
+        ];
+        const PUBLIC_KEY: [u8; 33] = *b"\x02\x51\x5c\x3d\x6e\xb9\xe3\x96\xb9\x04\xd3\xfe\xca\x7f\x54\xfd\xcd\x0c\xc1\xe9\x97\xbf\x37\x5d\xca\x51\x5a\xd0\xa6\xc3\xb4\x03\x5f";
+        const HASHED_INPUT: [u8; 33] = *b"\x02\x5c\x29\xe3\x1b\xfd\xb5\x4d\xb8\x80\xf9\xba\x48\xbe\xe0\xa5\xc1\xb4\xe4\x2e\xa5\xcb\x63\xc6\x6c\x86\x1b\x8c\xf7\xa8\x57\x79\xfc";
+        const EVALUATED_POINT: [u8; 33] = *b"\x03\x7b\xc7\x74\x27\xf2\x6e\xa7\xe2\xdb\xd0\xda\x65\x61\xea\xc0\x59\x59\xec\x04\x37\x6a\x87\xd6\x3e\xa2\xed\xd5\x23\x11\xf2\xc3\xd1";
+        const AUTHENTICATOR: [u8; 32] = *b"\xdd\x13\xcf\x53\x9f\xda\xf8\x6a\xfa\x32\x4f\x0b\x52\xbe\x16\x1a\x7c\x62\x61\x20\x65\xba\x4a\x42\xf0\x47\x31\x2f\x3e\x18\x24\x1d";
+
+        let server = Server::from_secret_key(SECRET_KEY, CONTEXT).unwrap();
+        assert_eq!(server.public_key_sec1_compressed(), PUBLIC_KEY);
+        assert_eq!(
+            encode_point(&hash_to_curve(INPUT, CONTEXT).unwrap()),
+            HASHED_INPUT
+        );
+        assert_eq!(
+            encode_point(
+                &(hash_to_curve(INPUT, CONTEXT).unwrap() * scalar_from_be32(SECRET_KEY).unwrap())
+            ),
+            EVALUATED_POINT
+        );
+        assert_eq!(server.evaluate_unblinded(INPUT).unwrap(), AUTHENTICATOR);
+    }
+
+    #[test]
+    fn freebird_v4_dleq_blinding_proof_known_answer() {
+        // Independently generated fixed blinding/proof vector; provenance is in
+        // crypto/tests/fixture-provenance.md. This is not an RFC 9497 vector.
+        const CONTEXT: &[u8] = b"freebird:v4";
+        const SECRET_KEY: [u8; 32] = [
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+            0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+            0x1d, 0x1e, 0x1f, 0x20,
+        ];
+        const BLINDING_SCALAR: [u8; 32] =
+            *b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x41";
+        const PROOF_SCALAR: [u8; 32] =
+            *b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x42";
+        const HASHED_INPUT: [u8; 33] = *b"\x02\x5c\x29\xe3\x1b\xfd\xb5\x4d\xb8\x80\xf9\xba\x48\xbe\xe0\xa5\xc1\xb4\xe4\x2e\xa5\xcb\x63\xc6\x6c\x86\x1b\x8c\xf7\xa8\x57\x79\xfc";
+        const BLINDED: [u8; 33] = *b"\x03\x50\x97\x4e\xc1\x45\x59\xb8\xa2\xbf\x2d\xbb\xf3\x99\x11\xdc\x70\x9a\xe5\x4f\x0e\x88\xfc\xb8\x8a\xe7\xf9\x37\x2e\xb7\x82\x08\xe1";
+        const EVALUATED: [u8; 33] = *b"\x03\x00\x58\xb5\x23\x52\x75\x0a\x5e\xc1\x1f\x6d\x63\xe8\x97\xbc\x4f\xcc\xc1\x91\x41\xb3\x17\xf2\x38\x36\x0e\x67\x9a\x03\x3b\x7a\x34";
+        const PROOF: [u8; 64] = *b"\x77\x3a\x7a\xac\xe9\xb4\x37\xd0\x43\xdf\x2d\xfd\xb6\x90\xf3\x3b\x86\xdd\x93\x8a\xb8\x5c\x88\x85\xaa\xf7\x02\x6e\xdb\xe1\xd0\x36\x58\x2b\xad\x3f\xc4\x1f\x0e\xd1\x43\x4e\x2e\x05\x8e\x1d\xbc\xb0\x96\xab\xe8\xa0\x29\xbf\x2b\x7d\x68\x39\x26\x13\x65\xbd\x66\x40";
+
+        let secret_key = scalar_from_be32(SECRET_KEY).unwrap();
+        let input = decode_point(&HASHED_INPUT).unwrap();
+        let blinded = input * scalar_from_be32(BLINDING_SCALAR).unwrap();
+        let public_key = generator() * secret_key;
+        let evaluated = blinded * secret_key;
+        assert_eq!(encode_point(&blinded), BLINDED);
+        assert_eq!(encode_point(&evaluated), EVALUATED);
+
+        let mut rng = FixedScalarRng(PROOF_SCALAR);
+        let proof = prove(
+            &secret_key,
+            &generator().to_affine(),
+            &public_key.to_affine(),
+            &blinded.to_affine(),
+            &evaluated.to_affine(),
+            &mut rng,
+            Some(CONTEXT),
+        );
+        assert_eq!(encode_proof(&proof), PROOF);
+        assert!(verify(
+            &generator().to_affine(),
+            &public_key.to_affine(),
+            &blinded.to_affine(),
+            &evaluated.to_affine(),
+            &proof,
+            Some(CONTEXT),
+        ));
+
+        let mut altered = proof;
+        altered.s += Scalar::ONE;
+        assert!(!verify(
+            &generator().to_affine(),
+            &public_key.to_affine(),
+            &blinded.to_affine(),
+            &evaluated.to_affine(),
+            &altered,
+            Some(CONTEXT),
+        ));
+    }
+
+    #[test]
+    fn freebird_v4_voprf_rejects_wrong_context_key_and_altered_proof() {
+        let context = b"freebird:v4";
+        let server = Server::from_secret_key([7u8; 32], context).unwrap();
+        let public_key = server.public_key_sec1_compressed();
+        let mut client = Client::new(context);
+        let (blinded, _) = client.blind(b"fixture-negative-input").unwrap();
+        let token = server.evaluate(&blinded).unwrap();
+
+        assert!(Verifier::new(b"freebird:v4:wrong-context")
+            .verify(&token, &public_key)
+            .is_err());
+        let wrong_key = Server::from_secret_key([8u8; 32], context)
+            .unwrap()
+            .public_key_sec1_compressed();
+        assert!(Verifier::new(context).verify(&token, &wrong_key).is_err());
+
+        let mut altered_proof = token;
+        altered_proof[TOKEN_LEN - 1] ^= 0x01;
+        assert!(Verifier::new(context)
+            .verify(&altered_proof, &public_key)
+            .is_err());
     }
 
     #[test]

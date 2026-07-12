@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: issuer-config
+  namespace: freebird
+data:
+  # Smoke script replaces this fail-closed sentinel with the controller pod /32.
+  TRUSTED_PROXY_CIDRS: "0.0.0.0/32"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: verifier-config
+  namespace: freebird
+data:
+  TRUSTED_PROXY_CIDRS: "0.0.0.0/32"
+  VERIFIER_ACCEPTED_TOKEN_VERSIONS: "v4"
+  ISSUER_URL: "https://issuer.freebird.test/.well-known/issuer"

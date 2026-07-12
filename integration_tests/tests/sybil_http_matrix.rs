@@ -84,6 +84,7 @@ async fn build_app(sybil_checker: Option<Arc<dyn SybilResistance>>) -> Result<Te
         behind_proxy: false,
         sybil_checker,
         invitation_system: None,
+        admin_api_key: None,
         public_issuer: Some(public_issuer.clone()),
         epoch_duration_sec: 86400,
         epoch_retention: 2,

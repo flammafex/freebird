@@ -1,15 +1,19 @@
 name: Build & Push Docker Images
-
 on:
   push:
     branches: [main]
     tags: ['v*']
   workflow_dispatch:
-
+    inputs:
+      run_kind_smoke:
+        description: Run the kind smoke test for this non-release commit
+        required: false
+        default: false
+        type: boolean
+permissions: {}
 env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/flammafex/freebird
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -17,62 +21,71 @@ jobs:
       contents: read
       packages: write
       id-token: write
-
-    strategy:
-      matrix:
-        target: [issuer, verifier]
-
+    strategy: {matrix: {target: [issuer, verifier]}}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
-      - name: Extract metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_PREFIX }}-${{ matrix.target }}
-          tags: |
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=
-            type=raw,value=latest,enable={{is_default_branch}}
-
-      - name: Build labels
-        id: vars
-        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-
+          ref: ${{ github.sha }}
+      - id: image
+        env:
+          TARGET: ${{ matrix.target }}
+          REF: ${{ github.ref }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ "$REF" == refs/tags/v* ]]; then
+            [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || exit 1
+            version="${TAG#v}"
+            minor="$(printf '%s' "$version" | cut -d. -f1,2)"
+            tags="${IMAGE_PREFIX}-${TARGET}:${version} ${IMAGE_PREFIX}-${TARGET}:${minor}"
+          else tags="${IMAGE_PREFIX}-${TARGET}:${GITHUB_SHA} ${IMAGE_PREFIX}-${TARGET}:latest"; fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - name: Login
+        run: echo "${{ github.token }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: ${{ matrix.target }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ github.ref_name }}
-            VCS_REF=${{ github.sha }}
-            CREATED=${{ steps.vars.outputs.created }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Sign image
         env:
-          IMAGE: ${{ env.IMAGE_PREFIX }}-${{ matrix.target }}
+          TAGS: ${{ steps.image.outputs.tags }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          args=(); for tag in $TAGS; do args+=(--tag "$tag"); done
+          docker buildx build --platform linux/amd64,linux/arm64 --target "$TARGET" --push "${args[@]}" --build-arg VERSION="$GITHUB_REF_NAME" --build-arg VCS_REF="$GITHUB_SHA" --metadata-file metadata.json .
+          digest="$(python3 -c 'import json; print(json.load(open("metadata.json"))["containerimage.digest"])')"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+      - name: Install cosign
+        run: curl -fsSL https://github.com/sigstore/cosign/releases/download/v2.4.1/cosign-linux-amd64 -o /tmp/cosign && chmod 755 /tmp/cosign
+      - name: Sign and record immutable manifest
+        env:
+          TARGET: ${{ matrix.target }}
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        run: |
+          /tmp/cosign sign --yes "${IMAGE_PREFIX}-${TARGET}@${DIGEST}"
+          mkdir -p release-metadata
+          printf '%s@%s\n' "${IMAGE_PREFIX}-${TARGET}" "$DIGEST" > "release-metadata/${TARGET}.image"
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+        with:
+          name: release-image-${{ matrix.target }}-${{ github.sha }}
+          path: release-metadata/*.image
+          retention-days: 14
+
+  kind-smoke:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.run_kind_smoke == true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions: {contents: read, actions: read, packages: read}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: release-image-*-${{ github.sha }}
+          merge-multiple: true
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Load unique images and smoke manifests
+        run: |
+          set -euo pipefail
+          issuer="${IMAGE_PREFIX}-issuer:smoke-${GITHUB_SHA}"; verifier="${IMAGE_PREFIX}-verifier:smoke-${GITHUB_SHA}"
+          docker pull "$(cat release-metadata/issuer.image)"
+          docker pull "$(cat release-metadata/verifier.image)"
+          docker tag "$(cat release-metadata/issuer.image)" "$issuer"; docker tag "$(cat release-metadata/verifier.image)" "$verifier"
+          ISSUER_IMAGE="$issuer" VERIFIER_IMAGE="$verifier" bash scripts/release-kind-smoke.sh

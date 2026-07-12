@@ -8,12 +8,19 @@ tamper-evident security logs.
 
 The issuer initializes an audit log at startup with:
 
-- path: `audit_log.json`
+- path: `AUDIT_LOG_PATH`, default `/var/lib/freebird/issuer/audit_log.json`
+
+Docker Compose sets this explicitly to `/data/audit_log.json` on the
+`issuer-data` volume. The systemd example sets it to the issuer state
+directory allowed by the service sandbox.
 - maximum entries: `10000`
 - autosave interval: `60` seconds
 
 The audit log is stored as local JSON. The file should be on protected
-persistent storage. Back it up if audit history matters for your deployment.
+persistent storage. Writes use a restrictive `0600` file mode and an atomic
+temporary-file-plus-rename sequence. Startup fails for corrupt or unreadable
+audit state, and save failures are reported to the operator. Back it up if
+audit history matters for your deployment.
 
 ## Entry Fields
 

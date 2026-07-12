@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use subtle::ConstantTimeEq;
 use tokio::fs as tokio_fs;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use super::{memory_replay_store, ReplayStore, SybilResistance};
 
@@ -95,6 +95,7 @@ pub struct MultiPartyVouchingSystem {
     hmac_key: [u8; 32],
     dirty: Arc<RwLock<bool>>,
     replay_store: Arc<dyn ReplayStore>,
+    save_lock: Arc<Mutex<()>>,
 }
 
 impl MultiPartyVouchingSystem {
@@ -118,6 +119,7 @@ impl MultiPartyVouchingSystem {
             hmac_key,
             dirty: Arc::new(RwLock::new(false)),
             replay_store,
+            save_lock: Arc::new(Mutex::new(())),
         });
 
         // Load existing state if available
@@ -587,7 +589,8 @@ impl MultiPartyVouchingSystem {
     }
 
     /// Save state to disk
-    async fn save_state(&self) -> Result<()> {
+    pub async fn save_state(&self) -> Result<()> {
+        let _save_guard = self.save_lock.lock().await;
         let vouchers = self.vouchers.read().await.clone();
         let pending = self.pending_vouches.read().await.clone();
 
@@ -599,9 +602,25 @@ impl MultiPartyVouchingSystem {
         tokio_fs::write(&tmp_path, json)
             .await
             .context("Failed to write multi-party vouching state temp file")?;
+        tokio_fs::File::open(&tmp_path)
+            .await
+            .context("Failed to open multi-party vouching temp file for sync")?
+            .sync_all()
+            .await
+            .context("Failed to sync multi-party vouching temp file")?;
         tokio_fs::rename(&tmp_path, &self.config.persistence_path)
             .await
             .context("Failed to rename multi-party vouching state temp file")?;
+        #[cfg(unix)]
+        {
+            let parent = crate::shutdown::persistence_parent(&self.config.persistence_path);
+            tokio_fs::File::open(parent)
+                .await
+                .context("Failed to open multi-party vouching directory for sync")?
+                .sync_all()
+                .await
+                .context("Failed to sync multi-party vouching directory")?;
+        }
         Ok(())
     }
 

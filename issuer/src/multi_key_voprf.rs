@@ -56,7 +56,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use time::OffsetDateTime;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 use crate::voprf_core::VoprfCore;
@@ -163,6 +163,7 @@ pub struct MultiKeyVoprfCore {
     persistence_path: Option<std::path::PathBuf>,
     /// Default grace period for deprecated keys (seconds)
     default_grace_period_secs: u64,
+    save_lock: Arc<Mutex<()>>,
 }
 
 impl MultiKeyVoprfCore {
@@ -186,6 +187,7 @@ impl MultiKeyVoprfCore {
             ctx: ctx.to_vec(),
             persistence_path: None,
             default_grace_period_secs: 30 * 24 * 3600, // 30 days
+            save_lock: Arc::new(Mutex::new(())),
         })
     }
 
@@ -516,7 +518,8 @@ impl MultiKeyVoprfCore {
     }
 
     /// Save current state to disk
-    async fn save_state(&self) -> Result<()> {
+    pub async fn save_state(&self) -> Result<()> {
+        let _save_guard = self.save_lock.lock().await;
         let Some(ref path) = self.persistence_path else {
             return Ok(()); // No persistence configured
         };
@@ -540,9 +543,25 @@ impl MultiKeyVoprfCore {
         tokio::fs::write(&tmp_path, json.as_bytes())
             .await
             .context("failed to write temp file")?;
+        tokio::fs::File::open(&tmp_path)
+            .await
+            .context("failed to open rotation temp file for sync")?
+            .sync_all()
+            .await
+            .context("failed to sync rotation temp file")?;
         tokio::fs::rename(&tmp_path, path)
             .await
             .context("failed to rename temp file")?;
+        #[cfg(unix)]
+        {
+            let parent = crate::shutdown::persistence_parent(path);
+            tokio::fs::File::open(parent)
+                .await
+                .context("failed to open rotation directory for sync")?
+                .sync_all()
+                .await
+                .context("failed to sync rotation directory")?;
+        }
 
         debug!("Saved key rotation state to {:?}", path);
         Ok(())

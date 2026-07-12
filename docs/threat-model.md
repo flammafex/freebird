@@ -3,6 +3,10 @@
 This document describes the current security model for Freebird. It is not a
 formal audit.
 
+Current issuance is transitional and experimental. Planned profile status and
+the limits of profile claims are defined in the [Profile and Claim
+Matrix](profile-claim-matrix.md).
+
 ## Security Goals
 
 Freebird aims to provide:

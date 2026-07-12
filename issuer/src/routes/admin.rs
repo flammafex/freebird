@@ -24,12 +24,13 @@ use crate::sybil_resistance::multi_party_vouching::{
     MultiPartyVouchingSystem, PendingVouchSummary, VoucherSummary,
 };
 use axum::{
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{ConnectInfo, Extension, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
     Json,
 };
 use base64ct::Encoding;
+use freebird_common::tls_enforcement::ValidatedClientIp;
 use p256::ecdsa::{Signature, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
@@ -62,6 +63,8 @@ pub struct AdminState {
     pub behind_proxy: bool,
     /// Whether TLS is required (affects Secure cookie flag)
     pub require_tls: bool,
+    /// Whether the explicitly unsafe V4 rotation endpoint is enabled.
+    pub allow_unsafe_v4_rotation: bool,
     /// Optional WebAuthn credential store (only if webauthn feature enabled)
     #[cfg(feature = "human-gate-webauthn")]
     pub webauthn_store: Option<crate::webauthn::CredentialStore>,
@@ -121,6 +124,7 @@ pub struct ConfigSummary {
     pub require_tls: bool,
     pub behind_proxy: bool,
     pub webauthn_enabled: bool,
+    pub allow_unsafe_v4_rotation: bool,
 }
 
 // ============================================================================
@@ -491,6 +495,11 @@ pub struct ConfigResponse {
     pub require_tls: bool,
     pub behind_proxy: bool,
     pub webauthn_enabled: bool,
+    pub allow_unsafe_v4_rotation: bool,
+}
+
+fn rotation_metric_value(enabled: bool) -> u8 {
+    u8::from(enabled)
 }
 
 /// Request to rotate to a new key
@@ -743,6 +752,7 @@ pub enum AdminError {
     InvitationNotFound,
     InvalidRequest(String),
     Internal(String),
+    V4RotationDisabled,
 }
 
 impl AdminError {
@@ -754,6 +764,7 @@ impl AdminError {
             AdminError::InvitationNotFound => StatusCode::NOT_FOUND,
             AdminError::InvalidRequest(_) => StatusCode::BAD_REQUEST,
             AdminError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            AdminError::V4RotationDisabled => StatusCode::SERVICE_UNAVAILABLE,
         }
     }
 
@@ -767,6 +778,7 @@ impl AdminError {
             AdminError::InvitationNotFound => "invitation not found".to_string(),
             AdminError::InvalidRequest(msg) => format!("invalid request: {}", msg),
             AdminError::Internal(_) => "internal server error".to_string(),
+            AdminError::V4RotationDisabled => "V4 key rotation is disabled".to_string(),
         }
     }
 }
@@ -919,25 +931,10 @@ fn extract_client_ip(
     headers: &HeaderMap,
     behind_proxy: bool,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Option<IpAddr> {
-    if behind_proxy {
-        // Try X-Forwarded-For first (may contain comma-separated list)
-        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-            // Take the first (leftmost) IP, which is the original client
-            if let Some(first_ip) = xff.split(',').next() {
-                if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
-                    return Some(ip);
-                }
-            }
-        }
-        // Fallback to X-Real-IP
-        if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-            if let Ok(ip) = real_ip.trim().parse::<IpAddr>() {
-                return Some(ip);
-            }
-        }
-    }
-    connect_info.map(|info| info.0.ip())
+    let _ = (headers, behind_proxy, connect_info);
+    validated_ip.map(|Extension(ip)| ip.0)
 }
 
 /// Verify authentication via session cookie or X-Admin-Key header with rate limiting
@@ -1004,9 +1001,10 @@ async fn login_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
 
     // Rate-limit login attempts by IP
     if let Some(ip) = client_ip {
@@ -1056,8 +1054,9 @@ pub async fn health_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<HealthResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     Ok(Json(HealthResponse {
@@ -1068,12 +1067,29 @@ pub async fn health_handler(
     }))
 }
 
+/// GET /admin/readiness — authenticated dependency status for operators.
+pub async fn readiness_handler(
+    State(state): State<Arc<AdminState>>,
+    headers: HeaderMap,
+    connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
+    readiness: Option<Extension<crate::readiness::ReadinessState>>,
+) -> Result<Json<crate::readiness::ReadinessReport>, AdminError> {
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
+    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+    let Some(Extension(readiness)) = readiness else {
+        return Err(AdminError::Internal("readiness unavailable".to_string()));
+    };
+    Ok(Json(readiness.report()))
+}
+
 pub async fn get_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<StatsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let stats = state.invitation_system.get_stats().await;
@@ -1099,8 +1115,9 @@ pub async fn get_config_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<ConfigResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let summary = &state.config_summary;
@@ -1116,6 +1133,7 @@ pub async fn get_config_handler(
         require_tls: summary.require_tls,
         behind_proxy: summary.behind_proxy,
         webauthn_enabled: summary.webauthn_enabled,
+        allow_unsafe_v4_rotation: summary.allow_unsafe_v4_rotation,
     }))
 }
 
@@ -1125,8 +1143,9 @@ pub async fn metrics_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<String, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let stats = state.invitation_system.get_stats().await;
@@ -1202,6 +1221,12 @@ pub async fn metrics_handler(
         "Number of keys expiring within 7 days",
         key_stats.expiring_soon
     );
+    metric!(
+        "freebird_v4_rotation_enabled",
+        "gauge",
+        "Whether the explicitly unsafe V4 admin key rotation endpoint is enabled",
+        rotation_metric_value(state.allow_unsafe_v4_rotation)
+    );
 
     // Sybil mode info (as a label)
     output.push_str(&format!(
@@ -1221,9 +1246,10 @@ pub async fn grant_invites_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<GrantInvitesRequest>,
 ) -> Result<Json<GrantInvitesResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate inputs
@@ -1278,9 +1304,10 @@ pub async fn ban_user_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<BanUserRequest>,
 ) -> Result<Json<BanUserResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate inputs
@@ -1328,9 +1355,10 @@ pub async fn unban_user_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<UnbanUserRequest>,
 ) -> Result<Json<UnbanUserResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     validate_user_id(&req.user_id)?;
 
@@ -1363,9 +1391,10 @@ pub async fn add_bootstrap_user_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<AddBootstrapUserRequest>,
 ) -> Result<Json<AddBootstrapUserResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate inputs
@@ -1409,9 +1438,10 @@ pub async fn register_owner_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<RegisterOwnerRequest>,
 ) -> Result<Json<RegisterOwnerResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate inputs
@@ -1455,9 +1485,10 @@ pub async fn create_invitations_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<CreateInvitationsRequest>,
 ) -> Result<Json<CreateInvitationsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate inputs
@@ -1544,8 +1575,9 @@ pub async fn save_state_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<serde_json::Value>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     state
@@ -1566,9 +1598,10 @@ pub async fn list_users_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Query(params): Query<ListUsersParams>,
 ) -> Result<Json<ListUsersResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Clamp limit to reasonable bounds (1-100)
@@ -1611,9 +1644,10 @@ pub async fn get_user_details_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Path(user_id): Path<String>,
 ) -> Result<Json<UserDetailsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate path parameter
@@ -1649,9 +1683,10 @@ pub async fn list_invitations_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Query(params): Query<ListInvitationsParams>,
 ) -> Result<Json<ListInvitationsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Clamp limit to reasonable bounds (1-100)
@@ -1717,9 +1752,10 @@ pub async fn get_invitation_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Path(code): Path<String>,
 ) -> Result<Json<GetInvitationResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let invitation = state
@@ -1751,9 +1787,10 @@ pub async fn revoke_invitation_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Path(code): Path<String>,
 ) -> Result<Json<RevokeInvitationResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let invitation = state
@@ -1796,9 +1833,10 @@ pub async fn list_audit_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Query(params): Query<ListAuditParams>,
 ) -> Result<Json<ListAuditResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Clamp limit to reasonable bounds (1-500)
@@ -1844,8 +1882,9 @@ pub async fn list_keys_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<ListKeysResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let keys = state.multi_key_voprf.list_keys().await;
@@ -1860,10 +1899,17 @@ pub async fn rotate_key_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<RotateKeyRequest>,
 ) -> Result<Json<RotateKeyResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
+
+    // Keep this before validation and key generation: V4 rotation is unsafe
+    // and must never be reachable in production configuration.
+    if !state.allow_unsafe_v4_rotation {
+        return Err(AdminError::V4RotationDisabled);
+    }
 
     // Validate inputs
     validate_kid(&req.new_kid)?;
@@ -1918,8 +1964,9 @@ pub async fn cleanup_keys_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<CleanupKeysResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let keys_before = state.multi_key_voprf.list_keys().await;
@@ -1955,9 +2002,10 @@ pub async fn force_remove_key_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Path(kid): Path<String>,
 ) -> Result<Json<ForceRemoveKeyResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Validate path parameter
@@ -2008,8 +2056,9 @@ pub async fn list_vouchers_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<ListVouchersResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     let system = require_vouching_system(&state)?;
 
@@ -2022,9 +2071,10 @@ pub async fn add_voucher_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<AddVoucherRequest>,
 ) -> Result<Json<VoucherMutationResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     validate_user_id(&req.user_id)?;
     let system = require_vouching_system(&state)?;
@@ -2057,9 +2107,10 @@ pub async fn remove_voucher_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Path(user_id): Path<String>,
 ) -> Result<Json<VoucherMutationResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     validate_user_id(&user_id)?;
     let system = require_vouching_system(&state)?;
@@ -2091,9 +2142,10 @@ pub async fn submit_vouch_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<SubmitVouchRequest>,
 ) -> Result<Json<SubmitVouchResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     validate_user_id(&req.voucher_id)?;
     validate_user_id(&req.vouchee_id)?;
@@ -2129,8 +2181,9 @@ pub async fn list_pending_vouches_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<ListPendingVouchesResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     let system = require_vouching_system(&state)?;
 
@@ -2143,9 +2196,10 @@ pub async fn clear_pending_vouches_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<VoucheeRequest>,
 ) -> Result<Json<ClearPendingVouchesResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     validate_user_id(&req.vouchee_id)?;
     let system = require_vouching_system(&state)?;
@@ -2174,9 +2228,10 @@ pub async fn mark_vouching_successful_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<VoucheeRequest>,
 ) -> Result<Json<serde_json::Value>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     validate_user_id(&req.vouchee_id)?;
     let system = require_vouching_system(&state)?;
@@ -2191,9 +2246,10 @@ pub async fn mark_vouching_problematic_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Json(req): Json<VoucheeRequest>,
 ) -> Result<Json<serde_json::Value>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     validate_user_id(&req.vouchee_id)?;
     let system = require_vouching_system(&state)?;
@@ -2257,9 +2313,10 @@ pub async fn export_invitations_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Query(params): Query<ExportParams>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let invitations = state.invitation_system.get_all_invitations().await;
@@ -2315,9 +2372,10 @@ pub async fn export_users_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Query(params): Query<ExportParams>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let users = state.invitation_system.get_all_users().await;
@@ -2369,9 +2427,10 @@ pub async fn export_audit_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Query(params): Query<ExportParams>,
 ) -> Result<impl IntoResponse, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     // Get all audit entries (no pagination for export)
@@ -2476,8 +2535,9 @@ pub async fn list_webauthn_credentials_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<ListWebAuthnCredentialsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let store = state
@@ -2516,9 +2576,10 @@ pub async fn delete_webauthn_credential_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Path(cred_id_b64): Path<String>,
 ) -> Result<Json<DeleteWebAuthnCredentialResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let store = state
@@ -2555,8 +2616,9 @@ pub async fn webauthn_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<serde_json::Value>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
 
     let store = state
@@ -2580,8 +2642,9 @@ pub async fn webauthn_policy_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<WebAuthnPolicyResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     let config = crate::webauthn::AttestationConfig::global();
     let mut allowed_aaguids: Vec<String> = config.allowed_aaguids.iter().cloned().collect();
@@ -2607,8 +2670,9 @@ pub async fn list_webauthn_credentials_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<ListWebAuthnCredentialsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     Ok(Json(ListWebAuthnCredentialsResponse {
         credentials: vec![],
@@ -2621,9 +2685,10 @@ pub async fn delete_webauthn_credential_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     Path(_cred_id_b64): Path<String>,
 ) -> Result<Json<DeleteWebAuthnCredentialResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     Err(AdminError::Internal(
         "WebAuthn feature not enabled".to_string(),
@@ -2635,8 +2700,9 @@ pub async fn webauthn_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<serde_json::Value>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     Ok(Json(serde_json::json!({
         "total_credentials": 0,
@@ -2649,8 +2715,9 @@ pub async fn webauthn_policy_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Result<Json<WebAuthnPolicyResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info);
+    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
     verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
     Ok(Json(WebAuthnPolicyResponse {
         enabled: false,
@@ -2678,6 +2745,7 @@ pub fn admin_router(
     api_key: String,
     behind_proxy: bool,
     require_tls: bool,
+    allow_unsafe_v4_rotation: bool,
     webauthn_store: Option<crate::webauthn::CredentialStore>,
     config_summary: ConfigSummary,
 ) -> axum::Router {
@@ -2692,6 +2760,7 @@ pub fn admin_router(
         rate_limiter: AdminRateLimiter::new(),
         behind_proxy,
         require_tls,
+        allow_unsafe_v4_rotation,
         webauthn_store,
         config_summary,
     });
@@ -2709,6 +2778,7 @@ pub fn admin_router(
     api_key: String,
     behind_proxy: bool,
     require_tls: bool,
+    allow_unsafe_v4_rotation: bool,
     config_summary: ConfigSummary,
 ) -> axum::Router {
     let session_key = derive_session_key(&api_key);
@@ -2722,6 +2792,7 @@ pub fn admin_router(
         rate_limiter: AdminRateLimiter::new(),
         behind_proxy,
         require_tls,
+        allow_unsafe_v4_rotation,
         config_summary,
     });
 
@@ -2734,6 +2805,7 @@ fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
         .route("/login", axum::routing::post(login_handler))
         .route("/logout", axum::routing::post(logout_handler))
         .route("/health", axum::routing::get(health_handler))
+        .route("/readiness", axum::routing::get(readiness_handler))
         .route("/stats", axum::routing::get(get_stats_handler))
         .route("/config", axum::routing::get(get_config_handler))
         .route("/metrics", axum::routing::get(metrics_handler))
@@ -2822,4 +2894,15 @@ fn build_admin_router(state: Arc<AdminState>) -> axum::Router {
             axum::routing::get(webauthn_policy_handler),
         )
         .with_state(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rotation_metric_value;
+
+    #[test]
+    fn rotation_metric_reports_containment_state() {
+        assert_eq!(rotation_metric_value(false), 0);
+        assert_eq!(rotation_metric_value(true), 1);
+    }
 }

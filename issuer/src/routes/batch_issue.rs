@@ -28,12 +28,13 @@ use crate::routes::issue::extract_client_data;
 use crate::sybil_resistance::SybilRequestContext;
 use crate::AppStateWithSybil;
 use axum::{
-    extract::{ConnectInfo, State},
+    extract::{ConnectInfo, Extension, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{BatchIssueReq, BatchIssueResp, SybilInfo, TokenResult};
+use freebird_common::tls_enforcement::ValidatedClientIp;
 use sha2::{Digest, Sha256};
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -202,6 +203,7 @@ pub async fn handle_batch(
     State((state, voprf)): State<(Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>)>,
     // Remove: voprf: Arc<MultiKeyVoprfCore>
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     headers: HeaderMap,
     Json(req): Json<BatchIssueReq>,
 ) -> Result<Json<BatchIssueResp>, (StatusCode, String)> {
@@ -246,7 +248,7 @@ pub async fn handle_batch(
 
     // --- SYBIL RESISTANCE CHECK ---
     let sybil_start = Instant::now();
-    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
+    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers, validated_ip);
 
     let sybil_info = match (&state.sybil_checker, &req.sybil_proof) {
         // Case 1: Sybil configured + proof provided → VERIFY

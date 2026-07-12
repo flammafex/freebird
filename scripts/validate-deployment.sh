@@ -303,8 +303,8 @@ check_network() {
     print_header "Network Configuration"
 
     # Check if ports are available
-    local issuer_port=$(grep "ISSUER_BIND_ADDR" "$ENV_FILE" | grep -o ':[0-9]*' | tr -d ':' || echo "8081")
-    local verifier_port=$(grep "VERIFIER_BIND_ADDR" "$ENV_FILE" | grep -o ':[0-9]*' | tr -d ':' || echo "8082")
+    local issuer_port=$(grep "ISSUER_HOST_BIND_ADDR" "$ENV_FILE" | grep -o ':[0-9]*' | tr -d ':' || echo "8081")
+    local verifier_port=$(grep "VERIFIER_HOST_BIND_ADDR" "$ENV_FILE" | grep -o ':[0-9]*' | tr -d ':' || echo "8082")
     local redis_port=${REDIS_PORT:-6379}
 
     # Test issuer port

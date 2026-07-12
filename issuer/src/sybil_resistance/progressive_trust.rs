@@ -32,7 +32,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 
 #[cfg(unix)]
@@ -160,6 +160,7 @@ pub struct ProgressiveTrustSystem {
     users: Arc<RwLock<HashMap<String, UserTrustRecord>>>,
     hmac_key: [u8; 32],
     dirty: Arc<RwLock<bool>>,
+    save_lock: Arc<Mutex<()>>,
 }
 
 impl ProgressiveTrustSystem {
@@ -179,6 +180,7 @@ impl ProgressiveTrustSystem {
             users: Arc::new(RwLock::new(users)),
             hmac_key,
             dirty: Arc::new(RwLock::new(false)),
+            save_lock: Arc::new(Mutex::new(())),
         });
 
         // Start autosave task
@@ -459,7 +461,8 @@ impl ProgressiveTrustSystem {
     }
 
     /// Save state to disk
-    async fn save_state(&self) -> Result<()> {
+    pub async fn save_state(&self) -> Result<()> {
+        let _save_guard = self.save_lock.lock().await;
         let users = self.users.read().await;
         let data = serde_json::to_string_pretty(&*users)
             .context("Failed to serialize progressive trust state")?;
@@ -475,9 +478,25 @@ impl ProgressiveTrustSystem {
         tokio::fs::write(&tmp_path, data)
             .await
             .context("Failed to write progressive trust state temp file")?;
+        tokio::fs::File::open(&tmp_path)
+            .await
+            .context("Failed to open progressive trust temp file for sync")?
+            .sync_all()
+            .await
+            .context("Failed to sync progressive trust temp file")?;
         tokio::fs::rename(&tmp_path, &self.config.persistence_path)
             .await
             .context("Failed to rename progressive trust state temp file")?;
+        #[cfg(unix)]
+        {
+            let parent = crate::shutdown::persistence_parent(&self.config.persistence_path);
+            tokio::fs::File::open(parent)
+                .await
+                .context("Failed to open progressive trust directory for sync")?
+                .sync_all()
+                .await
+                .context("Failed to sync progressive trust directory")?;
+        }
 
         *self.dirty.write().await = false;
 

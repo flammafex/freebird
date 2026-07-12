@@ -12,6 +12,7 @@ pub use freebird_common::api::{
     PublicIssueReq, PublicIssueResp,
 };
 
+pub use crate::readiness::liveness;
 pub use admin::admin_router;
 pub use batch_issue::handle_batch;
 pub use issue::handle;

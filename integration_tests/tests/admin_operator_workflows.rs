@@ -38,6 +38,13 @@ struct AdminHarness {
 async fn build_admin_router(
     vouching: Option<Arc<MultiPartyVouchingSystem>>,
 ) -> Result<AdminHarness> {
+    build_admin_router_with_rotation(vouching, true).await
+}
+
+async fn build_admin_router_with_rotation(
+    vouching: Option<Arc<MultiPartyVouchingSystem>>,
+    allow_unsafe_v4_rotation: bool,
+) -> Result<AdminHarness> {
     let tmp = tempfile::tempdir()?;
 
     let invitation_config = InvitationConfig {
@@ -96,6 +103,7 @@ async fn build_admin_router(
         require_tls: false,
         behind_proxy: false,
         webauthn_enabled: false,
+        allow_unsafe_v4_rotation,
     };
 
     let router = admin_router(
@@ -106,6 +114,7 @@ async fn build_admin_router(
         ADMIN_KEY.to_string(),
         false,
         false,
+        allow_unsafe_v4_rotation,
         config_summary,
     );
 
@@ -136,6 +145,72 @@ async fn admin_request(
     };
 
     Ok((status, value))
+}
+
+#[tokio::test]
+async fn v4_rotation_is_contained_when_disabled() -> Result<()> {
+    let harness = build_admin_router_with_rotation(None, false).await?;
+    let (status, before) = admin_request(&harness.router, Method::GET, "/keys", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    let before_kid = before["keys"][0]["kid"].clone();
+    let before_count = before["keys"].as_array().context("missing keys")?.len();
+
+    let (status, body) = admin_request(
+        &harness.router,
+        Method::POST,
+        "/keys/rotate",
+        Some(json!({ "new_kid": "should-not-rotate" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["error"], "V4 key rotation is disabled");
+
+    let (status, after) = admin_request(&harness.router, Method::GET, "/keys", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(after["keys"][0]["kid"], before_kid);
+    assert_eq!(
+        after["keys"].as_array().context("missing keys")?.len(),
+        before_count
+    );
+    let (_, audit) = admin_request(&harness.router, Method::GET, "/audit", None).await?;
+    assert!(!audit["entries"]
+        .as_array()
+        .context("missing audit entries")?
+        .iter()
+        .any(|entry| entry["action"] == "key_rotated"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn development_rotation_override_permits_rotation() -> Result<()> {
+    let harness = build_admin_router_with_rotation(None, true).await?;
+    let (status, before) = admin_request(&harness.router, Method::GET, "/keys", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    let old_kid = before["keys"][0]["kid"]
+        .as_str()
+        .context("missing active kid")?;
+
+    let (status, body) = admin_request(
+        &harness.router,
+        Method::POST,
+        "/keys/rotate",
+        Some(json!({ "new_kid": "development-rotated", "grace_period_secs": 3600 })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["old_kid"], old_kid);
+    assert_eq!(body["new_kid"], "development-rotated");
+
+    let (_, keys) = admin_request(&harness.router, Method::GET, "/keys", None).await?;
+    assert_eq!(keys["stats"]["total_keys"], 2);
+    assert_eq!(keys["stats"]["active_keys"], 1);
+    let (_, audit) = admin_request(&harness.router, Method::GET, "/audit", None).await?;
+    assert!(audit["entries"]
+        .as_array()
+        .context("missing audit entries")?
+        .iter()
+        .any(|entry| entry["action"] == "key_rotated"));
+    Ok(())
 }
 
 #[tokio::test]

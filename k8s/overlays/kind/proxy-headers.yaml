@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: freebird-proxy-headers
+  # The pinned kind ingress-nginx provider installs in this fixed namespace.
+  namespace: ingress-nginx
+data:
+  # The application sees HTTPS semantics; transport is HTTP only inside smoke.
+  X-Forwarded-Proto: "https"
+  X-Forwarded-For: "$remote_addr"
+  X-Forwarded-Host: "$host"
+  X-Forwarded-Port: "443"

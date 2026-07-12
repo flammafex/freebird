@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kind-health-to-proxy
+  namespace: freebird
+spec:
+  podSelector:
+    matchLabels:
+      app: freebird-smoke
+      component: health
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: controller
+      ports:
+        - protocol: TCP
+          port: 80
+        - protocol: TCP
+          port: 443

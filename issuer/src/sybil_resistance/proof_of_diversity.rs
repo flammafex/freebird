@@ -41,7 +41,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use subtle::ConstantTimeEq;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, info, warn};
 
 use crate::sybil_resistance::SybilResistance;
@@ -143,6 +143,7 @@ pub struct ProofOfDiversitySystem {
     records: Arc<RwLock<HashMap<String, DiversityRecord>>>,
     hmac_key: [u8; 32],
     dirty: Arc<RwLock<bool>>,
+    save_lock: Arc<Mutex<()>>,
 }
 
 impl ProofOfDiversitySystem {
@@ -160,6 +161,7 @@ impl ProofOfDiversitySystem {
             records: Arc::new(RwLock::new(records)),
             hmac_key,
             dirty: Arc::new(RwLock::new(false)),
+            save_lock: Arc::new(Mutex::new(())),
         });
 
         // Start autosave task
@@ -386,7 +388,8 @@ impl ProofOfDiversitySystem {
     }
 
     /// Save state to disk
-    async fn save_state(&self) -> Result<()> {
+    pub async fn save_state(&self) -> Result<()> {
+        let _save_guard = self.save_lock.lock().await;
         let records = self.records.read().await;
         let data = serde_json::to_string_pretty(&*records)
             .context("Failed to serialize diversity state")?;
@@ -395,9 +398,25 @@ impl ProofOfDiversitySystem {
         tokio::fs::write(&tmp_path, data)
             .await
             .context("Failed to write diversity state temp file")?;
+        tokio::fs::File::open(&tmp_path)
+            .await
+            .context("Failed to open diversity temp file for sync")?
+            .sync_all()
+            .await
+            .context("Failed to sync diversity temp file")?;
         tokio::fs::rename(&tmp_path, &self.config.persistence_path)
             .await
             .context("Failed to rename diversity state temp file")?;
+        #[cfg(unix)]
+        {
+            let parent = crate::shutdown::persistence_parent(&self.config.persistence_path);
+            tokio::fs::File::open(parent)
+                .await
+                .context("Failed to open diversity directory for sync")?
+                .sync_all()
+                .await
+                .context("Failed to sync diversity directory")?;
+        }
 
         *self.dirty.write().await = false;
 

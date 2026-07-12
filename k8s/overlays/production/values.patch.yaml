@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: issuer-config
+  namespace: freebird
+data:
+  # Replace every REQUIRED_* value before applying this overlay.
+  TRUSTED_PROXY_CIDRS: "REQUIRED_INGRESS_SOURCE_CIDR"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: verifier-config
+  namespace: freebird
+data:
+  TRUSTED_PROXY_CIDRS: "REQUIRED_INGRESS_SOURCE_CIDR"
+  ISSUER_URL: "https://REQUIRED_PUBLIC_ISSUER_HOST/.well-known/issuer"

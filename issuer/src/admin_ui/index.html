@@ -2753,10 +2753,17 @@ body > footer {
     <a href="#main-content" class="skip-link">Skip to main content</a>
     <header class="header">
       <h1>🕊️ Freebird Admin<span id="serviceBadge"></span></h1>
-      <p>Authorization without identity. Privacy without compromise.</p>
+      <p>Experimental operator console · token-layer unlinkability only</p>
       <div id="systemHealthBadge" style="margin-top: 10px">
         <span class="badge">Checking...</span>
       </div>
+      <p class="text-small" style="margin: 12px auto 0; max-width: 760px">
+        This console manages an experimental pre-1.0 service. Token-layer privacy
+        does not hide IP addresses, timing, User-Agent data, application
+        identifiers, proxy or hosting logs, or correlation by operators who
+        observe both issuance and redemption. No external security audit has
+        been completed.
+      </p>
     </header>
 
     <!-- API Key Configuration -->
@@ -2884,7 +2891,11 @@ body > footer {
     <main id="main-content">
 
     <div id="dashboard-tab" class="tab-content active" role="tabpanel" aria-labelledby="tab-dashboard" tabindex="0">
-      <h2>System Statistics</h2>
+      <h2>Operational Status</h2>
+      <p class="text-small">
+        Service events and configured records are shown here. They are not a
+        count of anonymous people and do not establish a privacy guarantee.
+      </p>
       <button type="button" onclick="loadStats()">🔄 Refresh</button>
 
       <div id="statsContainer" class="mt-20">
@@ -2915,8 +2926,12 @@ body > footer {
 
     <!-- Sybil Configuration Tab -->
     <div id="sybil-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-sybil" tabindex="0">
-      <h2>🛡️ Sybil Resistance Configuration</h2>
-      <p>View the current Sybil resistance settings for this issuer.</p>
+      <h2>🛡️ Admission Controls</h2>
+      <p>
+        View the issuer's local admission settings. No mechanism proves a
+        unique human; combined <code>OR</code> mode is only as strong as its
+        easiest mechanism, and replay safety depends on the configured store.
+      </p>
 
       <button type="button" onclick="loadSybilConfig()">🔄 Refresh</button>
 
@@ -2926,7 +2941,12 @@ body > footer {
     </div>
 
     <div id="users-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-users" tabindex="0">
-      <h2>User Management</h2>
+      <h2>Admission Records</h2>
+      <p class="text-small">
+        These records support issuer admission and are not token holders or
+        redemption identities. Review retention and export policies before
+        using this data.
+      </p>
 
       <div class="form-row">
         <div class="form-field">
@@ -3165,7 +3185,11 @@ body > footer {
     <!-- Keys Tab -->
     <div id="keys-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-keys" tabindex="0">
       <h2>🔑 Key Management</h2>
-      <p>Manage cryptographic keys for VOPRF token issuance.</p>
+      <p>
+        Manage keys for experimental token issuance. Rotation and cleanup can
+        affect which token epochs remain verifiable; follow deployment
+        lifecycle guidance before changing them.
+      </p>
 
       <div class="form-section">
         <h3>📋 Active Keys</h3>
@@ -3216,7 +3240,11 @@ body > footer {
     <!-- Audit Logs Tab -->
     <div id="audit-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-audit" tabindex="0">
       <h2>📝 Audit Logs</h2>
-      <p>View and search system activity logs.</p>
+      <p>
+        View and search operational records. These logs are not tamper-evident,
+        may contain deployment metadata, and are not proof of privacy or
+        profile enforcement.
+      </p>
 
       <div class="form-row">
         <div class="form-field">
@@ -3251,8 +3279,12 @@ body > footer {
 
     <!-- WebAuthn Tab -->
     <div id="webauthn-tab" class="tab-content" role="tabpanel" aria-labelledby="tab-webauthn" tabindex="0">
-      <h2>🔐 WebAuthn Management</h2>
-      <p>View and manage FIDO2 credentials for passwordless authentication.</p>
+      <h2>🔐 WebAuthn Admission</h2>
+      <p>
+        View and manage credentials used as an issuer admission control. This
+        is not proof of humanity; credential and deployment records remain in
+        the operator's state.
+      </p>
 
       <div class="form-section">
         <h3>📜 Policy</h3>
@@ -3297,7 +3329,10 @@ body > footer {
     <!-- Verifier: Trusted Issuers Tab -->
     <div id="trusted-issuers-tab" class="tab-content verifier-only" role="tabpanel" aria-labelledby="tab-trusted-issuers" tabindex="0">
       <h2>🏛️ Trusted Issuers</h2>
-      <p>View and manage trusted token issuers for verification.</p>
+      <p>
+        View and manage issuers trusted by this verifier. Trust is local to
+        this configuration, not a certification or privacy guarantee.
+      </p>
 
       <div class="form-section">
         <h3>📋 Loaded Issuers</h3>
@@ -3328,7 +3363,10 @@ body > footer {
     <!-- Verifier: Cache Tab -->
     <div id="cache-tab" class="tab-content verifier-only" role="tabpanel" aria-labelledby="tab-cache" tabindex="0">
       <h2>💾 Replay Cache</h2>
-      <p>Monitor and manage the token replay detection cache.</p>
+      <p>
+        Monitor and manage token replay detection state. Durable, shared state
+        is required for restart-safe or multi-instance operation.
+      </p>
 
       <div class="form-section">
         <h3>📊 Cache Statistics</h3>
@@ -4178,6 +4216,7 @@ body > footer {
                 <tbody>
                   <tr><td><strong>Require TLS</strong></td><td>${data.require_tls ? '✅ Yes' : '❌ No'}</td></tr>
                   <tr><td><strong>Behind Proxy</strong></td><td>${data.behind_proxy ? '✅ Yes' : '❌ No'}</td></tr>
+                  <tr><td><strong>V4 Key Rotation</strong></td><td>${data.allow_unsafe_v4_rotation ? '⚠️ Enabled (development override)' : '🔒 Disabled (production safe)'}</td></tr>
                   <tr><td><strong>WebAuthn Enabled</strong></td><td>${data.webauthn_enabled ? '✅ Yes' : '❌ No'}</td></tr>
                 </tbody>
               </table>

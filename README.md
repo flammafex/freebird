@@ -7,7 +7,8 @@ recording a nullifier so the same token cannot be spent twice.
 
 The current source tree supports two token modes:
 
-- V4 private-verification tokens using a P-256 VOPRF.
+- V4 private-verification tokens using a Freebird-specific, bespoke P-256
+  VOPRF-like construction; it is not RFC 9497 interoperable.
 - V5 public bearer passes using RFC 9474 blind RSA signatures.
 
 The `freebird-interface` binary exercises the V4 flow against local services on
@@ -17,6 +18,9 @@ The `freebird-interface` binary exercises the V4 flow against local services on
 
 - [Security Policy](SECURITY.md): vulnerability reporting, production baseline,
   and known limitations.
+- [Profile and Claim Matrix](docs/profile-claim-matrix.md): authoritative status
+  of planned issuance profiles, limits on public claims, and the Phase B
+  transitional-client inventory.
 - [Architecture](docs/architecture.md): issuer, verifier, client, storage, and
   token flows.
 - [Threat Model](docs/threat-model.md): security goals, assumptions, non-goals,
@@ -57,13 +61,20 @@ The `freebird-interface` binary exercises the V4 flow against local services on
 
 - Rust stable with Cargo.
 - `curl` for the smoke checks below.
-- Redis is optional for local source testing. Without `REDIS_URL`, the verifier
-  uses in-memory nullifier storage.
+- Redis is required by default for verifier replay protection. For explicitly
+  unsafe local development only, use `IN_MEMORY_REPLAY_STORE=true` together
+  with `VERIFIER_ENV=development`.
 - Node.js is only needed for the TypeScript SDK.
 
 ## Quickstart (Docker)
 
-The fastest way to get Freebird running is with Docker Compose:
+The fastest way to get Freebird running is with Docker Compose. This is an
+explicit direct-development deployment, not a production reverse-proxy mode:
+
+Compose sets `COMPOSE_DIRECT_ONLY=true`; its validator refuses
+`DEPLOYMENT_MODE=trusted-proxy` or production settings because no proxy-aware
+Compose profile is provided. The `/readyz` and `/ready` checks only admit the
+direct development services after their configured dependencies are ready.
 
 ```bash
 cp .env.example .env
@@ -73,6 +84,12 @@ cp .env.example .env
 `launch.sh` checks prerequisites, creates `.env` from `.env.example` if it does
 not exist, offers to generate a secure `ADMIN_API_KEY`, pulls or builds the
 images, and waits for both services to become healthy.
+
+Compose publishes the issuer and verifier on `127.0.0.1:8081` and
+`127.0.0.1:8082` by default. Override those host addresses with
+`ISSUER_HOST_BIND_ADDR` and `VERIFIER_HOST_BIND_ADDR`; keep `ISSUER_BIND_ADDR`
+and `VERIFIER_BIND_ADDR` for the in-container listeners (defaulting to
+`0.0.0.0:8081` and `0.0.0.0:8082`).
 
 When it finishes, verify the services are up:
 
@@ -167,6 +184,9 @@ ADMIN_API_KEY=local-admin-key-must-be-at-least-32-chars \
 BIND_ADDR=127.0.0.1:8082 \
 VERIFIER_ID=verifier:local:v4 \
 VERIFIER_AUDIENCE=local \
+VERIFIER_ACCEPTED_TOKEN_VERSIONS=v4 \
+VERIFIER_ENV=development \
+IN_MEMORY_REPLAY_STORE=true \
 ISSUER_URL=http://127.0.0.1:8081/.well-known/issuer \
 VERIFIER_SK_PATH=issuer_sk.bin \
 REFRESH_INTERVAL_MIN=1 \
@@ -222,6 +242,11 @@ and the second use of the same token is rejected.
 - `VERIFIER_SK_PATH=issuer_sk.bin` lets the verifier validate V4 private tokens
   from the local issuer. V5 public bearer verification uses public key discovery
   instead.
+- `VERIFIER_ACCEPTED_TOKEN_VERSIONS` is required and controls both accepted and
+  advertised token families. The local V4 command enables only `v4`.
+- `VERIFIER_ENV=development` plus `IN_MEMORY_REPLAY_STORE=true` is the explicit
+  unsafe local memory-backend configuration. Production deployments must use
+  Redis; an unsafe override cannot enable memory replay in production.
 - `REQUIRE_TLS=false` is for local development. With `REQUIRE_TLS=true`, inbound
   HTTP requests are rejected unless a reverse proxy supplies
   `X-Forwarded-Proto: https`, and verifier issuer metadata URLs must be HTTPS.
@@ -273,6 +298,7 @@ Common service variables:
 | --- | --- | --- | --- |
 | `ADMIN_API_KEY` | both | none | Required, minimum 32 characters. |
 | `BIND_ADDR` | both | issuer `0.0.0.0:8081`, verifier `0.0.0.0:8082` | Listen address. |
+| `ISSUER_HOST_BIND_ADDR` / `VERIFIER_HOST_BIND_ADDR` | Docker Compose | `127.0.0.1:8081` / `127.0.0.1:8082` | Host-published addresses; separate from container listeners. |
 | `REQUIRE_TLS` | both | `false` | Set `true` in production behind TLS. |
 | `BEHIND_PROXY` | both | `false` | Trust forwarded client IP and proto headers. |
 | `RUST_LOG` | both | set by logging init | Standard tracing filter. |
@@ -315,11 +341,14 @@ Verifier variables:
 | --- | --- | --- |
 | `VERIFIER_ID` | none | Required. V4 tokens are bound to this verifier ID. |
 | `VERIFIER_AUDIENCE` | `VERIFIER_ID` | Audience used in the verifier scope digest. |
+| `VERIFIER_ACCEPTED_TOKEN_VERSIONS` | none | Required comma-separated accepted families (`v4`, `v5`). |
+| `VERIFIER_ENV` | none | Must be `development` for the explicit in-memory development backend. |
+| `IN_MEMORY_REPLAY_STORE` | `false` | Must be `true` with `VERIFIER_ENV=development`; otherwise Redis is required. |
 | `ISSUER_URL` / `ISSUER_URLS` | `http://127.0.0.1:8081/.well-known/issuer` | One issuer URL or comma-separated issuer URLs. HTTPS is required when `REQUIRE_TLS=true`. |
 | `VERIFIER_SK_PATH` | none | V4 private verification key. Usually the issuer key file for local testing. |
 | `VERIFIER_SK_B64` | none | Base64url raw 32-byte V4 key alternative. |
 | `VERIFIER_KEYRING_B64` | none | JSON map of `kid` to base64url raw 32-byte keys for rotation windows. |
-| `REDIS_URL` | none | Enables Redis nullifier storage. Without it, storage is in-memory. |
+| `REDIS_URL` | none | Required for verifier nullifier storage outside explicit development memory mode. |
 | `REFRESH_INTERVAL_MIN` | `10` | Issuer metadata refresh interval. |
 | `EPOCH_DURATION_SEC` | `86400` | Verifier display/config value. |
 | `EPOCH_RETENTION` | `2` | Verifier display/config value. |

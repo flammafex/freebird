@@ -10,12 +10,13 @@
 //! - Credential management endpoints (list, revoke)
 
 use axum::{
-    extract::{ConnectInfo, Json, Path, State},
+    extract::{ConnectInfo, Extension, Json, Path, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
     Router,
 };
 use base64ct::Encoding;
+use freebird_common::tls_enforcement::ValidatedClientIp;
 use serde::{Deserialize, Serialize};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -41,22 +42,10 @@ fn extract_client_ip(
     connect_info: Option<ConnectInfo<SocketAddr>>,
     headers: &HeaderMap,
     behind_proxy: bool,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
 ) -> Option<IpAddr> {
-    if behind_proxy {
-        if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-            if let Some(first_ip) = xff.split(',').next() {
-                if let Ok(ip) = first_ip.trim().parse::<IpAddr>() {
-                    return Some(ip);
-                }
-            }
-        }
-        if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-            if let Ok(ip) = real_ip.trim().parse::<IpAddr>() {
-                return Some(ip);
-            }
-        }
-    }
-    connect_info.map(|ci| ci.0.ip())
+    let _ = (headers, behind_proxy, connect_info);
+    validated_ip.map(|Extension(ip)| ip.0)
 }
 
 // ============================================================================
@@ -98,6 +87,7 @@ pub struct ResidentRegistrationSession {
 pub async fn start_resident_registration(
     State(state): State<Arc<WebAuthnState>>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     headers: HeaderMap,
     Json(req): Json<StartResidentRegistrationRequest>,
 ) -> Result<Json<StartResidentRegistrationResponse>, (StatusCode, String)> {
@@ -110,7 +100,7 @@ pub async fn start_resident_registration(
     }
     debug!("Starting resident key registration");
 
-    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy)
+    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy, validated_ip)
         .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
     // Check rate limit
@@ -388,11 +378,12 @@ pub struct StartDiscoverableAuthResponse {
 pub async fn start_discoverable_authentication(
     State(state): State<Arc<WebAuthnState>>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     headers: HeaderMap,
 ) -> Result<Json<StartDiscoverableAuthResponse>, (StatusCode, String)> {
     debug!("Starting discoverable authentication");
 
-    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy)
+    let client_ip = extract_client_ip(connect_info, &headers, state.behind_proxy, validated_ip)
         .unwrap_or_else(|| IpAddr::V4(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
     // Check rate limit

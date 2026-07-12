@@ -3,6 +3,7 @@ use crate::routes::issue::extract_client_data;
 use crate::sybil_resistance::SybilRequestContext;
 use crate::AppStateWithSybil;
 use axum::{
+    extract::Extension,
     extract::{ConnectInfo, State},
     http::{HeaderMap, StatusCode},
     Json,
@@ -12,6 +13,7 @@ use freebird_common::api::{
     PublicBatchIssueReq, PublicBatchIssueResp, PublicIssueReq, PublicIssueResp, SybilInfo,
     SybilProof,
 };
+use freebird_common::tls_enforcement::ValidatedClientIp;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Instant;
@@ -28,6 +30,7 @@ pub async fn handle(
         Arc<crate::multi_key_voprf::MultiKeyVoprfCore>,
     )>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     headers: HeaderMap,
     Json(req): Json<PublicIssueReq>,
 ) -> Result<Json<PublicIssueResp>, (StatusCode, String)> {
@@ -44,7 +47,7 @@ pub async fn handle(
         )
     })?;
 
-    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
+    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers, validated_ip);
     let sybil_info = verify_sybil(
         &state,
         req.sybil_proof.as_ref(),
@@ -84,6 +87,7 @@ pub async fn handle_batch(
         Arc<crate::multi_key_voprf::MultiKeyVoprfCore>,
     )>,
     connect_info: Option<ConnectInfo<SocketAddr>>,
+    validated_ip: Option<Extension<ValidatedClientIp>>,
     headers: HeaderMap,
     Json(req): Json<PublicBatchIssueReq>,
 ) -> Result<Json<PublicBatchIssueResp>, (StatusCode, String)> {
@@ -117,7 +121,7 @@ pub async fn handle_batch(
         )
     })?;
 
-    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers);
+    let client_data = extract_client_data(connect_info, state.behind_proxy, &headers, validated_ip);
     let sybil_info = verify_sybil(
         &state,
         req.sybil_proof.as_ref(),

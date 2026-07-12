@@ -1,7 +1,18 @@
 # Production Deployment
 
-This is the recommended baseline for a public self-hosted Freebird deployment.
-It is intentionally conservative.
+This is an operational baseline for a public self-hosted Freebird deployment.
+It is intentionally conservative and describes the implementation that exists
+today, not a future deployment profile.
+
+The configuration below applies to the current transitional, experimental
+issuance API. Issuance is transitional and experimental: no named production
+profile, claim policy, or profile guarantees are implemented here. Do not
+present planned profiles as available. The [Profile and Claim
+Matrix](profile-claim-matrix.md) is planning documentation only.
+
+V4 key rotation is unsafe for production until Phase C. Keep one stable V4
+issuer key and matching verifier key; do not use the rotation workflow as a
+production rotation procedure yet.
 
 ## Required Services
 
@@ -13,6 +24,19 @@ It is intentionally conservative.
 - persistent storage for issuer keys, key rotation state, invitation/vouching
   state, public bearer keys, and audit logs
 
+Docker Compose is an explicit direct-development deployment probe only. It
+binds local HTTP ports and disables TLS/proxy enforcement; it is not the
+trusted-proxy production profile. Production requires an independently managed
+HTTPS reverse proxy with `REQUIRE_TLS=true`, `BEHIND_PROXY=true`, and an
+explicit `TRUSTED_PROXY_CIDRS` allowlist. Compose sets
+`COMPOSE_DIRECT_ONLY=true`, and its startup validator rejects
+`DEPLOYMENT_MODE=trusted-proxy` or any other production mode rather than
+allowing readiness to imply a proxy boundary.
+
+For public deployment, Redis is a security requirement: `REDIS_URL` must be
+durable verifier nullifier storage and `SYBIL_REPLAY_REDIS_URL` must be durable
+issuer Sybil replay storage. Do not use in-memory defaults.
+
 ## Minimum Environment
 
 Use high-entropy secrets. Do not reuse the example values below.
@@ -21,6 +45,7 @@ Use high-entropy secrets. Do not reuse the example values below.
 ADMIN_API_KEY=<at-least-32-random-characters>
 REQUIRE_TLS=true
 BEHIND_PROXY=true
+TRUSTED_PROXY_CIDRS=<reverse-proxy-CIDR>
 
 ISSUER_ID=issuer:example:v4
 ISSUER_SK_PATH=/data/keys/issuer_sk.bin
@@ -28,6 +53,9 @@ KEY_ROTATION_STATE_PATH=/data/keys/key_rotation_state.json
 
 VERIFIER_ID=verifier:example:v4
 VERIFIER_AUDIENCE=example
+VERIFIER_ACCEPTED_TOKEN_VERSIONS=v4,v5
+VERIFIER_ENV=production
+IN_MEMORY_REPLAY_STORE=false
 ISSUER_URL=https://issuer.example.org/.well-known/issuer
 VERIFIER_SK_PATH=/issuer-data/keys/issuer_sk.bin
 
@@ -41,6 +69,10 @@ SYBIL_COMBINED_MECHANISMS=pow,rate_limit
 SYBIL_POW_DIFFICULTY=20
 SYBIL_RATE_LIMIT=1h
 ```
+
+Use the parser's exact invitation names: `SYBIL_INVITE_COOLDOWN`,
+`SYBIL_INVITE_EXPIRES`, `SYBIL_INVITE_NEW_USER_WAIT`, and
+`SYBIL_INVITE_AUTOSAVE_INTERVAL`. Names ending in `_SECS` are not recognized.
 
 For invitation-based deployments, persist the invitation state and signing key:
 
@@ -92,21 +124,47 @@ prefer `SYBIL_RESISTANCE=combined` with `SYBIL_COMBINED_MODE=and` or `threshold`
 so social-graph attestations compose with another gate. See
 [Social Graph Sybil Gate](social-graph-gate.md) for the full design.
 
+The PKCS#11 integration currently supports key storage with software VOPRF
+operations only. HSM-native/full VOPRF is unsupported; `HSM_MODE=full` must not
+be presented as native HSM protection.
+
 ## Reverse Proxy
 
 Expose public issuance and verification routes. Restrict `/admin` to an
-operator VPN, private network, or trusted IP allowlist. `ADMIN_API_KEY` is still
-required, but it should not be the only boundary.
+operator VPN, private network, or trusted IP allowlist. `ADMIN_API_KEY` is
+still required, but must not be the only boundary. Keep admin credentials out
+of public clients, logs, proxy access logs, and shared service accounts; isolate
+issuer and verifier admin endpoints and use separate operator credentials where
+possible.
 
 Set:
 
 ```bash
 REQUIRE_TLS=true
 BEHIND_PROXY=true
+TRUSTED_PROXY_CIDRS=<reverse-proxy-CIDR>
 ```
 
-The proxy must forward `X-Forwarded-Proto: https` and should forward the real
-client IP only if the issuer trusts that proxy.
+The proxy must overwrite (not append) exactly one `X-Forwarded-Proto: https`
+and exactly one valid `X-Forwarded-For` IP. `TRUSTED_PROXY_CIDRS` must contain
+only the reverse-proxy networks; direct pod/service ports remain private. The
+application evaluates this against the **immediate TCP peer**, not the client
+IP in a forwarded header. Configure it with the proxy's actual backend source
+CIDR (or narrow proxy address range), never a broad pod or client CIDR. The
+examples in `server-configs/` use a loopback backend, 10 MiB request limit, and
+60-second connect/read/send deadlines for the 10,000-item blind issuance and
+verification batch limits.
+
+The public health model separates process liveness from dependency readiness:
+keep liveness process-local (or a private TCP probe) so it cannot bypass the
+proxy trust boundary. Route readiness through the trusted HTTPS proxy and use
+it for traffic admission: issuer readiness requires Redis, writable
+authoritative state, and an active issuance key; verifier readiness requires
+Redis, its configured usable key families, and fresh issuer metadata. A
+successful liveness response does not mean the service is ready for traffic.
+Do not publish backend ports or `/admin` on the public listener; use a separate
+private operator ingress with an explicit network allowlist if administration
+is required.
 
 ## Persistence
 
@@ -119,6 +177,11 @@ Back up:
 - multi-party vouching secret and state
 - audit log, if retained for operations
 - Redis data or managed Redis backups
+
+Keep issuer key files, verifier key material, rotation state, and invitation
+signing material on separate access-controlled persistent volumes. The verifier
+needs matching V4 key material, but must not have issuer state or issuer admin
+access.
 
 Losing verifier Redis data can allow already-spent tokens to be accepted again
 until old tokens expire. Losing the issuer Sybil replay store can allow replay

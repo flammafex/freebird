@@ -1,0 +1,77 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: issuer-ingress
+  namespace: freebird
+spec:
+  tls:
+    - hosts: [REQUIRED_PUBLIC_ISSUER_HOST]
+  rules:
+    - host: REQUIRED_PUBLIC_ISSUER_HOST
+      http:
+        paths:
+          - path: /.well-known/issuer
+            pathType: Exact
+            backend: {service: {name: issuer, port: {number: 8081}}}
+          - path: /.well-known/keys
+            pathType: Exact
+            backend: {service: {name: issuer, port: {number: 8081}}}
+          - path: /healthz
+            pathType: Exact
+            backend: {service: {name: issuer, port: {number: 8081}}}
+          - path: /readyz
+            pathType: Exact
+            backend: {service: {name: issuer, port: {number: 8081}}}
+          - path: /v1/oprf
+            pathType: Prefix
+            backend: {service: {name: issuer, port: {number: 8081}}}
+          - path: /v1/public
+            pathType: Prefix
+            backend: {service: {name: issuer, port: {number: 8081}}}
+          - path: /webauthn
+            pathType: Prefix
+            backend: {service: {name: issuer, port: {number: 8081}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: issuer-admin-ingress
+  namespace: freebird
+  annotations:
+    nginx.ingress.kubernetes.io/whitelist-source-range: REQUIRED_OPERATOR_CIDR
+spec:
+  tls:
+    - hosts: [REQUIRED_ISSUER_ADMIN_HOST]
+  rules:
+    - host: REQUIRED_ISSUER_ADMIN_HOST
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: verifier-ingress
+  namespace: freebird
+spec:
+  tls:
+    - hosts: [REQUIRED_PUBLIC_VERIFIER_HOST]
+  rules:
+    - host: REQUIRED_PUBLIC_VERIFIER_HOST
+      http:
+        paths:
+          - path: /health
+            pathType: Exact
+            backend: {service: {name: verifier, port: {number: 8082}}}
+          - path: /ready
+            pathType: Exact
+            backend: {service: {name: verifier, port: {number: 8082}}}
+          - path: /.well-known/verifier
+            pathType: Exact
+            backend: {service: {name: verifier, port: {number: 8082}}}
+          - path: /v1/verify
+            pathType: Exact
+            backend: {service: {name: verifier, port: {number: 8082}}}
+          - path: /v1/verify/batch
+            pathType: Exact
+            backend: {service: {name: verifier, port: {number: 8082}}}
+          - path: /v1/check
+            pathType: Exact
+            backend: {service: {name: verifier, port: {number: 8082}}}

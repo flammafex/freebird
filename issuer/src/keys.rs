@@ -28,8 +28,9 @@ use std::os::unix::fs::OpenOptionsExt; // for mode 0o600
 const DEFAULT_PATH: &str = "issuer_sk.bin";
 
 /// Returns (raw_secret_32, pubkey_sec1_b64url, kid)
-pub fn load_or_generate_keypair_b64() -> Result<(Zeroizing<[u8; 32]>, String, String)> {
-    let path = env::var("ISSUER_SK_PATH").unwrap_or_else(|_| DEFAULT_PATH.to_string());
+pub fn load_or_generate_keypair_b64_at(
+    path: &Path,
+) -> Result<(Zeroizing<[u8; 32]>, String, String)> {
     let p = Path::new(&path);
 
     // 1) Try to read an existing key (strict parsing: try PKCS#8 DER first, then raw 32)
@@ -38,7 +39,11 @@ pub fn load_or_generate_keypair_b64() -> Result<(Zeroizing<[u8; 32]>, String, St
         if let Ok(sk_pkcs8) = SecretKey::from_pkcs8_der(&bytes) {
             let sk = SigningKey::from(&sk_pkcs8);
             let (sk_bytes, pubkey_b64, kid) = finalize(sk)?;
-            info!("issuer key loaded (PKCS#8) path={} kid={}", path, kid);
+            info!(
+                "issuer key loaded (PKCS#8) path={} kid={}",
+                path.display(),
+                kid
+            );
             return Ok((sk_bytes, pubkey_b64, kid));
         }
 
@@ -51,7 +56,11 @@ pub fn load_or_generate_keypair_b64() -> Result<(Zeroizing<[u8; 32]>, String, St
             let sk = SigningKey::from_bytes(&arr.into())
                 .map_err(|_| anyhow!("stored 32-byte scalar is not a valid P-256 key"))?;
             let (sk_bytes, pubkey_b64, kid) = finalize(sk)?;
-            info!("issuer key loaded (raw 32B) path={} kid={}", path, kid);
+            info!(
+                "issuer key loaded (raw 32B) path={} kid={}",
+                path.display(),
+                kid
+            );
             return Ok((sk_bytes, pubkey_b64, kid));
         }
 
@@ -71,8 +80,13 @@ pub fn load_or_generate_keypair_b64() -> Result<(Zeroizing<[u8; 32]>, String, St
     let raw = sk.to_bytes(); // SecretBytes (zeroizes on drop)
     atomic_write_secure(p, raw.as_ref()).context("write issuer secret key atomically")?;
     let (sk_bytes, pubkey_b64, kid) = finalize(sk)?;
-    info!("issuer key created path={} kid={}", path, kid);
+    info!("issuer key created path={} kid={}", path.display(), kid);
     Ok((sk_bytes, pubkey_b64, kid))
+}
+
+pub fn load_or_generate_keypair_b64() -> Result<(Zeroizing<[u8; 32]>, String, String)> {
+    let path = env::var("ISSUER_SK_PATH").unwrap_or_else(|_| DEFAULT_PATH.to_string());
+    load_or_generate_keypair_b64_at(Path::new(&path))
 }
 
 // ---------- helpers ----------
