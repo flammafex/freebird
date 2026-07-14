@@ -8,6 +8,7 @@ pub mod routes;
 pub mod shutdown;
 pub mod startup;
 pub mod sybil_resistance;
+pub mod v2;
 pub mod voprf_core;
 pub mod webauthn;
 
