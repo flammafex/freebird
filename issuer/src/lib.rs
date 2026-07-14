@@ -40,6 +40,7 @@ pub mod main_state {
         /// (e.g. the `/v1/oprf/renew` route). `None` means admin auth is
         /// disabled and such endpoints return 503.
         pub admin_api_key: Option<String>,
+        pub v2_provider: Option<std::sync::Arc<freebird_crypto::scarcity_v2::V2SigningProvider>>,
     }
 
     impl AppStateWithSybil {

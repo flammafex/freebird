@@ -28,6 +28,7 @@ pub struct Config {
     pub audit_log_path: PathBuf,
     /// Explicit development-only mode which permits non-persistent dependencies.
     pub unsafe_development_mode: bool,
+    pub v2_issuance: Option<crate::v2::provider::V2IssuerConfig>,
 }
 
 #[derive(Clone, Debug)]
@@ -202,6 +203,7 @@ impl Config {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| "/var/lib/freebird/issuer/audit_log.json".into()),
             unsafe_development_mode,
+            v2_issuance: crate::v2::provider::V2IssuerConfig::from_env()?,
         })
     }
 }

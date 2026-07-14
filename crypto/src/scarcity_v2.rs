@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use blind_rsa_signatures::{DefaultRng, KeyPairSha384PSSRandomized};
+use blind_rsa_signatures::{DefaultRng, KeyPairSha384PSSRandomized, SecretKeySha384PSSRandomized};
 use cbor2::Value;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -14,7 +14,7 @@ const SUITE: &str = "RSABSSA-SHA384-PSS-Randomized";
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct Keyset {
+pub struct Keyset {
     #[serde(with = "serde_bytes")]
     pub issuer_id: Vec<u8>,
     #[serde(with = "serde_bytes")]
@@ -100,7 +100,7 @@ fn bytes32(value: &[u8]) -> bool {
     value.len() == 32
 }
 
-pub(crate) fn keyset_id(keyset: &Keyset) -> Result<Vec<u8>, String> {
+pub fn keyset_id(keyset: &Keyset) -> Result<Vec<u8>, String> {
     let identity = KeysetIdentity {
         issuer_id: &keyset.issuer_id,
         asset_id: &keyset.asset_id,
@@ -178,7 +178,7 @@ pub(crate) fn decode_request(bytes: &[u8]) -> Result<MintRequest, String> {
     decode_typed(bytes)
 }
 
-pub(crate) fn validate_keyset(keyset: &Keyset) -> Result<(), String> {
+pub fn validate_keyset(keyset: &Keyset) -> Result<(), String> {
     if !bytes32(&keyset.issuer_id)
         || !bytes32(&keyset.keyset_id)
         || !bytes32(&keyset.asset_id)
@@ -256,6 +256,36 @@ pub(crate) fn blind_finalize_verify(message: &[u8]) -> Result<(), String> {
         .pk
         .verify(&signature, Some(randomizer), message)
         .map_err(|e| e.to_string())
+}
+
+/// Narrow issuer-facing V2 blind-signing provider. The private key is retained
+/// here and is neither serializable nor printable.
+pub struct V2SigningProvider {
+    secret_key: SecretKeySha384PSSRandomized,
+    modulus_len: usize,
+}
+impl V2SigningProvider {
+    pub fn from_der(der: &[u8], expected_modulus: &[u8]) -> Result<Self, String> {
+        let secret_key = SecretKeySha384PSSRandomized::from_der(der).map_err(|e| e.to_string())?;
+        let public = secret_key.public_key().map_err(|e| e.to_string())?;
+        let modulus = public.components().n();
+        if modulus.len() != 384 || modulus != expected_modulus {
+            return Err("private/public modulus mismatch".into());
+        }
+        Ok(Self {
+            secret_key,
+            modulus_len: modulus.len(),
+        })
+    }
+    pub fn blind_sign(&self, blinded_message: &[u8]) -> Result<Vec<u8>, String> {
+        if blinded_message.len() != self.modulus_len {
+            return Err("invalid blinded message length".into());
+        }
+        self.secret_key
+            .blind_sign(blinded_message)
+            .map(|signature| signature.0)
+            .map_err(|e| e.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -367,5 +397,16 @@ mod tests {
             decode_canonical(&[0x81, 0x01, 0x00]),
             Err("decode-limit".into())
         );
+    }
+
+    #[test]
+    fn provider_rejects_wrong_public_modulus() {
+        let mut rng = DefaultRng;
+        let pair = KeyPairSha384PSSRandomized::generate(&mut rng, 3072).unwrap();
+        let der = pair.sk.to_der().unwrap();
+        let mut expected = pair.pk.components().n();
+        expected[0] ^= 1;
+        assert_eq!(expected.len(), 384);
+        assert!(V2SigningProvider::from_der(&der, &expected).is_err());
     }
 }

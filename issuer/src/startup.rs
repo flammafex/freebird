@@ -888,6 +888,12 @@ impl Application {
         });
 
         // 6. App State & Router
+        let v2_provider = config
+            .v2_issuance
+            .as_ref()
+            .map(|cfg| cfg.load_provider())
+            .transpose()?
+            .map(Arc::new);
         let state = Arc::new(AppStateWithSybil {
             issuer_id: config.issuer_id.clone(),
             kid: kid.clone(),
@@ -900,6 +906,7 @@ impl Application {
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
             admin_api_key: Some(admin_api_key.clone()),
+            v2_provider,
         });
 
         let app_state = (state.clone(), voprf.clone());

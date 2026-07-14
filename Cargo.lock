@@ -1199,6 +1199,7 @@ dependencies = [
  "axum",
  "base64ct",
  "blake3",
+ "blind-rsa-signatures",
  "chrono",
  "clap",
  "colored",
