@@ -4,7 +4,6 @@
 
 use crate::readiness::ReadinessState;
 use crate::shutdown::{flush_or_report, wait_for_signal, ShutdownCoordinator};
-use crate::v2::issuance_store::IssuanceStore;
 #[cfg(feature = "human-gate-webauthn")]
 use crate::webauthn;
 use crate::{
@@ -889,20 +888,6 @@ impl Application {
         });
 
         // 6. App State & Router
-        let v2_provider = config
-            .v2_issuance
-            .as_ref()
-            .map(|cfg| cfg.load_provider())
-            .transpose()?
-            .map(Arc::new);
-        let v2_store = match (&v2_provider, std::env::var("SCARCITY_V2_REDIS_URL").ok()) {
-            (Some(_), Some(url)) => Some(Arc::new(IssuanceStore::new(
-                &url,
-                Duration::from_secs(24 * 60 * 60),
-                Duration::from_secs(30 * 24 * 60 * 60),
-            )?)),
-            _ => None,
-        };
         let state = Arc::new(AppStateWithSybil {
             issuer_id: config.issuer_id.clone(),
             kid: kid.clone(),
@@ -915,8 +900,6 @@ impl Application {
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
             admin_api_key: Some(admin_api_key.clone()),
-            v2_provider,
-            v2_store,
         });
 
         let app_state = (state.clone(), voprf.clone());
@@ -987,25 +970,20 @@ impl Application {
             .route(
                 "/v1/public/issue/batch",
                 post(routes::public_issue::handle_batch),
-            );
-        let app = if state.v2_provider.is_some() && state.v2_store.is_some() {
-            app.route("/v2/scarcity/mint/issue", post(crate::v2::endpoint::issue))
-        } else {
-            app
-        }
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods([
-                    axum::http::Method::GET,
-                    axum::http::Method::POST,
-                    axum::http::Method::OPTIONS,
-                ])
-                .allow_headers([axum::http::header::CONTENT_TYPE])
-                .max_age(Duration::from_secs(86400)),
-        )
-        .layer(DefaultBodyLimit::max(64 * 1024))
-        .layer(freebird_common::rate_limit::PublicRateLimitLayer::default());
+            )
+            .layer(
+                CorsLayer::new()
+                    .allow_origin(Any)
+                    .allow_methods([
+                        axum::http::Method::GET,
+                        axum::http::Method::POST,
+                        axum::http::Method::OPTIONS,
+                    ])
+                    .allow_headers([axum::http::header::CONTENT_TYPE])
+                    .max_age(Duration::from_secs(86400)),
+            )
+            .layer(DefaultBodyLimit::max(64 * 1024))
+            .layer(freebird_common::rate_limit::PublicRateLimitLayer::default());
 
         // --- CRITICAL FIX: SHADOWING ---
         // Use `let app` to shadow the variable, allowing the type change from Router<S> to Router<()>

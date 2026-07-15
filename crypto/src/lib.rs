@@ -52,7 +52,6 @@ use sha2::{Digest, Sha256, Sha384};
 use subtle::ConstantTimeEq;
 
 // Internal VOPRF implementation (was vendor/voprf_p256)
-pub mod scarcity_v2;
 pub mod voprf;
 use voprf as v;
 

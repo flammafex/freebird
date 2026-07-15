@@ -9,6 +9,3 @@ members = [
   "integration_tests"   # <-- new
 ]
 resolver = "2"
-
-[workspace.dependencies]
-cbor2 = "=1.1.3"
