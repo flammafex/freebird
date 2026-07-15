@@ -27,7 +27,7 @@ impl V2IssuerConfig {
         validate_keyset(&keyset).map_err(|e| anyhow::anyhow!("invalid V2 keyset: {e}"))?;
         reject_private_permissions(&self.private_key_path)?;
         let private = fs::read(&self.private_key_path).context("read V2 private RSA key")?;
-        V2SigningProvider::from_der(&private, &keyset.modulus)
+        V2SigningProvider::from_der_with_keyset(&private, &keyset)
             .map_err(|e| anyhow::anyhow!("load V2 signing provider: {e}"))
     }
 }

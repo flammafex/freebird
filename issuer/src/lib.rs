@@ -41,6 +41,7 @@ pub mod main_state {
         /// disabled and such endpoints return 503.
         pub admin_api_key: Option<String>,
         pub v2_provider: Option<std::sync::Arc<freebird_crypto::scarcity_v2::V2SigningProvider>>,
+        pub v2_store: Option<std::sync::Arc<crate::v2::issuance_store::IssuanceStore>>,
     }
 
     impl AppStateWithSybil {

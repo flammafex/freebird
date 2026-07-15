@@ -487,6 +487,7 @@ mod tests {
             epoch_retention: 2,
             admin_api_key: None,
             v2_provider: None,
+            v2_store: None,
         }
     }
 

@@ -36,7 +36,7 @@ pub struct Keyset {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct MintRequest {
+pub struct MintRequest {
     pub version: u64,
     #[serde(with = "serde_bytes")]
     pub issuer_id: Vec<u8>,
@@ -118,7 +118,7 @@ pub fn keyset_id(keyset: &Keyset) -> Result<Vec<u8>, String> {
 pub(crate) fn blinded_message_digest(message: &[u8]) -> Vec<u8> {
     hash("mint-blinded-message", message)
 }
-pub(crate) fn request_digest(request: &MintRequest) -> Result<Vec<u8>, String> {
+pub fn request_digest(request: &MintRequest) -> Result<Vec<u8>, String> {
     Ok(hash("mint-request", &canonical(request)?))
 }
 
@@ -161,7 +161,7 @@ pub(crate) fn decode_canonical(bytes: &[u8]) -> Result<Value, String> {
     validate_value(&value, 0)?;
     let encoded = cbor2::to_canonical_vec(&value).map_err(|e| e.to_string())?;
     if encoded != bytes {
-        return Err("decode-limit".into());
+        return Err("non-canonical".into());
     }
     Ok(value)
 }
@@ -174,7 +174,7 @@ fn decode_typed<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
 pub(crate) fn decode_keyset(bytes: &[u8]) -> Result<Keyset, String> {
     decode_typed(bytes)
 }
-pub(crate) fn decode_request(bytes: &[u8]) -> Result<MintRequest, String> {
+pub fn decode_request(bytes: &[u8]) -> Result<MintRequest, String> {
     decode_typed(bytes)
 }
 
@@ -197,7 +197,7 @@ pub fn validate_keyset(keyset: &Keyset) -> Result<(), String> {
     }
     Ok(())
 }
-pub(crate) fn validate_request(request: &MintRequest) -> Result<(), String> {
+pub fn validate_request(request: &MintRequest) -> Result<(), String> {
     if request.version != 2
         || !bytes32(&request.issuer_id)
         || !bytes32(&request.keyset_id)
@@ -263,19 +263,53 @@ pub(crate) fn blind_finalize_verify(message: &[u8]) -> Result<(), String> {
 pub struct V2SigningProvider {
     secret_key: SecretKeySha384PSSRandomized,
     modulus_len: usize,
+    issuer_id: Vec<u8>,
+    keyset_id: Vec<u8>,
+    keyset: Keyset,
 }
 impl V2SigningProvider {
     pub fn from_der(der: &[u8], expected_modulus: &[u8]) -> Result<Self, String> {
+        Self::from_der_with_keyset(
+            der,
+            &Keyset {
+                issuer_id: Vec::new(),
+                keyset_id: Vec::new(),
+                asset_id: Vec::new(),
+                spend_domain: Vec::new(),
+                denomination: 0,
+                issuance_epoch: 0,
+                expiry_epoch: 0,
+                modulus: expected_modulus.to_vec(),
+                public_exponent: 65537,
+                suite: String::new(),
+                authority_key_id: Vec::new(),
+            },
+        )
+    }
+    pub fn from_der_with_keyset(der: &[u8], keyset: &Keyset) -> Result<Self, String> {
         let secret_key = SecretKeySha384PSSRandomized::from_der(der).map_err(|e| e.to_string())?;
         let public = secret_key.public_key().map_err(|e| e.to_string())?;
         let modulus = public.components().n();
-        if modulus.len() != 384 || modulus != expected_modulus {
+        let expected_modulus = &keyset.modulus;
+        if modulus.len() != 384 || modulus.as_slice() != expected_modulus.as_slice() {
             return Err("private/public modulus mismatch".into());
         }
         Ok(Self {
             secret_key,
             modulus_len: modulus.len(),
+            issuer_id: keyset.issuer_id.clone(),
+            keyset_id: keyset.keyset_id.clone(),
+            keyset: keyset.clone(),
         })
+    }
+    pub fn issuer_id(&self) -> &[u8] {
+        &self.issuer_id
+    }
+    pub fn keyset_id(&self) -> &[u8] {
+        &self.keyset_id
+    }
+    pub fn keyset(&self) -> &Keyset {
+        &self.keyset
     }
     pub fn blind_sign(&self, blinded_message: &[u8]) -> Result<Vec<u8>, String> {
         if blinded_message.len() != self.modulus_len {
@@ -395,7 +429,7 @@ mod tests {
         assert_eq!(decode_canonical(&[0xa1, 0x01, 0x00]), Err("schema".into()));
         assert_eq!(
             decode_canonical(&[0x81, 0x01, 0x00]),
-            Err("decode-limit".into())
+            Err("non-canonical".into())
         );
     }
 
