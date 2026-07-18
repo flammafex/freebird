@@ -2,7 +2,7 @@
 use crate::multi_key_voprf::MultiKeyVoprfCore;
 use crate::AppStateWithSybil;
 use axum::{extract::State, Json};
-use freebird_common::api::{KeyDiscoveryResp, PublicKeyInfo, VoprfKeyInfo};
+use freebird_common::api::{ExchangeDiscoveryInfo, KeyDiscoveryResp, PublicKeyInfo, VoprfKeyInfo};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -13,6 +13,8 @@ pub struct WellKnown {
     voprf: VoprfInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     public: Option<PublicModeInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exchange: Option<ExchangeDiscoveryInfo>,
 }
 
 #[derive(Serialize)]
@@ -51,6 +53,7 @@ pub async fn well_known_handler(State((state, voprf)): State<SharedState>) -> Js
             .public_issuer
             .as_ref()
             .map(|issuer| public_mode_info(issuer.metadata())),
+        exchange: state.exchange_metadata.clone(),
     })
 }
 
@@ -82,6 +85,7 @@ pub async fn keys_handler(State((state, voprf)): State<SharedState>) -> Json<Key
             .as_ref()
             .map(|issuer| vec![issuer.metadata().clone()])
             .unwrap_or_default(),
+        exchange: state.exchange_metadata.clone(),
     })
 }
 

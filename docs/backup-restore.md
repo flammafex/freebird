@@ -30,6 +30,43 @@ fails closed rather than omitting replay evidence.
 
 Backups quiesce services, synchronously save Redis (including AOF-aware state), capture complete resolved issuer and Redis volumes, and stream tar directly into age. No plaintext tar is created. Restore rejects legacy plaintext archives, unsafe entries, links, duplicates, undeclared files, bad signatures, and archives ahead of the protected generation high-water mark. The high-water generation is allocation history, distinct from the currently accepted restore; every archive at or below it requires its exact digest plus a non-empty rollback reason. It creates a signed/encrypted recovery archive in the same format before changing volumes. Acceptance requires bounded volume identity, readiness, and spent-fixture replay checks.
 
+When public bearer exchange is enabled, treat these as one recovery unit:
+
+* the authoritative Redis AOF operation ledger and shared V5 spend keys;
+* active and retained target profiles and RSA private keys;
+* active and retained Ed25519 receipt seeds; and
+* `PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH`.
+
+Never snapshot or restore only one side. Before backup, require Redis to be the
+standalone writable master with AOF active, `appendfsync always`, healthy last
+write status, and `maxmemory-policy noeviction`. Quiesce writers before the
+synchronous Redis save and volume capture. Keep operation IDs out of commands,
+filenames, normal logs, and manifests: they are private 16-byte capabilities.
+Any operation IDs retained for recovery probes belong in separately encrypted,
+access-controlled operator evidence.
+
+Private historical target and receipt keys remain configured until readiness
+confirms that their pending-reference counts are zero. Public history has a
+different lifetime: copy canonical public keysets, target descriptors, and
+receipt verification keys into it before private-key removal, then retain and
+back it up until all corresponding artifacts and receipts expire.
+
+After restore, before admitting traffic:
+
+1. confirm Redis still reports master role, non-cluster mode, no eviction,
+   active healthy AOF, and `appendfsync always`;
+2. require issuer and verifier readiness;
+3. compare discovered target descriptor/keyset IDs and receipt key IDs/public
+   keys with the protected pre-backup inventory;
+4. retry a protected committed operation through the fixed status endpoint and
+   require the pre-backup response bytes exactly; and
+5. confirm spent fixtures remain rejected.
+
+Restoring response bytes without their target and Ed25519 verification metadata
+is incomplete. A missing committed response, accepted spent artifact, changed
+receipt key, or Redis/AOF rollback is a security failure: stop services and use
+the exact generated `recover` procedure rather than accepting partial state.
+
 The replay fixture is always forced to the locally discovered Compose-published issuer and verifier endpoints, which are also used for readiness and metadata checks. Fixture validation re-fetches both discovery documents and rejects metadata or endpoint binding changes before replay. Before quiescence, the verifier's effective `REDIS_URL` must target the Compose `redis` service and its captured local volume; external Redis is rejected. Restored files are checked against the signed manifest for exact content and modes before ownership is applied. Archive ownership is never trusted: the issuer volume is explicitly assigned `1000:1000`, and the Redis volume `999:1000`. Volume identity covers captured files only; HSM-backed keys, environment-only keys, and keys outside the captured volume are intentionally excluded and must be recovered separately.
 
 If post-mutation validation fails, services remain stopped and the output prints the exact recovery archive digest and command. Run that exact `recover` command (not `restore`); recovery does not create another fixture or snapshot, discovers volumes from stopped Compose containers, restores and verifies both volumes, starts services, checks readiness, and confirms fixture replay rejection. Recovery archives are never overwritten.

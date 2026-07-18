@@ -18,6 +18,7 @@ pub struct Config {
     pub behind_proxy: bool,
     pub key_config: KeyConfig,
     pub public_key_config: PublicKeyConfig,
+    pub exchange_config: ExchangeConfig,
     pub sybil_config: SybilConfig,
     pub webauthn_config: Option<WebAuthnConfig>,
     pub admin_api_key: Option<String>,
@@ -192,6 +193,7 @@ impl Config {
             behind_proxy,
             key_config: KeyConfig::from_env(),
             public_key_config: PublicKeyConfig::from_env(),
+            exchange_config: ExchangeConfig::from_env()?,
             sybil_config: SybilConfig::from_env(),
             webauthn_config: WebAuthnConfig::from_env(),
             admin_api_key,
@@ -203,6 +205,151 @@ impl Config {
                 .unwrap_or_else(|_| "/var/lib/freebird/issuer/audit_log.json".into()),
             unsafe_development_mode,
         })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ExchangeConfig {
+    pub enabled: bool,
+    pub profile_path: PathBuf,
+    pub retained_profile_paths: Vec<PathBuf>,
+    pub receipt_key_path: PathBuf,
+    pub retained_receipt_key_paths: Vec<PathBuf>,
+    pub public_history_path: Option<PathBuf>,
+    pub redis_url: Option<String>,
+    pub receipt_lifetime_secs: u64,
+    pub request_body_limit: usize,
+    pub request_timeout_secs: u64,
+}
+
+impl ExchangeConfig {
+    fn from_env() -> Result<Self> {
+        let enabled = env_bool("PUBLIC_BEARER_EXCHANGE_ENABLE");
+        let comma_paths = |name: &str| -> Result<Vec<PathBuf>> {
+            let Some(value) = env::var(name).ok() else {
+                return Ok(Vec::new());
+            };
+            if value.trim().is_empty() {
+                return Ok(Vec::new());
+            }
+            value
+                .split(',')
+                .map(|path| {
+                    let path = path.trim();
+                    if path.is_empty() {
+                        anyhow::bail!("{name} contains an empty path")
+                    }
+                    Ok(PathBuf::from(path))
+                })
+                .collect()
+        };
+        let config = Self {
+            enabled,
+            profile_path: env::var("PUBLIC_BEARER_EXCHANGE_PROFILE_PATH")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "public_bearer_exchange_profile.json".into()),
+            retained_profile_paths: comma_paths("PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS")?,
+            receipt_key_path: env::var("PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH")
+                .or_else(|_| env::var("PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH"))
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "public_bearer_exchange_receipt.key".into()),
+            retained_receipt_key_paths: comma_paths(
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
+            )?,
+            public_history_path: env::var("PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH")
+                .ok()
+                .filter(|path| !path.trim().is_empty())
+                .map(PathBuf::from),
+            redis_url: env::var("PUBLIC_BEARER_EXCHANGE_REDIS_URL").ok(),
+            receipt_lifetime_secs: env::var("PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME")
+                .ok()
+                .map(|value| freebird_common::duration::parse_duration(&value))
+                .transpose()?
+                .unwrap_or(86_400),
+            request_body_limit: env::var("PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES")
+                .ok()
+                .map(|value| value.parse::<usize>())
+                .transpose()?
+                .unwrap_or(3 * 1024 * 1024),
+            request_timeout_secs: env::var("PUBLIC_BEARER_EXCHANGE_TIMEOUT")
+                .ok()
+                .map(|value| freebird_common::duration::parse_duration(&value))
+                .transpose()?
+                .unwrap_or(30),
+        };
+        if config.enabled {
+            if config.profile_path.as_os_str().is_empty()
+                || config.receipt_key_path.as_os_str().is_empty()
+            {
+                anyhow::bail!("exchange paths must not be empty")
+            }
+            if config.redis_url.as_deref().is_none_or(str::is_empty) {
+                anyhow::bail!("PUBLIC_BEARER_EXCHANGE_REDIS_URL is required")
+            }
+            if config.receipt_lifetime_secs == 0
+                || !(1024..=4 * 1024 * 1024).contains(&config.request_body_limit)
+                || config.request_timeout_secs == 0
+                || config.request_timeout_secs > 120
+            {
+                anyhow::bail!("exchange lifetime/body/timeout bounds are invalid")
+            }
+            // Loading is deliberately opt-in and does not create keys at config parse time.
+            let legacy_spki = if env_bool_default("PUBLIC_BEARER_ENABLE", true) {
+                let legacy_path = env::var("PUBLIC_BEARER_SK_PATH")
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|_| "public_bearer_sk.der".into());
+                if legacy_path.exists() {
+                    use freebird_crypto::provider::software::SoftwareBlindRsaProvider;
+                    use freebird_crypto::provider::BlindRsaProvider;
+                    let der = zeroize::Zeroizing::new(
+                        std::fs::read(&legacy_path)
+                            .with_context(|| format!("read {}", legacy_path.display()))?,
+                    );
+                    Some(
+                        SoftwareBlindRsaProvider::from_der(&der)?
+                            .public_key_spki()
+                            .to_vec(),
+                    )
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let profile = crate::exchange::profiles::ExchangeProfile::load(
+                &config.profile_path,
+                legacy_spki.as_deref(),
+            )
+            .with_context(|| "invalid public bearer exchange profile")?;
+            profile
+                .validate_target_keys()
+                .context("invalid exchange target key material")?;
+            let issuer_id = env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".into());
+            profile.validate_issuer_id(&issuer_id)?;
+            for path in &config.retained_profile_paths {
+                let retained =
+                    crate::exchange::profiles::ExchangeProfile::load(path, legacy_spki.as_deref())
+                        .with_context(|| {
+                            format!("invalid retained exchange profile {}", path.display())
+                        })?;
+                retained.validate_target_keys().with_context(|| {
+                    format!("invalid retained target key material {}", path.display())
+                })?;
+                retained.validate_issuer_id(&issuer_id)?;
+            }
+            crate::exchange::receipt::validate_receipt_key_paths(
+                &config.receipt_key_path,
+                &config.retained_receipt_key_paths,
+            )?;
+            if let Some(path) = &config.public_history_path {
+                crate::exchange::history::load_public_history(
+                    path,
+                    &issuer_id,
+                    legacy_spki.as_deref(),
+                )?;
+            }
+        }
+        Ok(config)
     }
 }
 
@@ -507,6 +654,17 @@ mod tests {
                 "HSM_SLOT",
                 "HSM_PIN",
                 "HSM_KEY_LABEL",
+                "PUBLIC_BEARER_EXCHANGE_ENABLE",
+                "PUBLIC_BEARER_EXCHANGE_PROFILE_PATH",
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS",
+                "PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH",
+                "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
+                "PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH",
+                "PUBLIC_BEARER_EXCHANGE_REDIS_URL",
+                "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
+                "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
+                "PUBLIC_BEARER_EXCHANGE_TIMEOUT",
             ];
             Self {
                 values: keys
@@ -570,6 +728,43 @@ mod tests {
 
         let hsm_config = HsmConfig::from_env();
         assert!(hsm_config.is_none(), "HSM should be disabled by default");
+    }
+
+    #[test]
+    #[serial]
+    fn enabled_exchange_requires_a_valid_profile() {
+        let _env = EnvGuard::new();
+        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
+        env::set_var(
+            "PUBLIC_BEARER_EXCHANGE_PROFILE_PATH",
+            "/definitely/missing/exchange-profile.json",
+        );
+        assert!(Config::from_env().is_err());
+        env::remove_var("PUBLIC_BEARER_EXCHANGE_ENABLE");
+        env::remove_var("PUBLIC_BEARER_EXCHANGE_PROFILE_PATH");
+    }
+
+    #[test]
+    #[serial]
+    fn exchange_config_parses_active_and_retained_signer_paths() {
+        let _env = EnvGuard::new();
+        env::remove_var("PUBLIC_BEARER_EXCHANGE_ENABLE");
+        env::set_var(
+            "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
+            "/keys/active.key",
+        );
+        env::set_var(
+            "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
+            "/keys/old-1.key, /keys/old-2.key",
+        );
+        env::set_var(
+            "PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS",
+            "/profiles/old-1.json,/profiles/old-2.json",
+        );
+        let config = ExchangeConfig::from_env().unwrap();
+        assert_eq!(config.receipt_key_path, PathBuf::from("/keys/active.key"));
+        assert_eq!(config.retained_receipt_key_paths.len(), 2);
+        assert_eq!(config.retained_profile_paths.len(), 2);
     }
 
     #[test]

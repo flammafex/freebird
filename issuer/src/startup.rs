@@ -25,6 +25,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use base64ct::Encoding;
 use freebird_common::metrics::{self, MetricsMiddleware};
 use p256::ecdsa::SigningKey;
 use rand::rngs::OsRng;
@@ -43,6 +44,8 @@ use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::set_header::SetResponseHeaderLayer;
+use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
@@ -53,18 +56,15 @@ fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response:
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
-    let msg = if let Some(s) = err.downcast_ref::<&'static str>() {
-        *s
-    } else if let Some(s) = err.downcast_ref::<String>() {
-        s.as_str()
-    } else {
-        "unknown panic"
-    };
-
-    tracing::error!(panic.message = %msg, "handler panic caught; suppressing details from client");
+    drop(err);
+    tracing::error!("handler panic caught; suppressing all details");
 
     (
         StatusCode::INTERNAL_SERVER_ERROR,
+        [(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        )],
         axum::Json(serde_json::json!({
             "error": "internal_error",
             "code": "INTERNAL_ERROR"
@@ -194,6 +194,183 @@ fn parse_progressive_trust_levels(levels: &[String]) -> Result<Vec<sybil_resista
     Ok(parsed)
 }
 
+pub(crate) fn exchange_discovery(
+    active: &crate::exchange::ExchangeProfile,
+    retained: &[crate::exchange::ExchangeProfile],
+    receipt_keys: Vec<freebird_common::api::ExchangeReceiptKeyInfo>,
+) -> freebird_common::api::ExchangeDiscoveryInfo {
+    let mut target_keysets = Vec::new();
+    let mut descriptors = Vec::new();
+    for profile in std::iter::once(active).chain(retained) {
+        if !target_keysets
+            .iter()
+            .any(|keyset: &freebird_common::api::ExchangeTargetKeysetInfo| {
+                keyset.keyset_id == profile.target_keyset.id
+            })
+        {
+            target_keysets.push(freebird_common::api::ExchangeTargetKeysetInfo {
+                keyset_id: profile.target_keyset.id.clone(),
+                descriptor_ids: profile
+                    .target_keyset
+                    .targets
+                    .iter()
+                    .map(|target| target.descriptor.id.clone())
+                    .collect(),
+            });
+        }
+        for source in &profile.sources.descriptors {
+            if !descriptors
+                .iter()
+                .any(|existing: &freebird_common::api::ExchangeDescriptorInfo| {
+                    existing.descriptor_id == source.id && existing.purpose == "exchange_source"
+                })
+            {
+                descriptors.push(freebird_common::api::ExchangeDescriptorInfo {
+                    descriptor_id: source.id.clone(),
+                    keyset_id: source.kid.clone(),
+                    purpose: "exchange_source".into(),
+                    profile_id: source.profile_id.clone(),
+                    role: source.role.clone(),
+                    issuer_id: source.issuer_id.clone(),
+                    class: source.class.clone(),
+                    token_key_id: source.kid.clone(),
+                    pubkey_spki_b64: source.spki_b64.clone(),
+                    suite: source.suite.clone(),
+                    valid_from: source.valid_from,
+                    valid_until: source.valid_until,
+                    max_quantity: source.max_quantity,
+                    audience: source.audience.clone(),
+                });
+            }
+        }
+        for target in &profile.target_keyset.targets {
+            if !descriptors.iter().any(|existing| {
+                existing.descriptor_id == target.descriptor.id
+                    && existing.purpose == "exchange_target"
+            }) {
+                descriptors.push(freebird_common::api::ExchangeDescriptorInfo {
+                    descriptor_id: target.descriptor.id.clone(),
+                    keyset_id: profile.target_keyset.id.clone(),
+                    purpose: "exchange_target".into(),
+                    profile_id: target.descriptor.profile_id.clone(),
+                    role: target.descriptor.role.clone(),
+                    issuer_id: target.descriptor.issuer_id.clone(),
+                    class: target.descriptor.class.clone(),
+                    token_key_id: target.descriptor.kid.clone(),
+                    pubkey_spki_b64: target.descriptor.spki_b64.clone(),
+                    suite: target.descriptor.suite.clone(),
+                    valid_from: target.descriptor.valid_from,
+                    valid_until: target.descriptor.valid_until,
+                    max_quantity: target.descriptor.max_quantity,
+                    audience: target.descriptor.audience.clone(),
+                });
+            }
+        }
+    }
+    freebird_common::api::ExchangeDiscoveryInfo {
+        profile_id: active.profile_id.clone(),
+        target_keysets,
+        descriptors,
+        receipt_keys,
+    }
+}
+
+fn merge_public_history(
+    discovery: &mut freebird_common::api::ExchangeDiscoveryInfo,
+    history: &freebird_common::api::ExchangePublicHistory,
+) -> Result<()> {
+    for keyset in &history.target_keysets {
+        match discovery
+            .target_keysets
+            .iter()
+            .find(|existing| existing.keyset_id == keyset.keyset_id)
+        {
+            Some(existing) if existing != keyset => {
+                bail!("public history conflicts with an active target keyset")
+            }
+            Some(_) => {}
+            None => discovery.target_keysets.push(keyset.clone()),
+        }
+    }
+    for descriptor in &history.target_descriptors {
+        match discovery
+            .descriptors
+            .iter()
+            .find(|existing| existing.descriptor_id == descriptor.descriptor_id)
+        {
+            Some(existing) if existing != descriptor => {
+                bail!("public history conflicts with an active exchange descriptor")
+            }
+            Some(_) => {}
+            None => discovery.descriptors.push(descriptor.clone()),
+        }
+    }
+    for key in &history.receipt_keys {
+        match discovery
+            .receipt_keys
+            .iter()
+            .find(|existing| existing.key_id == key.key_id)
+        {
+            Some(existing) if existing != key => {
+                bail!("public history conflicts with an active receipt key")
+            }
+            Some(_) => {}
+            None => discovery.receipt_keys.push(key.clone()),
+        }
+    }
+    Ok(())
+}
+
+pub type PublicState = (
+    Arc<crate::AppStateWithSybil>,
+    Arc<crate::multi_key_voprf::MultiKeyVoprfCore>,
+);
+
+pub fn exchange_router(body_limit: usize, timeout_secs: u64) -> Router<PublicState> {
+    Router::new()
+        .route(
+            "/v1/public/exchange",
+            post(routes::public_exchange::post_exchange),
+        )
+        .route(
+            "/v1/public/exchange/status",
+            get(routes::public_exchange::get_exchange_status),
+        )
+        .layer(TimeoutLayer::new(Duration::from_secs(timeout_secs)))
+        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::OPTIONS,
+                ])
+                .allow_headers([
+                    axum::http::header::CONTENT_TYPE,
+                    routes::public_exchange::IDEMPOTENCY_KEY,
+                ]),
+        )
+        .layer(freebird_common::rate_limit::PublicRateLimitLayer::default())
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        ))
+}
+
+pub fn apply_public_layers(app: Router) -> Result<Router> {
+    Ok(app.layer(
+        ServiceBuilder::new()
+            .layer(CatchPanicLayer::custom(handle_panic))
+            .layer(TraceLayer::new_for_http())
+            .layer(MetricsMiddleware)
+            .layer(
+                freebird_common::tls_enforcement::TlsEnforcementLayer::from_env()
+                    .map_err(|e| anyhow::anyhow!(e))?,
+            ),
+    ))
+}
+
 impl Application {
     pub async fn build(config: Config) -> Result<Self> {
         if config.sybil_config.progressive_trust_salt == "default-salt-change-in-production" {
@@ -280,6 +457,74 @@ impl Application {
                 "✅ V5 public bearer issuer initialized"
             );
         }
+
+        let (exchange_engine, exchange_metadata) = if config.exchange_config.enabled {
+            let legacy_spki = public_issuer
+                .as_ref()
+                .map(|issuer| {
+                    base64ct::Base64UrlUnpadded::decode_vec(&issuer.metadata().pubkey_spki_b64)
+                })
+                .transpose()
+                .context("invalid legacy public bearer SPKI metadata")?;
+            let profile = crate::exchange::ExchangeProfile::load(
+                &config.exchange_config.profile_path,
+                legacy_spki.as_deref(),
+            )
+            .context("Failed to load exchange profile")?;
+            let mut retained = Vec::new();
+            for path in &config.exchange_config.retained_profile_paths {
+                retained.push(
+                    crate::exchange::ExchangeProfile::load(path, legacy_spki.as_deref())
+                        .with_context(|| {
+                            format!("Failed to load retained profile {}", path.display())
+                        })?,
+                );
+            }
+            let store = crate::exchange::store::ExchangeStore::new(
+                config
+                    .exchange_config
+                    .redis_url
+                    .as_deref()
+                    .context("exchange Redis URL missing")?,
+            )?;
+            store
+                .validate_durable_standalone()
+                .await
+                .context("exchange Redis durability check failed")?;
+            let receipt_keys = crate::exchange::ReceiptKeyRing::load(
+                &config.exchange_config.receipt_key_path,
+                &config.exchange_config.retained_receipt_key_paths,
+            )?;
+            let mut metadata =
+                exchange_discovery(&profile, &retained, receipt_keys.discovery_metadata());
+            if let Some(path) = &config.exchange_config.public_history_path {
+                let history = crate::exchange::history::load_public_history(
+                    path,
+                    &config.issuer_id,
+                    legacy_spki.as_deref(),
+                )?;
+                merge_public_history(&mut metadata, &history)?;
+            }
+            freebird_common::api::validate_exchange_target_metadata(
+                &metadata.profile_id,
+                &config.issuer_id,
+                &metadata.target_keysets,
+                &metadata.descriptors,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let engine = crate::exchange::ExchangeEngine::new(
+                profile,
+                retained,
+                store,
+                config.issuer_id.clone(),
+                receipt_keys,
+                config.exchange_config.receipt_lifetime_secs,
+            )
+            .await?;
+            (Some(Arc::new(engine)), Some(metadata))
+        } else {
+            (None, None)
+        };
 
         // 2. WebAuthn Setup
         #[cfg(feature = "human-gate-webauthn")]
@@ -897,6 +1142,8 @@ impl Application {
             sybil_checker: sybil_checker.clone(),
             invitation_system: invitation_system.clone(),
             public_issuer: public_issuer.clone(),
+            exchange_engine: exchange_engine.clone(),
+            exchange_metadata,
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
             admin_api_key: Some(admin_api_key.clone()),
@@ -942,7 +1189,12 @@ impl Application {
                     .clone(),
             ));
         }
-        readiness.spawn_checks(sybil_replay_store.clone(), storage_paths, voprf.clone());
+        readiness.spawn_checks(
+            sybil_replay_store.clone(),
+            storage_paths,
+            voprf.clone(),
+            exchange_engine.clone(),
+        );
 
         // Initialize router
         // Note: routes::metadata::well_known_handler must exist!
@@ -984,6 +1236,12 @@ impl Application {
             )
             .layer(DefaultBodyLimit::max(64 * 1024))
             .layer(freebird_common::rate_limit::PublicRateLimitLayer::default());
+
+        let exchange_routes = exchange_router(
+            config.exchange_config.request_body_limit,
+            config.exchange_config.request_timeout_secs,
+        );
+        let app = app.merge(exchange_routes);
 
         // --- CRITICAL FIX: SHADOWING ---
         // Use `let app` to shadow the variable, allowing the type change from Router<S> to Router<()>
@@ -1048,16 +1306,7 @@ impl Application {
 
         // Outermost layers: catch panics before they escape handlers, then
         // emit HTTP tracing spans for every inbound request.
-        let app = app.layer(
-            ServiceBuilder::new()
-                .layer(CatchPanicLayer::custom(handle_panic))
-                .layer(TraceLayer::new_for_http())
-                .layer(MetricsMiddleware)
-                .layer(
-                    freebird_common::tls_enforcement::TlsEnforcementLayer::from_env()
-                        .map_err(|e| anyhow::anyhow!(e))?,
-                ),
-        );
+        let app = apply_public_layers(app)?;
 
         let listener = TcpListener::bind(config.bind_addr)
             .await

@@ -11,8 +11,10 @@
 // limitations under the License.
 pub mod api;
 pub mod duration;
+pub mod exchange_api;
 pub mod metrics;
 pub mod rate_limit;
+pub mod spend_key;
 pub mod tls_enforcement;
 pub mod logging {
     use std::sync::Once;

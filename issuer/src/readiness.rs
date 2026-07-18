@@ -14,6 +14,8 @@ pub struct ReadinessReport {
     pub redis: bool,
     pub storage: bool,
     pub issuance_key: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exchange: Option<bool>,
     pub stores: BTreeMap<String, bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub development_unsafe: Option<bool>,
@@ -55,13 +57,22 @@ impl ReadinessState {
         replay_store: Arc<dyn ReplayStore>,
         storage_paths: Vec<(String, PathBuf)>,
         voprf: Arc<MultiKeyVoprfCore>,
+        exchange: Option<Arc<crate::exchange::ExchangeEngine>>,
     ) {
         let state = self.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(5));
             loop {
                 ticker.tick().await;
-                let report = check_once(&replay_store, &storage_paths, &voprf).await;
+                let mut report = check_once(&replay_store, &storage_paths, &voprf).await;
+                if let Some(engine) = &exchange {
+                    let ready =
+                        tokio::time::timeout(Duration::from_secs(2), engine.readiness_check())
+                            .await
+                            .is_ok_and(|result| result.is_ok());
+                    report.exchange = Some(ready);
+                    report.ready &= ready;
+                }
                 state.update(report);
             }
         });
@@ -102,6 +113,7 @@ pub async fn check_once(
         redis,
         storage: storage_ready,
         issuance_key,
+        exchange: None,
         stores: storage,
         development_unsafe: None,
     }

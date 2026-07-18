@@ -9,11 +9,12 @@ use axum::{
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{
-    BatchVerifyReq, BatchVerifyResp, KeyDiscoveryResp, PublicKeyInfo, TokenToVerify,
-    VerifierMetadataResp, VerifyReq, VerifyResp, VerifyResult,
+    BatchVerifyReq, BatchVerifyResp, KeyDiscoveryResp, TokenToVerify, VerifierMetadataResp,
+    VerifyReq, VerifyResp, VerifyResult,
 };
 use freebird_common::logging;
 use freebird_common::metrics::{self, MetricsMiddleware};
+use freebird_common::spend_key::v5_spend_key;
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::{
@@ -257,71 +258,7 @@ async fn load_public_keys(
         .error_for_status()
         .with_context(|| format!("issuer key discovery request failed: {keys_url}"))?;
     let discovery: KeyDiscoveryResp = res.json().await?;
-    if discovery.issuer_id != issuer_id {
-        return Err(anyhow!(
-            "issuer key discovery returned issuer_id {}, expected {}",
-            discovery.issuer_id,
-            issuer_id
-        ));
-    }
-
-    let mut keys = HashMap::new();
-    for key_info in discovery.public {
-        match parse_public_key_info(issuer_id, key_info) {
-            Ok(key) => {
-                keys.insert(key.token_key_id, key);
-            }
-            Err(e) => warn!(?e, issuer = %issuer_id, "dropping invalid V5 public bearer key"),
-        }
-    }
-    Ok(keys)
-}
-
-fn parse_public_key_info(
-    issuer_id: &str,
-    key_info: PublicKeyInfo,
-) -> anyhow::Result<admin::PublicIssuerKey> {
-    if key_info.issuer_id != issuer_id {
-        return Err(anyhow!("public key issuer_id mismatch"));
-    }
-    if key_info.token_type != freebird_crypto::PUBLIC_BEARER_TOKEN_TYPE {
-        return Err(anyhow!("unsupported public token type"));
-    }
-    if key_info.rfc9474_variant != freebird_crypto::PUBLIC_BEARER_RFC9474_VARIANT {
-        return Err(anyhow!("unsupported RFC 9474 variant"));
-    }
-    if key_info.spend_policy != freebird_crypto::PUBLIC_BEARER_SPEND_POLICY_SINGLE_USE {
-        return Err(anyhow!("unsupported public bearer spend_policy"));
-    }
-    if matches!(key_info.max_uses, Some(max_uses) if max_uses != 1) {
-        return Err(anyhow!("unsupported public bearer max_uses"));
-    }
-    if !(2048..=4096).contains(&key_info.modulus_bits) {
-        return Err(anyhow!("unsupported public bearer modulus_bits"));
-    }
-    if key_info.valid_from >= key_info.valid_until {
-        return Err(anyhow!("invalid public bearer validity window"));
-    }
-
-    let token_key_id = freebird_crypto::decode_token_key_id_hex(&key_info.token_key_id)
-        .map_err(|_| anyhow!("invalid token_key_id"))?;
-    let pubkey_spki = Base64UrlUnpadded::decode_vec(&key_info.pubkey_spki_b64)
-        .context("base64 decode public bearer SPKI")?;
-    freebird_crypto::validate_public_bearer_spki(&pubkey_spki)
-        .map_err(|e| anyhow!("invalid public bearer SPKI: {:?}", e))?;
-    if freebird_crypto::token_key_id_from_spki(&pubkey_spki) != token_key_id {
-        return Err(anyhow!("token_key_id does not match SPKI"));
-    }
-
-    Ok(admin::PublicIssuerKey {
-        token_key_id,
-        token_key_id_hex: key_info.token_key_id,
-        pubkey_spki,
-        issuer_id: key_info.issuer_id,
-        valid_from: key_info.valid_from,
-        valid_until: key_info.valid_until,
-        audience: key_info.audience,
-    })
+    freebird_verifier::discovery::trusted_public_keys(issuer_id, discovery)
 }
 
 fn validate_secret_key_matches_pubkey(
@@ -754,7 +691,7 @@ async fn verify(
                 (StatusCode::BAD_REQUEST, "verification failed".to_string())
             })?;
             (
-                format!("freebird:spent:v5:{null_key}"),
+                v5_spend_key(&null_key),
                 Some(ttl_until(key.valid_until, now)),
             )
         }
@@ -977,7 +914,7 @@ async fn batch_verify(
                     }
                 };
                 (
-                    format!("freebird:spent:v5:{null_key}"),
+                    v5_spend_key(&null_key),
                     Some(ttl_until(key.valid_until, now)),
                 )
             }

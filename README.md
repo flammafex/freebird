@@ -14,6 +14,18 @@ The current source tree supports two token modes:
 The `freebird-interface` binary exercises the V4 flow against local services on
 `127.0.0.1:8081` and `127.0.0.1:8082`.
 
+The optional public bearer exchange atomically spends one or more single-use V5
+artifacts and signs configured caller-blinded outputs. Clients use
+`POST /v1/public/exchange` and the fixed `GET /v1/public/exchange/status` route.
+Both carry a private, random 16-byte operation capability in exactly one
+`Idempotency-Key` header—never in a URL or query—and return
+`Cache-Control: no-store`. Durable retries recover the original response without
+signing or spending twice. Discovery publishes isolated exchange targets and
+active/retained Ed25519 receipt verification keys; public-only history keeps
+unexpired outputs and receipts verifiable after private signers retire. See
+[Public Bearer Exchange](docs/public-bearer-exchange.md) for the API, profile,
+Redis, recovery, and retention contract.
+
 ## Project Documents
 
 - [Security Policy](SECURITY.md): vulnerability reporting, production baseline,
@@ -23,6 +35,8 @@ The `freebird-interface` binary exercises the V4 flow against local services on
   transitional-client inventory.
 - [Architecture](docs/architecture.md): issuer, verifier, client, storage, and
   token flows.
+- [Public Bearer Exchange](docs/public-bearer-exchange.md): exchange API,
+  operation capabilities, receipt verification, durable Redis, and retention.
 - [Threat Model](docs/threat-model.md): security goals, assumptions, non-goals,
   and current gaps.
 - [Sybil Modes](docs/sybil-modes.md): what each admission gate resists, where it

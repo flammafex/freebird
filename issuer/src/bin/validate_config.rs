@@ -19,7 +19,7 @@
 use freebird_common::duration::format_duration;
 use std::env;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Validation result for a single check
 #[derive(Debug)]
@@ -82,6 +82,7 @@ fn main() {
 
     // Validate key configuration
     sections.push(validate_key_config());
+    sections.push(validate_exchange_config());
 
     // Validate sybil configuration
     sections.push(validate_sybil_config());
@@ -326,6 +327,141 @@ fn validate_key_config() -> ValidationSection {
         section.add(CheckResult::Ok(format!("KID = {} (override)", kid)));
     }
 
+    section
+}
+
+fn validate_exchange_config() -> ValidationSection {
+    let mut section = ValidationSection::new("Public Bearer Exchange Configuration");
+    let enabled = env::var("PUBLIC_BEARER_EXCHANGE_ENABLE")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+    if !enabled {
+        section.add(CheckResult::Ok(
+            "PUBLIC_BEARER_EXCHANGE_ENABLE = false".into(),
+        ));
+        return section;
+    }
+    match env::var("PUBLIC_BEARER_EXCHANGE_REDIS_URL") {
+        Ok(url) if !url.trim().is_empty() => section.add(CheckResult::Ok(
+            "PUBLIC_BEARER_EXCHANGE_REDIS_URL is configured".into(),
+        )),
+        _ => section.add(CheckResult::Error(
+            "PUBLIC_BEARER_EXCHANGE_REDIS_URL is required".into(),
+        )),
+    }
+    let profile = env::var("PUBLIC_BEARER_EXCHANGE_PROFILE_PATH")
+        .unwrap_or_else(|_| "public_bearer_exchange_profile.json".into());
+    let retained_profiles = env::var("PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            value
+                .split(',')
+                .map(|path| path.trim().to_owned())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let receipt = env::var("PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH")
+        .or_else(|_| env::var("PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH"))
+        .unwrap_or_else(|_| "public_bearer_exchange_receipt.key".into());
+    let retained_receipts = env::var("PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| {
+            value
+                .split(',')
+                .map(|path| PathBuf::from(path.trim()))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let public_history = env::var("PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH")
+        .ok()
+        .filter(|path| !path.trim().is_empty());
+    let legacy_path =
+        env::var("PUBLIC_BEARER_SK_PATH").unwrap_or_else(|_| "public_bearer_sk.der".into());
+    let legacy_spki = if Path::new(&legacy_path).is_file() {
+        use freebird_crypto::provider::{software::SoftwareBlindRsaProvider, BlindRsaProvider};
+        fs::read(&legacy_path)
+            .ok()
+            .map(zeroize::Zeroizing::new)
+            .and_then(|der| {
+                SoftwareBlindRsaProvider::from_der(&der)
+                    .ok()
+                    .map(|p| p.public_key_spki().to_vec())
+            })
+    } else {
+        None
+    };
+    match freebird_issuer::exchange::profiles::ExchangeProfile::load(
+        Path::new(&profile),
+        legacy_spki.as_deref(),
+    ) {
+        Ok(loaded) => match loaded
+            .validate_issuer_id(
+                &env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".into()),
+            )
+            .and_then(|_| loaded.validate_target_keys())
+        {
+            Ok(()) => section.add(CheckResult::Ok(format!(
+                "{} = valid pinned profile and target keys",
+                profile
+            ))),
+            Err(error) => section.add(CheckResult::Error(format!(
+                "target key material invalid: {}",
+                error
+            ))),
+        },
+        Err(error) => section.add(CheckResult::Error(format!(
+            "{} invalid: {}",
+            profile, error
+        ))),
+    }
+    for retained in retained_profiles {
+        match freebird_issuer::exchange::profiles::ExchangeProfile::load(
+            Path::new(&retained),
+            legacy_spki.as_deref(),
+        )
+        .and_then(|loaded| {
+            loaded.validate_issuer_id(
+                &env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".into()),
+            )?;
+            loaded.validate_target_keys()
+        }) {
+            Ok(()) => section.add(CheckResult::Ok(format!(
+                "{retained} = valid retained target keyset"
+            ))),
+            Err(error) => section.add(CheckResult::Error(format!(
+                "retained exchange profile {retained} invalid: {error}"
+            ))),
+        }
+    }
+    validate_persistence_path(
+        &mut section,
+        "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
+        &receipt,
+    );
+    if let Err(error) = freebird_issuer::exchange::receipt::validate_receipt_key_paths(
+        Path::new(&receipt),
+        &retained_receipts,
+    ) {
+        section.add(CheckResult::Error(format!(
+            "active/retained receipt key ring invalid: {error}"
+        )));
+    }
+    if let Some(path) = public_history {
+        match freebird_issuer::exchange::history::load_public_history(
+            Path::new(&path),
+            &env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".into()),
+            legacy_spki.as_deref(),
+        ) {
+            Ok(_) => section.add(CheckResult::Ok(format!(
+                "{path} = valid public exchange history"
+            ))),
+            Err(error) => section.add(CheckResult::Error(format!(
+                "public exchange history invalid: {error}"
+            ))),
+        }
+    }
     section
 }
 

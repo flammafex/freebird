@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🕊️ Freebird - Experimental Privacy-Preserving Tokens</title>
-    <meta name="description" content="Experimental token infrastructure designed to unlink issuance from redemption. Metadata and operational limits remain in scope.">
+    <title>🕊️ Freebird - Experimental Authorization Tokens</title>
+    <meta name="description" content="Experimental authorization token infrastructure designed to separate issuance from redemption, with metadata and operational limits clearly defined.">
 
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -400,7 +400,7 @@
             <p class="tagline">Authorization tokens designed to separate issuance from redemption.</p>
 
             <p class="manifesto">
-                Many systems bind authorization to an application identity. Freebird explores a narrower alternative: use an unforgeable, one-time token to prove permission without putting an identity in the token itself. The result is a cryptographic privacy boundary—not a promise that the surrounding system cannot correlate activity.
+                Freebird uses unforgeable, one-time authorization tokens to prove permission without placing an application identity in the token. It separates issuance from redemption at the token layer. Network, timing, application, admission, and audit data remain visible to the surrounding deployment.
             </p>
         </header>
 
@@ -408,19 +408,19 @@
             <h2>The Problem</h2>
 
             <p>
-                The internet often binds authorization to accounts and operational records. Freebird focuses on one part of that problem: separating token issuance from later redemption.
+                Online authorization commonly connects access to accounts and operational records. Freebird addresses one specific part of that system: separating token issuance from later redemption.
             </p>
 
             <ul class="problem-list">
-                <li>Rate limiting requires tracking users</li>
-                <li>Access control requires accounts</li>
-                <li>Spam prevention requires surveillance</li>
-                <li>Resource allocation requires registration</li>
-                <li>"One person, one vote" requires identity databases</li>
+                <li>Rate limiting often uses user or network tracking</li>
+                <li>Access control commonly uses accounts</li>
+                <li>Spam prevention can rely on activity monitoring</li>
+                <li>Resource allocation often uses registration</li>
+                <li>"One person, one vote" often depends on identity databases</li>
             </ul>
 
             <p>
-                A deployment may still collect network, timing, application, admission, and audit data. The token protocol does not erase those surrounding records.
+                A deployment may still collect network, timing, application, admission, and audit data. Those surrounding records remain outside the token protocol.
             </p>
 
             <div class="diagram">
@@ -444,11 +444,11 @@ Server logs:                        ▼
             <h2>Freebird's Answer</h2>
 
             <p>
-                Freebird currently exposes <strong>two experimental token modes</strong>. V4 uses a Freebird-specific, bespoke P-256 VOPRF-like construction with DLEQ-style proofs; it is not RFC 9497 interoperable. V5 uses Blind RSA signatures described by RFC 9474 for public bearer passes. They are different implementation paths, not a certification or production-readiness claim.
+                Freebird currently exposes <strong>two experimental token modes</strong>. V4 uses a Freebird-specific P-256 VOPRF-like construction with DLEQ-style proofs and is not interoperable with RFC 9497 implementations. V5 uses Blind RSA signatures described by RFC 9474 for public bearer passes. Each mode has its own wire format and operating assumptions.
             </p>
 
             <p>
-                Think of it as a prototype privacy layer for authorization. A finalized token can prove issuer authorization without containing an application identity; the surrounding deployment can still observe and correlate metadata.
+                Freebird is a prototype privacy layer for authorization. A finalized token can prove issuer authorization without containing an application identity. The surrounding deployment can still observe and correlate metadata.
             </p>
 
             <div class="diagram">
@@ -466,11 +466,11 @@ Server logs:                        ▼
         │     │ unblinds to     │                    │            │
         │     │ get token       │                    │            │
         │     │                 │                    │            │
-        │     │──────────[anonymous token]──────────▶│            │
+        │     │───────[identity-free token]────────▶│            │
         │     │                                      │            │
         │     │                              ✓ Valid signature    │
-        │     │                              ✗ No identity        │
-        │     │                              ✗ No tracking        │
+        │     │                              ✓ No app identity    │
+        │     │                              ! Metadata remains  │
         │                                                         │
         └─────────────────────────────────────────────────────────┘
 
@@ -491,23 +491,23 @@ Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or
             <h2>Token Properties & Operating Limits</h2>
 
             <p>
-                These are protocol-level properties and deployment-dependent limits—not a claim of system-wide anonymity. Freebird is pre-1.0 and has not received an external security audit.
+                These properties describe the protocol boundary and its deployment-dependent limits. Freebird is pre-1.0 and has not received an external security audit.
             </p>
 
             <div class="comparison">
                 <div class="comparison-col bad">
                     <h4>❌ Traditional "Privacy"</h4>
-                    <p>"We won't share your data"</p>
-                    <p>"Trust our policy"</p>
-                    <p>"We anonymize logs"</p>
-                    <p><em>Until subpoena, hack, acquisition, policy change...</em></p>
+                    <p>Data handling depends on policy</p>
+                    <p>Logs remain under operator control</p>
+                    <p>Changes require continued trust</p>
+                    <p><em>Records may be exposed or correlated</em></p>
                 </div>
                 <div class="comparison-col good">
                     <h4>✓ Freebird</h4>
                     <p>Less identity in the token path</p>
                     <p>Cryptographic separation to review</p>
                     <p>Operational records still require policy</p>
-                    <p><strong>Token privacy, not total privacy</strong></p>
+                    <p><strong>Token privacy within a defined boundary</strong></p>
                 </div>
             </div>
 
@@ -553,7 +553,7 @@ Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or
             <h2>Prototype Use Cases</h2>
 
             <p>
-                Freebird is suitable today for local experiments and low-stakes prototypes. These examples are prompts for evaluation, not production endorsements or guarantees.
+                Freebird is intended for local experiments and low-stakes prototypes. The examples below mark areas for evaluation; they do not establish production suitability or guarantees.
             </p>
 
             <div class="use-cases">
@@ -597,22 +597,22 @@ Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or
             <h2>Configurable Admission Controls</h2>
 
             <p>
-                Freebird includes configurable admission mechanisms to make abuse more costly or limit issuance. They are local controls, not proof of a unique human, and they do not remove operational metadata.
+                Freebird includes configurable admission mechanisms that can raise abuse costs or limit issuance. They are local controls. They do not prove a unique human or remove operational metadata.
             </p>
 
             <h3>Invitation System (Trust Graphs)</h3>
             <p>
-                Users invite others. Operators can trace invitation relationships in their admission records and cut off branches. This is local social trust, not identity-free accountability or a global anti-abuse guarantee.
+                Users invite others. Operators can trace invitation relationships in admission records and cut off branches. This provides local social trust; it does not provide identity-free accountability or a global anti-abuse guarantee.
             </p>
 
             <h3>Proof of Work</h3>
             <p>
-                Computational cost per token. Prevents bot farms without collecting data.
+                Each token carries a computational cost. This can raise the cost of bot activity without collecting user identity data.
             </p>
 
             <h3>WebAuthn / Hardware Keys</h3>
             <p>
-                WebAuthn or hardware authenticators can gate issuance. This is not proof of humanity; credential and deployment records remain part of the operator's state.
+                WebAuthn or hardware authenticators can gate issuance. They do not prove humanity; credential and deployment records remain part of the operator's state.
             </p>
 
             <h3>Rate Limiting</h3>
@@ -622,12 +622,12 @@ Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or
 
             <h3>Social Graph Attestation</h3>
             <p>
-                A separate Social Graph Attester service evaluates signed trust edges (Clout-style) and issues short-lived attestations proving a user stands within a trusted social graph, without revealing which node they are. The issuer verifies the attester's Ed25519 signature, policy, expiry, and eligibility level — never the underlying graph.
+                A separate Social Graph Attester service evaluates signed trust edges (Clout-style) and issues short-lived attestations proving a user stands within a trusted social graph, without revealing which node they are. The issuer verifies the attester's Ed25519 signature, policy, expiry, and eligibility level; the underlying graph stays with the attester.
             </p>
 
             <h3>Progressive Trust</h3>
             <p>
-                Trust can accumulate with configured account age and usage history. New accounts may receive limited quotas; this still uses local records and is not global anonymity.
+                Trust can accumulate through configured account age and usage history. New accounts may receive limited quotas. The mechanism uses local records and does not provide global anonymity.
             </p>
 
             <h3>Proof of Diversity</h3>
@@ -642,7 +642,7 @@ Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or
 
             <h3>Composable Combiners</h3>
             <p>
-                Stack mechanisms with <code>OR</code> (any must pass), <code>AND</code> (all must pass), or <code>Threshold</code> (at least N of M). <code>OR</code> is only as strong as the easiest mechanism; <code>AND</code> is strictest. Proof replay protection and restart safety depend on the configured store.
+                Stack mechanisms with <code>OR</code> (any must pass), <code>AND</code> (all must pass), or <code>Threshold</code> (at least N of M). <code>OR</code> inherits the strength of its easiest mechanism, while <code>AND</code> is strictest. Proof replay protection and restart safety depend on the configured store.
             </p>
 
         </section>
@@ -722,7 +722,7 @@ Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or
             <h2>Current Experimental Implementation</h2>
 
             <p>
-                These labels describe code present in the current experimental tree, not external audit, production readiness, or support for any planned profile.
+                These labels describe code present in the current experimental tree. They do not indicate an external audit, production readiness, or support for a planned profile.
             </p>
 
             <table>
@@ -805,14 +805,14 @@ Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or
             <h2>Why Open Infrastructure Matters</h2>
 
             <p>
-                Privacy technology that requires trusting a company is privacy theater. Freebird is <strong>infrastructure</strong>, not a service.
+                Freebird is <strong>infrastructure</strong> that organizations can inspect, operate, and adapt themselves.
             </p>
 
             <ul>
-                <li><strong>Self-hostable:</strong> Run your own issuer. No dependencies on us.</li>
+                <li><strong>Self-hostable:</strong> Run your own issuer and manage its operational dependencies.</li>
                 <li><strong>Federated:</strong> Multiple issuers can exist. Verifiers choose whom to trust.</li>
-                <li><strong>Auditable:</strong> Every line of code is public. Every cryptographic claim is verifiable.</li>
-                <li><strong>Forkable:</strong> Don't like our decisions? Fork it. The protocol is the product.</li>
+                <li><strong>Auditable:</strong> The source is public for review of implementation and cryptographic claims.</li>
+                <li><strong>Forkable:</strong> Adapt the code and protocol to your own requirements.</li>
             </ul>
 
         </section>
@@ -831,7 +831,7 @@ Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or
 
             <div class="funding-goal">
                 <h4>Reference Implementations</h4>
-                <p>Working low-stakes prototypes beyond the current demo: feedback systems and token-gated forums. These should demonstrate the limits as well as the token flow; they are not proof of production readiness.</p>
+                <p>Working low-stakes prototypes beyond the current demo: feedback systems and token-gated forums. They will show the token flow and its operational limits.</p>
             </div>
 
             <div class="funding-goal">
@@ -841,7 +841,7 @@ Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or
 
             <div class="funding-goal">
                 <h4>Security Audit</h4>
-                <p>Third-party cryptographic audit. We believe the implementation is correct—let's prove it.</p>
+                <p>Commission an independent third-party review of the cryptographic implementation.</p>
             </div>
 
             <div class="funding-goal">
@@ -883,7 +883,7 @@ curl -X POST http://localhost:8082/v1/verify \
             <h2>Standards & Prior Art</h2>
 
             <p>
-                Freebird implements established cryptographic standards:
+                Freebird uses established cryptographic standards and related protocol designs:
             </p>
 
             <ul>

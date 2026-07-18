@@ -103,6 +103,8 @@ async fn build_issuer_state(
         sybil_checker,
         invitation_system: None,
         public_issuer: None,
+        exchange_engine: None,
+        exchange_metadata: None,
         epoch_duration_sec: 86400,
         epoch_retention: 2,
         admin_api_key: None,

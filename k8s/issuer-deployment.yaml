@@ -20,6 +20,9 @@ data:
   SYBIL_INVITE_AUTOSAVE_INTERVAL: "5m"
   SYBIL_INVITE_BOOTSTRAP_USERS: "admin:100"
   PUBLIC_BEARER_ENABLE: "true"
+  PUBLIC_BEARER_EXCHANGE_ENABLE: "false"
+  PUBLIC_BEARER_EXCHANGE_PROFILE_PATH: "/data/config/public_bearer_exchange_profile.json"
+  PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH: "/data/keys/exchange_receipt.key"
 
 ---
 apiVersion: v1
@@ -111,6 +114,8 @@ spec:
             - name: REDIS_URL
               value: redis://:$(REDIS_PASSWORD)@redis:6379
             - name: SYBIL_REPLAY_REDIS_URL
+              value: redis://:$(REDIS_PASSWORD)@redis:6379
+            - name: PUBLIC_BEARER_EXCHANGE_REDIS_URL
               value: redis://:$(REDIS_PASSWORD)@redis:6379
             - name: WEBAUTHN_REDIS_URL
               value: redis://:$(REDIS_PASSWORD)@redis:6379

@@ -204,7 +204,7 @@ pub enum VerifyResult {
 // ============================================================================
 
 /// A single vouch proof for Multi-Party Vouching
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VouchProof {
     pub voucher_id: String,
     pub vouchee_id: String,
@@ -281,7 +281,7 @@ pub enum SybilProof {
 // Key Management Types
 // ============================================================================
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyDiscoveryResp {
     pub issuer_id: String,
     pub current_epoch: u32,
@@ -290,9 +290,208 @@ pub struct KeyDiscoveryResp {
     pub voprf: VoprfKeyInfo,
     #[serde(default)]
     pub public: Vec<PublicKeyInfo>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange: Option<ExchangeDiscoveryInfo>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExchangeDiscoveryInfo {
+    pub profile_id: String,
+    pub target_keysets: Vec<ExchangeTargetKeysetInfo>,
+    pub descriptors: Vec<ExchangeDescriptorInfo>,
+    pub receipt_keys: Vec<ExchangeReceiptKeyInfo>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExchangeTargetKeysetInfo {
+    pub keyset_id: String,
+    /// Canonical ordered descriptor membership.
+    pub descriptor_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExchangeReceiptKeyInfo {
+    pub key_id: String,
+    pub algorithm: String,
+    pub purpose: String,
+    pub public_key_b64: String,
+    pub valid_from: u64,
+    pub valid_until: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExchangeDescriptorInfo {
+    pub descriptor_id: String,
+    pub keyset_id: String,
+    pub purpose: String,
+    pub profile_id: String,
+    pub role: String,
+    pub issuer_id: String,
+    pub class: String,
+    pub token_key_id: String,
+    pub pubkey_spki_b64: String,
+    pub suite: String,
+    pub valid_from: i64,
+    pub valid_until: i64,
+    pub max_quantity: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ExchangePublicHistory {
+    #[serde(default)]
+    pub target_keysets: Vec<ExchangeTargetKeysetInfo>,
+    #[serde(default)]
+    pub target_descriptors: Vec<ExchangeDescriptorInfo>,
+    #[serde(default)]
+    pub receipt_keys: Vec<ExchangeReceiptKeyInfo>,
+}
+
+impl ExchangeDescriptorInfo {
+    pub fn canonical_descriptor_bytes(&self) -> Result<Vec<u8>, String> {
+        let mut bytes = Vec::new();
+        for value in [
+            &self.profile_id,
+            &self.role,
+            &self.class,
+            &self.issuer_id,
+            &self.token_key_id,
+            &self.suite,
+        ] {
+            bytes.extend_from_slice(
+                &u32::try_from(value.len())
+                    .map_err(|_| "descriptor field too large")?
+                    .to_be_bytes(),
+            );
+            bytes.extend_from_slice(value.as_bytes());
+        }
+        if let Some(audience) = &self.audience {
+            bytes.push(1);
+            bytes.extend_from_slice(
+                &u32::try_from(audience.len())
+                    .map_err(|_| "audience too large")?
+                    .to_be_bytes(),
+            );
+            bytes.extend_from_slice(audience.as_bytes());
+        } else {
+            bytes.push(0);
+            bytes.extend_from_slice(&0u32.to_be_bytes());
+        }
+        let spki = crate::exchange_api::decode_base64url(&self.pubkey_spki_b64, 4096)
+            .map_err(|error| error.to_string())?;
+        bytes.extend_from_slice(&spki);
+        bytes.extend_from_slice(&self.max_quantity.to_be_bytes());
+        bytes.extend_from_slice(&self.valid_from.to_be_bytes());
+        bytes.extend_from_slice(&self.valid_until.to_be_bytes());
+        Ok(bytes)
+    }
+
+    pub fn canonical_descriptor_id(&self) -> Result<String, String> {
+        Ok(crate::exchange_api::descriptor_id(
+            &self.canonical_descriptor_bytes()?,
+        ))
+    }
+}
+
+impl ExchangeTargetKeysetInfo {
+    pub fn canonical_keyset_id(&self) -> String {
+        crate::exchange_api::keyset_id(&self.descriptor_ids)
+    }
+}
+
+/// Validate the complete immutable target descriptor/keyset graph shared by
+/// issuer history publication and verifier trust ingestion.
+pub fn validate_exchange_target_metadata(
+    profile_id: &str,
+    issuer_id: &str,
+    keysets: &[ExchangeTargetKeysetInfo],
+    descriptors: &[ExchangeDescriptorInfo],
+) -> Result<(), String> {
+    use base64ct::{Base64UrlUnpadded, Encoding};
+    use sha2::{Digest, Sha256};
+    use std::collections::{HashMap, HashSet};
+
+    if profile_id != crate::exchange_api::EXCHANGE_PROFILE_V1 || keysets.is_empty() {
+        return Err("invalid exchange profile or keyset bounds".into());
+    }
+    let mut descriptor_map = HashMap::new();
+    let mut spkis = HashSet::new();
+    for descriptor in descriptors
+        .iter()
+        .filter(|descriptor| descriptor.purpose == "exchange_target")
+    {
+        crate::exchange_api::validate_descriptor_id(&descriptor.descriptor_id)
+            .map_err(|error| error.to_string())?;
+        crate::exchange_api::validate_keyset_id(&descriptor.keyset_id)
+            .map_err(|error| error.to_string())?;
+        if descriptor.profile_id != profile_id
+            || descriptor.role != "target"
+            || descriptor.issuer_id != issuer_id
+            || descriptor.suite != "RSABSSA-SHA384-PSS-Deterministic"
+            || descriptor.class.is_empty()
+            || descriptor.class.len() > 128
+            || !descriptor.class.is_ascii()
+            || descriptor.max_quantity == 0
+            || descriptor.max_quantity > 64
+            || descriptor.valid_from >= descriptor.valid_until
+            || descriptor.audience.as_ref().is_some_and(|audience| {
+                audience.is_empty() || audience.len() > 128 || !audience.is_ascii()
+            })
+            || descriptor.canonical_descriptor_id()? != descriptor.descriptor_id
+        {
+            return Err("invalid immutable exchange target descriptor".into());
+        }
+        let spki = crate::exchange_api::decode_base64url(&descriptor.pubkey_spki_b64, 4096)
+            .map_err(|error| error.to_string())?;
+        if Base64UrlUnpadded::encode_string(&spki) != descriptor.pubkey_spki_b64
+            || hex::encode(Sha256::digest(&spki)) != descriptor.token_key_id
+            || freebird_crypto::validate_public_bearer_spki(&spki).is_err()
+            || !spkis.insert(spki)
+            || descriptor_map
+                .insert(descriptor.descriptor_id.clone(), descriptor)
+                .is_some()
+        {
+            return Err("exchange target identity collision".into());
+        }
+    }
+    if descriptor_map.is_empty() {
+        return Err("exchange target descriptors are empty".into());
+    }
+    let mut keyset_ids = HashSet::new();
+    let mut memberships = HashSet::new();
+    for keyset in keysets {
+        crate::exchange_api::validate_keyset_id(&keyset.keyset_id)
+            .map_err(|error| error.to_string())?;
+        if keyset.descriptor_ids.is_empty()
+            || keyset.canonical_keyset_id() != keyset.keyset_id
+            || !keyset_ids.insert(&keyset.keyset_id)
+        {
+            return Err("invalid canonical exchange target keyset".into());
+        }
+        for descriptor_id in &keyset.descriptor_ids {
+            let descriptor = descriptor_map
+                .get(descriptor_id)
+                .ok_or_else(|| "keyset references unknown descriptor".to_string())?;
+            if descriptor.keyset_id != keyset.keyset_id
+                || !memberships.insert(descriptor_id.clone())
+            {
+                return Err("descriptor keyset membership mismatch".into());
+            }
+        }
+    }
+    if memberships.len() != descriptor_map.len() {
+        return Err("unpublished target keyset membership".into());
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoprfKeyInfo {
     pub suite: String,
     pub kid: String,
@@ -314,4 +513,38 @@ pub struct PublicKeyInfo {
     pub spend_policy: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_uses: Option<u32>,
+}
+
+#[cfg(test)]
+mod exchange_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn receipt_metadata_round_trips_and_legacy_discovery_remains_compatible() {
+        let key = ExchangeReceiptKeyInfo {
+            key_id: "a".repeat(64),
+            algorithm: "Ed25519".into(),
+            purpose: "exchange_receipt_active".into(),
+            public_key_b64: "AQ".into(),
+            valid_from: 0,
+            valid_until: u64::MAX,
+        };
+        assert_eq!(
+            serde_json::from_value::<ExchangeReceiptKeyInfo>(serde_json::to_value(&key).unwrap())
+                .unwrap(),
+            key
+        );
+        let legacy = serde_json::json!({
+            "issuer_id":"issuer:test",
+            "current_epoch":1,
+            "valid_epochs":[1],
+            "epoch_duration_sec":86400,
+            "voprf":{"suite":"suite","kid":"kid","pubkey":"key"},
+            "public":[]
+        });
+        assert!(serde_json::from_value::<KeyDiscoveryResp>(legacy)
+            .unwrap()
+            .exchange
+            .is_none());
+    }
 }

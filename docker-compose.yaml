@@ -54,6 +54,12 @@ services:
       - SYBIL_INVITE_AUTOSAVE_INTERVAL=${SYBIL_INVITE_AUTOSAVE_INTERVAL:-5m}
       - SYBIL_INVITE_SIGNING_KEY_PATH=${SYBIL_INVITE_SIGNING_KEY_PATH:-/data/keys/invitation_signing_key.bin}
       - SYBIL_INVITE_BOOTSTRAP_USERS=${SYBIL_INVITE_BOOTSTRAP_USERS:-admin:100}
+      - PUBLIC_BEARER_EXCHANGE_ENABLE=${PUBLIC_BEARER_EXCHANGE_ENABLE:-false}
+      - PUBLIC_BEARER_EXCHANGE_REDIS_URL=${PUBLIC_BEARER_EXCHANGE_REDIS_URL:-redis://redis:6379}
+      - PUBLIC_BEARER_EXCHANGE_PROFILE_PATH=${PUBLIC_BEARER_EXCHANGE_PROFILE_PATH:-/data/config/public_bearer_exchange_profile.json}
+      - PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS=${PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS:-}
+      - PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH=${PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH:-/data/keys/exchange_receipt.key}
+      - PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS=${PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS:-}
 
     # Networking
     networks:
@@ -188,7 +194,7 @@ services:
     restart: unless-stopped
 
     # Data persistence with AOF
-    command: redis-server --appendonly yes --appendfsync everysec
+    command: redis-server --appendonly yes --appendfsync always --save "" --maxmemory-policy noeviction
 
     # Storage
     volumes:

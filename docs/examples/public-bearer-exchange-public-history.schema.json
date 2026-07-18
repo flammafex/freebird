@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Freebird public bearer exchange public history",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["target_keysets", "target_descriptors"],
+  "properties": {
+    "target_keysets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["keyset_id", "descriptor_ids"],
+        "properties": {
+          "keyset_id": { "$ref": "#/$defs/lowerHexId" },
+          "descriptor_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/lowerHexId" }
+          }
+        }
+      }
+    },
+    "target_descriptors": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/targetDescriptor" }
+    },
+    "receipt_keys": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/receiptKey" }
+    }
+  },
+  "$defs": {
+    "lowerHexId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "base64url": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "targetDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "descriptor_id",
+        "keyset_id",
+        "purpose",
+        "profile_id",
+        "role",
+        "issuer_id",
+        "class",
+        "token_key_id",
+        "pubkey_spki_b64",
+        "suite",
+        "valid_from",
+        "valid_until",
+        "max_quantity"
+      ],
+      "properties": {
+        "descriptor_id": { "$ref": "#/$defs/lowerHexId" },
+        "keyset_id": { "$ref": "#/$defs/lowerHexId" },
+        "purpose": { "const": "exchange_target" },
+        "profile_id": { "const": "freebird/public-bearer-exchange/v1" },
+        "role": { "const": "target" },
+        "issuer_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "class": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "token_key_id": { "$ref": "#/$defs/lowerHexId" },
+        "pubkey_spki_b64": { "$ref": "#/$defs/base64url" },
+        "suite": { "const": "RSABSSA-SHA384-PSS-Deterministic" },
+        "valid_from": { "type": "integer" },
+        "valid_until": { "type": "integer" },
+        "max_quantity": { "type": "integer", "minimum": 1, "maximum": 64 },
+        "audience": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 }
+      }
+    },
+    "receiptKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key_id",
+        "algorithm",
+        "purpose",
+        "public_key_b64",
+        "valid_from",
+        "valid_until"
+      ],
+      "properties": {
+        "key_id": { "$ref": "#/$defs/lowerHexId" },
+        "algorithm": { "const": "Ed25519" },
+        "purpose": { "const": "exchange_receipt_retained" },
+        "public_key_b64": { "$ref": "#/$defs/base64url" },
+        "valid_from": { "type": "integer", "minimum": 0 },
+        "valid_until": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}
