@@ -385,9 +385,6 @@
     </style>
 </head>
 <body>
-    <div class="surveillance-strip">
-        ⚠ EXPERIMENTAL / TOKEN-LAYER PRIVACY / METADATA REMAINS IN SCOPE
-    </div>
 
     <main class="container">
         <header>
@@ -466,24 +463,25 @@ Server logs:                        ▼
         │     │ unblinds to     │                    │            │
         │     │ get token       │                    │            │
         │     │                 │                    │            │
-        │     │───────[identity-free token]────────▶│            │
+        │     │───────[identity-free token] ────────▶│            │
         │     │                                      │            │
         │     │                              ✓ Valid signature    │
         │     │                              ✓ No app identity    │
-        │     │                              ! Metadata remains  │
+        │     │                                                   │
         │                                                         │
         └─────────────────────────────────────────────────────────┘
-
-Token boundary: The issuer evaluates a blinded request and the verifier validates the finalized token.
-Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or hosting logs, and collusion can still enable correlation.</pre>
+</pre>
             </div>
+
+            <p>
+                Freebird reduces linkability at the token layer; network, device, and application metadata remain deployment responsibilities.
+            </p>
 
             <ul class="solution-list">
                 <li>Prove token authorization without putting an identity in the token</li>
                 <li>Separate issuance records from redemption records at the token layer</li>
                 <li>Support one-time redemption with configured replay storage</li>
                 <li>Compose local admission controls before issuance</li>
-                <li>Prototype privacy-preserving access flows without claiming global anonymity</li>
             </ul>
         </section>
 
@@ -550,44 +548,44 @@ Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or
         </section>
 
         <section>
-            <h2>Prototype Use Cases</h2>
+            <h2>Private Access and Issuance Patterns</h2>
 
             <p>
-                Freebird is intended for local experiments and low-stakes prototypes. The examples below mark areas for evaluation; they do not establish production suitability or guarantees.
+                Freebird is built for evaluation and low-stakes deployments. These patterns show how its issuer, verifier, tokens, and admission controls can fit into real products.
             </p>
 
             <div class="use-cases">
                 <div class="use-case">
-                    <strong>🏛️ Municipal Feedback</strong>
-                    Prototype an anonymous feedback flow; operators must still evaluate network and application metadata.
+                    <strong>📝 Privacy-Preserving Feedback</strong>
+                    Collect feedback or survey responses with verifiable tokens and configurable replay protection.
                 </div>
                 <div class="use-case">
-                    <strong>🏥 STI Testing</strong>
-                    Research concept only; do not use for clinical eligibility or sensitive healthcare decisions.
+                    <strong>🤝 Token-Gated Communities</strong>
+                    Let a verifier admit token holders while issuance is gated by invitations, passkeys, proof of work, or rate limits.
                 </div>
                 <div class="use-case">
-                    <strong>🗳️ Voting research</strong>
-                    Research concept only; Freebird does not prove unique humans or provide an election system.
+                    <strong>📚 Library &amp; Community Passes</strong>
+                    Issue limited or time-bound passes for library collections, community spaces, and shared resources.
                 </div>
                 <div class="use-case">
-                    <strong>📚 Library Access</strong>
-                    Prototype token-gated access while keeping library and network logging policy explicit.
+                    <strong>📶 Public Wi-Fi Portals</strong>
+                    Use verifiable, rate-limited access tokens to support captive-portal and public network flows.
                 </div>
                 <div class="use-case">
-                    <strong>🍽️ Food Banks</strong>
-                    Explore low-stakes eligibility prototypes; admission and operational records remain in scope.
+                    <strong>🎟️ Limited-Distribution Access</strong>
+                    Distribute a controlled quantity of aid or access tokens for bounded programs and resource releases.
                 </div>
                 <div class="use-case">
-                    <strong>📱 Public WiFi</strong>
-                    Prototype rate-limited access; IP and network metadata may still be visible to operators.
+                    <strong>🔐 Passkey-Gated Issuance</strong>
+                    Require WebAuthn or hardware-backed credentials before issuing tokens for protected resources.
                 </div>
                 <div class="use-case">
-                    <strong>🏫 School Lunch</strong>
-                    Research concept only; do not treat a token as proof of eligibility or identity privacy.
+                    <strong>🌐 Social-Trust Onboarding</strong>
+                    Use short-lived attestations from a Social Graph Attester to guide trusted community onboarding.
                 </div>
                 <div class="use-case">
-                    <strong>🚨 Crisis Hotlines</strong>
-                    Research concept only; high-stakes and safety-critical deployments need separate review.
+                    <strong>🧪 Developer Evaluation Testbed</strong>
+                    Explore blind issuance, token verification, replay handling, and privacy-focused access flows with the SDK.
                 </div>
             </div>
 
@@ -622,7 +620,7 @@ Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or
 
             <h3>Social Graph Attestation</h3>
             <p>
-                A separate Social Graph Attester service evaluates signed trust edges (Clout-style) and issues short-lived attestations proving a user stands within a trusted social graph, without revealing which node they are. The issuer verifies the attester's Ed25519 signature, policy, expiry, and eligibility level; the underlying graph stays with the attester.
+                A separate Social Graph Attester service evaluates signed trust edges (compatible with <a href="https://cloutsocial.net">Clout</a> social graphs) and issues short-lived attestations proving a user stands within a trusted social graph, without revealing which node they are. The issuer verifies the attester's Ed25519 signature, policy, expiry, and eligibility level; the underlying graph stays with the attester.
             </p>
 
             <h3>Progressive Trust</h3>
@@ -654,24 +652,24 @@ Outside this boundary: IP, timing, User-Agent, application identifiers, proxy or
 ┌─────────────────────────────────────────────────────────────────────┐
 │                         Freebird System                             │
 │                                                                     │
-│   ┌──────────────┐  ┌──────────────┐  ┌────────────┐  ┌─────────┐  │
-│   │    Issuer    │  │   Verifier   │  │   Redis     │  │ Attester│  │
-│   │   (Rust)     │  │   (Rust)     │  │  (State)    │  │ (Rust)  │  │
-│   │              │  │              │  │            │  │ optional│  │
-│   │ - VOPRF eval │  │ - Token auth │  │ - Nulls    │  │ - Trust │  │
-│   │ - Blind RSA  │  │ - Multi-     │  │ - Invites  │  │   graph │  │
-│   │ - Sybil gates│  │   issuer     │  │ - WebAuthn │  │ - Scoring│ │
-│   │ - Key mgmt   │  │   federation │  │            │  │ - JWKS  │  │
-│   └──────────────┘  └──────────────┘  └────────────┘  └─────────┘  │
-│          │                  │                 │              │      │
-│          └──────────────────┴─────────────────┘              │      │
-│                             │                                 │      │
-│                    ┌────────▼────────┐                        │      │
-│                    │   TypeScript    │◀───────────────────────┘      │
-│                    │      SDK        │                               │
-│                    │                 │                               │
-│                    │ Browser/Node.js │                               │
-│                    └─────────────────┘                               │
+│   ┌──────────────┐  ┌──────────────┐  ┌────────────┐  ┌─────────┐   │
+│   │    Issuer    │  │   Verifier   │  │   Redis    │  │ Attester│   │
+│   │   (Rust)     │  │   (Rust)     │  │  (State)   │  │ (Rust)  │   │
+│   │              │  │              │  │            │  │ optional│   │
+│   │ - VOPRF eval │  │ - Token auth │  │ - Nulls    │  │ - Trust │   │
+│   │ - Blind RSA  │  │ - Multi-     │  │ - Invites  │  │   graph │   │
+│   │ - Sybil gates│  │   issuer     │  │ - WebAuthn │  │ -Scoring│   │
+│   │ - Key mgmt   │  │   federation │  │            │  │ - JWKS  │   │
+│   └──────────────┘  └──────────────┘  └────────────┘  └─────────┘   │
+│          │                  │                 │               │     │
+│          └──────────────────┴─────────────────┘               │     │
+│                             │                                 │     │
+│                    ┌────────▼────────┐                        │     │
+│                    │   TypeScript    │◀───────────────────────┘     │
+│                    │      SDK        │                              │
+│                    │                 │                              │
+│                    │ Browser/Node.js │                              │
+│                    └─────────────────┘                              │
 └─────────────────────────────────────────────────────────────────────┘</pre>
 
             <table>
