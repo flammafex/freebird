@@ -33,7 +33,7 @@ pub mod main_state {
         pub invitation_system: Option<Arc<InvitationSystem>>,
         pub public_issuer: Option<Arc<PublicTokenIssuer>>,
         pub exchange_engine: Option<Arc<crate::exchange::ExchangeEngine>>,
-        pub exchange_metadata: Option<freebird_common::api::ExchangeDiscoveryInfo>,
+        pub exchange_metadata: Option<freebird_common::api::ExchangeDiscoveryV2>,
         /// Duration of each epoch in seconds (default: 86400 = 1 day)
         pub epoch_duration_sec: u64,
         /// Number of previous epochs to accept (for graceful rotation)

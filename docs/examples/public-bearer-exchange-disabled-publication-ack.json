@@ -1,0 +1,12 @@
+{
+  "version": "freebird/exchange-disabled-publication-ack/v1",
+  "issuer_id": "issuer:docker:v4",
+  "graph_id": "e7ac9a7b24d4fdab6ba77b0c5d7fca19b821fbb981de45de7a7dda0c8615efa7",
+  "disabled_transition_ids": [
+    "5e64111531d69f7b7e5647040a1dab95b7638a921245fe1c3ec5a883673e6e74",
+    "3546d1e4e95275bdd11b90d9c90e164386f70177beb739d1e9499abf2dab99de"
+  ],
+  "acknowledged_admission_state": "disabled",
+  "operator": "replace-with-accountable-operator-id",
+  "acknowledged_at_unix": 1700000000
+}

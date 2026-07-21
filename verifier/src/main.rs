@@ -666,7 +666,7 @@ async fn verify(
     let version = decode_token_version(&req.token_b64)?;
     ensure_token_family_enabled(version, &st.accepted_token_families)?;
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    let (spend_key, ttl) = match version {
+    let (spend_key, valid_until) = match version {
         freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 => {
             info!("Starting V4 token verification");
             let issuers = st.issuers.read().await;
@@ -690,10 +690,7 @@ async fn verify(
                 error!(error = ?e, "failed to derive V5 nullifier");
                 (StatusCode::BAD_REQUEST, "verification failed".to_string())
             })?;
-            (
-                v5_spend_key(&null_key),
-                Some(ttl_until(key.valid_until, now)),
-            )
+            (v5_spend_key(&null_key), Some(key.valid_until))
         }
         _ => {
             return Err((
@@ -704,10 +701,12 @@ async fn verify(
     };
 
     debug!("Checking replay for token");
-    let spent = st.store.mark_spent(&spend_key, ttl).await.map_err(|e| {
-        error!("store error while recording token spend: {e}");
-        (StatusCode::INTERNAL_SERVER_ERROR, "store error".into())
-    })?;
+    let spent = record_spend(st.store.as_ref(), &spend_key, valid_until)
+        .await
+        .map_err(|e| {
+            error!("store error while recording token spend: {e}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "store error".into())
+        })?;
 
     if !spent {
         warn!("replay detected (token already used)");
@@ -798,8 +797,15 @@ const MAX_BATCH_SIZE: usize = 10_000;
 /// Minimum batch size for parallel processing
 const MIN_PARALLEL_BATCH_SIZE: usize = 10;
 
-fn ttl_until(valid_until: i64, now: i64) -> Duration {
-    Duration::from_secs(valid_until.saturating_sub(now).max(1) as u64)
+async fn record_spend(
+    store: &dyn SpendStore,
+    spend_key: &str,
+    valid_until: Option<i64>,
+) -> anyhow::Result<bool> {
+    match valid_until {
+        Some(valid_until) => store.mark_spent_through(spend_key, valid_until).await,
+        None => store.mark_spent(spend_key, None).await,
+    }
 }
 
 fn compute_throughput(successful: usize, total_time_ms: u64) -> f64 {
@@ -862,7 +868,7 @@ async fn batch_verify(
             }
         };
 
-        let (spend_key, ttl) = match version {
+        let (spend_key, valid_until) = match version {
             freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 => {
                 let parsed = match verify_v4_token(
                     &token_req.token_b64,
@@ -913,10 +919,7 @@ async fn batch_verify(
                         };
                     }
                 };
-                (
-                    v5_spend_key(&null_key),
-                    Some(ttl_until(key.valid_until, now)),
-                )
+                (v5_spend_key(&null_key), Some(key.valid_until))
             }
             _ => {
                 return VerifyResult::Error {
@@ -926,7 +929,8 @@ async fn batch_verify(
             }
         };
 
-        let spent = runtime_handle.block_on(async { st.store.mark_spent(&spend_key, ttl).await });
+        let spent = runtime_handle
+            .block_on(async { record_spend(st.store.as_ref(), &spend_key, valid_until).await });
 
         match spent {
             Ok(true) => VerifyResult::Success { verified_at: now },
@@ -1040,9 +1044,42 @@ async fn shutdown_signal() {
 mod tests {
     use super::{
         compute_throughput, ensure_token_family_enabled, family_enabled, in_memory_replay_allowed,
-        parse_accepted_token_families, parse_in_memory_replay_store, select_store_backend,
+        parse_accepted_token_families, parse_in_memory_replay_store, record_spend,
+        select_store_backend,
     };
     use freebird_verifier::readiness::TokenFamily;
+    use freebird_verifier::store::SpendStore;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct RecordingStore {
+        calls: Mutex<Vec<(String, Option<i64>)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SpendStore for RecordingStore {
+        async fn health_check(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn mark_spent(
+            &self,
+            key: &str,
+            ttl: Option<std::time::Duration>,
+        ) -> anyhow::Result<bool> {
+            assert!(ttl.is_none(), "V4 replay markers must remain non-expiring");
+            self.calls.lock().unwrap().push((key.to_string(), None));
+            Ok(true)
+        }
+
+        async fn mark_spent_through(&self, key: &str, valid_until: i64) -> anyhow::Result<bool> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((key.to_string(), Some(valid_until)));
+            Ok(true)
+        }
+    }
 
     #[test]
     fn test_compute_throughput_zero_time() {
@@ -1096,5 +1133,23 @@ mod tests {
             freebird_verifier::store::StoreBackend::InMemory
         ));
         assert!(select_store_backend(None, true, Some("production"), true).is_err());
+    }
+
+    #[tokio::test]
+    async fn single_and_batch_writes_share_v5_absolute_expiry_and_preserve_v4() {
+        let store = RecordingStore::default();
+
+        assert!(record_spend(&store, "single-v5", Some(123)).await.unwrap());
+        assert!(record_spend(&store, "batch-v5", Some(123)).await.unwrap());
+        assert!(record_spend(&store, "v4", None).await.unwrap());
+
+        assert_eq!(
+            *store.calls.lock().unwrap(),
+            vec![
+                ("single-v5".to_string(), Some(123)),
+                ("batch-v5".to_string(), Some(123)),
+                ("v4".to_string(), None),
+            ]
+        );
     }
 }

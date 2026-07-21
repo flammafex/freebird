@@ -1,6 +1,6 @@
 [package]
 name = "freebird-common"
-version = "0.7.5"
+version = "0.8.0"
 edition = "2021"
 description = "Common utilities and shared types for the Freebird privacy-preserving authentication system"
 license = "MIT OR Apache-2.0"
@@ -26,7 +26,7 @@ base64ct = { version = "1.6", features = ["alloc"] }
 sha2 = "0.10"
 hex = "0.4"
 
-freebird-crypto = { version = "0.7.5", path = "../crypto" }
+freebird-crypto = { version = "0.8.0", path = "../crypto" }
 
 # Metrics
 prometheus = "0.14"

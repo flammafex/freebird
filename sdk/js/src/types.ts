@@ -65,10 +65,15 @@ export interface ExchangeRequestOutput {
   blinded_value: string;
 }
 
-/** Exact JSON body accepted by POST /v1/public/exchange. */
+/** Exact JSON body accepted by POST /v2/public/exchange. */
 export interface ExchangeRequest {
-  profile: string;
-  rule_id: string;
+  version: 2;
+  /** Public, non-secret 16-byte operation identifier (canonical base64url). */
+  public_operation_id: string;
+  graph_id: string;
+  transition_id: string;
+  source_keyset_id: string;
+  target_keyset_id: string;
   sources: ExchangeRequestSource[];
   outputs: ExchangeRequestOutput[];
 }
@@ -81,16 +86,22 @@ export interface ExchangeResultOutput {
 }
 
 export interface ExchangeResult {
-  operation_id: string;
-  profile: string;
+  version: 2;
+  public_operation_id: string;
+  graph_id: string;
+  transition_id: string;
+  source_keyset_id: string;
   target_keyset_id: string;
   outputs: ExchangeResultOutput[];
   result_digest: string;
 }
 
 export interface ExchangeReceipt {
-  operation_id: string;
-  profile: string;
+  version: 2;
+  public_operation_id: string;
+  graph_id: string;
+  transition_id: string;
+  source_keyset_id: string;
   target_keyset_id: string;
   result_digest: string;
   created_at: number;
@@ -122,35 +133,67 @@ export interface ExchangeTargetKeysetInfo {
 
 export interface ExchangeDescriptorInfo {
   descriptor_id: string;
-  keyset_id: string;
-  purpose: 'exchange_source' | 'exchange_target';
   profile_id: string;
-  role: 'source' | 'target';
   issuer_id: string;
-  class: string;
   token_key_id: string;
   pubkey_spki_b64: string;
   suite: string;
   valid_from: number;
   valid_until: number;
-  max_quantity: number;
   audience?: string;
 }
 
-export interface ExchangeDiscoveryMetadata {
-  profile_id: string;
-  target_keysets: ExchangeTargetKeysetInfo[];
+export interface ExchangeTransitionSlotInfo {
+  descriptor_id: string;
+  slot_id: string;
+  class: string;
+  quantity: number;
+}
+
+export type ExchangeAdmissionState = 'accepting_new' | 'recovery_only' | 'disabled';
+
+export interface ExchangeTransitionInfo {
+  transition_id: string;
+  source_keyset_id: string;
+  target_keyset_id: string;
+  source_slots: ExchangeTransitionSlotInfo[];
+  output_slots: ExchangeTransitionSlotInfo[];
+  budget_id: string;
+  budget_limit: number;
+  admission_state: ExchangeAdmissionState;
+}
+
+export interface ExchangeGraphInfo {
+  profile_id: 'freebird/public-bearer-exchange/v2';
+  graph_id: string;
   descriptors: ExchangeDescriptorInfo[];
-  receipt_keys: ExchangeReceiptKeyInfo[];
+  keysets: ExchangeTargetKeysetInfo[];
+  transitions: ExchangeTransitionInfo[];
+}
+
+/** All-or-nothing V2 exchange trust container from /.well-known/keys. */
+export interface ExchangeDiscoveryMetadata {
+  active_graph: ExchangeGraphInfo;
+  retained_graphs: ExchangeGraphInfo[];
+  active_receipt_key: ExchangeReceiptKeyInfo;
+  retained_receipt_keys: ExchangeReceiptKeyInfo[];
+}
+
+export interface ExchangeTransitionSelection {
+  graph: ExchangeGraphInfo;
+  transition: ExchangeTransitionInfo;
 }
 
 export type ExchangeErrorCode =
-  | 'invalid_idempotency_key'
+  | 'invalid_status_capability'
+  | 'invalid_public_operation_id'
+  | 'exchange_request_too_large'
   | 'exchange_unavailable'
   | 'invalid_exchange_request'
   | 'operation_conflict'
   | 'invalid_exchange'
-  | 'unknown_operation';
+  | 'unknown_operation'
+  | 'status_unauthorized';
 
 export interface ExchangePendingResponse {
   error: 'exchange_retryable';
@@ -186,8 +229,17 @@ export type ExchangeErrorOutcome = ExchangeHttpOutcome &
         kind: 'error';
         httpStatus: 400;
         response: {
-          error: 'invalid_idempotency_key' | 'invalid_exchange_request' | 'invalid_exchange';
+          error:
+            | 'invalid_status_capability'
+            | 'invalid_public_operation_id'
+            | 'invalid_exchange_request'
+            | 'invalid_exchange';
         };
+      }
+    | {
+        kind: 'error';
+        httpStatus: 413;
+        response: { error: 'exchange_request_too_large' };
       }
     | {
         kind: 'error';

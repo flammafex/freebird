@@ -10,6 +10,21 @@ use std::fmt;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
+pub(crate) const EXCHANGE_DISABLED_PUBLICATION_ACK_VERSION: &str =
+    "freebird/exchange-disabled-publication-ack/v1";
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExchangeDisabledPublicationAcknowledgementV1 {
+    pub version: String,
+    pub issuer_id: String,
+    pub graph_id: String,
+    pub disabled_transition_ids: Vec<String>,
+    pub acknowledged_admission_state: String,
+    pub operator: String,
+    pub acknowledged_at_unix: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct Config {
     pub issuer_id: String,
@@ -211,19 +226,29 @@ impl Config {
 #[derive(Clone, Debug)]
 pub struct ExchangeConfig {
     pub enabled: bool,
-    pub profile_path: PathBuf,
-    pub retained_profile_paths: Vec<PathBuf>,
-    pub receipt_key_path: PathBuf,
-    pub retained_receipt_key_paths: Vec<PathBuf>,
+    pub active_graph_path: PathBuf,
+    pub retained_graph_paths: Vec<PathBuf>,
     pub public_history_path: Option<PathBuf>,
+    pub disabled_publication_ack_paths: Vec<PathBuf>,
+    pub active_receipt_key_path: PathBuf,
+    pub active_receipt_metadata_path: PathBuf,
+    pub retained_receipt_key_paths: Vec<PathBuf>,
+    pub retained_receipt_metadata_paths: Vec<PathBuf>,
     pub redis_url: Option<String>,
     pub receipt_lifetime_secs: u64,
     pub request_body_limit: usize,
     pub request_timeout_secs: u64,
 }
 
+pub struct LoadedExchangeConfigV2 {
+    pub active_graph: crate::exchange::profiles::ExchangeProfileV2,
+    pub retained_graphs: Vec<crate::exchange::profiles::ExchangeProfileV2>,
+    pub receipt_keys: crate::exchange::ReceiptKeyRing,
+    pub public_history: Option<crate::exchange::history::ExchangePublicHistoryV2>,
+}
+
 impl ExchangeConfig {
-    fn from_env() -> Result<Self> {
+    pub fn from_env() -> Result<Self> {
         let enabled = env_bool("PUBLIC_BEARER_EXCHANGE_ENABLE");
         let comma_paths = |name: &str| -> Result<Vec<PathBuf>> {
             let Some(value) = env::var(name).ok() else {
@@ -243,23 +268,42 @@ impl ExchangeConfig {
                 })
                 .collect()
         };
+        let active_graph_path = env::var("PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH")
+            .or_else(|_| env::var("PUBLIC_BEARER_EXCHANGE_PROFILE_PATH"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| "public_bearer_exchange_graph_v2.json".into());
+        let retained_graph_paths =
+            if env::var("PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS").is_ok() {
+                comma_paths("PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS")?
+            } else {
+                comma_paths("PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS")?
+            };
         let config = Self {
             enabled,
-            profile_path: env::var("PUBLIC_BEARER_EXCHANGE_PROFILE_PATH")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| "public_bearer_exchange_profile.json".into()),
-            retained_profile_paths: comma_paths("PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS")?,
-            receipt_key_path: env::var("PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH")
-                .or_else(|_| env::var("PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH"))
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| "public_bearer_exchange_receipt.key".into()),
-            retained_receipt_key_paths: comma_paths(
-                "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
-            )?,
+            active_graph_path,
+            retained_graph_paths,
             public_history_path: env::var("PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH")
                 .ok()
                 .filter(|path| !path.trim().is_empty())
                 .map(PathBuf::from),
+            disabled_publication_ack_paths: comma_paths(
+                "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
+            )?,
+            active_receipt_key_path: env::var("PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH")
+                .or_else(|_| env::var("PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH"))
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| "public_bearer_exchange_receipt.key".into()),
+            active_receipt_metadata_path: env::var(
+                "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH",
+            )
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| "public_bearer_exchange_receipt_metadata.json".into()),
+            retained_receipt_key_paths: comma_paths(
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
+            )?,
+            retained_receipt_metadata_paths: comma_paths(
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS",
+            )?,
             redis_url: env::var("PUBLIC_BEARER_EXCHANGE_REDIS_URL").ok(),
             receipt_lifetime_secs: env::var("PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME")
                 .ok()
@@ -278,10 +322,16 @@ impl ExchangeConfig {
                 .unwrap_or(30),
         };
         if config.enabled {
-            if config.profile_path.as_os_str().is_empty()
-                || config.receipt_key_path.as_os_str().is_empty()
+            if config.active_graph_path.as_os_str().is_empty()
+                || config.active_receipt_key_path.as_os_str().is_empty()
+                || config.active_receipt_metadata_path.as_os_str().is_empty()
             {
                 anyhow::bail!("exchange paths must not be empty")
+            }
+            if config.retained_receipt_key_paths.len()
+                != config.retained_receipt_metadata_paths.len()
+            {
+                anyhow::bail!("retained exchange receipt key and metadata path counts must match")
             }
             if config.redis_url.as_deref().is_none_or(str::is_empty) {
                 anyhow::bail!("PUBLIC_BEARER_EXCHANGE_REDIS_URL is required")
@@ -293,64 +343,159 @@ impl ExchangeConfig {
             {
                 anyhow::bail!("exchange lifetime/body/timeout bounds are invalid")
             }
-            // Loading is deliberately opt-in and does not create keys at config parse time.
-            let legacy_spki = if env_bool_default("PUBLIC_BEARER_ENABLE", true) {
-                let legacy_path = env::var("PUBLIC_BEARER_SK_PATH")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|_| "public_bearer_sk.der".into());
-                if legacy_path.exists() {
-                    use freebird_crypto::provider::software::SoftwareBlindRsaProvider;
-                    use freebird_crypto::provider::BlindRsaProvider;
-                    let der = zeroize::Zeroizing::new(
-                        std::fs::read(&legacy_path)
-                            .with_context(|| format!("read {}", legacy_path.display()))?,
-                    );
-                    Some(
-                        SoftwareBlindRsaProvider::from_der(&der)?
-                            .public_key_spki()
-                            .to_vec(),
-                    )
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            let profile = crate::exchange::profiles::ExchangeProfile::load(
-                &config.profile_path,
-                legacy_spki.as_deref(),
-            )
-            .with_context(|| "invalid public bearer exchange profile")?;
-            profile
-                .validate_target_keys()
-                .context("invalid exchange target key material")?;
-            let issuer_id = env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".into());
-            profile.validate_issuer_id(&issuer_id)?;
-            for path in &config.retained_profile_paths {
-                let retained =
-                    crate::exchange::profiles::ExchangeProfile::load(path, legacy_spki.as_deref())
-                        .with_context(|| {
-                            format!("invalid retained exchange profile {}", path.display())
-                        })?;
-                retained.validate_target_keys().with_context(|| {
-                    format!("invalid retained target key material {}", path.display())
-                })?;
-                retained.validate_issuer_id(&issuer_id)?;
-            }
-            crate::exchange::receipt::validate_receipt_key_paths(
-                &config.receipt_key_path,
-                &config.retained_receipt_key_paths,
-            )?;
-            if let Some(path) = &config.public_history_path {
-                crate::exchange::history::load_public_history(
-                    path,
-                    &issuer_id,
-                    legacy_spki.as_deref(),
-                )?;
-            }
         }
         Ok(config)
     }
+
+    pub fn load_v2(
+        &self,
+        issuer_id: &str,
+        direct_v5_spki: Option<&[u8]>,
+    ) -> Result<LoadedExchangeConfigV2> {
+        use crate::exchange::profiles::{
+            validate_exchange_profile_set_v2, ExchangeProfileV2, ExchangeProfileValidationModeV2,
+        };
+
+        let active_graph = ExchangeProfileV2::load(
+            &self.active_graph_path,
+            ExchangeProfileValidationModeV2::Active,
+            issuer_id,
+            direct_v5_spki,
+        )
+        .context("invalid active V2 exchange graph")?;
+        let retained_graphs = self
+            .retained_graph_paths
+            .iter()
+            .map(|path| {
+                ExchangeProfileV2::load(
+                    path,
+                    ExchangeProfileValidationModeV2::Retained,
+                    issuer_id,
+                    direct_v5_spki,
+                )
+                .with_context(|| format!("invalid retained V2 exchange graph {}", path.display()))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        validate_exchange_profile_set_v2(
+            &active_graph,
+            &retained_graphs,
+            issuer_id,
+            direct_v5_spki,
+        )
+        .context("invalid active/retained V2 exchange graph set")?;
+
+        let load_metadata =
+            |path: &PathBuf| -> Result<freebird_common::api::ExchangeReceiptKeyInfo> {
+                serde_json::from_slice(
+                    &std::fs::read(path)
+                        .with_context(|| format!("read receipt metadata {}", path.display()))?,
+                )
+                .with_context(|| format!("parse receipt metadata {}", path.display()))
+            };
+        let active_receipt = crate::exchange::ReceiptKeyConfig {
+            metadata: load_metadata(&self.active_receipt_metadata_path)?,
+            private_key_path: self.active_receipt_key_path.clone(),
+        };
+        let retained_receipts = self
+            .retained_receipt_key_paths
+            .iter()
+            .zip(&self.retained_receipt_metadata_paths)
+            .map(|(key, metadata)| {
+                Ok(crate::exchange::ReceiptKeyConfig {
+                    metadata: load_metadata(metadata)?,
+                    private_key_path: key.clone(),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let receipt_keys =
+            crate::exchange::ReceiptKeyRing::load_v2(active_receipt, &retained_receipts)
+                .context("invalid active/retained V2 exchange receipt signers")?;
+        let public_history = self
+            .public_history_path
+            .as_deref()
+            .map(crate::exchange::history::load_public_history_v2)
+            .transpose()
+            .context("invalid V2 exchange public history")?;
+
+        Ok(LoadedExchangeConfigV2 {
+            active_graph,
+            retained_graphs,
+            receipt_keys,
+            public_history,
+        })
+    }
+
+    pub async fn validate_redis_durability(&self) -> Result<()> {
+        let store = crate::exchange::store::ExchangeStore::new(
+            self.redis_url
+                .as_deref()
+                .context("exchange Redis URL missing")?,
+        )?;
+        store.validate_durable_standalone().await
+    }
+
+    pub(crate) fn load_disabled_publication_acknowledgements(
+        &self,
+    ) -> Result<Vec<ExchangeDisabledPublicationAcknowledgementV1>> {
+        load_disabled_publication_acknowledgements(&self.disabled_publication_ack_paths)
+    }
+}
+
+pub(crate) fn load_disabled_publication_acknowledgements(
+    paths: &[PathBuf],
+) -> Result<Vec<ExchangeDisabledPublicationAcknowledgementV1>> {
+    paths
+        .iter()
+        .map(|path| {
+            let acknowledgement: ExchangeDisabledPublicationAcknowledgementV1 =
+                serde_json::from_slice(&std::fs::read(path).with_context(|| {
+                    format!(
+                        "read disabled-publication acknowledgement {}",
+                        path.display()
+                    )
+                })?)
+                .with_context(|| {
+                    format!(
+                        "parse disabled-publication acknowledgement {}",
+                        path.display()
+                    )
+                })?;
+            validate_disabled_publication_acknowledgement(&acknowledgement)
+                .with_context(|| path.display().to_string())?;
+            Ok(acknowledgement)
+        })
+        .collect()
+}
+
+fn validate_disabled_publication_acknowledgement(
+    acknowledgement: &ExchangeDisabledPublicationAcknowledgementV1,
+) -> Result<()> {
+    use std::collections::HashSet;
+
+    let canonical_id = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    };
+    let mut transitions = HashSet::new();
+    if acknowledgement.version != EXCHANGE_DISABLED_PUBLICATION_ACK_VERSION
+        || acknowledgement.issuer_id.is_empty()
+        || acknowledgement.issuer_id.len() > 256
+        || !acknowledgement.issuer_id.is_ascii()
+        || !canonical_id(&acknowledgement.graph_id)
+        || acknowledgement.disabled_transition_ids.is_empty()
+        || acknowledgement
+            .disabled_transition_ids
+            .iter()
+            .any(|id| !canonical_id(id) || !transitions.insert(id))
+        || acknowledgement.acknowledged_admission_state != "disabled"
+        || acknowledgement.operator.trim().is_empty()
+        || acknowledgement.acknowledged_at_unix == 0
+    {
+        anyhow::bail!("invalid disabled-publication acknowledgement")
+    }
+    Ok(())
 }
 
 impl KeyConfig {
@@ -655,12 +800,17 @@ mod tests {
                 "HSM_PIN",
                 "HSM_KEY_LABEL",
                 "PUBLIC_BEARER_EXCHANGE_ENABLE",
+                "PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH",
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
                 "PUBLIC_BEARER_EXCHANGE_PROFILE_PATH",
                 "PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS",
                 "PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH",
                 "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
+                "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH",
                 "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS",
                 "PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH",
+                "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
                 "PUBLIC_BEARER_EXCHANGE_REDIS_URL",
                 "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
                 "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
@@ -735,13 +885,18 @@ mod tests {
     fn enabled_exchange_requires_a_valid_profile() {
         let _env = EnvGuard::new();
         env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
+        env::set_var("PUBLIC_BEARER_EXCHANGE_REDIS_URL", "redis://127.0.0.1/");
         env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_PROFILE_PATH",
+            "PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH",
             "/definitely/missing/exchange-profile.json",
         );
-        assert!(Config::from_env().is_err());
+        let config = Config::from_env().expect("environment shape should parse");
+        assert!(config
+            .exchange_config
+            .load_v2(&config.issuer_id, None)
+            .is_err());
         env::remove_var("PUBLIC_BEARER_EXCHANGE_ENABLE");
-        env::remove_var("PUBLIC_BEARER_EXCHANGE_PROFILE_PATH");
+        env::remove_var("PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH");
     }
 
     #[test]
@@ -758,13 +913,77 @@ mod tests {
             "/keys/old-1.key, /keys/old-2.key",
         );
         env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS",
+            "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS",
+            "/keys/old-1.json, /keys/old-2.json",
+        );
+        env::set_var(
+            "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
             "/profiles/old-1.json,/profiles/old-2.json",
         );
         let config = ExchangeConfig::from_env().unwrap();
-        assert_eq!(config.receipt_key_path, PathBuf::from("/keys/active.key"));
+        assert_eq!(
+            config.active_receipt_key_path,
+            PathBuf::from("/keys/active.key")
+        );
         assert_eq!(config.retained_receipt_key_paths.len(), 2);
-        assert_eq!(config.retained_profile_paths.len(), 2);
+        assert_eq!(config.retained_receipt_metadata_paths.len(), 2);
+        assert_eq!(config.retained_graph_paths.len(), 2);
+    }
+
+    #[test]
+    #[serial]
+    fn exchange_config_loads_strict_durable_publication_acknowledgement() {
+        let _env = EnvGuard::new();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("disabled-publication.json");
+        let acknowledgement = ExchangeDisabledPublicationAcknowledgementV1 {
+            version: EXCHANGE_DISABLED_PUBLICATION_ACK_VERSION.into(),
+            issuer_id: "issuer:test".into(),
+            graph_id: "a".repeat(64),
+            disabled_transition_ids: vec!["b".repeat(64)],
+            acknowledged_admission_state: "disabled".into(),
+            operator: "operator@example.test".into(),
+            acknowledged_at_unix: 1,
+        };
+        std::fs::write(&path, serde_json::to_vec(&acknowledgement).unwrap()).unwrap();
+        env::set_var(
+            "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
+            &path,
+        );
+
+        let config = ExchangeConfig::from_env().unwrap();
+        assert_eq!(
+            config.load_disabled_publication_acknowledgements().unwrap(),
+            vec![acknowledgement.clone()]
+        );
+
+        let mut wrong_state = acknowledgement;
+        wrong_state.acknowledged_admission_state = "accepting_new".into();
+        std::fs::write(&path, serde_json::to_vec(&wrong_state).unwrap()).unwrap();
+        assert!(config.load_disabled_publication_acknowledgements().is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn enabled_v2_exchange_accepts_public_history_path_and_rejects_unpaired_private_receipts() {
+        let _env = EnvGuard::new();
+        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
+        env::set_var("PUBLIC_BEARER_EXCHANGE_REDIS_URL", "redis://127.0.0.1/");
+        env::set_var(
+            "PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH",
+            "/history/v2.json",
+        );
+        let config = ExchangeConfig::from_env().unwrap();
+        assert_eq!(
+            config.public_history_path,
+            Some(PathBuf::from("/history/v2.json"))
+        );
+        env::remove_var("PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH");
+        env::set_var(
+            "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
+            "/keys/retained.key",
+        );
+        assert!(ExchangeConfig::from_env().is_err());
     }
 
     #[test]

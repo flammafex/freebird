@@ -2,7 +2,7 @@
 use crate::multi_key_voprf::MultiKeyVoprfCore;
 use crate::AppStateWithSybil;
 use axum::{extract::State, Json};
-use freebird_common::api::{ExchangeDiscoveryInfo, KeyDiscoveryResp, PublicKeyInfo, VoprfKeyInfo};
+use freebird_common::api::{KeyDiscoveryResp, PublicKeyInfo, VoprfKeyInfo};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -13,8 +13,6 @@ pub struct WellKnown {
     voprf: VoprfInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     public: Option<PublicModeInfo>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    exchange: Option<ExchangeDiscoveryInfo>,
 }
 
 #[derive(Serialize)]
@@ -53,7 +51,6 @@ pub async fn well_known_handler(State((state, voprf)): State<SharedState>) -> Js
             .public_issuer
             .as_ref()
             .map(|issuer| public_mode_info(issuer.metadata())),
-        exchange: state.exchange_metadata.clone(),
     })
 }
 
@@ -96,5 +93,61 @@ fn public_mode_info(metadata: &PublicKeyInfo) -> PublicModeInfo {
         rfc9474_variant: metadata.rfc9474_variant.clone(),
         modulus_bits: metadata.modulus_bits,
         spend_policy: metadata.spend_policy.clone(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use freebird_common::api::{
+        ExchangeDiscoveryV2, ExchangeGraphDiscoveryV2, ExchangeReceiptKeyInfo,
+    };
+
+    #[tokio::test]
+    async fn key_discovery_publishes_only_the_configured_v2_exchange_container() {
+        let exchange = ExchangeDiscoveryV2 {
+            active_graph: ExchangeGraphDiscoveryV2 {
+                profile_id: freebird_common::exchange_api::EXCHANGE_PROFILE_V2.into(),
+                graph_id: "a".repeat(64),
+                descriptors: vec![],
+                keysets: vec![],
+                transitions: vec![],
+            },
+            retained_graphs: vec![],
+            active_receipt_key: ExchangeReceiptKeyInfo {
+                key_id: "b".repeat(64),
+                algorithm: "Ed25519".into(),
+                purpose: "exchange_receipt_active".into(),
+                public_key_b64: "AQ".into(),
+                valid_from: 1,
+                valid_until: 2,
+            },
+            retained_receipt_keys: vec![],
+        };
+        let state = Arc::new(crate::AppStateWithSybil {
+            issuer_id: "issuer:test".into(),
+            kid: "kid".into(),
+            pubkey_b64: "pubkey".into(),
+            require_tls: false,
+            behind_proxy: false,
+            sybil_checker: None,
+            invitation_system: None,
+            public_issuer: None,
+            exchange_engine: None,
+            exchange_metadata: Some(exchange.clone()),
+            epoch_duration_sec: 86_400,
+            epoch_retention: 2,
+            admin_api_key: None,
+        });
+        let voprf = Arc::new(
+            MultiKeyVoprfCore::new([7; 32], "pubkey".into(), "kid".into(), b"test").unwrap(),
+        );
+
+        let response = keys_handler(State((state, voprf))).await.0;
+        assert_eq!(response.exchange, Some(exchange));
+        assert!(response
+            .exchange
+            .as_ref()
+            .is_some_and(|exchange| exchange.active_graph.profile_id.ends_with("/v2")));
     }
 }

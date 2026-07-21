@@ -194,128 +194,185 @@ fn parse_progressive_trust_levels(levels: &[String]) -> Result<Vec<sybil_resista
     Ok(parsed)
 }
 
-pub(crate) fn exchange_discovery(
-    active: &crate::exchange::ExchangeProfile,
-    retained: &[crate::exchange::ExchangeProfile],
-    receipt_keys: Vec<freebird_common::api::ExchangeReceiptKeyInfo>,
-) -> freebird_common::api::ExchangeDiscoveryInfo {
-    let mut target_keysets = Vec::new();
-    let mut descriptors = Vec::new();
-    for profile in std::iter::once(active).chain(retained) {
-        if !target_keysets
+fn graph_discovery_v2(
+    graph: &crate::exchange::profiles::ExchangeProfileV2,
+) -> freebird_common::api::ExchangeGraphDiscoveryV2 {
+    use freebird_common::api::{
+        ExchangeAdmissionStateV2, ExchangeDescriptorDiscoveryV2, ExchangeKeysetDiscoveryV2,
+        ExchangeTransitionDiscoveryV2, ExchangeTransitionSlotDiscoveryV2,
+    };
+
+    let slots = |slots: &[crate::exchange::profiles::ExchangeTransitionSlotV2]| {
+        slots
             .iter()
-            .any(|keyset: &freebird_common::api::ExchangeTargetKeysetInfo| {
-                keyset.keyset_id == profile.target_keyset.id
+            .map(|slot| ExchangeTransitionSlotDiscoveryV2 {
+                descriptor_id: slot.descriptor_id.clone(),
+                slot_id: slot.slot_id.clone(),
+                class: slot.class.clone(),
+                quantity: slot.quantity,
             })
-        {
-            target_keysets.push(freebird_common::api::ExchangeTargetKeysetInfo {
-                keyset_id: profile.target_keyset.id.clone(),
-                descriptor_ids: profile
-                    .target_keyset
-                    .targets
+            .collect()
+    };
+    freebird_common::api::ExchangeGraphDiscoveryV2 {
+        profile_id: graph.profile_id.clone(),
+        graph_id: graph.graph_id.clone(),
+        descriptors: graph
+            .keysets
+            .iter()
+            .flat_map(|keyset| &keyset.keys)
+            .map(|key| ExchangeDescriptorDiscoveryV2 {
+                descriptor_id: key.descriptor.id.clone(),
+                profile_id: key.descriptor.profile_id.clone(),
+                issuer_id: key.descriptor.issuer_id.clone(),
+                token_key_id: key.descriptor.kid.clone(),
+                audience: key.descriptor.audience.clone(),
+                pubkey_spki_b64: key.descriptor.spki_b64.clone(),
+                suite: key.descriptor.suite.clone(),
+                valid_from: key.descriptor.valid_from,
+                valid_until: key.descriptor.valid_until,
+            })
+            .collect(),
+        keysets: graph
+            .keysets
+            .iter()
+            .map(|keyset| ExchangeKeysetDiscoveryV2 {
+                keyset_id: keyset.id.clone(),
+                descriptor_ids: keyset
+                    .keys
                     .iter()
-                    .map(|target| target.descriptor.id.clone())
+                    .map(|key| key.descriptor.id.clone())
                     .collect(),
-            });
-        }
-        for source in &profile.sources.descriptors {
-            if !descriptors
-                .iter()
-                .any(|existing: &freebird_common::api::ExchangeDescriptorInfo| {
-                    existing.descriptor_id == source.id && existing.purpose == "exchange_source"
-                })
-            {
-                descriptors.push(freebird_common::api::ExchangeDescriptorInfo {
-                    descriptor_id: source.id.clone(),
-                    keyset_id: source.kid.clone(),
-                    purpose: "exchange_source".into(),
-                    profile_id: source.profile_id.clone(),
-                    role: source.role.clone(),
-                    issuer_id: source.issuer_id.clone(),
-                    class: source.class.clone(),
-                    token_key_id: source.kid.clone(),
-                    pubkey_spki_b64: source.spki_b64.clone(),
-                    suite: source.suite.clone(),
-                    valid_from: source.valid_from,
-                    valid_until: source.valid_until,
-                    max_quantity: source.max_quantity,
-                    audience: source.audience.clone(),
-                });
-            }
-        }
-        for target in &profile.target_keyset.targets {
-            if !descriptors.iter().any(|existing| {
-                existing.descriptor_id == target.descriptor.id
-                    && existing.purpose == "exchange_target"
-            }) {
-                descriptors.push(freebird_common::api::ExchangeDescriptorInfo {
-                    descriptor_id: target.descriptor.id.clone(),
-                    keyset_id: profile.target_keyset.id.clone(),
-                    purpose: "exchange_target".into(),
-                    profile_id: target.descriptor.profile_id.clone(),
-                    role: target.descriptor.role.clone(),
-                    issuer_id: target.descriptor.issuer_id.clone(),
-                    class: target.descriptor.class.clone(),
-                    token_key_id: target.descriptor.kid.clone(),
-                    pubkey_spki_b64: target.descriptor.spki_b64.clone(),
-                    suite: target.descriptor.suite.clone(),
-                    valid_from: target.descriptor.valid_from,
-                    valid_until: target.descriptor.valid_until,
-                    max_quantity: target.descriptor.max_quantity,
-                    audience: target.descriptor.audience.clone(),
-                });
-            }
-        }
-    }
-    freebird_common::api::ExchangeDiscoveryInfo {
-        profile_id: active.profile_id.clone(),
-        target_keysets,
-        descriptors,
-        receipt_keys,
+            })
+            .collect(),
+        transitions: graph
+            .transitions
+            .iter()
+            .map(|transition| ExchangeTransitionDiscoveryV2 {
+                transition_id: transition.id.clone(),
+                source_keyset_id: transition.source_keyset_id.clone(),
+                target_keyset_id: transition.target_keyset_id.clone(),
+                source_slots: slots(&transition.sources),
+                output_slots: slots(&transition.outputs),
+                budget_id: transition.budget_id.clone(),
+                budget_limit: transition.budget_limit,
+                admission_state: match transition.admission_state {
+                    crate::exchange::profiles::ExchangeAdmissionStateV2::AcceptingNew => {
+                        ExchangeAdmissionStateV2::AcceptingNew
+                    }
+                    crate::exchange::profiles::ExchangeAdmissionStateV2::RecoveryOnly => {
+                        ExchangeAdmissionStateV2::RecoveryOnly
+                    }
+                    crate::exchange::profiles::ExchangeAdmissionStateV2::Disabled => {
+                        ExchangeAdmissionStateV2::Disabled
+                    }
+                },
+            })
+            .collect(),
     }
 }
 
-fn merge_public_history(
-    discovery: &mut freebird_common::api::ExchangeDiscoveryInfo,
-    history: &freebird_common::api::ExchangePublicHistory,
+pub fn exchange_discovery_v2(
+    active: &crate::exchange::profiles::ExchangeProfileV2,
+    retained: &[crate::exchange::profiles::ExchangeProfileV2],
+    receipt_keys: &[freebird_common::api::ExchangeReceiptKeyInfo],
+) -> Result<freebird_common::api::ExchangeDiscoveryV2> {
+    let active_receipt_key = receipt_keys
+        .iter()
+        .find(|key| key.purpose == "exchange_receipt_active")
+        .cloned()
+        .context("active V2 receipt discovery metadata is unavailable")?;
+    let retained_receipt_keys = receipt_keys
+        .iter()
+        .filter(|key| key.purpose == "exchange_receipt_retained")
+        .cloned()
+        .collect();
+    Ok(freebird_common::api::ExchangeDiscoveryV2 {
+        active_graph: graph_discovery_v2(active),
+        retained_graphs: retained.iter().map(graph_discovery_v2).collect(),
+        active_receipt_key,
+        retained_receipt_keys,
+    })
+}
+
+fn exchange_registry_entries_v2(
+    identities: &std::collections::BTreeMap<String, crate::exchange::history::GlobalV5KeyIdentity>,
+) -> Vec<crate::exchange::store::KeyRegistryEntry> {
+    identities
+        .values()
+        .map(|identity| crate::exchange::store::KeyRegistryEntry {
+            key_id: identity.key_id.clone(),
+            canonical_metadata: identity.canonical_bytes(),
+        })
+        .collect()
+}
+
+pub(crate) fn validate_disabled_publication_acknowledgements_v2(
+    issuer_id: &str,
+    discovery: &freebird_common::api::ExchangeDiscoveryV2,
+    acknowledgements: &[crate::config::ExchangeDisabledPublicationAcknowledgementV1],
 ) -> Result<()> {
-    for keyset in &history.target_keysets {
-        match discovery
-            .target_keysets
+    let graphs = std::iter::once(&discovery.active_graph)
+        .chain(&discovery.retained_graphs)
+        .collect::<Vec<_>>();
+    let mut acknowledged = std::collections::HashSet::new();
+    for acknowledgement in acknowledgements {
+        if acknowledgement.issuer_id != issuer_id {
+            bail!("disabled-publication acknowledgement issuer mismatch")
+        }
+        let graph = graphs
             .iter()
-            .find(|existing| existing.keyset_id == keyset.keyset_id)
-        {
-            Some(existing) if existing != keyset => {
-                bail!("public history conflicts with an active target keyset")
+            .find(|graph| graph.graph_id == acknowledgement.graph_id)
+            .context("disabled-publication acknowledgement graph mismatch")?;
+        for transition_id in &acknowledgement.disabled_transition_ids {
+            if !graph
+                .transitions
+                .iter()
+                .any(|transition| transition.transition_id == *transition_id)
+            {
+                bail!("disabled-publication acknowledgement transition mismatch")
             }
-            Some(_) => {}
-            None => discovery.target_keysets.push(keyset.clone()),
+            if !acknowledged.insert((graph.graph_id.as_str(), transition_id.as_str())) {
+                bail!("duplicate disabled-publication acknowledgement")
+            }
         }
     }
-    for descriptor in &history.target_descriptors {
-        match discovery
-            .descriptors
-            .iter()
-            .find(|existing| existing.descriptor_id == descriptor.descriptor_id)
-        {
-            Some(existing) if existing != descriptor => {
-                bail!("public history conflicts with an active exchange descriptor")
+    for graph in graphs {
+        for transition in &graph.transitions {
+            if transition.admission_state
+                == freebird_common::api::ExchangeAdmissionStateV2::AcceptingNew
+                && !acknowledged
+                    .contains(&(graph.graph_id.as_str(), transition.transition_id.as_str()))
+            {
+                bail!(
+                    "accepting V2 transition lacks an explicit disabled-publication acknowledgement for this graph"
+                )
             }
-            Some(_) => {}
-            None => discovery.descriptors.push(descriptor.clone()),
         }
     }
-    for key in &history.receipt_keys {
-        match discovery
-            .receipt_keys
+    Ok(())
+}
+
+async fn validate_pending_graph_references_v2(
+    store: &crate::exchange::store::ExchangeStore,
+    active: &crate::exchange::profiles::ExchangeProfileV2,
+    retained: &[crate::exchange::profiles::ExchangeProfileV2],
+) -> Result<()> {
+    for record in store.pending_records_v2().await? {
+        let graph = std::iter::once(active)
+            .chain(retained)
+            .find(|graph| graph.graph_id == record.graph_id)
+            .context("pending V2 exchange references an unavailable graph")?;
+        let transition = graph
+            .transitions
             .iter()
-            .find(|existing| existing.key_id == key.key_id)
-        {
-            Some(existing) if existing != key => {
-                bail!("public history conflicts with an active receipt key")
-            }
-            Some(_) => {}
-            None => discovery.receipt_keys.push(key.clone()),
+            .find(|transition| {
+                transition.id == record.transition_id
+                    && transition.source_keyset_id == record.source_keyset_id
+                    && transition.target_keyset_id == record.target_keyset_id
+            })
+            .context("pending V2 exchange references an unavailable transition")?;
+        if !transition.allows_recovery() {
+            bail!("disabled V2 exchange transition still has pending references")
         }
     }
     Ok(())
@@ -329,11 +386,11 @@ pub type PublicState = (
 pub fn exchange_router(body_limit: usize, timeout_secs: u64) -> Router<PublicState> {
     Router::new()
         .route(
-            "/v1/public/exchange",
+            "/v2/public/exchange",
             post(routes::public_exchange::post_exchange),
         )
         .route(
-            "/v1/public/exchange/status",
+            "/v2/public/exchange/status",
             get(routes::public_exchange::get_exchange_status),
         )
         .layer(TimeoutLayer::new(Duration::from_secs(timeout_secs)))
@@ -458,28 +515,20 @@ impl Application {
             );
         }
 
-        let (exchange_engine, exchange_metadata) = if config.exchange_config.enabled {
-            let legacy_spki = public_issuer
+        let (exchange_engine, exchange_metadata, exchange_readiness) = if config
+            .exchange_config
+            .enabled
+        {
+            let direct_v5_metadata = public_issuer.as_ref().map(|issuer| issuer.metadata());
+            let direct_v5_spki = direct_v5_metadata
                 .as_ref()
-                .map(|issuer| {
-                    base64ct::Base64UrlUnpadded::decode_vec(&issuer.metadata().pubkey_spki_b64)
-                })
+                .map(|metadata| base64ct::Base64UrlUnpadded::decode_vec(&metadata.pubkey_spki_b64))
                 .transpose()
-                .context("invalid legacy public bearer SPKI metadata")?;
-            let profile = crate::exchange::ExchangeProfile::load(
-                &config.exchange_config.profile_path,
-                legacy_spki.as_deref(),
-            )
-            .context("Failed to load exchange profile")?;
-            let mut retained = Vec::new();
-            for path in &config.exchange_config.retained_profile_paths {
-                retained.push(
-                    crate::exchange::ExchangeProfile::load(path, legacy_spki.as_deref())
-                        .with_context(|| {
-                            format!("Failed to load retained profile {}", path.display())
-                        })?,
-                );
-            }
+                .context("invalid authoritative direct V5 public key metadata")?;
+            let loaded = config
+                .exchange_config
+                .load_v2(&config.issuer_id, direct_v5_spki.as_deref())
+                .context("Failed to load V2 exchange graph and signer configuration")?;
             let store = crate::exchange::store::ExchangeStore::new(
                 config
                     .exchange_config
@@ -491,39 +540,74 @@ impl Application {
                 .validate_durable_standalone()
                 .await
                 .context("exchange Redis durability check failed")?;
-            let receipt_keys = crate::exchange::ReceiptKeyRing::load(
-                &config.exchange_config.receipt_key_path,
-                &config.exchange_config.retained_receipt_key_paths,
-            )?;
-            let mut metadata =
-                exchange_discovery(&profile, &retained, receipt_keys.discovery_metadata());
-            if let Some(path) = &config.exchange_config.public_history_path {
-                let history = crate::exchange::history::load_public_history(
-                    path,
-                    &config.issuer_id,
-                    legacy_spki.as_deref(),
-                )?;
-                merge_public_history(&mut metadata, &history)?;
-            }
-            freebird_common::api::validate_exchange_target_metadata(
-                &metadata.profile_id,
-                &config.issuer_id,
-                &metadata.target_keysets,
-                &metadata.descriptors,
+            validate_pending_graph_references_v2(
+                &store,
+                &loaded.active_graph,
+                &loaded.retained_graphs,
             )
-            .map_err(anyhow::Error::msg)?;
-            let engine = crate::exchange::ExchangeEngine::new(
-                profile,
-                retained,
-                store,
+            .await
+            .context("invalid pending V2 exchange graph references")?;
+            let mut metadata = exchange_discovery_v2(
+                &loaded.active_graph,
+                &loaded.retained_graphs,
+                &loaded.receipt_keys.discovery_metadata(),
+            )?;
+            if let Some(history) = loaded.public_history.clone() {
+                crate::exchange::history::merge_public_history_v2(&mut metadata, history)?;
+            }
+            freebird_common::api::validate_exchange_discovery_v2(&config.issuer_id, &metadata)
+                .map_err(anyhow::Error::msg)?;
+            let global_identities = crate::exchange::history::global_key_identities_v2(
+                &config.issuer_id,
+                direct_v5_metadata,
+                &metadata,
+            )?;
+            let registry_entries = exchange_registry_entries_v2(&global_identities);
+            match store.initialize_key_registry_v2(&registry_entries).await? {
+                crate::exchange::store::KeyRegistryOutcome::Initialized
+                | crate::exchange::store::KeyRegistryOutcome::Equal => {}
+                crate::exchange::store::KeyRegistryOutcome::Conflict
+                | crate::exchange::store::KeyRegistryOutcome::Missing => {
+                    bail!("V2 durable key registry conflicts with configured graph history")
+                }
+            }
+            let publication_acknowledgements = config
+                .exchange_config
+                .load_disabled_publication_acknowledgements()?;
+            validate_disabled_publication_acknowledgements_v2(
+                &config.issuer_id,
+                &metadata,
+                &publication_acknowledgements,
+            )?;
+            let source_valid_until = global_identities
+                .into_iter()
+                .map(|(key_id, identity)| (key_id, identity.longest_valid_until))
+                .collect();
+            let engine = crate::exchange::ExchangeEngine::new_v2_with_source_validity(
+                loaded.active_graph,
+                loaded.retained_graphs,
+                store.clone(),
                 config.issuer_id.clone(),
-                receipt_keys,
+                loaded.receipt_keys,
                 config.exchange_config.receipt_lifetime_secs,
+                source_valid_until,
             )
             .await?;
-            (Some(Arc::new(engine)), Some(metadata))
+            let engine = Arc::new(engine);
+            let readiness = crate::readiness::ExchangeReadinessState::new(
+                engine.clone(),
+                store,
+                registry_entries,
+                config.issuer_id.clone(),
+                metadata.clone(),
+                config
+                    .exchange_config
+                    .disabled_publication_ack_paths
+                    .clone(),
+            );
+            (Some(engine), Some(metadata), Some(readiness))
         } else {
-            (None, None)
+            (None, None, None)
         };
 
         // 2. WebAuthn Setup
@@ -1189,13 +1273,6 @@ impl Application {
                     .clone(),
             ));
         }
-        readiness.spawn_checks(
-            sybil_replay_store.clone(),
-            storage_paths,
-            voprf.clone(),
-            exchange_engine.clone(),
-        );
-
         // Initialize router
         // Note: routes::metadata::well_known_handler must exist!
         let app = Router::new()
@@ -1311,11 +1388,19 @@ impl Application {
         let listener = TcpListener::bind(config.bind_addr)
             .await
             .context("Failed to bind TCP listener")?;
+        let port = listener.local_addr()?.port();
+
+        readiness.spawn_checks(
+            sybil_replay_store.clone(),
+            storage_paths,
+            voprf.clone(),
+            exchange_readiness,
+        );
 
         info!("🚀 Server ready at {}", config.bind_addr);
 
         Ok(Self {
-            port: listener.local_addr()?.port(),
+            port,
             listener,
             app,
             shutdown,
@@ -1384,12 +1469,70 @@ impl Application {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_progressive_trust_levels, Application};
+    use super::{
+        exchange_discovery_v2, parse_progressive_trust_levels,
+        validate_disabled_publication_acknowledgements_v2, Application,
+    };
+    use crate::config::{
+        ExchangeDisabledPublicationAcknowledgementV1, EXCHANGE_DISABLED_PUBLICATION_ACK_VERSION,
+    };
+    use crate::exchange::profiles::{
+        ExchangeAdmissionStateV2, ExchangeDescriptorV2, ExchangeKeyV2, ExchangeKeysetV2,
+        ExchangeProfileV2, ExchangeTransitionSlotV2, ExchangeTransitionV2,
+    };
     use crate::shutdown::ShutdownCoordinator;
     use axum::{routing::get, Router};
+    use freebird_common::api::ExchangeReceiptKeyInfo;
     use std::time::Duration;
     use tokio::io::AsyncWriteExt;
     use tokio::net::TcpListener;
+
+    fn publication_discovery(
+        admission_state: freebird_common::api::ExchangeAdmissionStateV2,
+    ) -> freebird_common::api::ExchangeDiscoveryV2 {
+        use freebird_common::api::{ExchangeGraphDiscoveryV2, ExchangeTransitionDiscoveryV2};
+
+        freebird_common::api::ExchangeDiscoveryV2 {
+            active_graph: ExchangeGraphDiscoveryV2 {
+                profile_id: freebird_common::exchange_api::EXCHANGE_PROFILE_V2.into(),
+                graph_id: "a".repeat(64),
+                descriptors: vec![],
+                keysets: vec![],
+                transitions: vec![ExchangeTransitionDiscoveryV2 {
+                    transition_id: "b".repeat(64),
+                    source_keyset_id: "c".repeat(64),
+                    target_keyset_id: "d".repeat(64),
+                    source_slots: vec![],
+                    output_slots: vec![],
+                    budget_id: "budget".into(),
+                    budget_limit: 1,
+                    admission_state,
+                }],
+            },
+            retained_graphs: vec![],
+            active_receipt_key: ExchangeReceiptKeyInfo {
+                key_id: "e".repeat(64),
+                algorithm: "Ed25519".into(),
+                purpose: "exchange_receipt_active".into(),
+                public_key_b64: "AQ".into(),
+                valid_from: 1,
+                valid_until: 2,
+            },
+            retained_receipt_keys: vec![],
+        }
+    }
+
+    fn publication_acknowledgement() -> ExchangeDisabledPublicationAcknowledgementV1 {
+        ExchangeDisabledPublicationAcknowledgementV1 {
+            version: EXCHANGE_DISABLED_PUBLICATION_ACK_VERSION.into(),
+            issuer_id: "issuer:test".into(),
+            graph_id: "a".repeat(64),
+            disabled_transition_ids: vec!["b".repeat(64)],
+            acknowledged_admission_state: "disabled".into(),
+            operator: "operator@example.test".into(),
+            acknowledged_at_unix: 1,
+        }
+    }
 
     #[test]
     fn parses_human_readable_progressive_trust_levels() {
@@ -1411,6 +1554,119 @@ mod tests {
         assert!(parse_progressive_trust_levels(&[]).is_err());
         assert!(parse_progressive_trust_levels(&["bad".to_string()]).is_err());
         assert!(parse_progressive_trust_levels(&["10x:1:1m".to_string()]).is_err());
+    }
+
+    #[test]
+    fn v2_discovery_projection_excludes_private_signer_paths_and_preserves_history() {
+        let descriptor = ExchangeDescriptorV2 {
+            id: "a".repeat(64),
+            profile_id: freebird_common::exchange_api::EXCHANGE_PROFILE_V2.into(),
+            issuer_id: "issuer:test".into(),
+            kid: "b".repeat(64),
+            audience: Some("audience".into()),
+            spki_b64: "AQ".into(),
+            suite: "RSABSSA-SHA384-PSS-Deterministic".into(),
+            valid_from: 1,
+            valid_until: 2,
+        };
+        let keyset = ExchangeKeysetV2 {
+            id: "c".repeat(64),
+            keys: vec![ExchangeKeyV2 {
+                descriptor: descriptor.clone(),
+                private_key_path: Some("/private/target.der".into()),
+            }],
+        };
+        let transition = ExchangeTransitionV2 {
+            id: "d".repeat(64),
+            source_keyset_id: keyset.id.clone(),
+            target_keyset_id: "e".repeat(64),
+            sources: vec![ExchangeTransitionSlotV2 {
+                descriptor_id: descriptor.id.clone(),
+                slot_id: "in".into(),
+                class: "bearer".into(),
+                quantity: 1,
+            }],
+            outputs: vec![ExchangeTransitionSlotV2 {
+                descriptor_id: descriptor.id.clone(),
+                slot_id: "out".into(),
+                class: "bearer".into(),
+                quantity: 1,
+            }],
+            budget_id: "budget".into(),
+            budget_limit: 1,
+            admission_state: ExchangeAdmissionStateV2::RecoveryOnly,
+        };
+        let active = ExchangeProfileV2 {
+            profile_id: freebird_common::exchange_api::EXCHANGE_PROFILE_V2.into(),
+            graph_id: "f".repeat(64),
+            keysets: vec![keyset],
+            transitions: vec![transition],
+        };
+        let mut retained = active.clone();
+        retained.graph_id = "0".repeat(64);
+        let receipt = ExchangeReceiptKeyInfo {
+            key_id: "1".repeat(64),
+            algorithm: "Ed25519".into(),
+            purpose: "exchange_receipt_active".into(),
+            public_key_b64: "AQ".into(),
+            valid_from: 1,
+            valid_until: 2,
+        };
+
+        let discovery = exchange_discovery_v2(&active, &[retained], &[receipt]).unwrap();
+        assert_eq!(discovery.retained_graphs.len(), 1);
+        assert_eq!(discovery.active_graph.transitions.len(), 1);
+        let json = serde_json::to_string(&discovery).unwrap();
+        assert!(!json.contains("private_key"));
+        assert!(!json.contains("/private/target.der"));
+        assert!(!json.contains("freebird/public-bearer-exchange/v1"));
+    }
+
+    #[tokio::test]
+    async fn failed_or_bound_but_unserved_disabled_startup_cannot_unlock_acceptance() {
+        let disabled =
+            publication_discovery(freebird_common::api::ExchangeAdmissionStateV2::Disabled);
+        validate_disabled_publication_acknowledgements_v2("issuer:test", &disabled, &[])
+            .expect("disabled graph does not require an acknowledgement");
+
+        // Merely binding and then abandoning a listener is not an operator
+        // acknowledgement and must have no admission side effect.
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        drop(listener);
+
+        let accepting =
+            publication_discovery(freebird_common::api::ExchangeAdmissionStateV2::AcceptingNew);
+        assert!(
+            validate_disabled_publication_acknowledgements_v2("issuer:test", &accepting, &[],)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn disabled_publication_acknowledgement_rejects_graph_mismatch() {
+        let accepting =
+            publication_discovery(freebird_common::api::ExchangeAdmissionStateV2::AcceptingNew);
+        let mut acknowledgement = publication_acknowledgement();
+        acknowledgement.graph_id = "f".repeat(64);
+        let error = validate_disabled_publication_acknowledgements_v2(
+            "issuer:test",
+            &accepting,
+            &[acknowledgement],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("graph mismatch"));
+    }
+
+    #[test]
+    fn accepting_transition_allows_exact_operator_acknowledgement() {
+        let accepting =
+            publication_discovery(freebird_common::api::ExchangeAdmissionStateV2::AcceptingNew);
+        validate_disabled_publication_acknowledgements_v2(
+            "issuer:test",
+            &accepting,
+            &[publication_acknowledgement()],
+        )
+        .unwrap();
     }
 
     #[tokio::test]

@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::sync::{atomic::AtomicBool, atomic::Ordering};
 use std::time::Duration;
 
 #[derive(Clone, Debug, Default, serde::Serialize)]
@@ -24,6 +25,99 @@ pub struct ReadinessReport {
 #[derive(Clone)]
 pub struct ReadinessState {
     report: Arc<RwLock<ReadinessReport>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ExchangeReadinessState {
+    engine: Arc<crate::exchange::ExchangeEngine>,
+    store: crate::exchange::store::ExchangeStore,
+    registry: Vec<crate::exchange::store::KeyRegistryEntry>,
+    issuer_id: String,
+    discovery: freebird_common::api::ExchangeDiscoveryV2,
+    disabled_publication_ack_paths: Vec<PathBuf>,
+    registry_failed_closed: Arc<AtomicBool>,
+}
+
+impl ExchangeReadinessState {
+    pub(crate) fn new(
+        engine: Arc<crate::exchange::ExchangeEngine>,
+        store: crate::exchange::store::ExchangeStore,
+        registry: Vec<crate::exchange::store::KeyRegistryEntry>,
+        issuer_id: String,
+        discovery: freebird_common::api::ExchangeDiscoveryV2,
+        disabled_publication_ack_paths: Vec<PathBuf>,
+    ) -> Self {
+        Self {
+            engine,
+            store,
+            registry,
+            issuer_id,
+            discovery,
+            disabled_publication_ack_paths,
+            registry_failed_closed: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    async fn check(&self) -> bool {
+        use crate::exchange::store::KeyRegistryOutcome;
+
+        let acknowledgements = match crate::config::load_disabled_publication_acknowledgements(
+            &self.disabled_publication_ack_paths,
+        ) {
+            Ok(acknowledgements) => acknowledgements,
+            Err(_) => return false,
+        };
+        if self.engine.readiness_check().await.is_err()
+            || freebird_common::api::validate_exchange_discovery_v2(
+                &self.issuer_id,
+                &self.discovery,
+            )
+            .is_err()
+            || !self.pending_references_are_recoverable().await
+            || crate::startup::validate_disabled_publication_acknowledgements_v2(
+                &self.issuer_id,
+                &self.discovery,
+                &acknowledgements,
+            )
+            .is_err()
+        {
+            return false;
+        }
+        if self.registry_failed_closed.load(Ordering::Acquire) {
+            return false;
+        }
+        let registry_equal = matches!(
+            self.store.initialize_key_registry_v2(&self.registry).await,
+            Ok(KeyRegistryOutcome::Equal)
+        );
+        if !registry_equal {
+            self.registry_failed_closed.store(true, Ordering::Release);
+        }
+        registry_equal
+    }
+
+    async fn pending_references_are_recoverable(&self) -> bool {
+        let records = match self.store.pending_records_v2().await {
+            Ok(records) => records,
+            Err(_) => return false,
+        };
+        records.into_iter().all(|record| {
+            std::iter::once(&self.discovery.active_graph)
+                .chain(&self.discovery.retained_graphs)
+                .find(|graph| graph.graph_id == record.graph_id)
+                .and_then(|graph| {
+                    graph.transitions.iter().find(|transition| {
+                        transition.transition_id == record.transition_id
+                            && transition.source_keyset_id == record.source_keyset_id
+                            && transition.target_keyset_id == record.target_keyset_id
+                    })
+                })
+                .is_some_and(|transition| {
+                    transition.admission_state
+                        != freebird_common::api::ExchangeAdmissionStateV2::Disabled
+                })
+        })
+    }
 }
 
 impl ReadinessState {
@@ -52,12 +146,12 @@ impl ReadinessState {
         };
     }
 
-    pub fn spawn_checks(
+    pub(crate) fn spawn_checks(
         &self,
         replay_store: Arc<dyn ReplayStore>,
         storage_paths: Vec<(String, PathBuf)>,
         voprf: Arc<MultiKeyVoprfCore>,
-        exchange: Option<Arc<crate::exchange::ExchangeEngine>>,
+        exchange: Option<ExchangeReadinessState>,
     ) {
         let state = self.clone();
         tokio::spawn(async move {
@@ -65,11 +159,10 @@ impl ReadinessState {
             loop {
                 ticker.tick().await;
                 let mut report = check_once(&replay_store, &storage_paths, &voprf).await;
-                if let Some(engine) = &exchange {
-                    let ready =
-                        tokio::time::timeout(Duration::from_secs(2), engine.readiness_check())
-                            .await
-                            .is_ok_and(|result| result.is_ok());
+                if let Some(exchange) = &exchange {
+                    let ready = tokio::time::timeout(Duration::from_secs(2), exchange.check())
+                        .await
+                        .is_ok_and(|ready| ready);
                     report.exchange = Some(ready);
                     report.ready &= ready;
                 }

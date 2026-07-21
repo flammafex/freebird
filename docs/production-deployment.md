@@ -47,9 +47,9 @@ connectivity, AOF health, or retained signer pins are unavailable. Redis
 Cluster, a replica endpoint, eviction, asynchronous durability, and failover
 that can lose acknowledged writes are unsupported.
 
-Keep private retained profiles and receipt seeds until pending-reference counts
-reach zero. Before removing them, copy canonical public target keysets,
-descriptors, and receipt verification keys to
+Keep retained V2 graphs, required RSA output signers, and receipt seeds until
+pending-reference counts reach zero. Before removing private signers, copy the
+complete public graph and receipt verification keys to
 `PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH`. Keep that public history through
 the expiry of every corresponding output artifact and receipt; public history
 outlives private-key retention.
@@ -92,18 +92,23 @@ If public bearer exchange is enabled, add reviewed deployment-specific paths:
 ```bash
 PUBLIC_BEARER_EXCHANGE_ENABLE=true
 PUBLIC_BEARER_EXCHANGE_REDIS_URL=redis://redis:6379
-PUBLIC_BEARER_EXCHANGE_PROFILE_PATH=/data/config/public-bearer-exchange-profile.json
+PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH=/data/config/public-bearer-exchange-graph-v2.json
+PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS=/data/config/exchange-graph-previous.json
+PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH=/data/config/exchange-public-history-v2.json
+PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS=/data/config/exchange-publication-ack.json
 PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH=/data/keys/exchange-receipt-active.key
-PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS=/data/config/exchange-profile-previous.json
+PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH=/data/config/exchange-receipt-active.json
 PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS=/data/keys/exchange-receipt-previous.key
-PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH=/data/config/exchange-public-history.json
+PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS=/data/config/exchange-receipt-previous.json
 ```
 
-Exchange target RSA keys must be isolated from the legacy V5 issuance key;
-receipt signing uses a separate Ed25519 key. A legacy V5 key may be allowlisted
-only as a source. Validate the profile, target private keys, receipt-key ring,
-and public history with `freebird-validate-config` before enabling traffic. See
-[Public Bearer Exchange](public-bearer-exchange.md).
+RSA keys used as outputs of accepting exchange transitions must be isolated from
+the direct V5 issuance key; receipt signing uses a separate Ed25519 key. Run
+`freebird-validate-config` before enabling traffic to validate graph/history and
+signer configuration, publication acknowledgements, and Redis durability. The
+validator does not create or mutate the durable key registry: issuer runtime
+startup initializes or byte-verifies that append-only registry, and readiness
+continues to verify it. See [Public Bearer Exchange](public-bearer-exchange.md).
 
 Use the parser's exact invitation names: `SYBIL_INVITE_COOLDOWN`,
 `SYBIL_INVITE_EXPIRES`, `SYBIL_INVITE_NEW_USER_WAIT`, and
@@ -190,13 +195,17 @@ examples in `server-configs/` use a loopback backend, 10 MiB request limit, and
 60-second connect/read/send deadlines for the 10,000-item blind issuance and
 verification batch limits.
 
-Expose `POST /v1/public/exchange` and the fixed
-`GET /v1/public/exchange/status` only over HTTPS. Preserve exactly one
-`Idempotency-Key` header and `Cache-Control: no-store`; do not copy the operation
-capability into URLs, query strings, access logs, tracing, metrics, or error
-pages. Disable request-header logging for this header. A client recovering from
-transport ambiguity must retry POST with the same capability and exact body;
-202 responses are retried after `Retry-After`, while a changed body returns 409.
+Expose `POST /v2/public/exchange` and
+`GET /v2/public/exchange/status?public_operation_id=...` only over HTTPS.
+Preserve exactly one `Exchange-Status-Capability` header containing canonical
+base64url for 32 random bytes and preserve `Cache-Control: no-store`. This
+private capability is header-only: never copy it into a body, URL, query string,
+access log, tracing field, metric, or error page, and disable request-header
+logging for it. The 16-byte `public_operation_id` is a separate non-secret
+correlation identifier and provides no authorization. A client recovering from
+transport ambiguity must retry POST with the same public operation ID, same
+status capability, and exact body; 202 responses are retried after
+`Retry-After`, while a changed body or capability returns 409.
 
 The public health model separates process liveness from dependency readiness:
 keep liveness process-local (or a private TCP probe) so it cannot bypass the
@@ -216,7 +225,7 @@ Back up:
 - `issuer_sk.bin`
 - `key_rotation_state.json`
 - public bearer key and metadata files
-- exchange profiles and active/retained target private keys
+- exchange active/retained V2 graphs and still-required RSA output private keys
 - exchange active/retained receipt seeds and public history
 - invitation signing key and state
 - multi-party vouching secret and state
@@ -234,9 +243,10 @@ of recently accepted PoW, WebAuthn, or vouching proofs. Use Redis persistence
 for public deployments.
 
 For exchange, Redis also stores authoritative source spends, pending operation
-state, and byte-exact committed responses. Back it up coherently with exchange
-profiles, target keys, receipt seeds, and public history. Never restore Redis or
-one side of the signer ring independently. Follow
+state, the append-only key registry, lifetime budgets, and byte-exact committed
+responses. Back it up coherently with exchange graphs, output keys, receipt
+seeds, and public history. Never restore Redis or one side of the signer ring
+independently. Follow
 [Backup and Restore](backup-restore.md) and verify readiness, discovery history,
 and a protected committed-operation retry before reopening traffic.
 

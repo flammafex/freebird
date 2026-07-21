@@ -2,7 +2,10 @@
 //! Pure V5 source and RSA-output validation. No function in this module mutates
 //! Redis, and source artifacts never enter durable work records.
 
-use crate::exchange::{profiles::ExchangeProfile, store::OutputWork};
+use crate::exchange::{
+    profiles::{ExchangeKeysetV2, ExchangeProfile, ExchangeProfileV2, ExchangeTransitionSlotV2},
+    store::OutputWork,
+};
 use anyhow::{bail, Context, Result};
 use freebird_common::{
     exchange_api::{decode_base64url, ExchangeOutput, MAX_ARTIFACT},
@@ -46,6 +49,40 @@ pub fn validate_source_v5(
         || token.token_key_id != expected_kid
     {
         bail!("source identity does not match pinned descriptor")
+    }
+    verify_public_bearer_signature(&descriptor.spki_bytes()?, &token)
+        .map_err(|_| anyhow::anyhow!("invalid source signature"))?;
+    Ok(ValidatedSource {
+        descriptor_id: descriptor.id.clone(),
+        spend_key: v5_spend_key(
+            &nullifier_key_v5(&token).map_err(|_| anyhow::anyhow!("source spend key failure"))?,
+        ),
+    })
+}
+
+pub fn validate_source_v5_v2(
+    source_keyset: &ExchangeKeysetV2,
+    descriptor_id: &str,
+    artifact: &[u8],
+    expected_issuer: &str,
+) -> Result<ValidatedSource> {
+    let descriptor = source_keyset
+        .keys
+        .iter()
+        .find(|key| key.descriptor.id == descriptor_id)
+        .map(|key| &key.descriptor)
+        .context("source descriptor is not in the selected keyset")?;
+    let token: PublicBearerPass = parse_public_bearer_pass(artifact)
+        .map_err(|_| anyhow::anyhow!("invalid source artifact"))?;
+    let expected_kid: [u8; 32] = hex::decode(&descriptor.kid)
+        .context("invalid source key id")?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid source key id"))?;
+    if token.issuer_id != expected_issuer
+        || token.issuer_id != descriptor.issuer_id
+        || token.token_key_id != expected_kid
+    {
+        bail!("source identity does not match selected descriptor")
     }
     verify_public_bearer_signature(&descriptor.spki_bytes()?, &token)
         .map_err(|_| anyhow::anyhow!("invalid source signature"))?;
@@ -164,6 +201,164 @@ impl PinnedTargetSigners {
                 .providers
                 .get(&output.descriptor_id)
                 .context("pinned target signer unavailable")?;
+            validate_representative(provider.public_key_spki(), &output.blinded_value)?;
+            signatures.push(provider.blind_sign(&output.blinded_value).await?);
+        }
+        Ok(signatures)
+    }
+}
+
+/// Signers pinned by immutable V2 descriptor identity. Providers are loaded
+/// once, while request validation is always scoped to one selected keyset and
+/// transition.
+pub struct PinnedTargetSignersV2 {
+    providers: HashMap<String, Arc<freebird_crypto::provider::software::SoftwareBlindRsaProvider>>,
+    keysets: HashMap<String, HashSet<String>>,
+    key_ids: HashMap<String, String>,
+}
+
+impl PinnedTargetSignersV2 {
+    pub fn load(active: &ExchangeProfileV2, retained: &[ExchangeProfileV2]) -> Result<Self> {
+        use freebird_crypto::provider::software::SoftwareBlindRsaProvider;
+
+        let mut providers: HashMap<String, Arc<SoftwareBlindRsaProvider>> = HashMap::new();
+        let mut keysets: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut key_ids = HashMap::new();
+        for graph in std::iter::once(active).chain(retained) {
+            for keyset in &graph.keysets {
+                let descriptors = keysets.entry(keyset.id.clone()).or_default();
+                for key in &keyset.keys {
+                    descriptors.insert(key.descriptor.id.clone());
+                    if let Some(existing) =
+                        key_ids.insert(key.descriptor.id.clone(), key.descriptor.kid.clone())
+                    {
+                        if existing != key.descriptor.kid {
+                            bail!("V2 descriptor maps to conflicting key identities")
+                        }
+                    }
+                    let Some(path) = key.private_key_path.as_deref() else {
+                        continue;
+                    };
+                    let der = zeroize::Zeroizing::new(
+                        std::fs::read(path).context("read V2 exchange target key")?,
+                    );
+                    let provider = SoftwareBlindRsaProvider::from_der(&der)?;
+                    if provider.token_key_id().as_slice()
+                        != hex::decode(&key.descriptor.kid)?.as_slice()
+                        || provider.public_key_spki() != key.descriptor.spki_bytes()?.as_slice()
+                    {
+                        bail!("V2 target key identity mismatch")
+                    }
+                    if let Some(existing) = providers.get(&key.descriptor.id) {
+                        if existing.public_key_spki() != provider.public_key_spki() {
+                            bail!("V2 target descriptor maps to conflicting signers")
+                        }
+                    } else {
+                        providers.insert(key.descriptor.id.clone(), Arc::new(provider));
+                    }
+                }
+            }
+        }
+        Ok(Self {
+            providers,
+            keysets,
+            key_ids,
+        })
+    }
+
+    pub fn validate_outputs(
+        &self,
+        target_keyset_id: &str,
+        expected: &[ExchangeTransitionSlotV2],
+        outputs: &[ExchangeOutput],
+    ) -> Result<Vec<OutputWork>> {
+        if outputs.len() != expected.len() || outputs.is_empty() {
+            bail!("output cardinality does not match selected transition")
+        }
+        let descriptors = self
+            .keysets
+            .get(target_keyset_id)
+            .context("selected target keyset is not pinned")?;
+        outputs
+            .iter()
+            .zip(expected)
+            .map(|(output, slot)| {
+                if output.slot.keyset_id != target_keyset_id
+                    || output.slot.descriptor_id != slot.descriptor_id
+                    || output.slot.slot_id != slot.slot_id
+                    || output.slot.quantity != slot.quantity
+                    || !descriptors.contains(&output.slot.descriptor_id)
+                {
+                    bail!("output does not satisfy selected transition")
+                }
+                let provider = self
+                    .providers
+                    .get(&output.slot.descriptor_id)
+                    .context("selected target signer is not pinned")?;
+                let blinded = decode_base64url(&output.blinded_value, MAX_ARTIFACT)
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                validate_representative(provider.public_key_spki(), &blinded)?;
+                Ok(OutputWork {
+                    descriptor_id: output.slot.descriptor_id.clone(),
+                    keyset_id: output.slot.keyset_id.clone(),
+                    slot_id: output.slot.slot_id.clone(),
+                    quantity: output.slot.quantity,
+                    blinded_value: blinded,
+                })
+            })
+            .collect()
+    }
+
+    pub fn signer_ref_keys(&self, outputs: &[OutputWork]) -> Result<Vec<String>> {
+        let mut refs = Vec::new();
+        for output in outputs {
+            let key_id = self
+                .key_ids
+                .get(&output.descriptor_id)
+                .context("V2 output key identity is unavailable")?;
+            let reference = crate::exchange::store::ExchangeStore::signer_ref_key_v2(key_id);
+            if !refs.contains(&reference) {
+                refs.push(reference);
+            }
+        }
+        Ok(refs)
+    }
+
+    pub fn supports_work(
+        &self,
+        target_keyset_id: &str,
+        outputs: &[OutputWork],
+        signer_refs: &[String],
+    ) -> bool {
+        self.keysets
+            .get(target_keyset_id)
+            .is_some_and(|descriptors| {
+                outputs.iter().all(|output| {
+                    output.keyset_id == target_keyset_id
+                        && descriptors.contains(&output.descriptor_id)
+                        && self.providers.contains_key(&output.descriptor_id)
+                })
+            })
+            && self
+                .signer_ref_keys(outputs)
+                .is_ok_and(|expected| expected == signer_refs)
+    }
+
+    pub async fn sign_work(
+        &self,
+        target_keyset_id: &str,
+        outputs: &[OutputWork],
+        signer_refs: &[String],
+    ) -> Result<Vec<Vec<u8>>> {
+        if !self.supports_work(target_keyset_id, outputs, signer_refs) {
+            bail!("persisted V2 target signer references are unavailable")
+        }
+        let mut signatures = Vec::with_capacity(outputs.len());
+        for output in outputs {
+            let provider = self
+                .providers
+                .get(&output.descriptor_id)
+                .context("pinned V2 target signer unavailable")?;
             validate_representative(provider.public_key_spki(), &output.blinded_value)?;
             signatures.push(provider.blind_sign(&output.blinded_value).await?);
         }

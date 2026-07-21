@@ -19,7 +19,129 @@
 use freebird_common::duration::format_duration;
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+const EXCHANGE_DISABLED_PUBLICATION_ACK_VERSION: &str =
+    "freebird/exchange-disabled-publication-ack/v1";
+
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ExchangeDisabledPublicationAcknowledgementV1 {
+    version: String,
+    issuer_id: String,
+    graph_id: String,
+    disabled_transition_ids: Vec<String>,
+    acknowledged_admission_state: String,
+    operator: String,
+    acknowledged_at_unix: u64,
+}
+
+fn load_disabled_publication_acknowledgements(
+    paths: &[std::path::PathBuf],
+) -> anyhow::Result<Vec<ExchangeDisabledPublicationAcknowledgementV1>> {
+    use anyhow::Context;
+
+    paths
+        .iter()
+        .map(|path| {
+            let acknowledgement: ExchangeDisabledPublicationAcknowledgementV1 =
+                serde_json::from_slice(&std::fs::read(path).with_context(|| {
+                    format!(
+                        "read disabled-publication acknowledgement {}",
+                        path.display()
+                    )
+                })?)
+                .with_context(|| {
+                    format!(
+                        "parse disabled-publication acknowledgement {}",
+                        path.display()
+                    )
+                })?;
+            validate_disabled_publication_acknowledgement(&acknowledgement)
+                .with_context(|| path.display().to_string())?;
+            Ok(acknowledgement)
+        })
+        .collect()
+}
+
+fn validate_disabled_publication_acknowledgement(
+    acknowledgement: &ExchangeDisabledPublicationAcknowledgementV1,
+) -> anyhow::Result<()> {
+    use std::collections::HashSet;
+
+    let canonical_id = |value: &str| {
+        value.len() == 64
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    };
+    let mut transitions = HashSet::new();
+    if acknowledgement.version != EXCHANGE_DISABLED_PUBLICATION_ACK_VERSION
+        || acknowledgement.issuer_id.is_empty()
+        || acknowledgement.issuer_id.len() > 256
+        || !acknowledgement.issuer_id.is_ascii()
+        || !canonical_id(&acknowledgement.graph_id)
+        || acknowledgement.disabled_transition_ids.is_empty()
+        || acknowledgement
+            .disabled_transition_ids
+            .iter()
+            .any(|id| !canonical_id(id) || !transitions.insert(id))
+        || acknowledgement.acknowledged_admission_state != "disabled"
+        || acknowledgement.operator.trim().is_empty()
+        || acknowledgement.acknowledged_at_unix == 0
+    {
+        anyhow::bail!("invalid disabled-publication acknowledgement")
+    }
+    Ok(())
+}
+
+fn validate_disabled_publication_acknowledgements_v2(
+    issuer_id: &str,
+    discovery: &freebird_common::api::ExchangeDiscoveryV2,
+    acknowledgements: &[ExchangeDisabledPublicationAcknowledgementV1],
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    let graphs = std::iter::once(&discovery.active_graph)
+        .chain(&discovery.retained_graphs)
+        .collect::<Vec<_>>();
+    let mut acknowledged = std::collections::HashSet::new();
+    for acknowledgement in acknowledgements {
+        if acknowledgement.issuer_id != issuer_id {
+            anyhow::bail!("disabled-publication acknowledgement issuer mismatch")
+        }
+        let graph = graphs
+            .iter()
+            .find(|graph| graph.graph_id == acknowledgement.graph_id)
+            .context("disabled-publication acknowledgement graph mismatch")?;
+        for transition_id in &acknowledgement.disabled_transition_ids {
+            if !graph
+                .transitions
+                .iter()
+                .any(|transition| transition.transition_id == *transition_id)
+            {
+                anyhow::bail!("disabled-publication acknowledgement transition mismatch")
+            }
+            if !acknowledged.insert((graph.graph_id.as_str(), transition_id.as_str())) {
+                anyhow::bail!("duplicate disabled-publication acknowledgement")
+            }
+        }
+    }
+    for graph in graphs {
+        for transition in &graph.transitions {
+            if transition.admission_state
+                == freebird_common::api::ExchangeAdmissionStateV2::AcceptingNew
+                && !acknowledged
+                    .contains(&(graph.graph_id.as_str(), transition.transition_id.as_str()))
+            {
+                anyhow::bail!(
+                    "accepting V2 transition lacks an explicit disabled-publication acknowledgement for this graph"
+                )
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Validation result for a single check
 #[derive(Debug)]
@@ -341,126 +463,151 @@ fn validate_exchange_config() -> ValidationSection {
         ));
         return section;
     }
-    match env::var("PUBLIC_BEARER_EXCHANGE_REDIS_URL") {
-        Ok(url) if !url.trim().is_empty() => section.add(CheckResult::Ok(
-            "PUBLIC_BEARER_EXCHANGE_REDIS_URL is configured".into(),
-        )),
-        _ => section.add(CheckResult::Error(
-            "PUBLIC_BEARER_EXCHANGE_REDIS_URL is required".into(),
-        )),
-    }
-    let profile = env::var("PUBLIC_BEARER_EXCHANGE_PROFILE_PATH")
-        .unwrap_or_else(|_| "public_bearer_exchange_profile.json".into());
-    let retained_profiles = env::var("PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| {
-            value
-                .split(',')
-                .map(|path| path.trim().to_owned())
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let receipt = env::var("PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH")
-        .or_else(|_| env::var("PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH"))
-        .unwrap_or_else(|_| "public_bearer_exchange_receipt.key".into());
-    let retained_receipts = env::var("PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .map(|value| {
-            value
-                .split(',')
-                .map(|path| PathBuf::from(path.trim()))
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-    let public_history = env::var("PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH")
-        .ok()
-        .filter(|path| !path.trim().is_empty());
-    let legacy_path =
-        env::var("PUBLIC_BEARER_SK_PATH").unwrap_or_else(|_| "public_bearer_sk.der".into());
-    let legacy_spki = if Path::new(&legacy_path).is_file() {
-        use freebird_crypto::provider::{software::SoftwareBlindRsaProvider, BlindRsaProvider};
-        fs::read(&legacy_path)
-            .ok()
-            .map(zeroize::Zeroizing::new)
-            .and_then(|der| {
-                SoftwareBlindRsaProvider::from_der(&der)
+    let config = match freebird_issuer::config::ExchangeConfig::from_env() {
+        Ok(config) => config,
+        Err(error) => {
+            section.add(CheckResult::Error(format!(
+                "V2 exchange environment is invalid: {error:#}"
+            )));
+            return section;
+        }
+    };
+    section.add(CheckResult::Ok(format!(
+        "active V2 graph = {}",
+        config.active_graph_path.display()
+    )));
+    section.add(CheckResult::Ok(format!(
+        "retained V2 graph history = {} graph(s)",
+        config.retained_graph_paths.len()
+    )));
+
+    let issuer_id = env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".into());
+    let direct_v5_metadata = if env::var("PUBLIC_BEARER_ENABLE")
+        .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+        .unwrap_or(true)
+    {
+        let path =
+            env::var("PUBLIC_BEARER_SK_PATH").unwrap_or_else(|_| "public_bearer_sk.der".into());
+        if Path::new(&path).is_file() {
+            let public_config = freebird_issuer::config::PublicKeyConfig {
+                enabled: true,
+                sk_path: path.into(),
+                metadata_path: env::var("PUBLIC_BEARER_METADATA_PATH")
+                    .map(Into::into)
+                    .unwrap_or_else(|_| "public_bearer_metadata.json".into()),
+                validity_secs: freebird_common::duration::env_duration(
+                    "PUBLIC_BEARER_VALIDITY",
+                    30 * 24 * 3600,
+                ),
+                audience: env::var("PUBLIC_BEARER_AUDIENCE")
                     .ok()
-                    .map(|p| p.public_key_spki().to_vec())
-            })
+                    .filter(|value| !value.is_empty()),
+                modulus_bits: env::var("PUBLIC_BEARER_MODULUS_BITS")
+                    .ok()
+                    .and_then(|value| value.parse().ok())
+                    .unwrap_or(2048),
+            };
+            match freebird_issuer::public_tokens::PublicTokenIssuer::load_or_generate(
+                &public_config,
+                &issuer_id,
+            ) {
+                Ok(Some(issuer)) => Some(issuer.metadata().clone()),
+                Ok(None) => {
+                    section.add(CheckResult::Error(
+                        "authoritative direct V5 issuer is unexpectedly disabled".into(),
+                    ));
+                    return section;
+                }
+                Err(error) => {
+                    section.add(CheckResult::Error(format!(
+                        "authoritative direct V5 key is invalid: {error}"
+                    )));
+                    return section;
+                }
+            }
+        } else {
+            section.add(CheckResult::Warning(format!(
+                "direct V5 key {path} does not exist yet; collision validation will be repeated after startup creates it"
+            )));
+            None
+        }
     } else {
         None
     };
-    match freebird_issuer::exchange::profiles::ExchangeProfile::load(
-        Path::new(&profile),
-        legacy_spki.as_deref(),
-    ) {
-        Ok(loaded) => match loaded
-            .validate_issuer_id(
-                &env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".into()),
-            )
-            .and_then(|_| loaded.validate_target_keys())
-        {
-            Ok(()) => section.add(CheckResult::Ok(format!(
-                "{} = valid pinned profile and target keys",
-                profile
-            ))),
-            Err(error) => section.add(CheckResult::Error(format!(
-                "target key material invalid: {}",
-                error
-            ))),
-        },
+    let direct_v5_spki = direct_v5_metadata
+        .as_ref()
+        .map(|metadata| {
+            use base64ct::Encoding;
+            base64ct::Base64UrlUnpadded::decode_vec(&metadata.pubkey_spki_b64)
+                .map_err(anyhow::Error::from)
+        })
+        .transpose();
+    let direct_v5_spki = match direct_v5_spki {
+        Ok(spki) => spki,
+        Err(error) => {
+            section.add(CheckResult::Error(format!(
+                "authoritative direct V5 metadata is invalid: {error}"
+            )));
+            return section;
+        }
+    };
+    match config.load_v2(&issuer_id, direct_v5_spki.as_deref()) {
+        Ok(loaded) => {
+            let discovery = freebird_issuer::startup::exchange_discovery_v2(
+                &loaded.active_graph,
+                &loaded.retained_graphs,
+                &loaded.receipt_keys.discovery_metadata(),
+            );
+            match discovery.and_then(|mut discovery| {
+                if let Some(history) = loaded.public_history {
+                    freebird_issuer::exchange::history::merge_public_history_v2(
+                        &mut discovery,
+                        history,
+                    )?;
+                }
+                freebird_common::api::validate_exchange_discovery_v2(&issuer_id, &discovery)
+                    .map_err(anyhow::Error::msg)?;
+                freebird_issuer::exchange::history::global_key_identities_v2(
+                    &issuer_id,
+                    direct_v5_metadata.as_ref(),
+                    &discovery,
+                )?;
+                let acknowledgements = load_disabled_publication_acknowledgements(
+                    &config.disabled_publication_ack_paths,
+                )?;
+                validate_disabled_publication_acknowledgements_v2(
+                    &issuer_id,
+                    &discovery,
+                    &acknowledgements,
+                )?;
+                Ok(())
+            }) {
+                Ok(()) => section.add(CheckResult::Ok(
+                    "active/retained V2 graphs, target signers, receipt signers, and discovery metadata are valid".into(),
+                )),
+                Err(error) => section.add(CheckResult::Error(format!(
+                    "V2 exchange discovery is invalid: {error:#}"
+                ))),
+            }
+        }
         Err(error) => section.add(CheckResult::Error(format!(
-            "{} invalid: {}",
-            profile, error
+            "V2 graph or signer history is invalid: {error:#}"
         ))),
     }
-    for retained in retained_profiles {
-        match freebird_issuer::exchange::profiles::ExchangeProfile::load(
-            Path::new(&retained),
-            legacy_spki.as_deref(),
-        )
-        .and_then(|loaded| {
-            loaded.validate_issuer_id(
-                &env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".into()),
-            )?;
-            loaded.validate_target_keys()
-        }) {
-            Ok(()) => section.add(CheckResult::Ok(format!(
-                "{retained} = valid retained target keyset"
-            ))),
-            Err(error) => section.add(CheckResult::Error(format!(
-                "retained exchange profile {retained} invalid: {error}"
-            ))),
-        }
-    }
-    validate_persistence_path(
-        &mut section,
-        "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
-        &receipt,
-    );
-    if let Err(error) = freebird_issuer::exchange::receipt::validate_receipt_key_paths(
-        Path::new(&receipt),
-        &retained_receipts,
-    ) {
-        section.add(CheckResult::Error(format!(
-            "active/retained receipt key ring invalid: {error}"
-        )));
-    }
-    if let Some(path) = public_history {
-        match freebird_issuer::exchange::history::load_public_history(
-            Path::new(&path),
-            &env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".into()),
-            legacy_spki.as_deref(),
-        ) {
-            Ok(_) => section.add(CheckResult::Ok(format!(
-                "{path} = valid public exchange history"
-            ))),
-            Err(error) => section.add(CheckResult::Error(format!(
-                "public exchange history invalid: {error}"
-            ))),
-        }
+
+    match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(anyhow::Error::from)
+        .and_then(|runtime| runtime.block_on(config.validate_redis_durability()))
+    {
+        Ok(()) => section.add(CheckResult::Ok(
+            "exchange Redis is reachable, standalone, authoritative, AOF-backed, and non-evicting"
+                .into(),
+        )),
+        Err(error) => section.add(CheckResult::Error(format!(
+            "exchange Redis durability validation failed: {error:#}"
+        ))),
     }
     section
 }
@@ -845,7 +992,41 @@ fn validate_hsm_config() -> Option<ValidationSection> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64ct::{Base64UrlUnpadded, Encoding};
+    use freebird_common::api::{ExchangeReceiptKeyInfo, PublicKeyInfo};
+    use freebird_crypto::provider::{software::SoftwareBlindRsaProvider, BlindRsaProvider};
+    use freebird_issuer::exchange::profiles::{
+        ExchangeAdmissionStateV2, ExchangeDescriptorV2, ExchangeKeyV2, ExchangeKeysetV2,
+        ExchangeProfileV2, ExchangeTransitionSlotV2, ExchangeTransitionV2,
+    };
     use serial_test::serial;
+
+    struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+
+    impl EnvGuard {
+        fn clear(names: &[&'static str]) -> Self {
+            let values = names
+                .iter()
+                .map(|name| {
+                    let value = std::env::var_os(name);
+                    std::env::remove_var(name);
+                    (*name, value)
+                })
+                .collect();
+            Self(values)
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (name, value) in &self.0 {
+                match value {
+                    Some(value) => std::env::set_var(name, value),
+                    None => std::env::remove_var(name),
+                }
+            }
+        }
+    }
 
     fn set_mode(mode: &str) {
         std::env::set_var("SYBIL_RESISTANCE", mode);
@@ -949,5 +1130,466 @@ mod tests {
             CheckResult::Error(message) if message.contains("Unknown SYBIL_RESISTANCE mode")
         )));
         std::env::remove_var("SYBIL_RESISTANCE");
+    }
+
+    const TEST_ISSUER_ID: &str = "issuer:freebird:v4";
+
+    fn write_provider(path: &Path, provider: &SoftwareBlindRsaProvider) {
+        fs::write(path, provider.to_der().unwrap()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+
+    fn exchange_descriptor(
+        provider: &SoftwareBlindRsaProvider,
+        audience: &str,
+    ) -> ExchangeDescriptorV2 {
+        let mut descriptor = ExchangeDescriptorV2 {
+            id: String::new(),
+            profile_id: freebird_common::exchange_api::EXCHANGE_PROFILE_V2.into(),
+            issuer_id: TEST_ISSUER_ID.into(),
+            kid: hex::encode(provider.token_key_id()),
+            audience: Some(audience.into()),
+            spki_b64: Base64UrlUnpadded::encode_string(provider.public_key_spki()),
+            suite: "RSABSSA-SHA384-PSS-Deterministic".into(),
+            valid_from: 10,
+            valid_until: 20,
+        };
+        descriptor.id = descriptor.canonical_id().unwrap();
+        descriptor
+    }
+
+    fn exchange_keyset(
+        provider: &SoftwareBlindRsaProvider,
+        audience: &str,
+        private_key_path: Option<&Path>,
+    ) -> ExchangeKeysetV2 {
+        let mut keyset = ExchangeKeysetV2 {
+            id: String::new(),
+            keys: vec![ExchangeKeyV2 {
+                descriptor: exchange_descriptor(provider, audience),
+                private_key_path: private_key_path.map(|path| path.display().to_string()),
+            }],
+        };
+        keyset.id = keyset.canonical_id();
+        keyset
+    }
+
+    fn exchange_graph(
+        source: ExchangeKeysetV2,
+        target: ExchangeKeysetV2,
+        admission_state: ExchangeAdmissionStateV2,
+        budget_id: &str,
+    ) -> ExchangeProfileV2 {
+        let mut transition = ExchangeTransitionV2 {
+            id: String::new(),
+            source_keyset_id: source.id.clone(),
+            target_keyset_id: target.id.clone(),
+            sources: vec![ExchangeTransitionSlotV2 {
+                descriptor_id: source.keys[0].descriptor.id.clone(),
+                slot_id: "input".into(),
+                class: "bearer".into(),
+                quantity: 1,
+            }],
+            outputs: vec![ExchangeTransitionSlotV2 {
+                descriptor_id: target.keys[0].descriptor.id.clone(),
+                slot_id: "output".into(),
+                class: "bearer".into(),
+                quantity: 1,
+            }],
+            budget_id: budget_id.into(),
+            budget_limit: 1,
+            admission_state,
+        };
+        transition.id = transition.canonical_id();
+        let mut graph = ExchangeProfileV2 {
+            profile_id: freebird_common::exchange_api::EXCHANGE_PROFILE_V2.into(),
+            graph_id: String::new(),
+            keysets: vec![source, target],
+            transitions: vec![transition],
+        };
+        graph.graph_id = graph.canonical_graph_id();
+        graph
+    }
+
+    struct ExchangeValidatorFixture {
+        _env: EnvGuard,
+        _dir: tempfile::TempDir,
+        history_path: std::path::PathBuf,
+        receipt_metadata: ExchangeReceiptKeyInfo,
+        direct_provider: Option<SoftwareBlindRsaProvider>,
+        active_graph_id: String,
+        active_transition_id: String,
+    }
+
+    impl ExchangeValidatorFixture {
+        fn new(direct_audience: Option<&str>) -> Self {
+            let env = EnvGuard::clear(&[
+                "PUBLIC_BEARER_EXCHANGE_ENABLE",
+                "PUBLIC_BEARER_EXCHANGE_REDIS_URL",
+                "PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH",
+                "PUBLIC_BEARER_EXCHANGE_PROFILE_PATH",
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS",
+                "PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH",
+                "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
+                "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
+                "PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH",
+                "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH",
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS",
+                "PUBLIC_BEARER_ENABLE",
+                "PUBLIC_BEARER_SK_PATH",
+                "PUBLIC_BEARER_METADATA_PATH",
+                "PUBLIC_BEARER_VALIDITY",
+                "PUBLIC_BEARER_AUDIENCE",
+                "PUBLIC_BEARER_MODULUS_BITS",
+                "ISSUER_ID",
+            ]);
+            let dir = tempfile::tempdir().unwrap();
+            let source_provider = SoftwareBlindRsaProvider::generate(2048).unwrap();
+            let target_provider = SoftwareBlindRsaProvider::generate(2048).unwrap();
+            let source_path = dir.path().join("source.der");
+            let target_path = dir.path().join("target.der");
+            write_provider(&source_path, &source_provider);
+            write_provider(&target_path, &target_provider);
+            let graph = exchange_graph(
+                exchange_keyset(&source_provider, "exchange", Some(&source_path)),
+                exchange_keyset(&target_provider, "exchange", Some(&target_path)),
+                ExchangeAdmissionStateV2::AcceptingNew,
+                "active-budget",
+            );
+            let active_graph_id = graph.graph_id.clone();
+            let active_transition_id = graph.transitions[0].id.clone();
+            let graph_path = dir.path().join("graph.json");
+            fs::write(&graph_path, serde_json::to_vec(&graph).unwrap()).unwrap();
+
+            let receipt_path = dir.path().join("receipt.key");
+            let receipt =
+                freebird_issuer::exchange::receipt::load_or_generate_receipt_key(&receipt_path)
+                    .unwrap();
+            let receipt_metadata = ExchangeReceiptKeyInfo {
+                key_id: receipt.key_id(),
+                algorithm: "Ed25519".into(),
+                purpose: "exchange_receipt_active".into(),
+                public_key_b64: Base64UrlUnpadded::encode_string(
+                    receipt.verifying_key().as_bytes(),
+                ),
+                valid_from: 10,
+                valid_until: 20,
+            };
+            let receipt_metadata_path = dir.path().join("receipt.json");
+            fs::write(
+                &receipt_metadata_path,
+                serde_json::to_vec(&receipt_metadata).unwrap(),
+            )
+            .unwrap();
+            let history_path = dir.path().join("history.json");
+
+            std::env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
+            std::env::set_var("PUBLIC_BEARER_EXCHANGE_REDIS_URL", "redis://127.0.0.1/");
+            std::env::set_var("PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH", &graph_path);
+            std::env::set_var(
+                "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
+                &receipt_path,
+            );
+            std::env::set_var(
+                "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH",
+                &receipt_metadata_path,
+            );
+            std::env::set_var("PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH", &history_path);
+            std::env::set_var("ISSUER_ID", TEST_ISSUER_ID);
+
+            let direct_provider = direct_audience.map(|audience| {
+                let provider = SoftwareBlindRsaProvider::generate(2048).unwrap();
+                let key_path = dir.path().join("direct.der");
+                let metadata_path = dir.path().join("direct.json");
+                write_provider(&key_path, &provider);
+                let now = time::OffsetDateTime::now_utc().unix_timestamp();
+                let metadata = PublicKeyInfo {
+                    token_key_id: hex::encode(provider.token_key_id()),
+                    token_type: freebird_crypto::PUBLIC_BEARER_TOKEN_TYPE.into(),
+                    rfc9474_variant: freebird_crypto::PUBLIC_BEARER_RFC9474_VARIANT.into(),
+                    modulus_bits: provider.modulus_bits(),
+                    pubkey_spki_b64: Base64UrlUnpadded::encode_string(provider.public_key_spki()),
+                    issuer_id: TEST_ISSUER_ID.into(),
+                    valid_from: now - 60,
+                    valid_until: now + 3600,
+                    audience: Some(audience.into()),
+                    spend_policy: freebird_crypto::PUBLIC_BEARER_SPEND_POLICY_SINGLE_USE.into(),
+                    max_uses: None,
+                };
+                fs::write(&metadata_path, serde_json::to_vec(&metadata).unwrap()).unwrap();
+                std::env::set_var("PUBLIC_BEARER_ENABLE", "true");
+                std::env::set_var("PUBLIC_BEARER_SK_PATH", key_path);
+                std::env::set_var("PUBLIC_BEARER_METADATA_PATH", metadata_path);
+                std::env::set_var("PUBLIC_BEARER_AUDIENCE", audience);
+                std::env::set_var(
+                    "PUBLIC_BEARER_MODULUS_BITS",
+                    provider.modulus_bits().to_string(),
+                );
+                provider
+            });
+            if direct_provider.is_none() {
+                std::env::set_var("PUBLIC_BEARER_ENABLE", "false");
+            }
+
+            Self {
+                _env: env,
+                _dir: dir,
+                history_path,
+                receipt_metadata,
+                direct_provider,
+                active_graph_id,
+                active_transition_id,
+            }
+        }
+
+        fn acknowledgement(&self) -> ExchangeDisabledPublicationAcknowledgementV1 {
+            ExchangeDisabledPublicationAcknowledgementV1 {
+                version: EXCHANGE_DISABLED_PUBLICATION_ACK_VERSION.into(),
+                issuer_id: TEST_ISSUER_ID.into(),
+                graph_id: self.active_graph_id.clone(),
+                disabled_transition_ids: vec![self.active_transition_id.clone()],
+                acknowledged_admission_state: "disabled".into(),
+                operator: "test-operator".into(),
+                acknowledged_at_unix: 1,
+            }
+        }
+
+        fn write_acknowledgement(
+            &self,
+            acknowledgement: &ExchangeDisabledPublicationAcknowledgementV1,
+        ) -> std::path::PathBuf {
+            let path = self._dir.path().join("publication-ack.json");
+            fs::write(&path, serde_json::to_vec(acknowledgement).unwrap()).unwrap();
+            std::env::set_var(
+                "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
+                &path,
+            );
+            path
+        }
+
+        fn write_history(
+            &self,
+            retained_graphs: serde_json::Value,
+            receipt_keys: serde_json::Value,
+        ) {
+            fs::write(
+                &self.history_path,
+                serde_json::json!({
+                    "retained_graphs": retained_graphs,
+                    "retained_receipt_keys": receipt_keys,
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+
+        fn retained_graph(
+            &self,
+            source: ExchangeKeysetV2,
+            target: ExchangeKeysetV2,
+            budget_id: &str,
+        ) -> freebird_common::api::ExchangeGraphDiscoveryV2 {
+            let graph = exchange_graph(
+                source,
+                target,
+                ExchangeAdmissionStateV2::RecoveryOnly,
+                budget_id,
+            );
+            freebird_issuer::startup::exchange_discovery_v2(
+                &graph,
+                &[],
+                std::slice::from_ref(&self.receipt_metadata),
+            )
+            .unwrap()
+            .active_graph
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn exchange_validator_rejects_semantically_invalid_v2_public_history() {
+        let fixture = ExchangeValidatorFixture::new(None);
+        fixture.write_history(
+            serde_json::json!([]),
+            serde_json::json!([fixture.receipt_metadata]),
+        );
+
+        let section = validate_exchange_config();
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("V2 public history receipt key is not retained")
+        )));
+        assert!(!section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Ok(message) if message.contains("discovery metadata are valid")
+        )));
+    }
+
+    #[test]
+    #[serial]
+    fn exchange_validator_rejects_history_direct_key_audience_conflict() {
+        let fixture = ExchangeValidatorFixture::new(Some("direct-audience"));
+        let direct = fixture.direct_provider.as_ref().unwrap();
+        let other = SoftwareBlindRsaProvider::generate(2048).unwrap();
+        let graph = fixture.retained_graph(
+            exchange_keyset(direct, "history-audience", None),
+            exchange_keyset(&other, "exchange", None),
+            "history-audience-budget",
+        );
+        fixture.write_history(serde_json::json!([graph]), serde_json::json!([]));
+
+        let section = validate_exchange_config();
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("conflicting global V5 key identity metadata")
+        )));
+        assert!(!section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Ok(message) if message.contains("discovery metadata are valid")
+        )));
+    }
+
+    #[test]
+    #[serial]
+    fn exchange_validator_rejects_historical_output_direct_issuance_collision() {
+        let fixture = ExchangeValidatorFixture::new(Some("direct-audience"));
+        let direct = fixture.direct_provider.as_ref().unwrap();
+        let other = SoftwareBlindRsaProvider::generate(2048).unwrap();
+        let graph = fixture.retained_graph(
+            exchange_keyset(&other, "exchange", None),
+            exchange_keyset(direct, "direct-audience", None),
+            "history-output-budget",
+        );
+        fixture.write_history(serde_json::json!([graph]), serde_json::json!([]));
+
+        let section = validate_exchange_config();
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("exchange output overlaps direct V5 issuance key")
+        )));
+        assert!(!section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Ok(message) if message.contains("discovery metadata are valid")
+        )));
+    }
+
+    #[test]
+    #[serial]
+    fn exchange_validator_requires_acknowledgement_for_accepting_transition() {
+        let fixture = ExchangeValidatorFixture::new(None);
+        fixture.write_history(serde_json::json!([]), serde_json::json!([]));
+
+        let section = validate_exchange_config();
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("accepting V2 transition lacks an explicit disabled-publication acknowledgement for this graph")
+        )));
+        assert!(!section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Ok(message) if message.contains("discovery metadata are valid")
+        )));
+    }
+
+    #[test]
+    #[serial]
+    fn exchange_validator_rejects_missing_and_malformed_acknowledgement_files() {
+        let fixture = ExchangeValidatorFixture::new(None);
+        fixture.write_history(serde_json::json!([]), serde_json::json!([]));
+        let path = fixture._dir.path().join("missing-publication-ack.json");
+        std::env::set_var(
+            "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
+            &path,
+        );
+
+        let missing = validate_exchange_config();
+        assert!(missing.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("read disabled-publication acknowledgement")
+        )));
+
+        fs::write(&path, b"not-json").unwrap();
+        let malformed = validate_exchange_config();
+        assert!(malformed.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("parse disabled-publication acknowledgement")
+        )));
+    }
+
+    #[test]
+    #[serial]
+    fn exchange_validator_rejects_acknowledgement_identity_and_state_mismatches() {
+        let fixture = ExchangeValidatorFixture::new(None);
+        fixture.write_history(serde_json::json!([]), serde_json::json!([]));
+
+        let mut acknowledgement = fixture.acknowledgement();
+        acknowledgement.issuer_id = "issuer:other".into();
+        fixture.write_acknowledgement(&acknowledgement);
+        let issuer_mismatch = validate_exchange_config();
+        assert!(issuer_mismatch.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("disabled-publication acknowledgement issuer mismatch")
+        )));
+
+        let mut acknowledgement = fixture.acknowledgement();
+        acknowledgement.graph_id = "f".repeat(64);
+        fixture.write_acknowledgement(&acknowledgement);
+        let graph_mismatch = validate_exchange_config();
+        assert!(graph_mismatch.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("disabled-publication acknowledgement graph mismatch")
+        )));
+
+        let mut acknowledgement = fixture.acknowledgement();
+        acknowledgement.disabled_transition_ids = vec!["f".repeat(64)];
+        fixture.write_acknowledgement(&acknowledgement);
+        let transition_mismatch = validate_exchange_config();
+        assert!(transition_mismatch.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("disabled-publication acknowledgement transition mismatch")
+        )));
+
+        let mut acknowledgement = fixture.acknowledgement();
+        acknowledgement.acknowledged_admission_state = "accepting_new".into();
+        fixture.write_acknowledgement(&acknowledgement);
+        let state_mismatch = validate_exchange_config();
+        assert!(state_mismatch.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("invalid disabled-publication acknowledgement")
+        )));
+    }
+
+    #[test]
+    #[serial]
+    fn exchange_validator_accepts_exact_disabled_publication_acknowledgement() {
+        let fixture = ExchangeValidatorFixture::new(None);
+        fixture.write_history(serde_json::json!([]), serde_json::json!([]));
+        fixture.write_acknowledgement(&fixture.acknowledgement());
+
+        let section = validate_exchange_config();
+        assert!(section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Ok(message) if message.contains("discovery metadata are valid")
+        )));
+        assert!(!section.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("disabled-publication acknowledgement")
+        )));
     }
 }

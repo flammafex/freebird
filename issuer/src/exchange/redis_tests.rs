@@ -4,19 +4,23 @@
 use super::{
     load_or_generate_receipt_key,
     profiles::{
-        ExchangeDescriptor, ExchangeKeyset, ExchangeProfile, ExchangeRule, ExchangeRuleSlot,
-        ExchangeSourceAllowlist, ExchangeTargetKey,
+        ExchangeAdmissionStateV2, ExchangeDescriptor, ExchangeDescriptorV2, ExchangeKeyV2,
+        ExchangeKeyset, ExchangeKeysetV2, ExchangeProfile, ExchangeProfileV2, ExchangeRule,
+        ExchangeRuleSlot, ExchangeSourceAllowlist, ExchangeTargetKey, ExchangeTransitionSlotV2,
+        ExchangeTransitionV2,
     },
     redis_harness::RedisHarness,
     store::{
         capacity_key, receipt_ref_key, target_ref_key, CapacityEntry, ClaimOutcome, ExchangeStore,
         OutputWork, ReservationInput, ReserveOutcome, SourceWork, State, TransitionOutcome,
+        V2ReservationInput, V2ReserveOutcome, V2SourceSpend,
     },
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::exchange_api::{
-    keyset_id, rule_id, ExchangeOutput, ExchangeRequest, ExchangeResult, ExchangeResultOutput,
-    ExchangeSlot, ExchangeSource, EXCHANGE_PROFILE_V1,
+    keyset_id, rule_id, ExchangeOutput, ExchangeRequest, ExchangeRequestV2, ExchangeResult,
+    ExchangeResultOutput, ExchangeResultV2, ExchangeSlot, ExchangeSource, EXCHANGE_PROFILE_V1,
+    EXCHANGE_PROFILE_V2, EXCHANGE_VERSION_V2,
 };
 use freebird_common::spend_key::v5_spend_key;
 use freebird_crypto::{
@@ -225,6 +229,179 @@ async fn e2e_fixture(issuer_id: &str, output_count: usize) -> E2eFixture {
     }
 }
 
+struct V2EngineFixture {
+    _dir: tempfile::TempDir,
+    graph: ExchangeProfileV2,
+    request_ab: ExchangeRequestV2,
+    request_ba: ExchangeRequestV2,
+    receipt_path: std::path::PathBuf,
+}
+
+fn v2_receipt_ring(
+    active_path: &std::path::Path,
+    retained_paths: &[std::path::PathBuf],
+) -> super::ReceiptKeyRing {
+    let now = time::OffsetDateTime::now_utc().unix_timestamp() as u64;
+    let config = |path: &std::path::Path, purpose: &str| {
+        let key = load_or_generate_receipt_key(path).unwrap();
+        super::ReceiptKeyConfig {
+            metadata: freebird_common::api::ExchangeReceiptKeyInfo {
+                key_id: key.key_id(),
+                algorithm: "Ed25519".into(),
+                purpose: purpose.into(),
+                public_key_b64: Base64UrlUnpadded::encode_string(key.verifying_key().as_bytes()),
+                valid_from: now - 60,
+                valid_until: now + 3600,
+            },
+            private_key_path: path.to_path_buf(),
+        }
+    };
+    let active = config(active_path, "exchange_receipt_active");
+    let retained = retained_paths
+        .iter()
+        .map(|path| config(path, "exchange_receipt_retained"))
+        .collect::<Vec<_>>();
+    super::ReceiptKeyRing::load_v2(active, &retained).unwrap()
+}
+
+async fn v2_engine_fixture(issuer_id: &str) -> V2EngineFixture {
+    let dir = tempfile::tempdir().unwrap();
+    let provider_a = SoftwareBlindRsaProvider::generate(2048).unwrap();
+    let provider_b = SoftwareBlindRsaProvider::generate(2048).unwrap();
+    let path_a = dir.path().join("a.der");
+    let path_b = dir.path().join("b.der");
+    for (path, provider) in [(&path_a, &provider_a), (&path_b, &provider_b)] {
+        std::fs::write(path, provider.to_der().unwrap()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let descriptor = |provider: &SoftwareBlindRsaProvider| {
+        let mut descriptor = ExchangeDescriptorV2 {
+            id: String::new(),
+            profile_id: EXCHANGE_PROFILE_V2.into(),
+            issuer_id: issuer_id.into(),
+            kid: hex::encode(provider.token_key_id()),
+            audience: Some("exchange".into()),
+            spki_b64: Base64UrlUnpadded::encode_string(provider.public_key_spki()),
+            suite: "RSABSSA-SHA384-PSS-Deterministic".into(),
+            valid_from: now - 60,
+            valid_until: now + 3600,
+        };
+        descriptor.id = descriptor.canonical_id().unwrap();
+        descriptor
+    };
+    let keyset = |descriptor: ExchangeDescriptorV2, path: &std::path::Path| {
+        let mut keyset = ExchangeKeysetV2 {
+            id: String::new(),
+            keys: vec![ExchangeKeyV2 {
+                descriptor,
+                private_key_path: Some(path.display().to_string()),
+            }],
+        };
+        keyset.id = keyset.canonical_id();
+        keyset
+    };
+    let keyset_a = keyset(descriptor(&provider_a), &path_a);
+    let keyset_b = keyset(descriptor(&provider_b), &path_b);
+    let transition = |source: &ExchangeKeysetV2, target: &ExchangeKeysetV2, budget: &str| {
+        let mut transition = ExchangeTransitionV2 {
+            id: String::new(),
+            source_keyset_id: source.id.clone(),
+            target_keyset_id: target.id.clone(),
+            sources: vec![ExchangeTransitionSlotV2 {
+                descriptor_id: source.keys[0].descriptor.id.clone(),
+                slot_id: "in".into(),
+                class: "bearer".into(),
+                quantity: 1,
+            }],
+            outputs: vec![ExchangeTransitionSlotV2 {
+                descriptor_id: target.keys[0].descriptor.id.clone(),
+                slot_id: "out".into(),
+                class: "bearer".into(),
+                quantity: 1,
+            }],
+            budget_id: budget.into(),
+            budget_limit: 100,
+            admission_state: ExchangeAdmissionStateV2::AcceptingNew,
+        };
+        transition.id = transition.canonical_id();
+        transition
+    };
+    let transition_ab = transition(&keyset_a, &keyset_b, "budget-a-b");
+    let transition_ba = transition(&keyset_b, &keyset_a, "budget-b-a");
+    let mut graph = ExchangeProfileV2 {
+        profile_id: EXCHANGE_PROFILE_V2.into(),
+        graph_id: String::new(),
+        keysets: vec![keyset_a.clone(), keyset_b.clone()],
+        transitions: vec![transition_ab.clone(), transition_ba.clone()],
+    };
+    graph.graph_id = graph.canonical_graph_id();
+    let request = |operation: [u8; 16],
+                   source: &ExchangeKeysetV2,
+                   target: &ExchangeKeysetV2,
+                   transition: &ExchangeTransitionV2,
+                   artifact: String,
+                   provider: &SoftwareBlindRsaProvider| {
+        let mut representative = vec![0u8; usize::from(provider.modulus_bits()) / 8];
+        *representative.last_mut().unwrap() = 1;
+        ExchangeRequestV2 {
+            version: EXCHANGE_VERSION_V2,
+            public_operation_id: Base64UrlUnpadded::encode_string(&operation),
+            graph_id: graph.graph_id.clone(),
+            transition_id: transition.id.clone(),
+            source_keyset_id: source.id.clone(),
+            target_keyset_id: target.id.clone(),
+            sources: vec![ExchangeSource {
+                slot: ExchangeSlot {
+                    descriptor_id: source.keys[0].descriptor.id.clone(),
+                    keyset_id: source.id.clone(),
+                    slot_id: "in".into(),
+                    quantity: 1,
+                },
+                artifact,
+            }],
+            outputs: vec![ExchangeOutput {
+                slot: ExchangeSlot {
+                    descriptor_id: target.keys[0].descriptor.id.clone(),
+                    keyset_id: target.id.clone(),
+                    slot_id: "out".into(),
+                    quantity: 1,
+                },
+                blinded_value: Base64UrlUnpadded::encode_string(&representative),
+            }],
+        }
+    };
+    let artifact_a = issue_source_artifact(&provider_a, issuer_id, [0xa1; 32]).await;
+    let artifact_b = issue_source_artifact(&provider_b, issuer_id, [0xb1; 32]).await;
+    let request_ab = request(
+        [0xa1; 16],
+        &keyset_a,
+        &keyset_b,
+        &transition_ab,
+        artifact_a,
+        &provider_b,
+    );
+    let request_ba = request(
+        [0xb1; 16],
+        &keyset_b,
+        &keyset_a,
+        &transition_ba,
+        artifact_b,
+        &provider_a,
+    );
+    V2EngineFixture {
+        receipt_path: dir.path().join("receipt.key"),
+        _dir: dir,
+        graph,
+        request_ab,
+        request_ba,
+    }
+}
+
 async fn reserve(
     store: &ExchangeStore,
     id: &[u8; 16],
@@ -269,6 +446,266 @@ fn created(outcome: ReserveOutcome) -> Vec<u8> {
     }
 }
 
+fn created_v2(outcome: V2ReserveOutcome) -> Vec<u8> {
+    match outcome {
+        V2ReserveOutcome::Created(reservation) => reservation.fence,
+        other => panic!("expected V2 creation, got {other:?}"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reserve_v2(
+    store: &ExchangeStore,
+    id: &[u8; 16],
+    hash: &[u8; 32],
+    capability: &[u8; 32],
+    source_key: &str,
+    budget_id: &str,
+    policy_digest: &[u8; 32],
+    budget_limit: u64,
+    quantity: u32,
+) -> V2ReserveOutcome {
+    let now = store.redis_time().await.unwrap() as i64;
+    let sources = [V2SourceSpend {
+        spend_key: source_key.into(),
+        valid_from: now - 1,
+        valid_until: now + 120,
+    }];
+    let outputs = [OutputWork {
+        quantity,
+        ..output("v2-target")
+    }];
+    let signer_refs = [ExchangeStore::signer_ref_key_v2("v2-signer")];
+    store
+        .reserve_v2(V2ReservationInput {
+            operation_id: id,
+            public_operation_id: &Base64UrlUnpadded::encode_string(id),
+            status_capability: capability,
+            request_hash: hash,
+            graph_id: "graph-v2",
+            transition_id: "transition-v2",
+            source_keyset_id: "source-keyset-v2",
+            target_keyset_id: "target-keyset-v2",
+            sources: &sources,
+            outputs: &outputs,
+            signer_ref_keys: &signer_refs,
+            receipt_key_id: "receipt-v2",
+            receipt_ref_key: &ExchangeStore::receipt_ref_key_v2("receipt-v2"),
+            budget_id,
+            budget_policy_digest: policy_digest,
+            budget_limit,
+            receipt_lifetime_secs: 300,
+            receipt_valid_from: 1,
+            receipt_valid_until: freebird_common::api::EXCHANGE_MAX_VALID_UNTIL as u64,
+        })
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn exchange_v2_receipt_interval_comes_from_atomic_redis_time() {
+    let Some(h) = harness() else { return };
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let before = store.redis_time().await.unwrap();
+    created_v2(
+        reserve_v2(
+            &store,
+            &[0xd1; 16],
+            &[0xd1; 32],
+            &[0xd2; 32],
+            "spend:v2:redis-time",
+            "budget-v2-redis-time",
+            &[0xd3; 32],
+            10,
+            1,
+        )
+        .await,
+    );
+    let after = store.redis_time().await.unwrap();
+    let record = store.get_v2(&[0xd1; 16]).await.unwrap().unwrap();
+    assert!((before..=after).contains(&record.created_at));
+    assert_eq!(record.receipt_expires_at, record.created_at + 300);
+
+    let now = store.redis_time().await.unwrap() as i64;
+    let sources = [V2SourceSpend {
+        spend_key: "spend:v2:invalid-receipt-window".into(),
+        valid_from: now - 1,
+        valid_until: now + 60,
+    }];
+    let outputs = [output("invalid-receipt-window")];
+    let refs = [ExchangeStore::signer_ref_key_v2("invalid-window")];
+    let outcome = store
+        .reserve_v2(V2ReservationInput {
+            operation_id: &[0xd4; 16],
+            public_operation_id: &Base64UrlUnpadded::encode_string(&[0xd4; 16]),
+            status_capability: &[0xd5; 32],
+            request_hash: &[0xd4; 32],
+            graph_id: "graph",
+            transition_id: "transition",
+            source_keyset_id: "source",
+            target_keyset_id: "target",
+            sources: &sources,
+            outputs: &outputs,
+            signer_ref_keys: &refs,
+            receipt_key_id: "receipt",
+            receipt_ref_key: &ExchangeStore::receipt_ref_key_v2("receipt-invalid"),
+            budget_id: "budget-invalid-window",
+            budget_policy_digest: &[0xd6; 32],
+            budget_limit: 10,
+            receipt_lifetime_secs: 300,
+            receipt_valid_from: u64::try_from(now + 10).unwrap(),
+            receipt_valid_until: u64::try_from(now + 1000).unwrap(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(outcome, V2ReserveOutcome::InvalidEntries);
+    assert!(store.get_v2(&[0xd4; 16]).await.unwrap().is_none());
+    let spend: Option<Vec<u8>> = store
+        .raw_command("GET", &[b"spend:v2:invalid-receipt-window"])
+        .await
+        .unwrap();
+    assert!(spend.is_none());
+}
+
+#[tokio::test]
+async fn exchange_v2_exact_lua_max_uses_absolute_inclusive_expiry() {
+    let Some(h) = harness() else { return };
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let now = store.redis_time().await.unwrap() as i64;
+    let max = freebird_common::api::EXCHANGE_MAX_VALID_UNTIL;
+    let sources = [V2SourceSpend {
+        spend_key: "spend:v2:max-inclusive".into(),
+        valid_from: now - 1,
+        valid_until: max,
+    }];
+    let outputs = [output("max-inclusive")];
+    let refs = [ExchangeStore::signer_ref_key_v2("max-inclusive")];
+    let outcome = store
+        .reserve_v2(V2ReservationInput {
+            operation_id: &[0xd7; 16],
+            public_operation_id: &Base64UrlUnpadded::encode_string(&[0xd7; 16]),
+            status_capability: &[0xd8; 32],
+            request_hash: &[0xd7; 32],
+            graph_id: "graph",
+            transition_id: "transition",
+            source_keyset_id: "source",
+            target_keyset_id: "target",
+            sources: &sources,
+            outputs: &outputs,
+            signer_ref_keys: &refs,
+            receipt_key_id: "receipt",
+            receipt_ref_key: &ExchangeStore::receipt_ref_key_v2("receipt-max"),
+            budget_id: "budget-max-inclusive",
+            budget_policy_digest: &[0xd9; 32],
+            budget_limit: freebird_common::api::EXCHANGE_MAX_BUDGET_LIMIT,
+            receipt_lifetime_secs: 300,
+            receipt_valid_from: 1,
+            receipt_valid_until: max as u64,
+        })
+        .await
+        .unwrap();
+    created_v2(outcome);
+    let expires_at: i64 = store
+        .raw_command("EXPIRETIME", &[b"spend:v2:max-inclusive"])
+        .await
+        .unwrap();
+    assert_eq!(
+        expires_at,
+        max + 1,
+        "inclusive validity must expire at valid_until + 1"
+    );
+}
+
+#[tokio::test]
+async fn exchange_v2_registry_is_additive_and_detects_removal_or_conflict() {
+    use super::store::{KeyRegistryEntry, KeyRegistryOutcome};
+
+    let Some(h) = harness() else { return };
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let first = KeyRegistryEntry {
+        key_id: "1".repeat(64),
+        canonical_metadata: b"first".to_vec(),
+    };
+    let second = KeyRegistryEntry {
+        key_id: "2".repeat(64),
+        canonical_metadata: b"second".to_vec(),
+    };
+    assert_eq!(
+        store
+            .initialize_key_registry_v2(std::slice::from_ref(&first))
+            .await
+            .unwrap(),
+        KeyRegistryOutcome::Initialized
+    );
+    assert_eq!(
+        store
+            .initialize_key_registry_v2(&[first.clone(), second.clone()])
+            .await
+            .unwrap(),
+        KeyRegistryOutcome::Initialized
+    );
+    assert_eq!(
+        store
+            .initialize_key_registry_v2(std::slice::from_ref(&second))
+            .await
+            .unwrap(),
+        KeyRegistryOutcome::Missing
+    );
+    let mut conflict = first.clone();
+    conflict.canonical_metadata = b"changed".to_vec();
+    assert_eq!(
+        store
+            .initialize_key_registry_v2(&[conflict, second])
+            .await
+            .unwrap(),
+        KeyRegistryOutcome::Conflict
+    );
+}
+
+#[tokio::test]
+async fn exchange_v2_accepting_requires_prior_durable_disabled_publication() {
+    let Some(mut h) = harness() else { return };
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let transition = "a".repeat(64);
+    assert!(store
+        .validate_publication_admission_v2(std::slice::from_ref(&transition))
+        .await
+        .is_err());
+    let marker_key = format!("freebird:exchange:v2:publication:disabled:{transition}");
+    let marker_exists: i64 = store
+        .raw_command("EXISTS", &[marker_key.as_bytes()])
+        .await
+        .unwrap();
+    assert_eq!(
+        marker_exists, 0,
+        "failed startup validation must not leave an acknowledgement"
+    );
+    store
+        .acknowledge_disabled_publication_v2(std::slice::from_ref(&transition))
+        .await
+        .unwrap();
+    h.restart().unwrap();
+    let restarted = ExchangeStore::new(&h.url).unwrap();
+    let mut last_loading_error = None;
+    for _ in 0..250 {
+        match restarted
+            .validate_publication_admission_v2(std::slice::from_ref(&transition))
+            .await
+        {
+            Ok(()) => return,
+            Err(error) if error.to_string().contains("loading the dataset") => {
+                last_loading_error = Some(error);
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(error) => panic!("durable publication acknowledgement was not restored: {error:#}"),
+        }
+    }
+    panic!(
+        "Redis did not finish loading durable publication acknowledgement: {:#}",
+        last_loading_error.unwrap()
+    );
+}
+
 async fn force_lease(store: &ExchangeStore, id: &[u8; 16], lease: u64) {
     let key = ExchangeStore::op(id);
     let lease = lease.to_string();
@@ -278,8 +715,520 @@ async fn force_lease(store: &ExchangeStore, id: &[u8; 16], lease: u64) {
         .unwrap();
 }
 
+async fn force_lease_v2(store: &ExchangeStore, id: &[u8; 16], lease: u64) {
+    let key = ExchangeStore::op_v2(id);
+    let lease = lease.to_string();
+    let _: i64 = store
+        .raw_command("HSET", &[key.as_bytes(), b"lease_until", lease.as_bytes()])
+        .await
+        .unwrap();
+}
+
+async fn seed_v2_pending(
+    engine: &super::ExchangeEngine,
+    store: &ExchangeStore,
+    request: &ExchangeRequestV2,
+    capability: &[u8; 32],
+) -> Vec<u8> {
+    let operation =
+        freebird_common::exchange_api::parse_operation_id(&request.public_operation_id).unwrap();
+    let fresh = engine.validate_fresh_v2(request).unwrap();
+    let receipt_key_id = engine.receipt_keys.active_id().to_owned();
+    let (receipt_valid_from, receipt_valid_until) = engine.receipt_keys.active_validity().unwrap();
+    let receipt_ref = ExchangeStore::receipt_ref_key_v2(&receipt_key_id);
+    let outcome = store
+        .reserve_v2(V2ReservationInput {
+            operation_id: &operation,
+            public_operation_id: &request.public_operation_id,
+            status_capability: capability,
+            request_hash: &request.request_digest().unwrap(),
+            graph_id: &request.graph_id,
+            transition_id: &request.transition_id,
+            source_keyset_id: &request.source_keyset_id,
+            target_keyset_id: &request.target_keyset_id,
+            sources: &fresh.sources,
+            outputs: &fresh.outputs,
+            signer_ref_keys: &fresh.signer_refs,
+            receipt_key_id: &receipt_key_id,
+            receipt_ref_key: &receipt_ref,
+            budget_id: &fresh.budget_id,
+            budget_policy_digest: &fresh.budget_policy_digest,
+            budget_limit: fresh.budget_limit,
+            receipt_lifetime_secs: engine.receipt_lifetime_secs,
+            receipt_valid_from,
+            receipt_valid_until,
+        })
+        .await
+        .unwrap();
+    created_v2(outcome)
+}
+
 async fn exchange_test_panic() -> axum::http::StatusCode {
     panic!("sensitive test panic")
+}
+
+#[tokio::test]
+async fn exchange_v2_engine_bidirectional_exact_status_and_secret_non_persistence() {
+    let Some(h) = harness() else { return };
+    let issuer_id = "issuer:v2:bidirectional";
+    let fixture = v2_engine_fixture(issuer_id).await;
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let engine = super::ExchangeEngine::new_v2(
+        fixture.graph.clone(),
+        vec![],
+        store.clone(),
+        issuer_id.into(),
+        v2_receipt_ring(&fixture.receipt_path, &[]),
+        300,
+    )
+    .await
+    .unwrap();
+    let capability_ab = [0x31; 32];
+    let capability_ba = [0x32; 32];
+    let response_ab = match engine
+        .process_or_recover_v2(&fixture.request_ab, &capability_ab)
+        .await
+        .unwrap()
+    {
+        super::ProcessDecision::Committed(response) => response,
+        decision => panic!("A to B did not commit: {decision:?}"),
+    };
+    assert!(matches!(
+        engine
+            .process_or_recover_v2(&fixture.request_ba, &capability_ba)
+            .await
+            .unwrap(),
+        super::ProcessDecision::Committed(_)
+    ));
+    assert_eq!(
+        engine
+            .process_or_recover_v2(&fixture.request_ab, &capability_ab)
+            .await
+            .unwrap(),
+        super::ProcessDecision::Committed(response_ab.clone())
+    );
+    let operation_ab =
+        freebird_common::exchange_api::parse_operation_id(&fixture.request_ab.public_operation_id)
+            .unwrap();
+    assert_eq!(
+        engine
+            .status_v2(&operation_ab, &capability_ab)
+            .await
+            .unwrap(),
+        super::StatusDecision::Committed(response_ab.clone())
+    );
+    assert_eq!(
+        engine.status_v2(&operation_ab, &[0x99; 32]).await.unwrap(),
+        super::StatusDecision::Unauthorized
+    );
+    assert_eq!(
+        engine
+            .process_or_recover_v2(&fixture.request_ab, &[0x99; 32])
+            .await
+            .unwrap(),
+        super::ProcessDecision::Conflict
+    );
+    let mut unauthorized_edge = fixture.request_ab.clone();
+    unauthorized_edge.public_operation_id = Base64UrlUnpadded::encode_string(&[0xcc; 16]);
+    unauthorized_edge.transition_id = "f".repeat(64);
+    assert_eq!(
+        engine
+            .process_or_recover_v2(&unauthorized_edge, &[0x33; 32])
+            .await
+            .unwrap(),
+        super::ProcessDecision::Rejected
+    );
+
+    let response: serde_json::Value = serde_json::from_slice(&response_ab).unwrap();
+    assert!(response.get("status_capability").is_none());
+    assert!(response["result"].get("status_capability").is_none());
+    assert!(response["receipt"].get("status_capability").is_none());
+    for (request, capability) in [
+        (&fixture.request_ab, &capability_ab),
+        (&fixture.request_ba, &capability_ba),
+    ] {
+        let operation =
+            freebird_common::exchange_api::parse_operation_id(&request.public_operation_id)
+                .unwrap();
+        let values: Vec<Vec<u8>> = store
+            .raw_command("HVALS", &[ExchangeStore::op_v2(&operation).as_bytes()])
+            .await
+            .unwrap();
+        let raw_source = Base64UrlUnpadded::decode_vec(&request.sources[0].artifact).unwrap();
+        assert!(!values.iter().any(|value| {
+            value
+                .windows(raw_source.len())
+                .any(|window| window == raw_source)
+                || value
+                    .windows(capability.len())
+                    .any(|window| window == capability.as_slice())
+        }));
+    }
+}
+
+#[tokio::test]
+async fn exchange_v2_source_expiry_uses_global_key_longest_validity() {
+    let Some(h) = harness() else { return };
+    let issuer_id = "issuer:v2:global-expiry";
+    let fixture = v2_engine_fixture(issuer_id).await;
+    let source = &fixture.graph.keysets[0].keys[0].descriptor;
+    let longest = source.valid_until + 600;
+    let mut validity = fixture
+        .graph
+        .keysets
+        .iter()
+        .flat_map(|keyset| &keyset.keys)
+        .map(|key| (key.descriptor.kid.clone(), key.descriptor.valid_until))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    validity.insert(source.kid.clone(), longest);
+    let engine = super::ExchangeEngine::new_v2_with_source_validity(
+        fixture.graph.clone(),
+        vec![],
+        ExchangeStore::new(&h.url).unwrap(),
+        issuer_id.into(),
+        v2_receipt_ring(&fixture.receipt_path, &[]),
+        300,
+        validity,
+    )
+    .await
+    .unwrap();
+    let work = engine.validate_fresh_v2(&fixture.request_ab).unwrap();
+    assert_eq!(work.sources[0].valid_until, longest);
+}
+
+#[tokio::test]
+async fn exchange_v2_recovery_only_finishes_pending_and_disabled_rejects() {
+    let Some(h) = harness() else { return };
+    let issuer_id = "issuer:v2:recovery";
+    let fixture = v2_engine_fixture(issuer_id).await;
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let accepting = super::ExchangeEngine::new_v2(
+        fixture.graph.clone(),
+        vec![],
+        store.clone(),
+        issuer_id.into(),
+        v2_receipt_ring(&fixture.receipt_path, &[]),
+        300,
+    )
+    .await
+    .unwrap();
+    let capability_ab = [0x41; 32];
+    seed_v2_pending(&accepting, &store, &fixture.request_ab, &capability_ab).await;
+    let capability_ba = [0x42; 32];
+    seed_v2_pending(&accepting, &store, &fixture.request_ba, &capability_ba).await;
+    let operation_ab =
+        freebird_common::exchange_api::parse_operation_id(&fixture.request_ab.public_operation_id)
+            .unwrap();
+    assert_eq!(
+        accepting
+            .status_v2(&operation_ab, &capability_ab)
+            .await
+            .unwrap(),
+        super::StatusDecision::Pending
+    );
+    assert_eq!(
+        accepting
+            .process_or_recover_v2(&fixture.request_ab, &capability_ab)
+            .await
+            .unwrap(),
+        super::ProcessDecision::Retryable
+    );
+    force_lease_v2(&store, &operation_ab, 0).await;
+    let operation_ba =
+        freebird_common::exchange_api::parse_operation_id(&fixture.request_ba.public_operation_id)
+            .unwrap();
+    force_lease_v2(&store, &operation_ba, 0).await;
+    let mut recovery_graph = fixture.graph.clone();
+    recovery_graph.transitions[0].admission_state = ExchangeAdmissionStateV2::RecoveryOnly;
+    let recovery = super::ExchangeEngine::new_v2(
+        recovery_graph,
+        vec![],
+        store.clone(),
+        issuer_id.into(),
+        v2_receipt_ring(&fixture.receipt_path, &[]),
+        300,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        recovery
+            .process_or_recover_v2(&fixture.request_ab, &capability_ab)
+            .await
+            .unwrap(),
+        super::ProcessDecision::Committed(_)
+    ));
+
+    let mut disabled_graph = fixture.graph.clone();
+    disabled_graph.transitions[1].admission_state = ExchangeAdmissionStateV2::Disabled;
+    let disabled = super::ExchangeEngine::new_v2(
+        disabled_graph,
+        vec![],
+        store,
+        issuer_id.into(),
+        v2_receipt_ring(&fixture.receipt_path, &[]),
+        300,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        disabled
+            .process_or_recover_v2(&fixture.request_ba, &capability_ba)
+            .await
+            .unwrap(),
+        super::ProcessDecision::Rejected
+    );
+    let mut fresh_disabled = fixture.request_ba.clone();
+    fresh_disabled.public_operation_id = Base64UrlUnpadded::encode_string(&[0xb2; 16]);
+    assert_eq!(
+        disabled
+            .process_or_recover_v2(&fresh_disabled, &[0x43; 32])
+            .await
+            .unwrap(),
+        super::ProcessDecision::Rejected
+    );
+}
+
+#[tokio::test]
+async fn exchange_v2_private_signers_may_retire_only_after_disabled_work_is_drained() {
+    let Some(h) = harness() else { return };
+    let issuer_id = "issuer:v2:retirement";
+    let fixture = v2_engine_fixture(issuer_id).await;
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let accepting = super::ExchangeEngine::new_v2(
+        fixture.graph.clone(),
+        vec![],
+        store.clone(),
+        issuer_id.into(),
+        v2_receipt_ring(&fixture.receipt_path, &[]),
+        300,
+    )
+    .await
+    .unwrap();
+    let capability = [0xe1; 32];
+    seed_v2_pending(&accepting, &store, &fixture.request_ab, &capability).await;
+
+    let mut retired = fixture.graph.clone();
+    for transition in &mut retired.transitions {
+        transition.admission_state = ExchangeAdmissionStateV2::RecoveryOnly;
+    }
+    for key in retired
+        .keysets
+        .iter_mut()
+        .flat_map(|keyset| &mut keyset.keys)
+    {
+        key.private_key_path = None;
+    }
+    assert!(super::ExchangeEngine::new_v2(
+        retired.clone(),
+        vec![],
+        store.clone(),
+        issuer_id.into(),
+        v2_receipt_ring(&fixture.receipt_path, &[]),
+        300,
+    )
+    .await
+    .is_err());
+
+    let operation =
+        freebird_common::exchange_api::parse_operation_id(&fixture.request_ab.public_operation_id)
+            .unwrap();
+    force_lease_v2(&store, &operation, 0).await;
+    assert!(matches!(
+        accepting
+            .process_or_recover_v2(&fixture.request_ab, &capability)
+            .await
+            .unwrap(),
+        super::ProcessDecision::Committed(_)
+    ));
+    for transition in &mut retired.transitions {
+        transition.admission_state = ExchangeAdmissionStateV2::Disabled;
+    }
+    super::ExchangeEngine::new_v2(
+        retired,
+        vec![],
+        store,
+        issuer_id.into(),
+        v2_receipt_ring(&fixture.receipt_path, &[]),
+        300,
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn exchange_v2_recovery_rejects_tampered_persisted_result_binding() {
+    let Some(h) = harness() else { return };
+    let issuer_id = "issuer:v2:tamper";
+    let fixture = v2_engine_fixture(issuer_id).await;
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let engine = super::ExchangeEngine::new_v2(
+        fixture.graph.clone(),
+        vec![],
+        store.clone(),
+        issuer_id.into(),
+        v2_receipt_ring(&fixture.receipt_path, &[]),
+        300,
+    )
+    .await
+    .unwrap();
+    let capability = [0x51; 32];
+    let fence = seed_v2_pending(&engine, &store, &fixture.request_ab, &capability).await;
+    let operation =
+        freebird_common::exchange_api::parse_operation_id(&fixture.request_ab.public_operation_id)
+            .unwrap();
+    let mut result = ExchangeResultV2 {
+        version: EXCHANGE_VERSION_V2,
+        public_operation_id: fixture.request_ab.public_operation_id.clone(),
+        graph_id: "f".repeat(64),
+        transition_id: fixture.request_ab.transition_id.clone(),
+        source_keyset_id: fixture.request_ab.source_keyset_id.clone(),
+        target_keyset_id: fixture.request_ab.target_keyset_id.clone(),
+        outputs: vec![ExchangeResultOutput {
+            slot: fixture.request_ab.outputs[0].slot.clone(),
+            blinded_value: fixture.request_ab.outputs[0].blinded_value.clone(),
+            blind_signature: Base64UrlUnpadded::encode_string(&[1; 256]),
+        }],
+        result_digest: String::new(),
+    };
+    let digest = result.result_digest().unwrap();
+    result.result_digest = Base64UrlUnpadded::encode_string(&digest);
+    store
+        .result_ready_v2(
+            &operation,
+            &fence,
+            &serde_json::to_vec(&result).unwrap(),
+            &digest,
+        )
+        .await
+        .unwrap();
+    force_lease_v2(&store, &operation, 0).await;
+    assert!(engine
+        .process_or_recover_v2(&fixture.request_ab, &capability)
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn exchange_v2_http_pending_retry_conflict_status_and_exact_replay() {
+    let Some(h) = harness() else { return };
+    let issuer_id = "issuer:v2:http";
+    let fixture = v2_engine_fixture(issuer_id).await;
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let engine = super::ExchangeEngine::new_v2(
+        fixture.graph.clone(),
+        vec![],
+        store.clone(),
+        issuer_id.into(),
+        v2_receipt_ring(&fixture.receipt_path, &[]),
+        300,
+    )
+    .await
+    .unwrap();
+    let pending_capability = [0x61; 32];
+    seed_v2_pending(&engine, &store, &fixture.request_ba, &pending_capability).await;
+    let engine = Arc::new(engine);
+    let voprf = Arc::new(
+        crate::multi_key_voprf::MultiKeyVoprfCore::new(
+            [7; 32],
+            "public".into(),
+            "kid".into(),
+            freebird_crypto::VOPRF_CONTEXT_V4,
+        )
+        .unwrap(),
+    );
+    let state = Arc::new(crate::AppStateWithSybil {
+        issuer_id: issuer_id.into(),
+        kid: "kid".into(),
+        pubkey_b64: "public".into(),
+        require_tls: false,
+        behind_proxy: false,
+        sybil_checker: None,
+        invitation_system: None,
+        public_issuer: None,
+        exchange_engine: Some(engine),
+        exchange_metadata: None,
+        epoch_duration_sec: 86_400,
+        epoch_retention: 2,
+        admin_api_key: None,
+    });
+    let app = crate::startup::apply_public_layers(
+        crate::startup::exchange_router(3 * 1024 * 1024, 30).with_state((state, voprf)),
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .await
+        .unwrap()
+    });
+    let client = reqwest::Client::new();
+    let exchange_url = format!("http://{address}/v2/public/exchange");
+    let status_url = format!(
+        "http://{address}/v2/public/exchange/status?public_operation_id={}",
+        fixture.request_ab.public_operation_id
+    );
+    let header = "exchange-status-capability";
+    let pending = client
+        .post(&exchange_url)
+        .header(
+            header,
+            Base64UrlUnpadded::encode_string(&pending_capability),
+        )
+        .json(&fixture.request_ba)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(pending.status(), reqwest::StatusCode::ACCEPTED);
+    assert_eq!(pending.headers()["retry-after"], "1");
+
+    let capability = [0x62; 32];
+    let encoded_capability = Base64UrlUnpadded::encode_string(&capability);
+    let committed = client
+        .post(&exchange_url)
+        .header(header, &encoded_capability)
+        .json(&fixture.request_ab)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(committed.status(), reqwest::StatusCode::OK);
+    let exact = committed.bytes().await.unwrap();
+    let replay = client
+        .post(&exchange_url)
+        .header(header, &encoded_capability)
+        .json(&fixture.request_ab)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(replay.status(), reqwest::StatusCode::OK);
+    assert_eq!(replay.bytes().await.unwrap(), exact);
+    let status = client
+        .get(&status_url)
+        .header(header, &encoded_capability)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(status.status(), reqwest::StatusCode::OK);
+    assert_eq!(status.bytes().await.unwrap(), exact);
+    let unauthorized = client
+        .get(&status_url)
+        .header(header, Base64UrlUnpadded::encode_string(&[0x63; 32]))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(unauthorized.status(), reqwest::StatusCode::FORBIDDEN);
+    let conflict = client
+        .post(&exchange_url)
+        .header(header, Base64UrlUnpadded::encode_string(&[0x63; 32]))
+        .json(&fixture.request_ab)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(conflict.status(), reqwest::StatusCode::CONFLICT);
+    server.abort();
 }
 
 #[tokio::test]
@@ -472,40 +1421,25 @@ async fn exchange_engine_multi_input_multi_output_rule_commits_atomically() {
 #[tokio::test]
 async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
     let Some(h) = harness() else { return };
-    let mut fixture = e2e_fixture("issuer:http:e2e", 1).await;
+    let fixture = v2_engine_fixture("issuer:http:e2e").await;
     let store = ExchangeStore::new(&h.url).unwrap();
-    let receipt_keys = super::ReceiptKeyRing::load(&fixture.receipt_path, &[]).unwrap();
-    let receipt_key_id = receipt_keys.active_id().to_owned();
-    let original_artifact = fixture.request.sources[0].artifact.clone();
-    fixture.request.sources[0].artifact = fixture.alternate_artifact.clone();
-    let pending_request = fixture.request.clone();
-    let pending_operation = [0x56; 16];
-    seed_fixture_work(
-        &store,
-        &pending_operation,
-        &fixture,
-        "issuer:http:e2e",
-        &receipt_key_id,
+    let receipt_keys = v2_receipt_ring(&fixture.receipt_path, &[]);
+    let receipt_metadata = receipt_keys.discovery_metadata();
+    let exchange_metadata =
+        crate::startup::exchange_discovery_v2(&fixture.graph, &[], &receipt_metadata).unwrap();
+    let engine = super::ExchangeEngine::new_v2(
+        fixture.graph.clone(),
+        vec![],
+        store.clone(),
+        "issuer:http:e2e".into(),
+        receipt_keys,
+        300,
     )
-    .await;
-    fixture.request.sources[0].artifact = original_artifact;
-    let exchange_metadata = crate::startup::exchange_discovery(
-        &fixture.profile,
-        &[],
-        receipt_keys.discovery_metadata(),
-    );
-    let engine = Arc::new(
-        super::ExchangeEngine::new(
-            fixture.profile.clone(),
-            vec![],
-            store.clone(),
-            "issuer:http:e2e".into(),
-            receipt_keys,
-            300,
-        )
-        .await
-        .unwrap(),
-    );
+    .await
+    .unwrap();
+    let pending_capability = [0x56; 32];
+    seed_v2_pending(&engine, &store, &fixture.request_ba, &pending_capability).await;
+    let engine = Arc::new(engine);
     let voprf = Arc::new(
         crate::multi_key_voprf::MultiKeyVoprfCore::new(
             [7; 32],
@@ -557,17 +1491,28 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
         .unwrap()
     });
     let client = reqwest::Client::new();
-    let exchange_url = format!("http://{address}/v1/public/exchange");
-    let status_url = format!("http://{address}/v1/public/exchange/status");
-    let operation = Base64UrlUnpadded::encode_string(&[0x53; 16]);
-    let request_body = serde_json::to_vec(&fixture.request).unwrap();
+    let exchange_url = format!("http://{address}/v2/public/exchange");
+    let status_url = format!(
+        "http://{address}/v2/public/exchange/status?public_operation_id={}",
+        fixture.request_ab.public_operation_id
+    );
+    let operation = Base64UrlUnpadded::encode_string(&[0x53; 32]);
+    let request_body = serde_json::to_vec(&fixture.request_ab).unwrap();
+    let legacy_path = client
+        .post(format!("http://{address}/v1/public/exchange"))
+        .header("exchange-status-capability", &operation)
+        .body(request_body.clone())
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(legacy_path.status(), reqwest::StatusCode::NOT_FOUND);
     let pending = client
         .post(&exchange_url)
         .header(
-            "idempotency-key",
-            Base64UrlUnpadded::encode_string(&pending_operation),
+            "exchange-status-capability",
+            Base64UrlUnpadded::encode_string(&pending_capability),
         )
-        .json(&pending_request)
+        .json(&fixture.request_ba)
         .send()
         .await
         .unwrap();
@@ -577,7 +1522,7 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
     let response = client
         .post(&exchange_url)
         .header("content-type", "application/json")
-        .header("idempotency-key", &operation)
+        .header("exchange-status-capability", &operation)
         .body(request_body.clone())
         .send()
         .await
@@ -587,7 +1532,7 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
     let committed = response.bytes().await.unwrap();
     let response = client
         .get(&status_url)
-        .header("idempotency-key", &operation)
+        .header("exchange-status-capability", &operation)
         .send()
         .await
         .unwrap();
@@ -596,33 +1541,33 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
     assert_eq!(response.bytes().await.unwrap(), committed);
     let retry_one = client
         .post(&exchange_url)
-        .header("idempotency-key", &operation)
-        .json(&fixture.request)
+        .header("exchange-status-capability", &operation)
+        .json(&fixture.request_ab)
         .send();
     let retry_two = client
         .post(&exchange_url)
-        .header("idempotency-key", &operation)
-        .json(&fixture.request)
+        .header("exchange-status-capability", &operation)
+        .json(&fixture.request_ab)
         .send();
     let (retry_one, retry_two) = tokio::join!(retry_one, retry_two);
     for retry in [retry_one.unwrap(), retry_two.unwrap()] {
         assert_eq!(retry.status(), reqwest::StatusCode::OK);
         assert_eq!(retry.bytes().await.unwrap(), committed);
     }
-    let mut changed = fixture.request.clone();
-    changed.sources[0].artifact = fixture.alternate_artifact;
+    let mut changed = fixture.request_ab.clone();
+    changed.sources[0].artifact = fixture.request_ba.sources[0].artifact.clone();
     let response = client
         .post(&exchange_url)
         .header("content-type", "application/json")
-        .header("idempotency-key", &operation)
+        .header("exchange-status-capability", &operation)
         .body(serde_json::to_vec(&changed).unwrap())
         .send()
         .await
         .unwrap();
     assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
     let mut duplicate_headers = reqwest::header::HeaderMap::new();
-    duplicate_headers.append("idempotency-key", operation.parse().unwrap());
-    duplicate_headers.append("idempotency-key", operation.parse().unwrap());
+    duplicate_headers.append("exchange-status-capability", operation.parse().unwrap());
+    duplicate_headers.append("exchange-status-capability", operation.parse().unwrap());
     let response = client
         .post(&exchange_url)
         .header("content-type", "application/json")
@@ -636,8 +1581,8 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
     let oversized = client
         .post(&exchange_url)
         .header(
-            "idempotency-key",
-            Base64UrlUnpadded::encode_string(&[0x57; 16]),
+            "exchange-status-capability",
+            Base64UrlUnpadded::encode_string(&[0x57; 32]),
         )
         .header("content-type", "application/json")
         .body(vec![b'x'; 3 * 1024 * 1024 + 1])
@@ -647,10 +1592,13 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
     assert_eq!(oversized.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(oversized.headers()["cache-control"], "no-store");
     let unknown = client
-        .get(&status_url)
+        .get(format!(
+            "http://{address}/v2/public/exchange/status?public_operation_id={}",
+            Base64UrlUnpadded::encode_string(&[0x7f; 16])
+        ))
         .header(
-            "idempotency-key",
-            Base64UrlUnpadded::encode_string(&[0x7f; 16]),
+            "exchange-status-capability",
+            Base64UrlUnpadded::encode_string(&[0x7f; 32]),
         )
         .send()
         .await
@@ -667,10 +1615,10 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
         .unwrap();
     assert_eq!(discovery["public"], serde_json::json!([]));
     assert_eq!(
-        discovery["exchange"]["receipt_keys"][0]["purpose"],
+        discovery["exchange"]["active_receipt_key"]["purpose"],
         "exchange_receipt_active"
     );
-    let public_key = discovery["exchange"]["receipt_keys"][0]["public_key_b64"]
+    let public_key = discovery["exchange"]["active_receipt_key"]["public_key_b64"]
         .as_str()
         .unwrap();
     assert_eq!(Base64UrlUnpadded::decode_vec(public_key).unwrap().len(), 32);
@@ -1270,7 +2218,7 @@ async fn exchange_redis_stale_fence_repeated_conflict_and_underflow() {
     let fence2 =
         created(reserve(&store, &id2, &[22; 32], "spend:underflow", "underflow", &[]).await);
     let record = store.get(&id2).await.unwrap().unwrap();
-    let _: i64 = store
+    let _: String = store
         .raw_command("SET", &[record.target_refs[0].key.as_bytes(), b"0"])
         .await
         .unwrap();
@@ -1302,7 +2250,7 @@ async fn exchange_redis_stale_fence_repeated_conflict_and_underflow() {
         TransitionOutcome::Applied
     );
     let record3 = store.get(&id3).await.unwrap().unwrap();
-    let _: i64 = store
+    let _: String = store
         .raw_command("SET", &[record3.receipt_ref.as_bytes(), b"0"])
         .await
         .unwrap();
@@ -1545,24 +2493,34 @@ async fn exchange_redis_committed_exact_response_no_raw_source_and_no_ttl() {
 async fn exchange_engine_rotation_and_aof_restart_recover_reserved_and_result_ready() {
     let Some(mut harness) = harness() else { return };
     let issuer_id = "issuer:e2e:rotation";
-    let old = e2e_fixture(issuer_id, 1).await;
+    let mut old = e2e_fixture(issuer_id, 1).await;
     let current = e2e_fixture(issuer_id, 1).await;
     let old_receipt_id = load_or_generate_receipt_key(&old.receipt_path)
         .unwrap()
         .key_id();
-    let retained_ring = super::ReceiptKeyRing::load(
+    let retained_ring = v2_receipt_ring(
         &current.receipt_path,
         std::slice::from_ref(&old.receipt_path),
+    );
+    let current_graph = v2_engine_fixture(issuer_id).await;
+    let mut retained_graph = v2_engine_fixture(issuer_id).await.graph;
+    for transition in &mut retained_graph.transitions {
+        transition.admission_state = ExchangeAdmissionStateV2::RecoveryOnly;
+    }
+    let receipt_metadata = retained_ring.discovery_metadata();
+    let discovery = crate::startup::exchange_discovery_v2(
+        &current_graph.graph,
+        std::slice::from_ref(&retained_graph),
+        &receipt_metadata,
     )
     .unwrap();
-    let discovery = crate::startup::exchange_discovery(
-        &current.profile,
-        std::slice::from_ref(&old.profile),
-        retained_ring.discovery_metadata(),
+    assert_eq!(discovery.retained_receipt_keys.len(), 1);
+    assert_eq!(
+        discovery.active_receipt_key.purpose,
+        "exchange_receipt_active"
     );
-    assert_eq!(discovery.receipt_keys.len(), 2);
     assert!(discovery
-        .receipt_keys
+        .retained_receipt_keys
         .iter()
         .any(|key| key.key_id == old_receipt_id && key.purpose == "exchange_receipt_retained"));
     let store = ExchangeStore::new(&harness.url).unwrap();
@@ -1577,11 +2535,12 @@ async fn exchange_engine_rotation_and_aof_restart_recover_reserved_and_result_re
     .await
     .unwrap();
     let reserved = [0x61; 16];
+    let reserved_request = old.request.clone();
     seed_fixture_work(&store, &reserved, &old, issuer_id, &old_receipt_id).await;
     force_lease(&store, &reserved, 0).await;
     assert_eq!(
         current_only_engine
-            .process_or_recover(&reserved, &old.request)
+            .process_or_recover(&reserved, &reserved_request)
             .await
             .unwrap(),
         super::ProcessDecision::Retryable
@@ -1592,6 +2551,7 @@ async fn exchange_engine_rotation_and_aof_restart_recover_reserved_and_result_re
         .await
         .unwrap();
     assert!(unavailable_spend.is_some());
+    old.request.sources[0].artifact = old.alternate_artifact.clone();
     let result_ready = [0x62; 16];
     let result_fence =
         seed_fixture_work(&store, &result_ready, &old, issuer_id, &old_receipt_id).await;
@@ -1638,7 +2598,7 @@ async fn exchange_engine_rotation_and_aof_restart_recover_reserved_and_result_re
     .await
     .unwrap();
     let reserved_response = match engine
-        .process_or_recover(&reserved, &old.request)
+        .process_or_recover(&reserved, &reserved_request)
         .await
         .unwrap()
     {
@@ -1655,7 +2615,7 @@ async fn exchange_engine_rotation_and_aof_restart_recover_reserved_and_result_re
     };
     assert_eq!(
         engine
-            .process_or_recover(&reserved, &old.request)
+            .process_or_recover(&reserved, &reserved_request)
             .await
             .unwrap(),
         super::ProcessDecision::Committed(reserved_response.clone())

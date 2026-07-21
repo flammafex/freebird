@@ -16,15 +16,18 @@ The `freebird-interface` binary exercises the V4 flow against local services on
 
 The optional public bearer exchange atomically spends one or more single-use V5
 artifacts and signs configured caller-blinded outputs. Clients use
-`POST /v1/public/exchange` and the fixed `GET /v1/public/exchange/status` route.
-Both carry a private, random 16-byte operation capability in exactly one
-`Idempotency-Key` header—never in a URL or query—and return
-`Cache-Control: no-store`. Durable retries recover the original response without
-signing or spending twice. Discovery publishes isolated exchange targets and
-active/retained Ed25519 receipt verification keys; public-only history keeps
-unexpired outputs and receipts verifiable after private signers retire. See
-[Public Bearer Exchange](docs/public-bearer-exchange.md) for the API, profile,
-Redis, recovery, and retention contract.
+`POST /v2/public/exchange` and
+`GET /v2/public/exchange/status?public_operation_id=...`. A request carries a
+public, non-authorizing 16-byte operation ID in its body; both routes require
+exactly one separate `Exchange-Status-Capability` header containing canonical
+base64url for 32 random bytes. The capability is header-only and must never be
+put in a body, URL, query, or log. Responses use `Cache-Control: no-store`, and
+durable retries recover the original response without signing or spending
+twice. Discovery publishes role-neutral V2 graphs and active/retained Ed25519
+receipt verification keys; public-only history keeps outputs and receipts
+verifiable after private signers retire. See [Public Bearer
+Exchange](docs/public-bearer-exchange.md) for the API, graph, Redis, recovery,
+and retention contract.
 
 ## Project Documents
 
@@ -277,6 +280,8 @@ Issuer public endpoints:
 | `POST` | `/v1/oprf/issue/batch` | Batch V4 issuance. |
 | `POST` | `/v1/public/issue` | Issue one V5 blind RSA signature. |
 | `POST` | `/v1/public/issue/batch` | Batch V5 public bearer issuance. |
+| `POST` | `/v2/public/exchange` | Atomically consume V5 sources and blind-sign outputs selected by a V2 graph transition. |
+| `GET` | `/v2/public/exchange/status?public_operation_id=...` | Recover exchange status using the separate 32-byte `Exchange-Status-Capability` header. |
 
 Verifier public endpoints:
 

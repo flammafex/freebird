@@ -1,35 +1,18 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Freebird public bearer exchange public history",
+  "title": "Freebird public bearer exchange V2 public history",
   "type": "object",
   "additionalProperties": false,
-  "required": ["target_keysets", "target_descriptors"],
   "properties": {
-    "target_keysets": {
+    "retained_graphs": {
       "type": "array",
-      "minItems": 1,
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["keyset_id", "descriptor_ids"],
-        "properties": {
-          "keyset_id": { "$ref": "#/$defs/lowerHexId" },
-          "descriptor_ids": {
-            "type": "array",
-            "minItems": 1,
-            "items": { "$ref": "#/$defs/lowerHexId" }
-          }
-        }
-      }
+      "maxItems": 63,
+      "items": { "$ref": "#/$defs/retainedGraph" }
     },
-    "target_descriptors": {
+    "retained_receipt_keys": {
       "type": "array",
-      "minItems": 1,
-      "items": { "$ref": "#/$defs/targetDescriptor" }
-    },
-    "receipt_keys": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/receiptKey" }
+      "maxItems": 63,
+      "items": { "$ref": "#/$defs/retainedReceiptKey" }
     }
   },
   "$defs": {
@@ -37,46 +20,159 @@
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
     },
+    "asciiId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[\\x20-\\x7E]+$"
+    },
     "base64url": {
       "type": "string",
+      "minLength": 1,
       "pattern": "^[A-Za-z0-9_-]+$"
     },
-    "targetDescriptor": {
+    "retainedGraph": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id",
+        "graph_id",
+        "descriptors",
+        "keysets",
+        "transitions"
+      ],
+      "properties": {
+        "profile_id": { "const": "freebird/public-bearer-exchange/v2" },
+        "graph_id": { "$ref": "#/$defs/lowerHexId" },
+        "descriptors": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/descriptor" }
+        },
+        "keysets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/keyset" }
+        },
+        "transitions": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/retainedTransition" }
+        }
+      }
+    },
+    "descriptor": {
       "type": "object",
       "additionalProperties": false,
       "required": [
         "descriptor_id",
-        "keyset_id",
-        "purpose",
         "profile_id",
-        "role",
         "issuer_id",
-        "class",
         "token_key_id",
         "pubkey_spki_b64",
         "suite",
         "valid_from",
-        "valid_until",
-        "max_quantity"
+        "valid_until"
       ],
       "properties": {
         "descriptor_id": { "$ref": "#/$defs/lowerHexId" },
-        "keyset_id": { "$ref": "#/$defs/lowerHexId" },
-        "purpose": { "const": "exchange_target" },
-        "profile_id": { "const": "freebird/public-bearer-exchange/v1" },
-        "role": { "const": "target" },
-        "issuer_id": { "type": "string", "minLength": 1, "maxLength": 128 },
-        "class": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "profile_id": { "const": "freebird/public-bearer-exchange/v2" },
+        "issuer_id": { "$ref": "#/$defs/asciiId" },
         "token_key_id": { "$ref": "#/$defs/lowerHexId" },
+        "audience": {
+          "oneOf": [
+            { "$ref": "#/$defs/asciiId" },
+            { "type": "null" }
+          ]
+        },
         "pubkey_spki_b64": { "$ref": "#/$defs/base64url" },
         "suite": { "const": "RSABSSA-SHA384-PSS-Deterministic" },
-        "valid_from": { "type": "integer" },
-        "valid_until": { "type": "integer" },
-        "max_quantity": { "type": "integer", "minimum": 1, "maximum": 64 },
-        "audience": { "type": ["string", "null"], "minLength": 1, "maxLength": 128 }
+        "valid_from": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "valid_until": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 9007199254740991
+        }
       }
     },
-    "receiptKey": {
+    "keyset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["keyset_id", "descriptor_ids"],
+      "properties": {
+        "keyset_id": { "$ref": "#/$defs/lowerHexId" },
+        "descriptor_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/lowerHexId" }
+        }
+      }
+    },
+    "slot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["descriptor_id", "slot_id", "class", "quantity"],
+      "properties": {
+        "descriptor_id": { "$ref": "#/$defs/lowerHexId" },
+        "slot_id": { "$ref": "#/$defs/asciiId" },
+        "class": { "$ref": "#/$defs/asciiId" },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64
+        }
+      }
+    },
+    "retainedTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transition_id",
+        "source_keyset_id",
+        "target_keyset_id",
+        "source_slots",
+        "output_slots",
+        "budget_id",
+        "budget_limit",
+        "admission_state"
+      ],
+      "properties": {
+        "transition_id": { "$ref": "#/$defs/lowerHexId" },
+        "source_keyset_id": { "$ref": "#/$defs/lowerHexId" },
+        "target_keyset_id": { "$ref": "#/$defs/lowerHexId" },
+        "source_slots": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/slot" }
+        },
+        "output_slots": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/slot" }
+        },
+        "budget_id": { "$ref": "#/$defs/asciiId" },
+        "budget_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "admission_state": {
+          "enum": ["recovery_only", "disabled"]
+        }
+      }
+    },
+    "retainedReceiptKey": {
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -92,8 +188,16 @@
         "algorithm": { "const": "Ed25519" },
         "purpose": { "const": "exchange_receipt_retained" },
         "public_key_b64": { "$ref": "#/$defs/base64url" },
-        "valid_from": { "type": "integer", "minimum": 0 },
-        "valid_until": { "type": "integer", "minimum": 1 }
+        "valid_from": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "valid_until": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 9007199254740991
+        }
       }
     }
   }

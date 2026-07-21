@@ -1,64 +1,94 @@
 {
-  "profile_id": "freebird/public-bearer-exchange/v1",
-  "sources": {
-    "descriptors": [
-      {
-        "id": "4dce9fbcd1bb95d5c9d2609afc8cdb3d5d78bb630e16f6281fb69fffb28f2bd3",
-        "profile_id": "freebird/public-bearer-exchange/v1",
-        "role": "source",
-        "class": "source",
-        "issuer_id": "issuer:freebird:v4",
-        "kid": "4bf5122f344554c53bde2ebb8cd2b7e3d1600ad631c385a5d7cce23c7785459a",
-        "audience": null,
-        "spki_b64": "AQ",
-        "suite": "RSABSSA-SHA384-PSS-Deterministic",
-        "max_quantity": 1,
-        "valid_from": 1,
-        "valid_until": 4102444800
-      }
-    ]
-  },
-  "target_keyset": {
-    "id": "33a2e56a50add64decd3d521dfd0a5d95e601799f6a63f299f402014502dd51a",
-    "targets": [
-      {
-        "descriptor": {
-          "id": "e75705c5cfd8bf7daf27225a8ef1bc219fe8c9ddd88f4544c714049655ccbaac",
-          "profile_id": "freebird/public-bearer-exchange/v1",
-          "role": "target",
-          "class": "target",
-          "issuer_id": "issuer:freebird:v4",
-          "kid": "dbc1b4c900ffe48d575b5da5c638040125f65db0fe3e24494b76ea986457d986",
-          "audience": null,
-          "spki_b64": "Ag",
-          "suite": "RSABSSA-SHA384-PSS-Deterministic",
-          "max_quantity": 1,
-          "valid_from": 1,
-          "valid_until": 4102444800
-        },
-        "private_key_path": "/var/lib/freebird/exchange-target.der"
-      }
-    ]
-  },
-  "rules": [
+  "profile_id": "freebird/public-bearer-exchange/v2",
+  "graph_id": "e7ac9a7b24d4fdab6ba77b0c5d7fca19b821fbb981de45de7a7dda0c8615efa7",
+  "keysets": [
     {
-      "id": "4703b504c70ee47be1c5cdf190eb84c065456ee642fe5bf070f1febe7125481a",
+      "id": "df657e70ea47c40e9e32718e274fe192d6c9d08a065826f42f10f5bf1819b2be",
+      "keys": [
+        {
+          "descriptor": {
+            "id": "4385af515d9768ee27cdd0e2ddfe49af2e3205c19abafdd5decea62b4a7c34b7",
+            "profile_id": "freebird/public-bearer-exchange/v2",
+            "issuer_id": "issuer:docker:v4",
+            "kid": "746ae20a4aaeca09d07f2022eedcfb1589c5c848b2f79e7ff11073e8acfc2577",
+            "audience": null,
+            "spki_b64": "MIIBUjA9BgkqhkiG9w0BAQowMKANMAsGCWCGSAFlAwQCAqEaMBgGCSqGSIb3DQEBCDALBglghkgBZQMEAgKiAwIBMAOCAQ8AMIIBCgKCAQEAynIiugK2RSKpz8e1g3kDeU_Exq54YTdNinkYjr8u7jkUdbfeVcbvfSxdDWcS569GSxIjTcxSu7ZDYn4_i1LIHysimma8TV0XOYBjJAwnlKJDXFNSjUIaEqOph9QuRAtbwBsD6S0G-Xu6O1JlWIruY1U6c0rJn0gE1sjZAkGFIlfiRkAy1TMnCEFHtT02aoEvS4Lqx2ZNVc9V7kQg0CczyoRdskv0udnARpThXls5M9rk4k2X3VFnat3ygtqKI2r2zBWslapYHjBVfJ8xIBVo2UHY66VccQl6azzDPG7znLjvWAt9WkC0Y4J_GshKZn-28t7NvGaincNIZ098Q1LwhwIDAQAB",
+            "suite": "RSABSSA-SHA384-PSS-Deterministic",
+            "valid_from": 1700000000,
+            "valid_until": 4102444800
+          },
+          "private_key_path": "/data/keys/exchange-a.der"
+        }
+      ]
+    },
+    {
+      "id": "b8024c13933bb4d27930935a43182aa5d28647bdd27927daaf2f10e85d246317",
+      "keys": [
+        {
+          "descriptor": {
+            "id": "333778b2dc1df2fbafc181cc69da20fcdabb0a2d77c4f5d8bf97e6572aa6429e",
+            "profile_id": "freebird/public-bearer-exchange/v2",
+            "issuer_id": "issuer:docker:v4",
+            "kid": "c437e1c8612326d89e5c6bef1f99f45799119903d3abb5d06f364f6423ee9e1f",
+            "audience": null,
+            "spki_b64": "MIIBUjA9BgkqhkiG9w0BAQowMKANMAsGCWCGSAFlAwQCAqEaMBgGCSqGSIb3DQEBCDALBglghkgBZQMEAgKiAwIBMAOCAQ8AMIIBCgKCAQEAvuYJHXiPq4UeAIM4Vb0I1EbcnFIpOFsT1mrSkAdaf_uS40KmHLgm8_y7z2Cca3we5MbSbPVdCDNJDnrCR3PnXKc1AYXBzZyo8ELX0poGVzm-ur80Teuka6qmg6EhVJKyXuKBbXPKHfJxPX_dqzuHJdM0fJtDFZRirW94isCllz5iMrcNe0TiBJf6zdM00MKOrSc45FEsE0IyOaqDVD-uwfrzVpsR9WRn3s7Bx4Ebc-L6Ci4GAZZKC2spV82Sa-cIY-vqWH5ChFoCGFprHBjaUgKFnvj-Ka5HegHj9hoB7RVWv9oPJLkk3dBWOfJaksdXof2jSP2OPWR2dq80cY5uyQIDAQAB",
+            "suite": "RSABSSA-SHA384-PSS-Deterministic",
+            "valid_from": 1700000000,
+            "valid_until": 4102444800
+          },
+          "private_key_path": "/data/keys/exchange-b.der"
+        }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "id": "5e64111531d69f7b7e5647040a1dab95b7638a921245fe1c3ec5a883673e6e74",
+      "source_keyset_id": "df657e70ea47c40e9e32718e274fe192d6c9d08a065826f42f10f5bf1819b2be",
+      "target_keyset_id": "b8024c13933bb4d27930935a43182aa5d28647bdd27927daaf2f10e85d246317",
       "sources": [
         {
-          "descriptor_id": "4dce9fbcd1bb95d5c9d2609afc8cdb3d5d78bb630e16f6281fb69fffb28f2bd3",
-          "slot_id": "in",
-          "class": "source",
+          "descriptor_id": "4385af515d9768ee27cdd0e2ddfe49af2e3205c19abafdd5decea62b4a7c34b7",
+          "slot_id": "input",
+          "class": "standard",
           "quantity": 1
         }
       ],
       "outputs": [
         {
-          "descriptor_id": "e75705c5cfd8bf7daf27225a8ef1bc219fe8c9ddd88f4544c714049655ccbaac",
-          "slot_id": "out",
-          "class": "target",
+          "descriptor_id": "333778b2dc1df2fbafc181cc69da20fcdabb0a2d77c4f5d8bf97e6572aa6429e",
+          "slot_id": "output",
+          "class": "standard",
           "quantity": 1
         }
-      ]
+      ],
+      "budget_id": "docker-a-to-b-2026-01",
+      "budget_limit": 1000000,
+      "admission_state": "accepting_new"
+    },
+    {
+      "id": "3546d1e4e95275bdd11b90d9c90e164386f70177beb739d1e9499abf2dab99de",
+      "source_keyset_id": "b8024c13933bb4d27930935a43182aa5d28647bdd27927daaf2f10e85d246317",
+      "target_keyset_id": "df657e70ea47c40e9e32718e274fe192d6c9d08a065826f42f10f5bf1819b2be",
+      "sources": [
+        {
+          "descriptor_id": "333778b2dc1df2fbafc181cc69da20fcdabb0a2d77c4f5d8bf97e6572aa6429e",
+          "slot_id": "input",
+          "class": "standard",
+          "quantity": 1
+        }
+      ],
+      "outputs": [
+        {
+          "descriptor_id": "4385af515d9768ee27cdd0e2ddfe49af2e3205c19abafdd5decea62b4a7c34b7",
+          "slot_id": "output",
+          "class": "standard",
+          "quantity": 1
+        }
+      ],
+      "budget_id": "docker-b-to-a-2026-01",
+      "budget_limit": 1000000,
+      "admission_state": "accepting_new"
     }
   ]
 }
