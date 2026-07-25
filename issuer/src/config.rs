@@ -238,6 +238,61 @@ pub struct ExchangeConfig {
     pub receipt_lifetime_secs: u64,
     pub request_body_limit: usize,
     pub request_timeout_secs: u64,
+    pub graph_issuance: GraphIssuanceConfig,
+}
+
+#[derive(Clone)]
+pub struct GraphIssuanceConfig {
+    pub enabled: bool,
+    pub policy_path: PathBuf,
+    pub authorization: GraphIssuanceAuthorizationConfig,
+}
+
+#[derive(Clone)]
+pub enum GraphIssuanceAuthorizationConfig {
+    HmacSha256(Vec<u8>),
+    V4Local {
+        replay_redis_url: String,
+        keys: Vec<GraphIssuanceV4VerificationKey>,
+    },
+    DevelopmentMock,
+    Disabled,
+}
+
+#[derive(Clone)]
+pub struct GraphIssuanceV4VerificationKey {
+    pub issuer_id: String,
+    pub kid: String,
+    pub secret_key: [u8; 32],
+}
+
+impl fmt::Debug for GraphIssuanceConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("GraphIssuanceConfig")
+            .field("enabled", &self.enabled)
+            .field("policy_path", &self.policy_path)
+            .field("authorization", &self.authorization)
+            .finish()
+    }
+}
+
+impl fmt::Debug for GraphIssuanceAuthorizationConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::HmacSha256(_) => formatter.write_str("HmacSha256([REDACTED])"),
+            Self::V4Local {
+                replay_redis_url,
+                keys,
+            } => formatter
+                .debug_struct("V4Local")
+                .field("replay_redis_url", replay_redis_url)
+                .field("trusted_key_count", &keys.len())
+                .finish(),
+            Self::DevelopmentMock => formatter.write_str("DevelopmentMock"),
+            Self::Disabled => formatter.write_str("Disabled"),
+        }
+    }
 }
 
 pub struct LoadedExchangeConfigV2 {
@@ -320,6 +375,7 @@ impl ExchangeConfig {
                 .map(|value| freebird_common::duration::parse_duration(&value))
                 .transpose()?
                 .unwrap_or(30),
+            graph_issuance: GraphIssuanceConfig::from_env()?,
         };
         if config.enabled {
             if config.active_graph_path.as_os_str().is_empty()
@@ -342,6 +398,17 @@ impl ExchangeConfig {
                 || config.request_timeout_secs > 120
             {
                 anyhow::bail!("exchange lifetime/body/timeout bounds are invalid")
+            }
+        }
+        if config.graph_issuance.enabled && !config.enabled {
+            anyhow::bail!("graph issuance requires PUBLIC_BEARER_EXCHANGE_ENABLE=true")
+        }
+        if let GraphIssuanceAuthorizationConfig::V4Local {
+            replay_redis_url, ..
+        } = &config.graph_issuance.authorization
+        {
+            if config.redis_url.as_deref() != Some(replay_redis_url.as_str()) {
+                anyhow::bail!("v4_local graph issuance replay Redis must exactly match PUBLIC_BEARER_EXCHANGE_REDIS_URL")
             }
         }
         Ok(config)
@@ -438,6 +505,97 @@ impl ExchangeConfig {
         &self,
     ) -> Result<Vec<ExchangeDisabledPublicationAcknowledgementV1>> {
         load_disabled_publication_acknowledgements(&self.disabled_publication_ack_paths)
+    }
+}
+
+impl GraphIssuanceConfig {
+    fn from_env() -> Result<Self> {
+        use base64ct::{Base64UrlUnpadded, Encoding};
+
+        let enabled = env_bool("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE");
+        let policy_path = env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| "public_bearer_graph_issuance_policy_v1.json".into());
+        if !enabled {
+            return Ok(Self {
+                enabled,
+                policy_path,
+                authorization: GraphIssuanceAuthorizationConfig::Disabled,
+            });
+        }
+        if policy_path.as_os_str().is_empty() {
+            anyhow::bail!("PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH must not be empty")
+        }
+        let mode = env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION")
+            .unwrap_or_else(|_| "hmac_sha256".into());
+        let authorization = match mode.as_str() {
+            "hmac_sha256" => {
+                let encoded = env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64")
+                    .context("PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64 is required")?;
+                let secret = Base64UrlUnpadded::decode_vec(&encoded)
+                    .context("invalid graph issuance HMAC secret encoding")?;
+                if secret.len() < 32 || Base64UrlUnpadded::encode_string(&secret) != encoded {
+                    anyhow::bail!("graph issuance HMAC secret must be canonical base64url for at least 32 bytes")
+                }
+                GraphIssuanceAuthorizationConfig::HmacSha256(secret)
+            }
+            "v4_local" => {
+                let replay_redis_url = env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL")
+                    .context("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL is required")?;
+                let raw = env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64")
+                    .context("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64 is required")?;
+                let encoded: std::collections::BTreeMap<
+                    String,
+                    std::collections::BTreeMap<String, String>,
+                > = serde_json::from_str(&raw).context("parse graph issuance V4 keyring JSON")?;
+                let mut keys = Vec::new();
+                for (issuer_id, issuer_keys) in encoded {
+                    if issuer_id.is_empty() || issuer_id.len() > 255 || issuer_keys.is_empty() {
+                        anyhow::bail!("invalid graph issuance V4 issuer keyring")
+                    }
+                    for (kid, encoded_key) in issuer_keys {
+                        let bytes = Base64UrlUnpadded::decode_vec(&encoded_key)
+                            .context("invalid graph issuance V4 verification key encoding")?;
+                        if kid.is_empty()
+                            || kid.len() > 255
+                            || bytes.len() != 32
+                            || Base64UrlUnpadded::encode_string(&bytes) != encoded_key
+                        {
+                            anyhow::bail!("invalid graph issuance V4 verification key")
+                        }
+                        keys.push(GraphIssuanceV4VerificationKey {
+                            issuer_id: issuer_id.clone(),
+                            kid,
+                            secret_key: bytes
+                                .try_into()
+                                .map_err(|_| anyhow::anyhow!("invalid V4 key length"))?,
+                        });
+                    }
+                }
+                if keys.is_empty() {
+                    anyhow::bail!("graph issuance V4 keyring cannot be empty")
+                }
+                GraphIssuanceAuthorizationConfig::V4Local {
+                    replay_redis_url,
+                    keys,
+                }
+            }
+            "development_mock" => {
+                if env::var("FREEBIRD_ENV").as_deref() != Ok("development")
+                    || !env_bool("FREEBIRD_UNSAFE_DEVELOPMENT_MODE")
+                    || !env_bool("PUBLIC_BEARER_GRAPH_ISSUANCE_ALLOW_DEVELOPMENT_MOCK")
+                {
+                    anyhow::bail!("development graph issuance authorization requires all development safety fences")
+                }
+                GraphIssuanceAuthorizationConfig::DevelopmentMock
+            }
+            _ => anyhow::bail!("unsupported graph issuance authorization verifier"),
+        };
+        Ok(Self {
+            enabled,
+            policy_path,
+            authorization,
+        })
     }
 }
 
@@ -792,6 +950,7 @@ mod tests {
         fn new() -> Self {
             let keys = [
                 "FREEBIRD_ENV",
+                "FREEBIRD_UNSAFE_DEVELOPMENT_MODE",
                 "ALLOW_UNSAFE_V4_ROTATION",
                 "HSM_ENABLE",
                 "HSM_MODE",
@@ -815,6 +974,13 @@ mod tests {
                 "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
                 "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
                 "PUBLIC_BEARER_EXCHANGE_TIMEOUT",
+                "PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE",
+                "PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH",
+                "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
+                "PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64",
+                "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL",
+                "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64",
+                "PUBLIC_BEARER_GRAPH_ISSUANCE_ALLOW_DEVELOPMENT_MOCK",
             ];
             Self {
                 values: keys
@@ -984,6 +1150,70 @@ mod tests {
             "/keys/retained.key",
         );
         assert!(ExchangeConfig::from_env().is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn graph_issuance_has_no_permissive_production_authorizer_default() {
+        let _env = EnvGuard::new();
+        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
+        env::set_var("PUBLIC_BEARER_EXCHANGE_REDIS_URL", "redis://127.0.0.1/");
+        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE", "true");
+        env::remove_var("PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64");
+        assert!(ExchangeConfig::from_env().is_err());
+
+        env::set_var(
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
+            "development_mock",
+        );
+        env::set_var("FREEBIRD_ENV", "production");
+        env::set_var("FREEBIRD_UNSAFE_DEVELOPMENT_MODE", "true");
+        env::set_var(
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_ALLOW_DEVELOPMENT_MOCK",
+            "true",
+        );
+        assert!(ExchangeConfig::from_env().is_err());
+    }
+
+    #[test]
+    #[serial]
+    fn v4_local_requires_an_exact_shared_replay_redis_and_private_keyring() {
+        use base64ct::{Base64UrlUnpadded, Encoding};
+
+        let _env = EnvGuard::new();
+        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
+        env::set_var(
+            "PUBLIC_BEARER_EXCHANGE_REDIS_URL",
+            "redis://127.0.0.1:6379/4",
+        );
+        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE", "true");
+        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION", "v4_local");
+        env::set_var(
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64",
+            serde_json::json!({
+                "issuer:test": {
+                    "kid:test": Base64UrlUnpadded::encode_string(&[7; 32])
+                }
+            })
+            .to_string(),
+        );
+        env::remove_var("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL");
+        assert!(ExchangeConfig::from_env().is_err());
+        env::set_var(
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL",
+            "redis://127.0.0.1:6379/5",
+        );
+        assert!(ExchangeConfig::from_env().is_err());
+
+        env::set_var(
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL",
+            "redis://127.0.0.1:6379/4",
+        );
+        let config = ExchangeConfig::from_env().unwrap();
+        assert!(matches!(
+            config.graph_issuance.authorization,
+            GraphIssuanceAuthorizationConfig::V4Local { .. }
+        ));
     }
 
     #[test]

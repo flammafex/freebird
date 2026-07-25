@@ -5,6 +5,8 @@ import { FreebirdClient } from '../src/index.js';
 import type {
   ExchangeRequest,
   ExchangeSuccessResponse,
+  GraphIssuanceRequest,
+  GraphIssuanceResult,
   KeyDiscoveryMetadata,
 } from '../src/index.js';
 
@@ -382,5 +384,122 @@ describe('strict V2 graph discovery', () => {
     const metadata = structuredClone(fixture.metadata); delete metadata.exchange;
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify(metadata), 200)));
     await expect(client().getKeyDiscoveryMetadata()).resolves.toMatchObject({ issuer_id: 'issuer:test' });
+  });
+});
+
+function graphIssuanceFixture(): {
+  metadata: KeyDiscoveryMetadata;
+  request: GraphIssuanceRequest;
+  result: GraphIssuanceResult;
+} {
+  const metadata = structuredClone(fixture.metadata);
+  const graph = metadata.exchange!.active_graph;
+  const keyset = graph.keysets[1];
+  const descriptor = graph.descriptors.find((item) => item.descriptor_id === keyset.descriptor_ids[0])!;
+  metadata.graph_issuance = {
+    version: 1,
+    policies: [{
+      issuance_policy_id: 'bootstrap-v1', graph_id: graph.graph_id,
+      keyset_id: keyset.keyset_id, descriptor_id: descriptor.descriptor_id,
+      budget_id: 'graph-bootstrap-budget', budget_limit: 10, quantity: 1,
+      admission_state: 'accepting_new', authorization_scheme: 'hmac_sha256',
+    }],
+  };
+  const request: GraphIssuanceRequest = {
+    version: 1, public_operation_id: operationId, issuance_policy_id: 'bootstrap-v1',
+    graph_id: graph.graph_id, keyset_id: keyset.keyset_id,
+    descriptor_id: descriptor.descriptor_id, blinded_message: b64(ascii('blinded graph message')),
+    authorization: b64(new Uint8Array(64).fill(6)),
+  };
+  const sdk = client();
+  const result: GraphIssuanceResult = {
+    version: 1, public_operation_id: request.public_operation_id,
+    issuance_policy_id: request.issuance_policy_id, graph_id: request.graph_id,
+    keyset_id: request.keyset_id, descriptor_id: request.descriptor_id,
+    token_key_id: descriptor.token_key_id, quantity: 1,
+    request_digest: sdk.graphIssuanceRequestDigest(request),
+    blind_signature: b64(ascii('blind graph signature')), result_digest: '',
+  };
+  const bytes: number[] = [1];
+  put(bytes, fromB64(result.public_operation_id));
+  for (const field of [result.issuance_policy_id, result.graph_id, result.keyset_id,
+    result.descriptor_id, result.token_key_id]) put(bytes, ascii(field));
+  bytes.push(...u32(result.quantity));
+  put(bytes, fromB64(result.request_digest)); put(bytes, fromB64(result.blind_signature));
+  result.result_digest = domainB64('freebird graph blind issuance result v1\0', new Uint8Array(bytes));
+  return { metadata, request, result };
+}
+
+describe('policy-authorized graph blind issuance client', () => {
+  it('treats v4_local as generic policy scheme metadata only', async () => {
+    const value = graphIssuanceFixture();
+    value.metadata.graph_issuance!.policies[0].authorization_scheme = 'v4_local';
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify(value.metadata), 200)));
+    await expect(client().selectGraphIssuancePolicy('bootstrap-v1')).resolves.toMatchObject({
+      authorization_scheme: 'v4_local',
+    });
+  });
+
+  it('validates discovery and exact result binding with a header-only capability', async () => {
+    const value = graphIssuanceFixture();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+      .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+    vi.stubGlobal('fetch', fetchMock);
+    const sdk = client();
+    const changedAuthorization = structuredClone(value.request);
+    changedAuthorization.authorization = b64(new Uint8Array(64).fill(8));
+    expect(sdk.graphIssuanceAuthorizationBindingDigest(changedAuthorization))
+      .toBe(sdk.graphIssuanceAuthorizationBindingDigest(value.request));
+    expect(sdk.graphIssuanceRequestDigest(changedAuthorization))
+      .not.toBe(sdk.graphIssuanceRequestDigest(value.request));
+    await expect(sdk.selectGraphIssuancePolicy('bootstrap-v1')).resolves.toMatchObject({ quantity: 1 });
+    await expect(sdk.issueGraphBlindSignature(value.request, statusCapability)).resolves.toMatchObject({
+      kind: 'committed', response: value.result,
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith('https://issuer.example/v1/public/graph/issue', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'graph-issuance-status-capability': statusCapability },
+      body: JSON.stringify(value.request),
+    });
+  });
+
+  it('uses observation-only status and rejects wrong bindings or missing no-store', async () => {
+    const value = graphIssuanceFixture();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+      .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+    vi.stubGlobal('fetch', fetchMock);
+    await client().getGraphIssuanceStatus(value.request, statusCapability);
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      `https://issuer.example/v1/public/graph/issue/status?public_operation_id=${operationId}`
+    );
+    expect(fetchMock.mock.calls[1][0]).not.toContain(statusCapability);
+
+    const tampered = structuredClone(value.result); tampered.descriptor_id = 'a'.repeat(64);
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+      .mockResolvedValueOnce(response(JSON.stringify(tampered), 200)));
+    await expect(client().issueGraphBlindSignature(value.request, statusCapability))
+      .rejects.toThrow('malformed success JSON');
+
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+      .mockResolvedValueOnce(new Response(JSON.stringify(value.result), { status: 200 })));
+    await expect(client().issueGraphBlindSignature(value.request, statusCapability))
+      .rejects.toThrow('Cache-Control: no-store');
+  });
+
+  it('rejects unknown graph policies and malformed capabilities before POST', async () => {
+    const value = graphIssuanceFixture();
+    value.metadata.graph_issuance!.policies[0].graph_id = 'a'.repeat(64);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify(value.metadata), 200)));
+    await expect(client().getKeyDiscoveryMetadata()).rejects.toThrow('Invalid graph issuance discovery metadata');
+
+    const clean = graphIssuanceFixture();
+    const fetchMock = vi.fn(); vi.stubGlobal('fetch', fetchMock);
+    await expect(client().issueGraphBlindSignature(clean.request, operationId))
+      .rejects.toThrow('exactly 32 bytes');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

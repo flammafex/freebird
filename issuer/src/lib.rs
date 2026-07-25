@@ -1,6 +1,7 @@
 pub mod audit;
 pub mod config;
 pub mod exchange;
+pub mod graph_issuance;
 pub mod keys;
 pub mod multi_key_voprf;
 pub mod public_tokens;
@@ -34,6 +35,8 @@ pub mod main_state {
         pub public_issuer: Option<Arc<PublicTokenIssuer>>,
         pub exchange_engine: Option<Arc<crate::exchange::ExchangeEngine>>,
         pub exchange_metadata: Option<freebird_common::api::ExchangeDiscoveryV2>,
+        pub graph_issuance_engine: Option<Arc<crate::graph_issuance::GraphIssuanceEngine>>,
+        pub graph_issuance_metadata: Option<freebird_common::api::GraphIssuanceDiscoveryV1>,
         /// Duration of each epoch in seconds (default: 86400 = 1 day)
         pub epoch_duration_sec: u64,
         /// Number of previous epochs to accept (for graceful rotation)

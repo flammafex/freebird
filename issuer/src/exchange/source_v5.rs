@@ -364,6 +364,34 @@ impl PinnedTargetSignersV2 {
         }
         Ok(signatures)
     }
+
+    /// Validate and blind-sign one explicitly selected graph descriptor without
+    /// treating the operation as an exchange output.
+    pub(crate) async fn sign_graph_issuance(
+        &self,
+        keyset_id: &str,
+        descriptor_id: &str,
+        blinded_message: &[u8],
+    ) -> Result<(String, Vec<u8>)> {
+        let members = self
+            .keysets
+            .get(keyset_id)
+            .context("graph issuance keyset is not pinned")?;
+        if !members.contains(descriptor_id) {
+            bail!("graph issuance descriptor is not in the selected keyset")
+        }
+        let provider = self
+            .providers
+            .get(descriptor_id)
+            .context("graph issuance signer is not pinned")?;
+        validate_representative(provider.public_key_spki(), blinded_message)?;
+        let key_id = self
+            .key_ids
+            .get(descriptor_id)
+            .context("graph issuance signer identity is unavailable")?
+            .clone();
+        Ok((key_id, provider.blind_sign(blinded_message).await?))
+    }
 }
 
 pub(crate) fn validate_representative(spki: &[u8], representative: &[u8]) -> Result<()> {

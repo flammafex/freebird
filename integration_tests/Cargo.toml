@@ -34,3 +34,5 @@ freebird-issuer = { path = "../issuer" }
 
 freebird-verifier = { path = "../verifier" } # <--- Now accessible as a lib
 blind-rsa-signatures = "0.17.1"
+redis = { version = "0.24", features = ["aio", "tokio-comp"] }
+hex = "0.4"

@@ -415,6 +415,38 @@ pub fn exchange_router(body_limit: usize, timeout_secs: u64) -> Router<PublicSta
         ))
 }
 
+pub fn graph_issuance_router(body_limit: usize, timeout_secs: u64) -> Router<PublicState> {
+    Router::new()
+        .route(
+            "/v1/public/graph/issue",
+            post(routes::public_graph_issuance::post),
+        )
+        .route(
+            "/v1/public/graph/issue/status",
+            get(routes::public_graph_issuance::status),
+        )
+        .layer(TimeoutLayer::new(Duration::from_secs(timeout_secs)))
+        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([
+                    axum::http::Method::GET,
+                    axum::http::Method::POST,
+                    axum::http::Method::OPTIONS,
+                ])
+                .allow_headers([
+                    axum::http::header::CONTENT_TYPE,
+                    routes::public_graph_issuance::STATUS_CAPABILITY,
+                ]),
+        )
+        .layer(freebird_common::rate_limit::PublicRateLimitLayer::default())
+        .layer(SetResponseHeaderLayer::if_not_present(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        ))
+}
+
 pub fn apply_public_layers(app: Router) -> Result<Router> {
     Ok(app.layer(
         ServiceBuilder::new()
@@ -515,10 +547,13 @@ impl Application {
             );
         }
 
-        let (exchange_engine, exchange_metadata, exchange_readiness) = if config
-            .exchange_config
-            .enabled
-        {
+        let (
+            exchange_engine,
+            exchange_metadata,
+            exchange_readiness,
+            graph_issuance_engine,
+            graph_issuance_metadata,
+        ) = if config.exchange_config.enabled {
             let direct_v5_metadata = public_issuer.as_ref().map(|issuer| issuer.metadata());
             let direct_v5_spki = direct_v5_metadata
                 .as_ref()
@@ -583,6 +618,85 @@ impl Application {
                 .into_iter()
                 .map(|(key_id, identity)| (key_id, identity.longest_valid_until))
                 .collect();
+            let (graph_issuance_engine, graph_issuance_metadata) = if config
+                .exchange_config
+                .graph_issuance
+                .enabled
+            {
+                if let crate::config::GraphIssuanceAuthorizationConfig::V4Local {
+                    replay_redis_url,
+                    ..
+                } = &config.exchange_config.graph_issuance.authorization
+                {
+                    if config.exchange_config.redis_url.as_deref()
+                        != Some(replay_redis_url.as_str())
+                    {
+                        bail!("v4_local graph issuance and ordinary verifier replay Redis are not the same configured authority")
+                    }
+                }
+                let document = crate::graph_issuance::GraphIssuancePolicyDocument::load(
+                    &config.exchange_config.graph_issuance.policy_path,
+                    &loaded.active_graph,
+                    &loaded.retained_graphs,
+                )?;
+                let issuance_metadata = document.discovery();
+                freebird_common::api::validate_graph_issuance_discovery_v1(
+                    &metadata,
+                    &issuance_metadata,
+                )
+                .map_err(anyhow::Error::msg)?;
+                let configured_scheme = match &config.exchange_config.graph_issuance.authorization {
+                    crate::config::GraphIssuanceAuthorizationConfig::HmacSha256(_) => "hmac_sha256",
+                    crate::config::GraphIssuanceAuthorizationConfig::V4Local { .. } => "v4_local",
+                    crate::config::GraphIssuanceAuthorizationConfig::DevelopmentMock => {
+                        "development_mock"
+                    }
+                    crate::config::GraphIssuanceAuthorizationConfig::Disabled => {
+                        bail!("graph issuance authorization verifier is disabled")
+                    }
+                };
+                if document.policies.iter().any(|policy| {
+                    policy.admission_state
+                        == crate::graph_issuance::GraphIssuanceAdmissionState::AcceptingNew
+                        && policy.authorization_scheme != configured_scheme
+                }) {
+                    bail!("accepting graph issuance policy authorization scheme mismatch")
+                }
+                let authorizer: Arc<dyn crate::graph_issuance::GraphIssuanceAuthorizer> =
+                    match &config.exchange_config.graph_issuance.authorization {
+                        crate::config::GraphIssuanceAuthorizationConfig::HmacSha256(secret) => {
+                            Arc::new(crate::graph_issuance::HmacGraphIssuanceAuthorizer::new(
+                                secret.clone(),
+                            )?)
+                        }
+                        crate::config::GraphIssuanceAuthorizationConfig::V4Local {
+                            keys, ..
+                        } => Arc::new(crate::graph_issuance::V4LocalGraphIssuanceAuthorizer::new(
+                            keys.clone(),
+                        )?),
+                        crate::config::GraphIssuanceAuthorizationConfig::DevelopmentMock
+                            if config.unsafe_development_mode =>
+                        {
+                            warn!("UNSAFE development-only graph issuance authorization enabled");
+                            Arc::new(crate::graph_issuance::DevelopmentMockAuthorizer)
+                        }
+                        _ => bail!("graph issuance authorization verifier is unavailable"),
+                    };
+                let engine = crate::graph_issuance::GraphIssuanceEngine::new(
+                    &loaded.active_graph,
+                    &loaded.retained_graphs,
+                    document,
+                    config
+                        .exchange_config
+                        .redis_url
+                        .as_deref()
+                        .context("exchange Redis URL missing")?,
+                    authorizer,
+                )?;
+                (Some(Arc::new(engine)), Some(issuance_metadata))
+            } else {
+                (None, None)
+            };
             let engine = crate::exchange::ExchangeEngine::new_v2_with_source_validity(
                 loaded.active_graph,
                 loaded.retained_graphs,
@@ -605,9 +719,15 @@ impl Application {
                     .disabled_publication_ack_paths
                     .clone(),
             );
-            (Some(engine), Some(metadata), Some(readiness))
+            (
+                Some(engine),
+                Some(metadata),
+                Some(readiness),
+                graph_issuance_engine,
+                graph_issuance_metadata,
+            )
         } else {
-            (None, None, None)
+            (None, None, None, None, None)
         };
 
         // 2. WebAuthn Setup
@@ -1228,6 +1348,8 @@ impl Application {
             public_issuer: public_issuer.clone(),
             exchange_engine: exchange_engine.clone(),
             exchange_metadata,
+            graph_issuance_engine,
+            graph_issuance_metadata,
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
             admin_api_key: Some(admin_api_key.clone()),
@@ -1318,7 +1440,11 @@ impl Application {
             config.exchange_config.request_body_limit,
             config.exchange_config.request_timeout_secs,
         );
-        let app = app.merge(exchange_routes);
+        let graph_issuance_routes = graph_issuance_router(
+            config.exchange_config.request_body_limit,
+            config.exchange_config.request_timeout_secs,
+        );
+        let app = app.merge(exchange_routes).merge(graph_issuance_routes);
 
         // --- CRITICAL FIX: SHADOWING ---
         // Use `let app` to shadow the variable, allowing the type change from Router<S> to Router<()>

@@ -14,14 +14,20 @@ use freebird_common::{
         ExchangeOutput, ExchangeReceiptV2, ExchangeRequestV2, ExchangeResultV2, ExchangeSlot,
         ExchangeSource, EXCHANGE_PROFILE_V2, EXCHANGE_VERSION_V2,
     },
-    spend_key::v5_spend_key,
+    graph_issuance_api::{GraphIssuanceRequestV1, GraphIssuanceResultV1},
+    spend_key::{v4_spend_key, v5_spend_key},
 };
 use freebird_crypto::{
-    build_public_bearer_message_from_parts, build_public_bearer_pass, nullifier_key_v5,
-    parse_public_bearer_pass, token_key_id_from_spki, PublicBearerPass,
+    build_private_token_input, build_public_bearer_message_from_parts, build_public_bearer_pass,
+    build_redemption_token, build_scope_digest, nullifier_key_v4, nullifier_key_v5,
+    parse_public_bearer_pass, parse_redemption_token, token_key_id_from_spki, PublicBearerPass,
+    RedemptionToken, Server, VOPRF_CONTEXT_V4,
 };
 use freebird_issuer::{
-    config::{Config, ExchangeConfig, KeyConfig, PublicKeyConfig, SybilConfig},
+    config::{
+        Config, ExchangeConfig, GraphIssuanceAuthorizationConfig, GraphIssuanceConfig,
+        GraphIssuanceV4VerificationKey, KeyConfig, PublicKeyConfig, SybilConfig,
+    },
     exchange::{
         load_or_generate_receipt_key,
         profiles::{
@@ -35,18 +41,27 @@ use freebird_issuer::{
 };
 use freebird_verifier::{
     discovery::trusted_public_keys,
+    routes::admin::IssuerInfo,
     store::{RedisStore, SpendStore},
+    verify::verify_v4_token,
 };
 use serde::Deserialize;
 use std::{
+    collections::HashMap,
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     time::Duration,
+    time::Instant,
 };
 
 const ISSUER_ID: &str = "issuer:test:exchange-v2-integration";
 const AUDIENCE: &str = "exchange-integration";
+const V4_ADMISSION_ISSUER: &str = "issuer:test:v4-admission";
+const V4_ADMISSION_KID: &str = "kid-v4-admission";
+const V4_ADMISSION_VERIFIER: &str = "verifier:test:graph-issuance";
+const V4_ADMISSION_AUDIENCE: &str = "graph-issuance";
+const V4_ADMISSION_SECRET: [u8; 32] = [0x45; 32];
 
 struct RedisHarness {
     child: Option<Child>,
@@ -148,6 +163,7 @@ struct GraphFixture {
     receipt_path: PathBuf,
     receipt_metadata_path: PathBuf,
     acknowledgement_path: PathBuf,
+    graph_issuance_policy_path: PathBuf,
 }
 
 impl GraphFixture {
@@ -246,6 +262,25 @@ impl GraphFixture {
             }))?,
         )?;
 
+        let graph_issuance_policy_path = dir.path().join("graph-issuance-policy.json");
+        std::fs::write(
+            &graph_issuance_policy_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": "freebird/graph-blind-issuance-policy/v1",
+                "policies": [{
+                    "issuance_policy_id": "integration-bootstrap-v1",
+                    "graph_id": graph.graph_id,
+                    "keyset_id": graph.keysets[0].id,
+                    "descriptor_id": graph.keysets[0].keys[0].descriptor.id,
+                    "budget_id": "integration-graph-issuance-budget",
+                    "budget_limit": 3,
+                    "quantity": 1,
+                    "admission_state": "accepting_new",
+                    "authorization_scheme": "development_mock"
+                }]
+            }))?,
+        )?;
+
         Ok(Self {
             _dir: dir,
             keys,
@@ -256,6 +291,7 @@ impl GraphFixture {
             receipt_path,
             receipt_metadata_path,
             acknowledgement_path,
+            graph_issuance_policy_path,
         })
     }
 
@@ -294,6 +330,11 @@ impl GraphFixture {
                 receipt_lifetime_secs: 300,
                 request_body_limit: 64 * 1024,
                 request_timeout_secs: 5,
+                graph_issuance: GraphIssuanceConfig {
+                    enabled: true,
+                    policy_path: self.graph_issuance_policy_path.clone(),
+                    authorization: GraphIssuanceAuthorizationConfig::DevelopmentMock,
+                },
             },
             sybil_config: test_sybil_config(root),
             webauthn_config: None,
@@ -310,8 +351,72 @@ impl GraphFixture {
         for transition in &mut self.graph.transitions {
             transition.admission_state = ExchangeAdmissionStateV2::RecoveryOnly;
         }
+        // The committed graph issuance result no longer needs the original signer snapshot.
+        // Retiring this now-recovery-only key proves recovery is result-based, not re-signing.
+        self.graph.keysets[0].keys[0].private_key_path = None;
+        self.retained.keysets[0].keys[0].private_key_path = None;
         std::fs::write(&self.graph_path, serde_json::to_vec_pretty(&self.graph)?)?;
+        std::fs::write(
+            &self.retained_path,
+            serde_json::to_vec_pretty(&self.retained)?,
+        )?;
+        let mut policy: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&self.graph_issuance_policy_path)?)?;
+        policy["policies"][0]["admission_state"] = serde_json::json!("recovery_only");
+        std::fs::write(
+            &self.graph_issuance_policy_path,
+            serde_json::to_vec_pretty(&policy)?,
+        )?;
         Ok(())
+    }
+
+    fn write_v4_local_policies(&self) -> Result<()> {
+        let policy = |id: &str, budget: &str| {
+            serde_json::json!({
+                "issuance_policy_id": id,
+                "graph_id": self.graph.graph_id,
+                "keyset_id": self.graph.keysets[0].id,
+                "descriptor_id": self.graph.keysets[0].keys[0].descriptor.id,
+                "budget_id": budget,
+                "budget_limit": 20,
+                "quantity": 1,
+                "admission_state": "accepting_new",
+                "authorization_scheme": "v4_local",
+                "v4_local": {
+                    "verifier_id": V4_ADMISSION_VERIFIER,
+                    "audience": V4_ADMISSION_AUDIENCE,
+                    "trusted_issuers": [{
+                        "issuer_id": V4_ADMISSION_ISSUER,
+                        "key_ids": [V4_ADMISSION_KID]
+                    }]
+                }
+            })
+        };
+        std::fs::write(
+            &self.graph_issuance_policy_path,
+            serde_json::to_vec_pretty(&serde_json::json!({
+                "version": "freebird/graph-blind-issuance-policy/v1",
+                "policies": [
+                    policy("v4-bootstrap-one", "v4-bootstrap-budget-one"),
+                    policy("v4-bootstrap-two", "v4-bootstrap-budget-two")
+                ]
+            }))?,
+        )?;
+        Ok(())
+    }
+
+    fn config_v4_local(&self, redis_url: String) -> Config {
+        let mut config = self.config(redis_url.clone());
+        config.exchange_config.graph_issuance.authorization =
+            GraphIssuanceAuthorizationConfig::V4Local {
+                replay_redis_url: redis_url,
+                keys: vec![GraphIssuanceV4VerificationKey {
+                    issuer_id: V4_ADMISSION_ISSUER.into(),
+                    kid: V4_ADMISSION_KID.into(),
+                    secret_key: V4_ADMISSION_SECRET,
+                }],
+            };
+        config
     }
 }
 
@@ -568,6 +673,168 @@ async fn post_exchange(
         .await?)
 }
 
+fn graph_issuance_request(
+    graph: &ExchangeGraphDiscoveryV2,
+    key: &KeyPairSha384PSSDeterministic,
+    operation: [u8; 16],
+    nonce: [u8; 32],
+    authorization: [u8; 32],
+) -> Result<(GraphIssuanceRequestV1, PendingOutput)> {
+    graph_issuance_request_with_authorization(
+        graph,
+        key,
+        operation,
+        nonce,
+        "integration-bootstrap-v1",
+        Base64UrlUnpadded::encode_string(&authorization),
+    )
+}
+
+fn graph_issuance_request_with_authorization(
+    graph: &ExchangeGraphDiscoveryV2,
+    key: &KeyPairSha384PSSDeterministic,
+    operation: [u8; 16],
+    nonce: [u8; 32],
+    policy_id: &str,
+    authorization: String,
+) -> Result<(GraphIssuanceRequestV1, PendingOutput)> {
+    let keyset = &graph.keysets[0];
+    let descriptor = graph
+        .descriptors
+        .iter()
+        .find(|descriptor| descriptor.descriptor_id == keyset.descriptor_ids[0])
+        .context("graph issuance descriptor missing")?;
+    let token_key_id = token_key_id_from_spki(&key.pk.to_spki()?);
+    let message = build_public_bearer_message_from_parts(&nonce, &token_key_id, ISSUER_ID)
+        .map_err(|error| anyhow::anyhow!("build graph issuance message: {error:?}"))?
+        .to_vec();
+    let mut rng = DefaultRng;
+    let blinding = key.pk.blind(&mut rng, &message)?;
+    Ok((
+        GraphIssuanceRequestV1 {
+            version: 1,
+            public_operation_id: Base64UrlUnpadded::encode_string(&operation),
+            issuance_policy_id: policy_id.into(),
+            graph_id: graph.graph_id.clone(),
+            keyset_id: keyset.keyset_id.clone(),
+            descriptor_id: descriptor.descriptor_id.clone(),
+            blinded_message: Base64UrlUnpadded::encode_string(&blinding.blind_message.0),
+            authorization,
+        },
+        PendingOutput {
+            nonce,
+            token_key_id,
+            message,
+            blinding,
+        },
+    ))
+}
+
+fn v4_admission_token(
+    issuer_id: &str,
+    kid: &str,
+    verifier_id: &str,
+    audience: &str,
+    secret: [u8; 32],
+    nonce: [u8; 32],
+) -> Result<String> {
+    let scope_digest = build_scope_digest(verifier_id, audience)
+        .map_err(|error| anyhow::anyhow!("build V4 scope: {error:?}"))?;
+    let input = build_private_token_input(issuer_id, kid, &nonce, &scope_digest)
+        .map_err(|error| anyhow::anyhow!("build V4 input: {error:?}"))?;
+    let server = Server::from_secret_key(secret, VOPRF_CONTEXT_V4)
+        .map_err(|error| anyhow::anyhow!("build V4 server: {error:?}"))?;
+    let token = RedemptionToken {
+        nonce,
+        scope_digest,
+        kid: kid.into(),
+        issuer_id: issuer_id.into(),
+        authenticator: server
+            .evaluate_unblinded(&input)
+            .map_err(|error| anyhow::anyhow!("evaluate V4 credential: {error:?}"))?,
+    };
+    Ok(Base64UrlUnpadded::encode_string(
+        &build_redemption_token(&token)
+            .map_err(|error| anyhow::anyhow!("encode V4 credential: {error:?}"))?,
+    ))
+}
+
+fn v4_spend_from_token(token_b64: &str) -> Result<String> {
+    let token = parse_redemption_token(&Base64UrlUnpadded::decode_vec(token_b64)?)
+        .map_err(|error| anyhow::anyhow!("parse V4 credential: {error:?}"))?;
+    let nullifier = nullifier_key_v4(&token, V4_ADMISSION_VERIFIER, V4_ADMISSION_AUDIENCE)
+        .map_err(|error| anyhow::anyhow!("derive V4 nullifier: {error:?}"))?;
+    Ok(v4_spend_key(&nullifier))
+}
+
+fn v4_issuer_info(secret: [u8; 32]) -> Result<IssuerInfo> {
+    let server = Server::from_secret_key(secret, VOPRF_CONTEXT_V4)
+        .map_err(|error| anyhow::anyhow!("build V4 verifier key: {error:?}"))?;
+    Ok(IssuerInfo {
+        pubkey_bytes: server.public_key_sec1_compressed().to_vec(),
+        kid: V4_ADMISSION_KID.into(),
+        ctx: VOPRF_CONTEXT_V4.to_vec(),
+        verification_key: Some(secret),
+        deprecated_verification_keys: HashMap::new(),
+        public_keys: HashMap::new(),
+        last_refreshed: Some(Instant::now()),
+    })
+}
+
+async fn ordinary_v4_verify_and_consume(store: &RedisStore, credential: &str) -> Result<bool> {
+    let expected_scope = build_scope_digest(V4_ADMISSION_VERIFIER, V4_ADMISSION_AUDIENCE)
+        .map_err(|error| anyhow::anyhow!("build ordinary verifier scope: {error:?}"))?;
+    let issuers = HashMap::from([(
+        V4_ADMISSION_ISSUER.to_string(),
+        v4_issuer_info(V4_ADMISSION_SECRET)?,
+    )]);
+    let (token, _) = verify_v4_token(credential, &issuers, &expected_scope)
+        .map_err(|error| anyhow::anyhow!("ordinary V4 verifier rejected credential: {error:?}"))?;
+    let nullifier = nullifier_key_v4(&token, V4_ADMISSION_VERIFIER, V4_ADMISSION_AUDIENCE)
+        .map_err(|error| anyhow::anyhow!("derive ordinary V4 nullifier: {error:?}"))?;
+    Ok(store.mark_spent(&v4_spend_key(&nullifier), None).await?)
+}
+
+async fn post_graph_issuance(
+    client: &reqwest::Client,
+    base: &str,
+    request: &GraphIssuanceRequestV1,
+    capability: &[u8; 32],
+) -> Result<reqwest::Response> {
+    Ok(client
+        .post(format!("{base}/v1/public/graph/issue"))
+        .header(
+            "graph-issuance-status-capability",
+            Base64UrlUnpadded::encode_string(capability),
+        )
+        .json(request)
+        .send()
+        .await?)
+}
+
+fn finalize_graph_issuance(
+    result: &GraphIssuanceResultV1,
+    pending: PendingOutput,
+    key: &KeyPairSha384PSSDeterministic,
+) -> Result<String> {
+    result.validate().map_err(anyhow::Error::msg)?;
+    let signature = BlindSignature(Base64UrlUnpadded::decode_vec(&result.blind_signature)?);
+    let signature = key
+        .pk
+        .finalize(&signature, &pending.blinding, &pending.message)?
+        .0;
+    let pass = PublicBearerPass {
+        nonce: pending.nonce,
+        token_key_id: pending.token_key_id,
+        issuer_id: ISSUER_ID.into(),
+        signature,
+    };
+    Ok(Base64UrlUnpadded::encode_string(
+        &build_public_bearer_pass(&pass)
+            .map_err(|error| anyhow::anyhow!("build issued graph artifact: {error:?}"))?,
+    ))
+}
+
 #[test]
 fn v2_graph_config_rejects_self_edges_and_conflicting_key_metadata() -> Result<()> {
     let fixture = GraphFixture::new(4)?;
@@ -615,6 +882,8 @@ async fn disabled_v2_exchange_routes_are_generic_and_require_status_capability()
         public_issuer: None,
         exchange_engine: None,
         exchange_metadata: None,
+        graph_issuance_engine: None,
+        graph_issuance_metadata: None,
         epoch_duration_sec: 86_400,
         epoch_retention: 2,
         admin_api_key: None,
@@ -690,9 +959,11 @@ async fn v2_graph_http_exchange_atomicity_binding_cycles_and_restart() -> Result
         "redis_url",
         "status_capability",
         "source_artifact",
+        "blinded_message",
     ] {
         assert!(!discovery_text.contains(sensitive));
     }
+    assert!(!discovery_text.contains("\"authorization\":"));
     let issuer: KeyDiscoveryResp = serde_json::from_slice(&discovery_bytes)?;
     let trusted_keys = trusted_public_keys(ISSUER_ID, issuer.clone())?;
     let exchange = issuer
@@ -720,6 +991,200 @@ async fn v2_graph_http_exchange_atomicity_binding_cycles_and_restart() -> Result
             .await?
             .status(),
         reqwest::StatusCode::NOT_FOUND
+    );
+
+    // Policy-authorized initial issuance creates the first artifact in keyset A without a source,
+    // receipt, exchange spend key, or transition budget charge. The resulting artifact is then a
+    // normal eligible source on A -> C.
+    let issuance_discovery = issuer
+        .graph_issuance
+        .as_ref()
+        .context("graph issuance discovery missing")?;
+    assert_eq!(issuance_discovery.policies.len(), 1);
+    assert_eq!(issuance_discovery.policies[0].quantity, 1);
+    let (initial_request, initial_pending) = graph_issuance_request(
+        &exchange.active_graph,
+        &fixture.keys[0],
+        [0x01; 16],
+        [0x02; 32],
+        [0x03; 32],
+    )?;
+    let initial_capability = [0x04; 32];
+    let initial_response =
+        post_graph_issuance(&client, &server.base, &initial_request, &initial_capability).await?;
+    assert_eq!(initial_response.status(), reqwest::StatusCode::OK);
+    assert_eq!(initial_response.headers()["cache-control"], "no-store");
+    let initial_bytes = initial_response.bytes().await?.to_vec();
+    let initial_text = std::str::from_utf8(&initial_bytes)?;
+    assert!(!initial_text.contains(&initial_request.authorization));
+    assert!(!initial_text.contains(&initial_request.blinded_message));
+    let initial_result: GraphIssuanceResultV1 = serde_json::from_slice(&initial_bytes)?;
+    assert_eq!(
+        initial_result.request_digest,
+        Base64UrlUnpadded::encode_string(&initial_request.request_digest()?)
+    );
+    let mut durable_connection = ::redis::Client::open(redis.url.clone())?
+        .get_async_connection()
+        .await?;
+    let durable_record: std::collections::HashMap<Vec<u8>, Vec<u8>> = ::redis::cmd("HGETALL")
+        .arg(format!("freebird:graph-issuance:v1:op:{}", "01".repeat(16)))
+        .query_async(&mut durable_connection)
+        .await?;
+    let contains = |needle: &[u8]| {
+        durable_record.iter().any(|(key, value)| {
+            key.windows(needle.len()).any(|part| part == needle)
+                || value.windows(needle.len()).any(|part| part == needle)
+        })
+    };
+    assert!(!contains(initial_request.blinded_message.as_bytes()));
+    assert!(!contains(initial_request.authorization.as_bytes()));
+    assert!(!contains(
+        Base64UrlUnpadded::encode_string(&initial_capability).as_bytes()
+    ));
+    assert!(!durable_record.contains_key(b"blinded_message".as_slice()));
+    assert!(!durable_record.contains_key(b"authorization".as_slice()));
+    drop(durable_connection);
+    let initial_artifact =
+        finalize_graph_issuance(&initial_result, initial_pending, &fixture.keys[0])?;
+    let exact_retry =
+        post_graph_issuance(&client, &server.base, &initial_request, &initial_capability).await?;
+    assert_eq!(
+        exact_retry.bytes().await?.as_ref(),
+        initial_bytes.as_slice()
+    );
+    let mut changed_initial = initial_request.clone();
+    changed_initial.authorization = Base64UrlUnpadded::encode_string(&[0x05; 32]);
+    assert_eq!(
+        post_graph_issuance(&client, &server.base, &changed_initial, &initial_capability,)
+            .await?
+            .status(),
+        reqwest::StatusCode::CONFLICT
+    );
+    let status_url = format!(
+        "{}/v1/public/graph/issue/status?public_operation_id={}",
+        server.base, initial_request.public_operation_id
+    );
+    assert_eq!(
+        client
+            .get(&status_url)
+            .header(
+                "graph-issuance-status-capability",
+                Base64UrlUnpadded::encode_string(&[0xff; 32]),
+            )
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::FORBIDDEN
+    );
+    for (index, mutate) in [
+        |request: &mut GraphIssuanceRequestV1| request.issuance_policy_id = "wrong-policy".into(),
+        |request: &mut GraphIssuanceRequestV1| request.graph_id = "a".repeat(64),
+        |request: &mut GraphIssuanceRequestV1| request.keyset_id = "b".repeat(64),
+        |request: &mut GraphIssuanceRequestV1| request.descriptor_id = "c".repeat(64),
+        |request: &mut GraphIssuanceRequestV1| {
+            request.blinded_message = Base64UrlUnpadded::encode_string(b"malformed")
+        },
+        |request: &mut GraphIssuanceRequestV1| {
+            request.authorization = Base64UrlUnpadded::encode_string(&[7; 31])
+        },
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut invalid = initial_request.clone();
+        invalid.public_operation_id = Base64UrlUnpadded::encode_string(&[0x20 + index as u8; 16]);
+        mutate(&mut invalid);
+        assert_eq!(
+            post_graph_issuance(&client, &server.base, &invalid, &[0x30 + index as u8; 32],)
+                .await?
+                .status(),
+            reqwest::StatusCode::BAD_REQUEST
+        );
+    }
+    let (issued_exchange, issued_pending) = request_from_discovery(
+        &exchange.active_graph,
+        2,
+        initial_artifact,
+        &fixture.keys[2],
+        [0x06; 16],
+        [0x07; 32],
+    )?;
+    let issued_exchange_response =
+        post_exchange(&client, &server.base, &issued_exchange, &[0x08; 32]).await?;
+    assert_eq!(issued_exchange_response.status(), reqwest::StatusCode::OK);
+    let issued_exchange_response: ExchangeResponseV2 = issued_exchange_response.json().await?;
+    let _ = finalize_output(&issued_exchange_response, issued_pending, &fixture.keys[2])?;
+
+    // Direct V5 issuance remains isolated from every graph output key.
+    assert_eq!(
+        client
+            .post(format!("{}/v1/public/issue", server.base))
+            .json(&serde_json::json!({
+                "blinded_msg_b64": initial_request.blinded_message,
+                "token_key_id": initial_result.token_key_id
+            }))
+            .send()
+            .await?
+            .status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+
+    // Concurrent reuse of one authorization has exactly one winner. A third unique claim reaches
+    // the issuance budget; a fourth is rejected without charging any exchange budget.
+    let (concurrent_a, _) = graph_issuance_request(
+        &exchange.active_graph,
+        &fixture.keys[0],
+        [0x09; 16],
+        [0x0a; 32],
+        [0x0b; 32],
+    )?;
+    let (concurrent_b, _) = graph_issuance_request(
+        &exchange.active_graph,
+        &fixture.keys[0],
+        [0x0c; 16],
+        [0x0d; 32],
+        [0x0b; 32],
+    )?;
+    let (concurrent_a_response, concurrent_b_response) = tokio::join!(
+        post_graph_issuance(&client, &server.base, &concurrent_a, &[0x0e; 32]),
+        post_graph_issuance(&client, &server.base, &concurrent_b, &[0x0f; 32]),
+    );
+    let concurrent_statuses = [
+        concurrent_a_response?.status(),
+        concurrent_b_response?.status(),
+    ];
+    assert_eq!(
+        concurrent_statuses
+            .iter()
+            .filter(|status| **status == reqwest::StatusCode::OK)
+            .count(),
+        1
+    );
+    let (last_allowed, _) = graph_issuance_request(
+        &exchange.active_graph,
+        &fixture.keys[0],
+        [0x10; 16],
+        [0x11; 32],
+        [0x12; 32],
+    )?;
+    assert_eq!(
+        post_graph_issuance(&client, &server.base, &last_allowed, &[0x13; 32])
+            .await?
+            .status(),
+        reqwest::StatusCode::OK
+    );
+    let (exhausted, _) = graph_issuance_request(
+        &exchange.active_graph,
+        &fixture.keys[0],
+        [0x14; 16],
+        [0x15; 32],
+        [0x16; 32],
+    )?;
+    assert_eq!(
+        post_graph_issuance(&client, &server.base, &exhausted, &[0x17; 32])
+            .await?
+            .status(),
+        reqwest::StatusCode::BAD_REQUEST
     );
 
     // The verifier and exchange must use one V5 spend namespace. The direct issuance key is also
@@ -1122,6 +1587,31 @@ async fn v2_graph_http_exchange_atomicity_binding_cycles_and_restart() -> Result
         recovered.bytes().await?.as_ref(),
         first_response_bytes.as_slice()
     );
+    let recovered_initial = post_graph_issuance(
+        &client,
+        &restarted.base,
+        &initial_request,
+        &initial_capability,
+    )
+    .await?;
+    assert_eq!(recovered_initial.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        recovered_initial.bytes().await?.as_ref(),
+        initial_bytes.as_slice()
+    );
+    let (fresh_initial, _) = graph_issuance_request(
+        &exchange.active_graph,
+        &fixture.keys[0],
+        [0xfa; 16],
+        [0xfb; 32],
+        [0xfc; 32],
+    )?;
+    assert_eq!(
+        post_graph_issuance(&client, &restarted.base, &fresh_initial, &[0xfd; 32])
+            .await?
+            .status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
 
     let recovery_discovery: KeyDiscoveryResp = client
         .get(format!("{}/.well-known/keys", restarted.base))
@@ -1148,6 +1638,422 @@ async fn v2_graph_http_exchange_atomicity_binding_cycles_and_restart() -> Result
             .status(),
         reqwest::StatusCode::BAD_REQUEST
     );
+    restarted.stop().await;
+    let mut disabled_policy: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&fixture.graph_issuance_policy_path)?)?;
+    disabled_policy["policies"][0]["admission_state"] = serde_json::json!("disabled");
+    std::fs::write(
+        &fixture.graph_issuance_policy_path,
+        serde_json::to_vec_pretty(&disabled_policy)?,
+    )?;
+    let disabled_server = start_server(fixture.config(redis.url.clone())).await?;
+    let (disabled_fresh, _) = graph_issuance_request(
+        &exchange.active_graph,
+        &fixture.keys[0],
+        [0xe1; 16],
+        [0xe2; 32],
+        [0xe3; 32],
+    )?;
+    assert_eq!(
+        post_graph_issuance(&client, &disabled_server.base, &disabled_fresh, &[0xe4; 32],)
+            .await?
+            .status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    disabled_server.stop().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn v4_local_graph_issuance_is_atomic_with_the_global_verifier_replay_marker() -> Result<()> {
+    let Some(mut redis) = RedisHarness::start_if_available()? else {
+        return Ok(());
+    };
+    let fixture = GraphFixture::new(20)?;
+    fixture.write_v4_local_policies()?;
+    let config = fixture.config_v4_local(redis.url.clone());
+
+    let mut mismatched = config.clone();
+    if let GraphIssuanceAuthorizationConfig::V4Local {
+        replay_redis_url, ..
+    } = &mut mismatched.exchange_config.graph_issuance.authorization
+    {
+        *replay_redis_url = "redis://127.0.0.1:1/".into();
+    }
+    assert!(Application::build(mismatched).await.is_err());
+
+    let server = start_server(config.clone()).await?;
+    let client = reqwest::Client::new();
+    let discovery: KeyDiscoveryResp = client
+        .get(format!("{}/.well-known/keys", server.base))
+        .send()
+        .await?
+        .json()
+        .await?;
+    let graph = discovery
+        .exchange
+        .as_ref()
+        .context("V2 graph discovery missing")?
+        .active_graph
+        .clone();
+    let issuance = discovery
+        .graph_issuance
+        .as_ref()
+        .context("V4 graph issuance discovery missing")?;
+    assert_eq!(issuance.policies.len(), 2);
+    assert!(issuance
+        .policies
+        .iter()
+        .all(|policy| policy.authorization_scheme == "v4_local"));
+    let discovery_json = serde_json::to_string(&discovery)?;
+    assert!(!discovery_json.contains(&Base64UrlUnpadded::encode_string(&V4_ADMISSION_SECRET)));
+    assert!(!discovery_json.contains("secret_key"));
+    assert!(!discovery_json.contains("trusted_issuers"));
+
+    let credential = v4_admission_token(
+        V4_ADMISSION_ISSUER,
+        V4_ADMISSION_KID,
+        V4_ADMISSION_VERIFIER,
+        V4_ADMISSION_AUDIENCE,
+        V4_ADMISSION_SECRET,
+        [0x51; 32],
+    )?;
+
+    // Signing runs before reservation. Inject a signer failure with a malformed
+    // RSA representative and prove that no credential, operation, or budget was
+    // consumed before the request reached the atomic Redis reservation.
+    let (mut signing_failure, _) = graph_issuance_request_with_authorization(
+        &graph,
+        &fixture.keys[0],
+        [0x40; 16],
+        [0x41; 32],
+        "v4-bootstrap-one",
+        v4_admission_token(
+            V4_ADMISSION_ISSUER,
+            V4_ADMISSION_KID,
+            V4_ADMISSION_VERIFIER,
+            V4_ADMISSION_AUDIENCE,
+            V4_ADMISSION_SECRET,
+            [0x42; 32],
+        )?,
+    )?;
+    signing_failure.blinded_message =
+        Base64UrlUnpadded::encode_string(b"not-an-rsa-representative");
+    assert_eq!(
+        post_graph_issuance(&client, &server.base, &signing_failure, &[0x43; 32])
+            .await?
+            .status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+    let mut failure_connection = ::redis::Client::open(redis.url.clone())?
+        .get_async_connection()
+        .await?;
+    let failure_operation: Vec<Vec<u8>> = ::redis::cmd("HGETALL")
+        .arg(format!("freebird:graph-issuance:v1:op:{}", "40".repeat(16)))
+        .query_async(&mut failure_connection)
+        .await?;
+    assert!(failure_operation.is_empty());
+    let failure_budget: Vec<Vec<u8>> = ::redis::cmd("HGETALL")
+        .arg("freebird:graph-issuance:v1:budget:v4-bootstrap-budget-one")
+        .query_async(&mut failure_connection)
+        .await?;
+    assert!(failure_budget.is_empty());
+    assert!(::redis::cmd("GET")
+        .arg(v4_spend_from_token(&signing_failure.authorization)?)
+        .query_async::<_, Option<Vec<u8>>>(&mut failure_connection)
+        .await?
+        .is_none());
+    drop(failure_connection);
+
+    let (request, pending) = graph_issuance_request_with_authorization(
+        &graph,
+        &fixture.keys[0],
+        [0x51; 16],
+        [0x52; 32],
+        "v4-bootstrap-one",
+        credential.clone(),
+    )?;
+    let capability = [0x53; 32];
+    let response = post_graph_issuance(&client, &server.base, &request, &capability).await?;
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let response_bytes = response.bytes().await?.to_vec();
+    let result: GraphIssuanceResultV1 = serde_json::from_slice(&response_bytes)?;
+    let artifact = finalize_graph_issuance(&result, pending, &fixture.keys[0])?;
+    let exact_retry = post_graph_issuance(&client, &server.base, &request, &capability).await?;
+    assert_eq!(exact_retry.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        exact_retry.bytes().await?.as_ref(),
+        response_bytes.as_slice()
+    );
+    let changed_capability =
+        post_graph_issuance(&client, &server.base, &request, &[0x54; 32]).await?;
+    assert_eq!(changed_capability.status(), reqwest::StatusCode::CONFLICT);
+
+    let mut connection = ::redis::Client::open(redis.url.clone())?
+        .get_async_connection()
+        .await?;
+    let operation_record: std::collections::HashMap<Vec<u8>, Vec<u8>> = ::redis::cmd("HGETALL")
+        .arg(format!("freebird:graph-issuance:v1:op:{}", "51".repeat(16)))
+        .query_async(&mut connection)
+        .await?;
+    assert!(!operation_record.is_empty());
+    assert!(!operation_record.iter().any(|(key, value)| {
+        key.windows(credential.len())
+            .any(|part| part == credential.as_bytes())
+            || value
+                .windows(credential.len())
+                .any(|part| part == credential.as_bytes())
+    }));
+    let credential_bytes = Base64UrlUnpadded::decode_vec(&credential)?;
+    let credential_token = parse_redemption_token(&credential_bytes)
+        .map_err(|error| anyhow::anyhow!("parse V4 credential for inspection: {error:?}"))?;
+    let credential_nullifier = nullifier_key_v4(
+        &credential_token,
+        V4_ADMISSION_VERIFIER,
+        V4_ADMISSION_AUDIENCE,
+    )
+    .map_err(|error| anyhow::anyhow!("derive V4 credential nullifier: {error:?}"))?;
+    let authorization_key = format!(
+        "freebird:graph-issuance:v1:authorization:v4-bootstrap-one:{}",
+        hex::encode(Base64UrlUnpadded::decode_vec(&credential_nullifier)?)
+    );
+    let inspection_keys = [
+        format!("freebird:graph-issuance:v1:op:{}", "51".repeat(16)),
+        "freebird:graph-issuance:v1:budget:v4-bootstrap-budget-one".into(),
+        authorization_key,
+        v4_spend_from_token(&credential)?,
+    ];
+    let mut inspected_material = Vec::new();
+    for key in &inspection_keys {
+        inspected_material.push(key.as_bytes().to_vec());
+        if key.starts_with("freebird:spent:") {
+            if let Some(value) = ::redis::cmd("GET")
+                .arg(key)
+                .query_async::<_, Option<Vec<u8>>>(&mut connection)
+                .await?
+            {
+                inspected_material.push(value);
+            }
+        } else {
+            let values: HashMap<Vec<u8>, Vec<u8>> = ::redis::cmd("HGETALL")
+                .arg(key)
+                .query_async(&mut connection)
+                .await?;
+            for (field, value) in values {
+                inspected_material.push(field);
+                inspected_material.push(value);
+            }
+        }
+    }
+    for material in &inspected_material {
+        assert!(!material
+            .windows(credential_bytes.len())
+            .any(|window| window == credential_bytes.as_slice()));
+        assert!(!material
+            .windows(credential.len())
+            .any(|window| window == credential.as_bytes()));
+    }
+    let marker: Option<String> = ::redis::cmd("GET")
+        .arg(v4_spend_from_token(&credential)?)
+        .query_async(&mut connection)
+        .await?;
+    assert_eq!(marker.as_deref(), Some("1"));
+    drop(connection);
+
+    let status = client
+        .get(format!(
+            "{}/v1/public/graph/issue/status?public_operation_id={}",
+            server.base, request.public_operation_id
+        ))
+        .header(
+            "graph-issuance-status-capability",
+            Base64UrlUnpadded::encode_string(&capability),
+        )
+        .send()
+        .await?;
+    let status_bytes = status.bytes().await?;
+    assert_eq!(status_bytes.as_ref(), response_bytes.as_slice());
+    assert!(!std::str::from_utf8(&status_bytes)?.contains(&credential));
+
+    for (index, policy) in ["v4-bootstrap-one", "v4-bootstrap-two"]
+        .into_iter()
+        .enumerate()
+    {
+        let (replay, _) = graph_issuance_request_with_authorization(
+            &graph,
+            &fixture.keys[0],
+            [0x54 + index as u8; 16],
+            [0x55 + index as u8; 32],
+            policy,
+            credential.clone(),
+        )?;
+        assert_eq!(
+            post_graph_issuance(&client, &server.base, &replay, &[0x56 + index as u8; 32],)
+                .await?
+                .status(),
+            reqwest::StatusCode::BAD_REQUEST
+        );
+    }
+    let verifier_store = RedisStore::new(&redis.url)?;
+    // This is the issuance -> ordinary-verifier direction. The ordinary
+    // verifier validates the credential and attempts the exact same global
+    // marker, so it must reject the already-issued credential.
+    assert!(!ordinary_v4_verify_and_consume(&verifier_store, &credential).await?);
+
+    let verifier_first = v4_admission_token(
+        V4_ADMISSION_ISSUER,
+        V4_ADMISSION_KID,
+        V4_ADMISSION_VERIFIER,
+        V4_ADMISSION_AUDIENCE,
+        V4_ADMISSION_SECRET,
+        [0x60; 32],
+    )?;
+    // This is the ordinary-verifier -> issuance direction. A valid ordinary
+    // verification consumes the marker before graph issuance sees it.
+    assert!(ordinary_v4_verify_and_consume(&verifier_store, &verifier_first).await?);
+    let (verifier_first_request, _) = graph_issuance_request_with_authorization(
+        &graph,
+        &fixture.keys[0],
+        [0x60; 16],
+        [0x61; 32],
+        "v4-bootstrap-one",
+        verifier_first,
+    )?;
+    assert_eq!(
+        post_graph_issuance(&client, &server.base, &verifier_first_request, &[0x62; 32],)
+            .await?
+            .status(),
+        reqwest::StatusCode::BAD_REQUEST
+    );
+
+    let concurrent_credential = v4_admission_token(
+        V4_ADMISSION_ISSUER,
+        V4_ADMISSION_KID,
+        V4_ADMISSION_VERIFIER,
+        V4_ADMISSION_AUDIENCE,
+        V4_ADMISSION_SECRET,
+        [0x70; 32],
+    )?;
+    let (concurrent_a, _) = graph_issuance_request_with_authorization(
+        &graph,
+        &fixture.keys[0],
+        [0x70; 16],
+        [0x71; 32],
+        "v4-bootstrap-one",
+        concurrent_credential.clone(),
+    )?;
+    let (concurrent_b, _) = graph_issuance_request_with_authorization(
+        &graph,
+        &fixture.keys[0],
+        [0x72; 16],
+        [0x73; 32],
+        "v4-bootstrap-two",
+        concurrent_credential,
+    )?;
+    let (race_a, race_b) = tokio::join!(
+        post_graph_issuance(&client, &server.base, &concurrent_a, &[0x74; 32]),
+        post_graph_issuance(&client, &server.base, &concurrent_b, &[0x75; 32]),
+    );
+    let statuses = [race_a?.status(), race_b?.status()];
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|status| **status == reqwest::StatusCode::OK)
+            .count(),
+        1
+    );
+
+    let mut wrong_scope_token =
+        parse_redemption_token(&Base64UrlUnpadded::decode_vec(&credential)?).map_err(|error| {
+            anyhow::anyhow!("parse V4 credential for scope mutation: {error:?}")
+        })?;
+    wrong_scope_token.scope_digest[0] ^= 1;
+    let wrong_scope_bytes = build_redemption_token(&wrong_scope_token)
+        .map_err(|error| anyhow::anyhow!("encode wrong-scope V4 credential: {error:?}"))?;
+    let wrong_scope = Base64UrlUnpadded::encode_string(&wrong_scope_bytes);
+    let mut forged_token = parse_redemption_token(&Base64UrlUnpadded::decode_vec(&credential)?)
+        .map_err(|error| {
+            anyhow::anyhow!("parse V4 credential for authenticator mutation: {error:?}")
+        })?;
+    forged_token.authenticator[0] ^= 1;
+    let forged_bytes = build_redemption_token(&forged_token)
+        .map_err(|error| anyhow::anyhow!("encode forged V4 credential: {error:?}"))?;
+    let forged_authenticator = Base64UrlUnpadded::encode_string(&forged_bytes);
+    for (index, invalid_credential) in [
+        wrong_scope,
+        v4_admission_token(
+            V4_ADMISSION_ISSUER,
+            V4_ADMISSION_KID,
+            "verifier:wrong",
+            V4_ADMISSION_AUDIENCE,
+            V4_ADMISSION_SECRET,
+            [0x80; 32],
+        )?,
+        v4_admission_token(
+            V4_ADMISSION_ISSUER,
+            V4_ADMISSION_KID,
+            V4_ADMISSION_VERIFIER,
+            "audience-wrong",
+            V4_ADMISSION_SECRET,
+            [0x81; 32],
+        )?,
+        v4_admission_token(
+            "issuer:wrong",
+            V4_ADMISSION_KID,
+            V4_ADMISSION_VERIFIER,
+            V4_ADMISSION_AUDIENCE,
+            V4_ADMISSION_SECRET,
+            [0x82; 32],
+        )?,
+        v4_admission_token(
+            V4_ADMISSION_ISSUER,
+            "kid-wrong",
+            V4_ADMISSION_VERIFIER,
+            V4_ADMISSION_AUDIENCE,
+            V4_ADMISSION_SECRET,
+            [0x83; 32],
+        )?,
+        forged_authenticator,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (invalid, _) = graph_issuance_request_with_authorization(
+            &graph,
+            &fixture.keys[0],
+            [0x80 + index as u8; 16],
+            [0x84 + index as u8; 32],
+            "v4-bootstrap-one",
+            invalid_credential,
+        )?;
+        assert_eq!(
+            post_graph_issuance(&client, &server.base, &invalid, &[0x88 + index as u8; 32],)
+                .await?
+                .status(),
+            reqwest::StatusCode::BAD_REQUEST
+        );
+    }
+
+    server.stop().await;
+    redis.restart()?;
+    let restarted = start_server(config).await?;
+    let recovered = post_graph_issuance(&client, &restarted.base, &request, &capability).await?;
+    assert_eq!(recovered.status(), reqwest::StatusCode::OK);
+    assert_eq!(recovered.bytes().await?.as_ref(), response_bytes.as_slice());
+
+    let (exchange_request, exchange_pending) = request_from_discovery(
+        &graph,
+        2,
+        artifact,
+        &fixture.keys[2],
+        [0x90; 16],
+        [0x91; 32],
+    )?;
+    let exchange_response =
+        post_exchange(&client, &restarted.base, &exchange_request, &[0x92; 32]).await?;
+    assert_eq!(exchange_response.status(), reqwest::StatusCode::OK);
+    let exchange_response: ExchangeResponseV2 = exchange_response.json().await?;
+    let _ = finalize_output(&exchange_response, exchange_pending, &fixture.keys[2])?;
     restarted.stop().await;
     Ok(())
 }

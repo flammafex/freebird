@@ -14,7 +14,7 @@ use freebird_common::api::{
 };
 use freebird_common::logging;
 use freebird_common::metrics::{self, MetricsMiddleware};
-use freebird_common::spend_key::v5_spend_key;
+use freebird_common::spend_key::{v4_spend_key, v5_spend_key};
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::{
@@ -155,6 +155,37 @@ fn select_store_backend(
     } else {
         anyhow::bail!("REDIS_URL is required; development memory replay requires IN_MEMORY_REPLAY_STORE=true and VERIFIER_ENV=development")
     }
+}
+
+fn enforce_declared_v4_replay_authority(
+    redis_url: Option<&str>,
+    declared_graph_issuance_authority: Option<&str>,
+) -> anyhow::Result<()> {
+    if let Some(declared) = declared_graph_issuance_authority {
+        if redis_url != Some(declared) {
+            anyhow::bail!(
+                "REDIS_URL must exactly match the declared v4_local graph issuance replay authority"
+            )
+        }
+    }
+    Ok(())
+}
+
+fn enforce_graph_v4_replay_configuration(
+    redis_url: Option<&str>,
+    declared_graph_issuance_authority: Option<&str>,
+    graph_issuance_enabled: bool,
+    authorization_scheme: Option<&str>,
+) -> anyhow::Result<()> {
+    if graph_issuance_enabled
+        && authorization_scheme == Some("v4_local")
+        && declared_graph_issuance_authority.is_none()
+    {
+        anyhow::bail!(
+            "v4_local graph issuance requires an explicit shared replay Redis authority declaration"
+        )
+    }
+    enforce_declared_v4_replay_authority(redis_url, declared_graph_issuance_authority)
 }
 
 fn ensure_token_family_enabled(
@@ -302,8 +333,19 @@ async fn main() -> anyhow::Result<()> {
 
     let memory_opt_in =
         parse_in_memory_replay_store(std::env::var("IN_MEMORY_REPLAY_STORE").ok().as_deref())?;
+    let redis_url = std::env::var("REDIS_URL").ok();
+    enforce_graph_v4_replay_configuration(
+        redis_url.as_deref(),
+        std::env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL")
+            .ok()
+            .as_deref(),
+        std::env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE").as_deref() == Ok("true"),
+        std::env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION")
+            .ok()
+            .as_deref(),
+    )?;
     let (backend, store_backend_name) = select_store_backend(
-        std::env::var("REDIS_URL").ok(),
+        redis_url,
         memory_opt_in,
         std::env::var("VERIFIER_ENV").ok().as_deref(),
         std::env::var("VERIFIER_ALLOW_UNSAFE").as_deref() == Ok("true"),
@@ -679,7 +721,7 @@ async fn verify(
                         (StatusCode::BAD_REQUEST, "verification failed".to_string())
                     },
                 )?;
-            (format!("freebird:spent:v4:{null_key}"), None)
+            (v4_spend_key(&null_key), None)
         }
         freebird_crypto::REDEMPTION_TOKEN_VERSION_V5 => {
             info!("Starting V5 public bearer verification");
@@ -894,7 +936,7 @@ async fn batch_verify(
                             };
                         }
                     };
-                (format!("freebird:spent:v4:{null_key}"), None)
+                (v4_spend_key(&null_key), None)
             }
             freebird_crypto::REDEMPTION_TOKEN_VERSION_V5 => {
                 let (parsed, key) = match verify_v5_public_token(
@@ -1043,9 +1085,10 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_throughput, ensure_token_family_enabled, family_enabled, in_memory_replay_allowed,
-        parse_accepted_token_families, parse_in_memory_replay_store, record_spend,
-        select_store_backend,
+        compute_throughput, enforce_declared_v4_replay_authority,
+        enforce_graph_v4_replay_configuration, ensure_token_family_enabled, family_enabled,
+        in_memory_replay_allowed, parse_accepted_token_families, parse_in_memory_replay_store,
+        record_spend, select_store_backend,
     };
     use freebird_verifier::readiness::TokenFamily;
     use freebird_verifier::store::SpendStore;
@@ -1126,6 +1169,7 @@ mod tests {
         assert!(parse_in_memory_replay_store(Some("invalid")).is_err());
 
         assert!(select_store_backend(None, false, Some("development"), false).is_err());
+        assert!(select_store_backend(None, false, Some("production"), false).is_err());
         assert!(matches!(
             select_store_backend(None, true, Some("development"), false)
                 .unwrap()
@@ -1133,6 +1177,35 @@ mod tests {
             freebird_verifier::store::StoreBackend::InMemory
         ));
         assert!(select_store_backend(None, true, Some("production"), true).is_err());
+    }
+
+    #[test]
+    fn declared_graph_v4_replay_authority_must_exactly_match_redis_url() {
+        assert!(enforce_declared_v4_replay_authority(
+            Some("redis://redis:6379/4"),
+            Some("redis://redis:6379/4")
+        )
+        .is_ok());
+        assert!(enforce_declared_v4_replay_authority(
+            Some("redis://redis:6379/4"),
+            Some("redis://redis:6379/5")
+        )
+        .is_err());
+        assert!(enforce_declared_v4_replay_authority(None, Some("redis://redis:6379/4")).is_err());
+        assert!(enforce_graph_v4_replay_configuration(
+            Some("redis://redis:6379/4"),
+            None,
+            true,
+            Some("v4_local")
+        )
+        .is_err());
+        assert!(enforce_graph_v4_replay_configuration(
+            Some("redis://redis:6379/4"),
+            None,
+            false,
+            Some("v4_local")
+        )
+        .is_ok());
     }
 
     #[tokio::test]

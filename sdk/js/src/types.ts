@@ -179,6 +179,53 @@ export interface ExchangeDiscoveryMetadata {
   retained_receipt_keys: ExchangeReceiptKeyInfo[];
 }
 
+export interface GraphIssuancePolicyInfo {
+  issuance_policy_id: string;
+  graph_id: string;
+  keyset_id: string;
+  descriptor_id: string;
+  budget_id: string;
+  budget_limit: number;
+  quantity: number;
+  admission_state: ExchangeAdmissionState;
+  authorization_scheme: string;
+}
+
+export interface GraphIssuanceDiscoveryMetadata {
+  version: 1;
+  policies: GraphIssuancePolicyInfo[];
+}
+
+/** Exact JSON body accepted by POST /v1/public/graph/issue. */
+export interface GraphIssuanceRequest {
+  version: 1;
+  public_operation_id: string;
+  issuance_policy_id: string;
+  graph_id: string;
+  keyset_id: string;
+  descriptor_id: string;
+  blinded_message: string;
+  authorization: string;
+}
+
+export interface GraphIssuanceResult {
+  version: 1;
+  public_operation_id: string;
+  issuance_policy_id: string;
+  graph_id: string;
+  keyset_id: string;
+  descriptor_id: string;
+  token_key_id: string;
+  quantity: number;
+  request_digest: string;
+  blind_signature: string;
+  result_digest: string;
+}
+
+export type GraphIssuanceOutcome =
+  | { kind: 'committed'; httpStatus: 200; response: GraphIssuanceResult; rawResponseBody: string; cacheControl: 'no-store' }
+  | { kind: 'error'; httpStatus: 400 | 404 | 409 | 413 | 503; response: { error: string }; rawResponseBody: string; cacheControl: 'no-store' };
+
 export interface ExchangeTransitionSelection {
   graph: ExchangeGraphInfo;
   transition: ExchangeTransitionInfo;
@@ -276,6 +323,8 @@ export interface KeyDiscoveryMetadata {
   public: PublicKeyInfo[];
   /** Absent on legacy issuers that do not publish exchange metadata. */
   exchange?: ExchangeDiscoveryMetadata;
+  /** Absent unless policy-authorized graph initial issuance is configured. */
+  graph_issuance?: GraphIssuanceDiscoveryMetadata;
 }
 
 /**

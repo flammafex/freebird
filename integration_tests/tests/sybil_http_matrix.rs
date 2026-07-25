@@ -88,6 +88,8 @@ async fn build_app(sybil_checker: Option<Arc<dyn SybilResistance>>) -> Result<Te
         public_issuer: Some(public_issuer.clone()),
         exchange_engine: None,
         exchange_metadata: None,
+        graph_issuance_engine: None,
+        graph_issuance_metadata: None,
         epoch_duration_sec: 86400,
         epoch_retention: 2,
     });

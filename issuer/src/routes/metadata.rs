@@ -83,6 +83,7 @@ pub async fn keys_handler(State((state, voprf)): State<SharedState>) -> Json<Key
             .map(|issuer| vec![issuer.metadata().clone()])
             .unwrap_or_default(),
         exchange: state.exchange_metadata.clone(),
+        graph_issuance: state.graph_issuance_metadata.clone(),
     })
 }
 
@@ -135,6 +136,8 @@ mod tests {
             public_issuer: None,
             exchange_engine: None,
             exchange_metadata: Some(exchange.clone()),
+            graph_issuance_engine: None,
+            graph_issuance_metadata: None,
             epoch_duration_sec: 86_400,
             epoch_retention: 2,
             admin_api_key: None,

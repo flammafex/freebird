@@ -299,6 +299,78 @@ pub struct KeyDiscoveryResp {
     pub public: Vec<PublicKeyInfo>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exchange: Option<ExchangeDiscoveryV2>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub graph_issuance: Option<GraphIssuanceDiscoveryV1>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GraphIssuanceDiscoveryV1 {
+    pub version: u8,
+    pub policies: Vec<GraphIssuancePolicyDiscoveryV1>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GraphIssuancePolicyDiscoveryV1 {
+    pub issuance_policy_id: String,
+    pub graph_id: String,
+    pub keyset_id: String,
+    pub descriptor_id: String,
+    pub budget_id: String,
+    pub budget_limit: u64,
+    pub quantity: u32,
+    pub admission_state: ExchangeAdmissionStateV2,
+    pub authorization_scheme: String,
+}
+
+pub fn validate_graph_issuance_discovery_v1(
+    exchange: &ExchangeDiscoveryV2,
+    issuance: &GraphIssuanceDiscoveryV1,
+) -> Result<(), String> {
+    use std::collections::HashSet;
+
+    if issuance.version != crate::graph_issuance_api::GRAPH_ISSUANCE_VERSION_V1
+        || issuance.policies.is_empty()
+        || issuance.policies.len() > crate::exchange_api::MAX_ITEMS
+    {
+        return Err("invalid graph issuance discovery bounds".into());
+    }
+    let mut policy_ids = HashSet::new();
+    let mut budget_ids = HashSet::new();
+    for policy in &issuance.policies {
+        let graph = std::iter::once((&exchange.active_graph, true))
+            .chain(exchange.retained_graphs.iter().map(|graph| (graph, false)))
+            .find(|(graph, _)| graph.graph_id == policy.graph_id)
+            .ok_or_else(|| "graph issuance policy references an unknown graph".to_string())?;
+        let keyset = graph
+            .0
+            .keysets
+            .iter()
+            .find(|keyset| keyset.keyset_id == policy.keyset_id)
+            .ok_or_else(|| "graph issuance policy references an unknown keyset".to_string())?;
+        if policy.issuance_policy_id.is_empty()
+            || policy.issuance_policy_id.len() > crate::exchange_api::MAX_ID
+            || !policy.issuance_policy_id.is_ascii()
+            || policy.budget_id.is_empty()
+            || policy.budget_id.len() > crate::exchange_api::MAX_ID
+            || !policy.budget_id.is_ascii()
+            || policy.authorization_scheme.is_empty()
+            || policy.authorization_scheme.len() > crate::exchange_api::MAX_ID
+            || !policy.authorization_scheme.is_ascii()
+            || policy.budget_limit == 0
+            || policy.budget_limit > EXCHANGE_MAX_BUDGET_LIMIT
+            || policy.quantity == 0
+            || u64::from(policy.quantity) > policy.budget_limit
+            || !keyset.descriptor_ids.contains(&policy.descriptor_id)
+            || !policy_ids.insert(policy.issuance_policy_id.as_str())
+            || !budget_ids.insert(policy.budget_id.as_str())
+            || (policy.admission_state == ExchangeAdmissionStateV2::AcceptingNew && !graph.1)
+        {
+            return Err("invalid graph issuance policy metadata".into());
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

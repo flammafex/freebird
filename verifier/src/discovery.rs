@@ -233,6 +233,7 @@ mod tests {
                 max_uses: Some(1),
             }],
             exchange: None,
+            graph_issuance: None,
         }
     }
 

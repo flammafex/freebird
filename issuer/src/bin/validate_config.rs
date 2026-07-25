@@ -567,6 +567,22 @@ fn validate_exchange_config() -> ValidationSection {
                 }
                 freebird_common::api::validate_exchange_discovery_v2(&issuer_id, &discovery)
                     .map_err(anyhow::Error::msg)?;
+                if config.graph_issuance.enabled {
+                    let document = freebird_issuer::graph_issuance::GraphIssuancePolicyDocument::load(
+                        &config.graph_issuance.policy_path,
+                        &loaded.active_graph,
+                        &loaded.retained_graphs,
+                    )?;
+                    freebird_issuer::graph_issuance::validate_configured_authorizer(
+                        &config.graph_issuance.authorization,
+                        &document,
+                    )?;
+                    freebird_common::api::validate_graph_issuance_discovery_v1(
+                        &discovery,
+                        &document.discovery(),
+                    )
+                    .map_err(anyhow::Error::msg)?;
+                }
                 freebird_issuer::exchange::history::global_key_identities_v2(
                     &issuer_id,
                     direct_v5_metadata.as_ref(),

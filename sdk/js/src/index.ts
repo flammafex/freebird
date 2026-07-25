@@ -38,6 +38,11 @@ export type {
   ExchangePendingOutcome,
   ExchangeErrorOutcome,
   ExchangeOutcome,
+  GraphIssuancePolicyInfo,
+  GraphIssuanceDiscoveryMetadata,
+  GraphIssuanceRequest,
+  GraphIssuanceResult,
+  GraphIssuanceOutcome,
   FreebirdToken,
   SybilProof,
   // Export internal types that might be useful for debugging

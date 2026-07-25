@@ -10,7 +10,6 @@ use crate::routes::admin::{IssuerInfo, PublicIssuerKey};
 use axum::http::StatusCode;
 use base64ct::{Base64UrlUnpadded, Encoding};
 use std::collections::HashMap;
-use subtle::ConstantTimeEq;
 use tracing::{debug, error};
 
 /// Parse a V4 redemption token from base64url, find the issuer-trusted private
@@ -30,35 +29,32 @@ pub fn verify_v4_token(
         )
     })?;
 
-    let parsed = freebird_crypto::parse_redemption_token(&token_bytes).map_err(|e| {
-        error!("Failed to parse V4 token: {:?}", e);
-        (
-            StatusCode::BAD_REQUEST,
-            format!("invalid token format: {:?}", e),
-        )
-    })?;
-
-    if !bool::from(parsed.scope_digest.ct_eq(expected_scope_digest)) {
-        error!("token scope does not match verifier");
-        return Err((StatusCode::UNAUTHORIZED, "verification failed".to_string()));
-    }
-
-    let issuer = issuers.get(&parsed.issuer_id).ok_or_else(|| {
-        error!("token issuer is not trusted");
-        (StatusCode::UNAUTHORIZED, "verification failed".to_string())
-    })?;
-
-    let Some(secret_key) = issuer.verification_key_for(&parsed.kid) else {
-        error!("no private verification key configured for token");
-        return Err((StatusCode::UNAUTHORIZED, "verification failed".to_string()));
-    };
-
-    freebird_crypto::verify_private_token_authenticator(secret_key, &issuer.ctx, &parsed).map_err(
-        |e| {
-            error!(error = ?e, "private token authenticator verification failed");
-            (StatusCode::UNAUTHORIZED, "verification failed".to_string())
+    let parsed = freebird_common::v4_admission::authenticate_v4_credential(
+        &token_bytes,
+        expected_scope_digest,
+        |issuer_id, kid| {
+            let issuer = issuers.get(issuer_id)?;
+            Some(freebird_common::v4_admission::V4VerificationKey {
+                secret_key: issuer.verification_key_for(kid)?,
+                context: issuer.ctx.clone(),
+            })
         },
-    )?;
+    )
+    .map_err(|error| {
+        error!("V4 token parsing, scope, trust, or authenticator verification failed");
+        match error {
+            freebird_common::v4_admission::V4AdmissionError::InvalidToken(detail) => (
+                StatusCode::BAD_REQUEST,
+                format!("invalid token format: {detail}"),
+            ),
+            freebird_common::v4_admission::V4AdmissionError::Rejected => {
+                (StatusCode::UNAUTHORIZED, "verification failed".to_string())
+            }
+        }
+    })?;
+    let issuer = issuers
+        .get(&parsed.issuer_id)
+        .expect("shared V4 verification resolved this issuer");
 
     debug!("V4 private token authenticator verified");
 
