@@ -66,7 +66,18 @@ PROXY_IP="$(kubectl -n ingress-nginx get pod -l app.kubernetes.io/component=cont
 : "${PROXY_IP:?could not determine ingress controller pod IP}"
 TRUSTED_PROXY_CIDR="${PROXY_IP}/32"
 
-kind load docker-image "$ISSUER_IMAGE" "$VERIFIER_IMAGE" --name "$CLUSTER"
+# The kind overlay intentionally contains non-release local placeholders rather
+# than an historical GHCR tag. Retag the operator-provided immutable test
+# images to those placeholders before applying the workload.
+KIND_ISSUER_IMAGE="freebird-issuer:kind-smoke"
+KIND_VERIFIER_IMAGE="freebird-verifier:kind-smoke"
+if [[ "$ISSUER_IMAGE" != "$KIND_ISSUER_IMAGE" ]]; then
+  docker tag "$ISSUER_IMAGE" "$KIND_ISSUER_IMAGE"
+fi
+if [[ "$VERIFIER_IMAGE" != "$KIND_VERIFIER_IMAGE" ]]; then
+  docker tag "$VERIFIER_IMAGE" "$KIND_VERIFIER_IMAGE"
+fi
+kind load docker-image "$KIND_ISSUER_IMAGE" "$KIND_VERIFIER_IMAGE" --name "$CLUSTER"
 kubectl apply -f k8s/namespace.yaml -f k8s/rbac.yaml
 kubectl create secret generic admin-credentials --namespace freebird \
   --from-literal=admin-api-key=release-smoke-admin-key-01234567890123456789
@@ -160,8 +171,11 @@ kubectl -n freebird patch configmap issuer-config --type merge \
   -p "{\"data\":{\"TRUSTED_PROXY_CIDRS\":\"${TRUSTED_PROXY_CIDR}\"}}"
 kubectl -n freebird patch configmap verifier-config --type merge \
   -p "{\"data\":{\"TRUSTED_PROXY_CIDRS\":\"${TRUSTED_PROXY_CIDR}\"}}"
-kubectl set image deployment/issuer -n freebird issuer="$ISSUER_IMAGE"
-kubectl set image deployment/verifier -n freebird verifier="$VERIFIER_IMAGE"
+# Keep the workload references aligned with the exact aliases loaded above.
+# The operator-provided source references are only used to create those local
+# tags; they are not present in the kind node's image store after retagging.
+kubectl set image deployment/issuer -n freebird issuer="$KIND_ISSUER_IMAGE"
+kubectl set image deployment/verifier -n freebird verifier="$KIND_VERIFIER_IMAGE"
 kubectl rollout restart deployment/issuer deployment/verifier -n freebird
 kubectl rollout status deployment/issuer -n freebird --timeout=180s
 kubectl rollout status deployment/verifier -n freebird --timeout=180s

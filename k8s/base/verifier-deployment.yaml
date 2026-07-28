@@ -16,6 +16,13 @@ data:
   VERIFIER_ENV: "production"
   IN_MEMORY_REPLAY_STORE: "false"
   REFRESH_INTERVAL_MIN: "10"
+  # This coordination marker must match the issuer when graph issuance is
+  # enabled. Leave it false with an empty authority URL otherwise.
+  PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE: "false"
+  # Leave empty unless this verifier participates in V2 graph issuance.
+  VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS: ""
+  VERIFIER_REPLAY_AUTHORITY_PROBE_INTERVAL: "30s"
+  VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS: "60s"
   EPOCH_DURATION_SEC: "86400"
   EPOCH_RETENTION: "2"
 
@@ -60,7 +67,7 @@ spec:
       # Main containers
       containers:
         - name: verifier
-          image: ghcr.io/flammafex/freebird-verifier:0.5.1
+          image: ghcr.io/flammafex/freebird-verifier@sha256:REQUIRED_VERIFIER_IMAGE_DIGEST
           imagePullPolicy: IfNotPresent
 
           # Environment

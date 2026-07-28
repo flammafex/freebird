@@ -20,6 +20,20 @@ data:
   SYBIL_INVITE_AUTOSAVE_INTERVAL: "5m"
   SYBIL_INVITE_BOOTSTRAP_USERS: "admin:100"
   PUBLIC_BEARER_ENABLE: "true"
+  # V2 exchange/graph issuance are opt-in. When enabled, provision all
+  # referenced graph, history, acknowledgement, metadata, and signer files.
+  PUBLIC_BEARER_EXCHANGE_ENABLE: "false"
+  PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH: "/data/config/public-bearer-exchange-graph-v2.json"
+  PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS: ""
+  PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH: "/data/config/exchange-public-history-v2.json"
+  PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS: ""
+  PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH: "/data/keys/exchange-receipt-active.key"
+  PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH: "/data/config/exchange-receipt-active.json"
+  PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS: ""
+  PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS: ""
+  PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE: "false"
+  PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH: "/data/config/graph-issuance-policy-v2.json"
+  PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION: "hmac_sha256"
 
 ---
 apiVersion: v1
@@ -73,7 +87,10 @@ spec:
       # Init containers for setup
       initContainers:
         - name: setup
-          image: ghcr.io/flammafex/freebird-issuer:0.5.1
+          # Production must replace this sentinel with the operator-verified
+          # release image digest. The kind overlay substitutes a local smoke
+          # image and the smoke script then loads the requested test image.
+          image: ghcr.io/flammafex/freebird-issuer@sha256:REQUIRED_ISSUER_IMAGE_DIGEST
           imagePullPolicy: IfNotPresent
           command:
             - sh
@@ -90,7 +107,7 @@ spec:
       # Main containers
       containers:
         - name: issuer
-          image: ghcr.io/flammafex/freebird-issuer:0.5.1
+          image: ghcr.io/flammafex/freebird-issuer@sha256:REQUIRED_ISSUER_IMAGE_DIGEST
           imagePullPolicy: IfNotPresent
 
           # Environment
@@ -126,6 +143,20 @@ spec:
               value: /data/keys/public_bearer_sk.der
             - name: PUBLIC_BEARER_METADATA_PATH
               value: /data/keys/public_bearer_metadata.json
+            - name: PUBLIC_BEARER_EXCHANGE_REDIS_URL
+              value: redis://:$(REDIS_PASSWORD)@redis:6379
+            - name: PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64
+              valueFrom:
+                secretKeyRef:
+                  name: graph-issuance-credentials
+                  key: hmac-secret-b64
+                  optional: true
+            - name: PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64
+              valueFrom:
+                secretKeyRef:
+                  name: graph-issuance-credentials
+                  key: v4-keyring-b64
+                  optional: true
             - name: WEBAUTHN_PROOF_SECRET
               valueFrom:
                 secretKeyRef:

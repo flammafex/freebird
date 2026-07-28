@@ -300,19 +300,33 @@ pub struct KeyDiscoveryResp {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exchange: Option<ExchangeDiscoveryV2>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub graph_issuance: Option<GraphIssuanceDiscoveryV1>,
+    pub graph_issuance: Option<GraphIssuanceDiscoveryV2>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct GraphIssuanceDiscoveryV1 {
+pub struct GraphIssuanceReplayAuthorityDiscoveryV1 {
+    /// The permanent Redis-backed replay authority identity.
+    pub authority_id: String,
+    /// Scope identities are retained forever once a V4-local policy could have
+    /// consumed a non-expiring V4 replay marker.
+    #[serde(default)]
+    pub v4_scope_digest_tombstones: Vec<String>,
+}
+
+pub type ReplayAuthorityDiscoveryV1 = GraphIssuanceReplayAuthorityDiscoveryV1;
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct GraphIssuanceDiscoveryV2 {
     pub version: u8,
-    pub policies: Vec<GraphIssuancePolicyDiscoveryV1>,
+    pub policies: Vec<GraphIssuancePolicyDiscoveryV2>,
+    pub replay_authority: GraphIssuanceReplayAuthorityDiscoveryV1,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-pub struct GraphIssuancePolicyDiscoveryV1 {
+pub struct GraphIssuancePolicyDiscoveryV2 {
     pub issuance_policy_id: String,
     pub graph_id: String,
     pub keyset_id: String,
@@ -322,20 +336,91 @@ pub struct GraphIssuancePolicyDiscoveryV1 {
     pub quantity: u32,
     pub admission_state: ExchangeAdmissionStateV2,
     pub authorization_scheme: String,
+    /// Present exactly for `v4_local`.  The value is public because it is a
+    /// verifier replay namespace selector, not a raw verifier scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization_scope_digest_b64: Option<String>,
 }
 
-pub fn validate_graph_issuance_discovery_v1(
+pub type GraphIssuancePolicyDiscovery = GraphIssuancePolicyDiscoveryV2;
+pub type GraphIssuanceDiscovery = GraphIssuanceDiscoveryV2;
+
+fn validate_graph_issuance_replay_authority(
+    authority: &GraphIssuanceReplayAuthorityDiscoveryV1,
+) -> Result<std::collections::HashSet<[u8; 32]>, String> {
+    use base64ct::Encoding;
+
+    crate::graph_issuance_api::decode_authority_id(&authority.authority_id)
+        .map_err(|error| error.to_string())?;
+    if authority.v4_scope_digest_tombstones.len() > crate::exchange_api::MAX_ITEMS {
+        return Err("invalid graph issuance replay authority metadata".into());
+    }
+    let mut tombstones = std::collections::HashSet::new();
+    for digest in &authority.v4_scope_digest_tombstones {
+        let raw =
+            crate::graph_issuance_api::decode_digest(digest).map_err(|error| error.to_string())?;
+        if !tombstones.insert(raw) || base64ct::Base64UrlUnpadded::encode_string(&raw) != *digest {
+            return Err("invalid graph issuance V4 scope tombstone".into());
+        }
+    }
+    Ok(tombstones)
+}
+
+fn validate_graph_issuance_policy_id(value: &str) -> bool {
+    !value.is_empty() && value.len() <= crate::exchange_api::MAX_ID && value.is_ascii()
+}
+
+fn validate_graph_issuance_authorization_metadata(
+    policy: &GraphIssuancePolicyDiscoveryV2,
+    tombstones: &std::collections::HashSet<[u8; 32]>,
+) -> Result<(), String> {
+    use base64ct::Encoding;
+
+    let supported = matches!(
+        policy.authorization_scheme.as_str(),
+        crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_HMAC_SHA256
+            | crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_V4_LOCAL
+            | crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_DEVELOPMENT_MOCK
+    );
+    if !supported {
+        return Err("invalid graph issuance authorization scheme".into());
+    }
+    match (
+        policy.authorization_scheme.as_str(),
+        policy.authorization_scope_digest_b64.as_deref(),
+    ) {
+        (crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_V4_LOCAL, Some(scope)) => {
+            let raw = crate::graph_issuance_api::decode_digest(scope)
+                .map_err(|error| error.to_string())?;
+            if !tombstones.contains(&raw)
+                || base64ct::Base64UrlUnpadded::encode_string(&raw) != scope
+            {
+                return Err("V4 graph issuance scope is not retained by replay authority".into());
+            }
+        }
+        (crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_V4_LOCAL, None) => {
+            return Err("V4 graph issuance scope metadata is missing".into());
+        }
+        (_, Some(_)) => {
+            return Err("non-V4 graph issuance policy contains V4 scope metadata".into());
+        }
+        (_, None) => {}
+    }
+    Ok(())
+}
+
+pub fn validate_graph_issuance_discovery_v2(
     exchange: &ExchangeDiscoveryV2,
-    issuance: &GraphIssuanceDiscoveryV1,
+    issuance: &GraphIssuanceDiscoveryV2,
 ) -> Result<(), String> {
     use std::collections::HashSet;
 
-    if issuance.version != crate::graph_issuance_api::GRAPH_ISSUANCE_VERSION_V1
-        || issuance.policies.is_empty()
+    if issuance.version != crate::graph_issuance_api::GRAPH_ISSUANCE_VERSION_V2
         || issuance.policies.len() > crate::exchange_api::MAX_ITEMS
     {
         return Err("invalid graph issuance discovery bounds".into());
     }
+    let tombstones = validate_graph_issuance_replay_authority(&issuance.replay_authority)?;
     let mut policy_ids = HashSet::new();
     let mut budget_ids = HashSet::new();
     for policy in &issuance.policies {
@@ -349,19 +434,15 @@ pub fn validate_graph_issuance_discovery_v1(
             .iter()
             .find(|keyset| keyset.keyset_id == policy.keyset_id)
             .ok_or_else(|| "graph issuance policy references an unknown keyset".to_string())?;
-        if policy.issuance_policy_id.is_empty()
-            || policy.issuance_policy_id.len() > crate::exchange_api::MAX_ID
-            || !policy.issuance_policy_id.is_ascii()
-            || policy.budget_id.is_empty()
-            || policy.budget_id.len() > crate::exchange_api::MAX_ID
-            || !policy.budget_id.is_ascii()
-            || policy.authorization_scheme.is_empty()
-            || policy.authorization_scheme.len() > crate::exchange_api::MAX_ID
-            || !policy.authorization_scheme.is_ascii()
+        if crate::graph_issuance_api::validate_lowercase_hex_id(&policy.graph_id).is_err()
+            || crate::graph_issuance_api::validate_lowercase_hex_id(&policy.keyset_id).is_err()
+            || crate::graph_issuance_api::validate_lowercase_hex_id(&policy.descriptor_id).is_err()
+            || !validate_graph_issuance_policy_id(&policy.issuance_policy_id)
+            || !validate_graph_issuance_policy_id(&policy.budget_id)
+            || !validate_graph_issuance_policy_id(&policy.authorization_scheme)
             || policy.budget_limit == 0
             || policy.budget_limit > EXCHANGE_MAX_BUDGET_LIMIT
-            || policy.quantity == 0
-            || u64::from(policy.quantity) > policy.budget_limit
+            || policy.quantity != crate::graph_issuance_api::GRAPH_ISSUANCE_QUANTITY
             || !keyset.descriptor_ids.contains(&policy.descriptor_id)
             || !policy_ids.insert(policy.issuance_policy_id.as_str())
             || !budget_ids.insert(policy.budget_id.as_str())
@@ -369,8 +450,260 @@ pub fn validate_graph_issuance_discovery_v1(
         {
             return Err("invalid graph issuance policy metadata".into());
         }
+        validate_graph_issuance_authorization_metadata(policy, &tombstones)?;
     }
     Ok(())
+}
+
+/// Validate a discovery lifecycle update without allowing the replay authority
+/// or its V4 scope tombstone set to move backwards.
+///
+/// Only `next` is validated against `current_exchange`.  The previous
+/// discovery may legitimately refer to a graph which has since been retired
+/// or replaced; callers which have the historical exchange snapshot may
+/// validate it separately.  The replay-authority container itself is
+/// permanent, so an existing container may not disappear.
+pub fn validate_graph_issuance_discovery_v2_update(
+    current_exchange: &ExchangeDiscoveryV2,
+    previous: Option<&GraphIssuanceDiscoveryV2>,
+    next: Option<&GraphIssuanceDiscoveryV2>,
+) -> Result<(), String> {
+    let Some(next) = next else {
+        if previous.is_some() {
+            return Err("graph issuance replay authority container was removed".into());
+        }
+        return Ok(());
+    };
+
+    validate_graph_issuance_discovery_v2(current_exchange, next)?;
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+
+    // Validate only the durable authority container from the historical
+    // snapshot.  Revalidating its policy graph against the current exchange
+    // would reject legitimate retirement/replacement transitions.
+    if previous.version != crate::graph_issuance_api::GRAPH_ISSUANCE_VERSION_V2 {
+        return Err("invalid previous graph issuance discovery version".into());
+    }
+    validate_graph_issuance_replay_authority(&previous.replay_authority)?;
+    if previous.replay_authority.authority_id != next.replay_authority.authority_id {
+        return Err("graph issuance replay authority changed".into());
+    }
+    let old = previous
+        .replay_authority
+        .v4_scope_digest_tombstones
+        .iter()
+        .collect::<std::collections::HashSet<_>>();
+    if !old.iter().all(|digest| {
+        next.replay_authority
+            .v4_scope_digest_tombstones
+            .contains(digest)
+    }) {
+        return Err("graph issuance replay authority tombstones are not append-only".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod graph_issuance_discovery_tests {
+    use super::*;
+    use base64ct::{Base64UrlUnpadded, Encoding};
+
+    fn exchange() -> ExchangeDiscoveryV2 {
+        ExchangeDiscoveryV2 {
+            active_graph: ExchangeGraphDiscoveryV2 {
+                profile_id: String::new(),
+                graph_id: "1".repeat(64),
+                descriptors: Vec::new(),
+                keysets: vec![ExchangeKeysetDiscoveryV2 {
+                    keyset_id: "2".repeat(64),
+                    descriptor_ids: vec!["3".repeat(64)],
+                }],
+                transitions: Vec::new(),
+            },
+            retained_graphs: Vec::new(),
+            active_receipt_key: ExchangeReceiptKeyInfo {
+                key_id: String::new(),
+                algorithm: String::new(),
+                purpose: String::new(),
+                public_key_b64: String::new(),
+                valid_from: 0,
+                valid_until: 0,
+            },
+            retained_receipt_keys: Vec::new(),
+        }
+    }
+
+    fn discovery(
+        authorization_scheme: &str,
+        scope: Option<String>,
+        tombstones: Vec<String>,
+    ) -> GraphIssuanceDiscoveryV2 {
+        GraphIssuanceDiscoveryV2 {
+            version: crate::graph_issuance_api::GRAPH_ISSUANCE_VERSION_V2,
+            policies: vec![GraphIssuancePolicyDiscoveryV2 {
+                issuance_policy_id: "policy-v2".into(),
+                graph_id: "1".repeat(64),
+                keyset_id: "2".repeat(64),
+                descriptor_id: "3".repeat(64),
+                budget_id: "budget-v2".into(),
+                budget_limit: 1,
+                quantity: 1,
+                admission_state: ExchangeAdmissionStateV2::RecoveryOnly,
+                authorization_scheme: authorization_scheme.into(),
+                authorization_scope_digest_b64: scope,
+            }],
+            replay_authority: GraphIssuanceReplayAuthorityDiscoveryV1 {
+                authority_id: Base64UrlUnpadded::encode_string(&[9; 32]),
+                v4_scope_digest_tombstones: tombstones,
+            },
+        }
+    }
+
+    #[test]
+    fn discovery_requires_exact_scope_presence_and_combination() {
+        let scope = Base64UrlUnpadded::encode_string(&[8; 32]);
+        let valid_v4 = discovery(
+            crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_V4_LOCAL,
+            Some(scope.clone()),
+            vec![scope.clone()],
+        );
+        assert!(validate_graph_issuance_discovery_v2(&exchange(), &valid_v4).is_ok());
+
+        let missing_scope = discovery(
+            crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_V4_LOCAL,
+            None,
+            vec![],
+        );
+        assert!(validate_graph_issuance_discovery_v2(&exchange(), &missing_scope).is_err());
+
+        let hmac_with_scope = discovery(
+            crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_HMAC_SHA256,
+            Some(scope),
+            vec![],
+        );
+        assert!(validate_graph_issuance_discovery_v2(&exchange(), &hmac_with_scope).is_err());
+
+        let unknown_scheme = discovery("other", None, vec![]);
+        assert!(validate_graph_issuance_discovery_v2(&exchange(), &unknown_scheme).is_err());
+    }
+
+    #[test]
+    fn discovery_requires_one_artifact_and_replay_authority_tombstones_are_canonical() {
+        let mut valid = discovery(
+            crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_HMAC_SHA256,
+            None,
+            vec![],
+        );
+        assert!(validate_graph_issuance_discovery_v2(&exchange(), &valid).is_ok());
+        valid.policies[0].quantity = 2;
+        assert!(validate_graph_issuance_discovery_v2(&exchange(), &valid).is_err());
+
+        let mut malformed = discovery(
+            crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_HMAC_SHA256,
+            None,
+            vec![Base64UrlUnpadded::encode_string(&[7; 31])],
+        );
+        assert!(validate_graph_issuance_discovery_v2(&exchange(), &malformed).is_err());
+        malformed = discovery(
+            crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_HMAC_SHA256,
+            None,
+            vec![Base64UrlUnpadded::encode_string(&[7; 32]); 2],
+        );
+        assert!(validate_graph_issuance_discovery_v2(&exchange(), &malformed).is_err());
+    }
+
+    #[test]
+    fn discovery_tombstones_are_append_only_and_authority_is_permanent() {
+        let scope = Base64UrlUnpadded::encode_string(&[8; 32]);
+        let previous = discovery(
+            crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_V4_LOCAL,
+            Some(scope.clone()),
+            vec![scope.clone()],
+        );
+        let mut next = previous.clone();
+        next.replay_authority
+            .v4_scope_digest_tombstones
+            .push(Base64UrlUnpadded::encode_string(&[7; 32]));
+        assert!(validate_graph_issuance_discovery_v2_update(
+            &exchange(),
+            Some(&previous),
+            Some(&next)
+        )
+        .is_ok());
+
+        let mut removed = previous.clone();
+        removed.replay_authority.v4_scope_digest_tombstones.clear();
+        assert!(validate_graph_issuance_discovery_v2_update(
+            &exchange(),
+            Some(&previous),
+            Some(&removed)
+        )
+        .is_err());
+
+        let mut changed_authority = previous;
+        changed_authority.replay_authority.authority_id =
+            Base64UrlUnpadded::encode_string(&[6; 32]);
+        assert!(validate_graph_issuance_discovery_v2_update(
+            &exchange(),
+            Some(&changed_authority),
+            Some(&next)
+        )
+        .is_err());
+
+        let mut retired = next;
+        retired.policies.clear();
+        assert!(validate_graph_issuance_discovery_v2(&exchange(), &retired).is_ok());
+    }
+
+    #[test]
+    fn lifecycle_validates_next_against_current_exchange_but_allows_retired_previous_graphs() {
+        let scope = Base64UrlUnpadded::encode_string(&[8; 32]);
+        let mut previous = discovery(
+            crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_V4_LOCAL,
+            Some(scope.clone()),
+            vec![scope.clone()],
+        );
+        previous.policies[0].graph_id = "4".repeat(64);
+        let next = discovery(
+            crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_V4_LOCAL,
+            Some(scope),
+            vec![Base64UrlUnpadded::encode_string(&[8; 32])],
+        );
+        assert!(validate_graph_issuance_discovery_v2_update(
+            &exchange(),
+            Some(&previous),
+            Some(&next)
+        )
+        .is_ok());
+
+        let mut bad_next = next.clone();
+        bad_next.policies[0].graph_id = "5".repeat(64);
+        assert!(validate_graph_issuance_discovery_v2_update(
+            &exchange(),
+            Some(&previous),
+            Some(&bad_next)
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn lifecycle_rejects_permanent_authority_container_removal() {
+        let previous = discovery(
+            crate::graph_issuance_api::GRAPH_ISSUANCE_AUTHORIZATION_HMAC_SHA256,
+            None,
+            vec![],
+        );
+        assert!(
+            validate_graph_issuance_discovery_v2_update(&exchange(), Some(&previous), None)
+                .is_err()
+        );
+        assert!(validate_graph_issuance_discovery_v2_update(&exchange(), None, None).is_ok());
+        assert!(
+            validate_graph_issuance_discovery_v2_update(&exchange(), None, Some(&previous)).is_ok()
+        );
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

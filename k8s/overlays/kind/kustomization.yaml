@@ -10,3 +10,12 @@ patches:
   - path: ingress.patch.yaml
   - path: proxy-policy.patch.yaml
   - path: verifier-tls.patch.yaml
+images:
+  # Local-only placeholders are replaced by release-kind-smoke.sh after the
+  # overlay is applied. They deliberately do not name a historical release.
+  - name: ghcr.io/flammafex/freebird-issuer
+    newName: freebird-issuer
+    newTag: kind-smoke
+  - name: ghcr.io/flammafex/freebird-verifier
+    newName: freebird-verifier
+    newTag: kind-smoke

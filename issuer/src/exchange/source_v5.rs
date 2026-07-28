@@ -215,15 +215,35 @@ pub struct PinnedTargetSignersV2 {
     providers: HashMap<String, Arc<freebird_crypto::provider::software::SoftwareBlindRsaProvider>>,
     keysets: HashMap<String, HashSet<String>>,
     key_ids: HashMap<String, String>,
+    validity: HashMap<String, (i64, i64)>,
 }
 
 impl PinnedTargetSignersV2 {
     pub fn load(active: &ExchangeProfileV2, retained: &[ExchangeProfileV2]) -> Result<Self> {
+        Self::load_filtered(active, retained, None)
+    }
+
+    /// Load only descriptors needed by fresh graph issuance. Retained
+    /// recovery policies do not force retired signer files to remain present.
+    pub fn load_for_graph_issuance(
+        active: &ExchangeProfileV2,
+        retained: &[ExchangeProfileV2],
+        required_descriptors: &HashSet<String>,
+    ) -> Result<Self> {
+        Self::load_filtered(active, retained, Some(required_descriptors))
+    }
+
+    fn load_filtered(
+        active: &ExchangeProfileV2,
+        retained: &[ExchangeProfileV2],
+        required_descriptors: Option<&HashSet<String>>,
+    ) -> Result<Self> {
         use freebird_crypto::provider::software::SoftwareBlindRsaProvider;
 
         let mut providers: HashMap<String, Arc<SoftwareBlindRsaProvider>> = HashMap::new();
         let mut keysets: HashMap<String, HashSet<String>> = HashMap::new();
         let mut key_ids = HashMap::new();
+        let mut validity = HashMap::new();
         for graph in std::iter::once(active).chain(retained) {
             for keyset in &graph.keysets {
                 let descriptors = keysets.entry(keyset.id.clone()).or_default();
@@ -236,9 +256,23 @@ impl PinnedTargetSignersV2 {
                             bail!("V2 descriptor maps to conflicting key identities")
                         }
                     }
+                    if let Some(existing) = validity.insert(
+                        key.descriptor.id.clone(),
+                        (key.descriptor.valid_from, key.descriptor.valid_until),
+                    ) {
+                        if existing != (key.descriptor.valid_from, key.descriptor.valid_until) {
+                            bail!("V2 descriptor maps to conflicting validity windows")
+                        }
+                    }
                     let Some(path) = key.private_key_path.as_deref() else {
                         continue;
                     };
+                    if required_descriptors
+                        .is_some_and(|required| !required.contains(&key.descriptor.id))
+                    {
+                        continue;
+                    }
+                    crate::exchange::profiles::validate_output_signer_v2(key)?;
                     let der = zeroize::Zeroizing::new(
                         std::fs::read(path).context("read V2 exchange target key")?,
                     );
@@ -263,6 +297,7 @@ impl PinnedTargetSignersV2 {
             providers,
             keysets,
             key_ids,
+            validity,
         })
     }
 
@@ -392,6 +427,13 @@ impl PinnedTargetSignersV2 {
             .clone();
         Ok((key_id, provider.blind_sign(blinded_message).await?))
     }
+
+    pub(crate) fn graph_issuance_validity(&self, descriptor_id: &str) -> Result<(i64, i64)> {
+        self.validity
+            .get(descriptor_id)
+            .copied()
+            .context("graph issuance descriptor validity is unavailable")
+    }
 }
 
 pub(crate) fn validate_representative(spki: &[u8], representative: &[u8]) -> Result<()> {
@@ -482,6 +524,10 @@ fn rsa_modulus(spki: &[u8]) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::exchange::profiles::{
+        ExchangeDescriptorV2, ExchangeKeyV2, ExchangeKeysetV2, ExchangeProfileV2,
+    };
+    use base64ct::{Base64UrlUnpadded, Encoding};
     use freebird_crypto::provider::{software::SoftwareBlindRsaProvider, BlindRsaProvider};
 
     #[test]
@@ -517,5 +563,89 @@ mod tests {
             validate_representative(provider.public_key_spki(), &long).is_err(),
             "long"
         );
+    }
+
+    fn graph_signer_profile(
+        provider: &SoftwareBlindRsaProvider,
+        path: &std::path::Path,
+    ) -> (ExchangeProfileV2, String) {
+        let mut descriptor = ExchangeDescriptorV2 {
+            id: String::new(),
+            profile_id: crate::exchange::profiles::PROFILE_ID_V2.into(),
+            issuer_id: "issuer:test".into(),
+            kid: hex::encode(provider.token_key_id()),
+            audience: None,
+            spki_b64: Base64UrlUnpadded::encode_string(provider.public_key_spki()),
+            suite: "RSABSSA-SHA384-PSS-Deterministic".into(),
+            valid_from: 1,
+            valid_until: 4_102_444_800,
+        };
+        descriptor.id = descriptor.canonical_id().unwrap();
+        let mut keyset = ExchangeKeysetV2 {
+            id: String::new(),
+            keys: vec![ExchangeKeyV2 {
+                descriptor,
+                private_key_path: Some(path.display().to_string()),
+            }],
+        };
+        keyset.id = keyset.canonical_id();
+        let descriptor_id = keyset.keys[0].descriptor.id.clone();
+        (
+            ExchangeProfileV2 {
+                profile_id: crate::exchange::profiles::PROFILE_ID_V2.into(),
+                graph_id: "0".repeat(64),
+                keysets: vec![keyset],
+                transitions: Vec::new(),
+            },
+            descriptor_id,
+        )
+    }
+
+    #[test]
+    fn graph_issuance_runtime_signer_loader_rejects_file_spki_kid_and_mode_failures() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("graph-signer.der");
+        let provider = SoftwareBlindRsaProvider::generate(2048).unwrap();
+        std::fs::write(&path, provider.to_der().unwrap()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let (profile, descriptor_id) = graph_signer_profile(&provider, &path);
+        let required = std::iter::once(descriptor_id.clone()).collect::<HashSet<_>>();
+        assert!(PinnedTargetSignersV2::load_for_graph_issuance(&profile, &[], &required).is_ok());
+
+        std::fs::write(&path, b"not a private key").unwrap();
+        assert!(PinnedTargetSignersV2::load_for_graph_issuance(&profile, &[], &required).is_err());
+        std::fs::write(&path, provider.to_der().unwrap()).unwrap();
+
+        let other = SoftwareBlindRsaProvider::generate(2048).unwrap();
+        let (mut spki_profile, descriptor_id) = graph_signer_profile(&other, &path);
+        spki_profile.keysets[0].keys[0].descriptor.spki_b64 =
+            Base64UrlUnpadded::encode_string(provider.public_key_spki());
+        let required = std::iter::once(descriptor_id).collect::<HashSet<_>>();
+        assert!(
+            PinnedTargetSignersV2::load_for_graph_issuance(&spki_profile, &[], &required).is_err()
+        );
+
+        let (mut kid_profile, descriptor_id) = graph_signer_profile(&provider, &path);
+        kid_profile.keysets[0].keys[0].descriptor.kid = "a".repeat(64);
+        let required = std::iter::once(descriptor_id).collect::<HashSet<_>>();
+        assert!(
+            PinnedTargetSignersV2::load_for_graph_issuance(&kid_profile, &[], &required).is_err()
+        );
+
+        std::fs::write(&path, provider.to_der().unwrap()).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+            let (profile, descriptor_id) = graph_signer_profile(&provider, &path);
+            let required = std::iter::once(descriptor_id).collect::<HashSet<_>>();
+            assert!(
+                PinnedTargetSignersV2::load_for_graph_issuance(&profile, &[], &required).is_err()
+            );
+        }
     }
 }

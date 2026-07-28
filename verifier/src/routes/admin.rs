@@ -16,6 +16,7 @@
 //! The API key should be configured via the `ADMIN_API_KEY` environment variable.
 
 use crate::readiness::{self, MetadataStatus, StoreHealth, TokenFamily};
+use crate::replay_authority::ReplayAuthorityHealth;
 use crate::routes::admin_rate_limit::AdminRateLimiter;
 use crate::store::SpendStore;
 use axum::{
@@ -103,6 +104,7 @@ pub struct AdminState {
     pub metadata: Arc<RwLock<HashMap<String, MetadataStatus>>>,
     pub accepted_token_families: Vec<TokenFamily>,
     pub store_health: StoreHealth,
+    pub replay_authority: Arc<ReplayAuthorityHealth>,
 }
 
 /// Derive a session signing key from the admin API key using HKDF-SHA256.
@@ -158,6 +160,9 @@ pub struct VerifierConfig {
     pub store_backend: String,
     pub issuer_urls: Vec<String>,
     pub accepted_token_versions: Vec<String>,
+    pub graph_issuer_urls: Vec<String>,
+    pub replay_authority_probe_interval_secs: u64,
+    pub replay_authority_max_staleness_secs: u64,
 }
 
 // ============================================================================
@@ -517,6 +522,7 @@ pub async fn readiness_handler(
         &state.config.issuer_urls,
         &state.accepted_token_families,
         std::time::Duration::from_secs(state.config.refresh_interval_min * 60),
+        Some(&state.replay_authority),
     )
     .await;
     Ok(Json(

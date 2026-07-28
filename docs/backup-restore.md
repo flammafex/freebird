@@ -37,6 +37,21 @@ When public bearer exchange is enabled, treat these as one recovery unit:
 * active and retained Ed25519 receipt seeds; and
 * `PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH`.
 
+For V2 graph issuance, the same Redis capture must include the permanent
+replay-authority container:
+
+* `freebird:v4-replay-authority:v1:id`;
+* `freebird:v4-replay-authority:v1:scope-tombstones`;
+* graph-issuance operations, budgets, probe challenges/acknowledgements, and
+  the shared `freebird:spent:v4:` markers.
+
+The authority identity and scope tombstones are append-only security state, not
+cache entries. Never delete them, flush their logical database, or restore a
+different Redis database merely because a URL or host name changed. The
+issuer, graph configuration, and every participating verifier must be restored
+against the same logical Redis database; the verifier's 30-second probe is the
+post-restore proof, not URL string equality.
+
 Never snapshot or restore only one side. Before backup, require Redis to be the
 standalone writable master with AOF active, `appendfsync always`, healthy last
 write status, and `maxmemory-policy noeviction`. Quiesce writers before the
@@ -56,11 +71,13 @@ After restore, before admitting traffic:
 1. confirm Redis still reports master role, non-cluster mode, no eviction,
    active healthy AOF, and `appendfsync always`;
 2. require issuer and verifier readiness;
-3. compare discovered target descriptor/keyset IDs and receipt key IDs/public
+3. wait for a fresh replay-authority probe when graph issuance is configured;
+4. compare discovered target descriptor/keyset IDs, replay authority ID,
+   retained scope tombstones, and receipt key IDs/public
    keys with the protected pre-backup inventory;
-4. retry a protected committed operation through the fixed status endpoint and
+5. retry a protected committed operation through the fixed status endpoint and
    require the pre-backup response bytes exactly; and
-5. confirm spent fixtures remain rejected.
+6. confirm spent fixtures remain rejected.
 
 Restoring response bytes without their target and Ed25519 verification metadata
 is incomplete. A missing committed response, accepted spent artifact, changed

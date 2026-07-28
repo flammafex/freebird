@@ -14,21 +14,33 @@ They assume:
 
 ## Image Pinning
 
-The manifests pin `ghcr.io/flammafex/freebird-issuer:0.7.0` and
-`ghcr.io/flammafex/freebird-verifier:0.7.0`. For production, pin image digests
-after verifying signatures:
+Every registry image in the raw and base manifests is a
+`@sha256:REQUIRED_*_IMAGE_DIGEST` sentinel. Replace both sentinels with
+operator-provided, signature-verified immutable `@sha256:` references from the
+feature-bearing release artifact before applying. No v0.8.1 GHCR digest is
+invented or checked in here because those release digests are not publicly
+discoverable in this lane. Historical v0.7.0 images are not graph-capable and
+must not be used for graph issuance.
+
+The kind overlay deliberately substitutes `freebird-issuer:kind-smoke` and
+`freebird-verifier:kind-smoke`; `scripts/release-kind-smoke.sh` retags and
+loads the operator-provided smoke images before rollout. Those local names are
+not production image references.
+
+After obtaining the release digests, verify each pinned image:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/.*/.github/workflows/docker.yml@refs/tags/v0.7.0' \
+  --certificate-identity-regexp 'https://github.com/.*/.github/workflows/docker.yml@refs/tags/<feature-release-tag>' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/flammafex/freebird-issuer@sha256:<digest>
+  ghcr.io/flammafex/freebird-issuer@sha256:<operator-provided-digest>
 ```
 
 ## Validate and apply
 
 ```bash
-# First replace REQUIRED_* values in k8s/overlays/production/*.patch.yaml.
+# First replace REQUIRED_* values in the production overlay, including both
+# image digest markers and graph coupling choices.
 k8s/validate-overlays.sh
 kubectl apply -k k8s/overlays/production
 ```
@@ -43,6 +55,21 @@ trusted ingress source, never a pod CIDR. The proxy-policy patch supplies the
 matching namespace and controller label. Production probe egress is fixed to
 HTTPS port 443; the kind overlay consistently uses the controller Service's
 HTTP port 80.
+
+The base manifests use the canonical V2 exchange names. Do not restore the old
+`PUBLIC_BEARER_EXCHANGE_PROFILE_PATH` or
+`PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS` settings. Exchange and graph
+issuance remain disabled in the base; enabling them requires setting
+`PUBLIC_BEARER_EXCHANGE_ENABLE` and
+`PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE` to `true` in the issuer ConfigMap,
+setting the same graph marker and a non-empty
+`VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS` in the verifier ConfigMap, mounting the
+V2 graph/history/acknowledgement/policy files and signer material at the paths
+in the issuer ConfigMap, and creating the referenced
+`graph-issuance-credentials` secret with exactly one production authorizer
+secret. Run `freebird-validate-config` against the same Redis database used by
+the verifiers. The overlay validator rejects an issuer-only graph
+configuration or a non-HTTPS authority URL.
 
 ## Ingress controller prerequisite
 
@@ -147,6 +174,7 @@ probe status endpoints):
 - `/.well-known/keys`
 - `/v1/oprf`
 - `/v1/public`
+- `/v1/public/graph/replay-authority/probe` (V2 verifier authority probe)
 - `/webauthn`
 - `/healthz`
 - `/readyz`
@@ -163,22 +191,40 @@ with an operator CIDR allowlist only if required.
 ## Redis
 
 Redis is used for verifier nullifier storage and issuer Sybil replay storage.
-The examples enable append-only persistence and password authentication.
+The examples enable a standalone writable master, append-only persistence with
+`appendfsync always`, `maxmemory-policy noeviction`, and password
+authentication. These settings are required for V2 exchange/graph issuance;
+RDB-only or `everysec` durability is not a fallback.
 
 The issuer receives:
 
 - `REDIS_URL`
-- `VERIFIER_ACCEPTED_TOKEN_VERSIONS` (for example `v4,v5`)
-- `VERIFIER_ENV=production`
-- `IN_MEMORY_REPLAY_STORE=false`
 - `SYBIL_REPLAY_REDIS_URL`
 - `WEBAUTHN_REDIS_URL`
 
 The verifier receives:
 
 - `REDIS_URL`
+- `VERIFIER_ACCEPTED_TOKEN_VERSIONS` (for example `v4,v5`)
+- `VERIFIER_ENV=production`
+- `IN_MEMORY_REPLAY_STORE=false`
+- `VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS` when participating in V2 graph
+  issuance;
+- `VERIFIER_REPLAY_AUTHORITY_PROBE_INTERVAL=30s` and
+  `VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS=60s` for the authority health
+  contract.
 
 Network policies allow Redis access only from issuer and verifier pods.
+
+When graph issuance is enabled, set the verifier graph URL to the issuer's
+public HTTPS host (for example, `https://issuer.example.com`) and expose both
+`/.well-known/keys` and the exact
+`POST /v1/public/graph/replay-authority/probe` path on the issuer ingress. The
+existing `/v1/public` prefix and explicit probe route in the overlays are
+intentional. The verifier readiness probe must use the HTTPS ingress boundary,
+not the issuer ClusterIP. The authority probe proves that the verifier's
+`REDIS_URL` and issuer exchange Redis reach the same logical database; URL
+string equality is not used as proof.
 
 ## Issuer Scaling
 

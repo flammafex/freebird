@@ -8,3 +8,12 @@ resources:
   - verifier-deployment.yaml
   - network-policy.yaml
   - ingress.yaml
+# Direct root rendering is fail-closed too: operators must supply release
+# artifact digests rather than deploying a floating image tag.
+images:
+  - name: ghcr.io/flammafex/freebird-issuer
+    newName: ghcr.io/flammafex/freebird-issuer
+    digest: sha256:REQUIRED_ISSUER_IMAGE_DIGEST
+  - name: ghcr.io/flammafex/freebird-verifier
+    newName: ghcr.io/flammafex/freebird-verifier
+    digest: sha256:REQUIRED_VERIFIER_IMAGE_DIGEST

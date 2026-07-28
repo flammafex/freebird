@@ -3,6 +3,7 @@
 
 pub mod discovery;
 pub mod readiness;
+pub mod replay_authority;
 pub mod routes;
 pub mod store;
 pub mod verify;

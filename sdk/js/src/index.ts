@@ -40,9 +40,11 @@ export type {
   ExchangeOutcome,
   GraphIssuancePolicyInfo,
   GraphIssuanceDiscoveryMetadata,
+  GraphIssuanceReplayAuthorityDiscovery,
   GraphIssuanceRequest,
   GraphIssuanceResult,
   GraphIssuanceOutcome,
+  GraphIssuanceRecoveryContext,
   FreebirdToken,
   SybilProof,
   // Export internal types that might be useful for debugging
@@ -52,6 +54,7 @@ export type {
 // Optionally export low-level crypto for advanced use cases
 // (e.g. if a user wants to manually blind/unblind without the client wrapper)
 import * as voprf from './crypto/voprf.js';
+import * as graphIssuance from './crypto/graph_issuance.js';
 export const crypto = {
   blind: voprf.blind,
   finalize: voprf.finalize,
@@ -65,4 +68,31 @@ export const crypto = {
   buildPublicBearerMessage: voprf.buildPublicBearerMessage,
   buildPublicBearerPass: voprf.buildPublicBearerPass,
   parsePublicBearerPass: voprf.parsePublicBearerPass,
+  graphIssuanceHmacAuthorizationTranscriptV2:
+    graphIssuance.graphIssuanceHmacAuthorizationTranscriptV2,
+  graphIssuanceHmacAuthorizationTagV2: graphIssuance.graphIssuanceHmacAuthorizationTagV2,
+  buildGraphIssuanceHmacAuthorizationV2:
+    graphIssuance.buildGraphIssuanceHmacAuthorizationV2,
+  parseGraphIssuanceHmacAuthorizationV2:
+    graphIssuance.parseGraphIssuanceHmacAuthorizationV2,
+  verifyGraphIssuanceHmacAuthorizationV2:
+    graphIssuance.verifyGraphIssuanceHmacAuthorizationV2,
+  hmacAuthorizationTranscriptV2: graphIssuance.hmacAuthorizationTranscriptV2,
+  hmacAuthorizationTagV2: graphIssuance.hmacAuthorizationTagV2,
+  buildHmacAuthorizationV2: graphIssuance.buildHmacAuthorizationV2,
+  parseHmacAuthorizationV2: graphIssuance.parseHmacAuthorizationV2,
+  verifyHmacAuthorizationV2: graphIssuance.verifyHmacAuthorizationV2,
 };
+
+export {
+  graphIssuanceHmacAuthorizationTranscriptV2,
+  graphIssuanceHmacAuthorizationTagV2,
+  buildGraphIssuanceHmacAuthorizationV2,
+  parseGraphIssuanceHmacAuthorizationV2,
+  verifyGraphIssuanceHmacAuthorizationV2,
+  hmacAuthorizationTranscriptV2,
+  hmacAuthorizationTagV2,
+  buildHmacAuthorizationV2,
+  parseHmacAuthorizationV2,
+  verifyHmacAuthorizationV2,
+} from './crypto/graph_issuance.js';

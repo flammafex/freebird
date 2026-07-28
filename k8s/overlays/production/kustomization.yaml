@@ -8,3 +8,12 @@ patches:
   - path: probes.patch.yaml
   - path: ingress.patch.yaml
   - path: proxy-policy.patch.yaml
+images:
+  # GHCR digests are release outputs, not invented in this repository. Replace
+  # both REQUIRED_* markers with operator-verified sha256 values before apply.
+  - name: ghcr.io/flammafex/freebird-issuer
+    newName: ghcr.io/flammafex/freebird-issuer
+    digest: sha256:REQUIRED_ISSUER_IMAGE_DIGEST
+  - name: ghcr.io/flammafex/freebird-verifier
+    newName: ghcr.io/flammafex/freebird-verifier
+    digest: sha256:REQUIRED_VERIFIER_IMAGE_DIGEST

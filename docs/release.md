@@ -3,8 +3,8 @@
 Freebird releases are tag-driven. Use annotated version tags:
 
 ```bash
-git tag -a v0.7.0 -m "Freebird 0.7.0"
-git push origin v0.7.0
+git tag -a v0.8.1 -m "Freebird 0.8.1"
+git push origin v0.8.1
 ```
 
 Pushing a `v*` tag starts two workflows:
@@ -24,12 +24,12 @@ names are: `build`, `test`, `feature-tests`, `lint`, `security`,
 out that SHA and creates the release with `gh release create --target SHA`, so
 mutable branch/tag movement cannot change the packaged source.
 
-Tag image publishing uses version tags only as aliases; the registry-returned
-multi-architecture manifest digest is recorded in the `release-image-*` Actions
-artifact as `image@sha256:...`. Deployment operators must use that immutable
-reference (an overlay may consume the artifact); do not use `latest` in
-production. Images are keylessly signed with GitHub OIDC and must be verified
-by digest.
+Tag image publishing uses version tags only as aliases. Deployment operators
+must obtain the registry-returned multi-architecture manifest digest from the
+release artifact and supply an immutable `image@sha256:...` reference; do not
+use `latest` or a floating version tag in production. This repository does not
+invent or check in GHCR digests when the release artifact is unavailable.
+Images are keylessly signed with GitHub OIDC and must be verified by digest.
 
 Tagged image builds run a bounded `kind` smoke test using unique local image
 tags, checked-in manifests plus ephemeral smoke secrets/configuration, rollout
@@ -62,7 +62,7 @@ The archive contains:
 Verify the archive checksum before installing:
 
 ```bash
-sha256sum -c freebird-0.7.0-linux-x86_64.tar.gz.sha256
+sha256sum -c freebird-0.8.1-linux-x86_64.tar.gz.sha256
 ```
 
 ## Container Images
@@ -70,14 +70,16 @@ sha256sum -c freebird-0.7.0-linux-x86_64.tar.gz.sha256
 Tag releases publish:
 
 ```text
-ghcr.io/flammafex/freebird-issuer:0.7.0
+ghcr.io/flammafex/freebird-issuer:0.8.1
 ghcr.io/flammafex/freebird-issuer:0.5
-ghcr.io/flammafex/freebird-verifier:0.7.0
+ghcr.io/flammafex/freebird-verifier:0.8.1
 ghcr.io/flammafex/freebird-verifier:0.5
 ```
 
-The default branch also publishes `latest`. Production deployments should pin a
-version tag or image digest instead of `latest`.
+The default branch also publishes `latest`. Production deployments must replace
+the deployment example's required image markers with operator-provided verified
+image digests. A version tag is not an acceptable substitute for the immutable
+production prerequisite.
 
 ## Signature Verification
 
@@ -86,7 +88,7 @@ After installing `cosign`, verify a pinned image digest with:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/.*/.github/workflows/docker.yml@refs/tags/v0.7.0' \
+  --certificate-identity-regexp 'https://github.com/.*/.github/workflows/docker.yml@refs/tags/v0.8.1' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/flammafex/freebird-issuer@sha256:<digest>
 ```

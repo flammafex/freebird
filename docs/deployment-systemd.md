@@ -45,9 +45,14 @@ install -o root -g freebird -m 0640 deploy/systemd/verifier.env.example /etc/fre
 - nginx or another TLS reverse proxy.
 - Backups for `/var/lib/freebird`.
 
-For a single-host deployment, Redis can run locally. For public use, enable
-Redis persistence and restrict Redis to localhost or a private network. Set
-both `REDIS_URL` and `SYBIL_REPLAY_REDIS_URL`; in-memory stores are not safe.
+For a single-host deployment, Redis can run locally. For public use, enable a
+standalone writable Redis master with AOF, `appendfsync always`, and
+`maxmemory-policy noeviction`, and restrict it to localhost or a private
+network. Set both `REDIS_URL` and `SYBIL_REPLAY_REDIS_URL`; in-memory stores are
+not safe. When V2 exchange or graph issuance is enabled, set
+`PUBLIC_BEARER_EXCHANGE_REDIS_URL` to the same logical database as every
+participating verifier's `REDIS_URL`. Do not use URL string equality as proof;
+the graph authority probe proves the shared store.
 Verifier deployments must also set `VERIFIER_ACCEPTED_TOKEN_VERSIONS` explicitly,
 `VERIFIER_ENV=production`, and `IN_MEMORY_REPLAY_STORE=false`.
 Keep issuer keys/state and verifier data in separate directories and backups.
@@ -66,6 +71,12 @@ freebird-validate-config
 Then start:
 
 ```bash
+# This preflight is required when using the two systemd environment files. It
+# rejects a graph-enabled issuer unless the verifier is explicitly configured
+# as a graph participant through the same trusted HTTPS boundary.
+scripts/validate-graph-coupling.sh \
+  /etc/freebird/issuer.env /etc/freebird/verifier.env
+
 systemctl daemon-reload
 systemctl enable --now freebird-issuer
 systemctl enable --now freebird-verifier
@@ -87,6 +98,23 @@ templates explicitly proxy issuer `GET /healthz` and `GET /readyz`, and
 verifier `GET /health` and `GET /ready`; these exact routes are safe health
 surfaces and carry the same strict forwarded headers. Do not substitute an
 admin or wildcard route for probes.
+
+For graph issuance, proxy `/.well-known/keys` and the exact issuer route
+`POST /v1/public/graph/replay-authority/probe` through HTTPS. The route is
+covered by the issuer nginx example's `/v1/public/` location; preserve the
+JSON body/path, allow POST, disable caching and request-header/body logging,
+and do not expose the loopback backend directly. Verifiers configure the
+issuer separately with `VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS`, plus the frozen
+`VERIFIER_REPLAY_AUTHORITY_PROBE_INTERVAL=30s` and
+`VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS=60s` values.
+
+Graph enablement is a coupled deployment setting, not an issuer-only switch.
+Set `PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE=true` in both environment files, set
+the issuer's V2 exchange and graph policy/authorizer settings, and set the
+verifier's `VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS` to the issuer's public HTTPS
+URL. Run `validate-graph-coupling.sh` and `freebird-validate-config` before
+starting either unit. A verifier with the marker or URL missing is not a valid
+participant and must not serve V4 traffic for this deployment.
 
 Admin API keys are secrets: do not expose them to clients or logs, and isolate
 issuer and verifier admin access (use separate operator credentials where

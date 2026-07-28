@@ -577,9 +577,28 @@ fn validate_exchange_config() -> ValidationSection {
                         &config.graph_issuance.authorization,
                         &document,
                     )?;
-                    freebird_common::api::validate_graph_issuance_discovery_v1(
+                    freebird_issuer::graph_issuance::validate_runtime_graph_issuance_signers(
+                        &loaded.active_graph,
+                        &loaded.retained_graphs,
+                        &document,
+                    )?;
+                    use base64ct::Encoding;
+                    let scopes = document
+                        .policies
+                        .iter()
+                        .filter_map(|policy| policy.v4_local.as_ref())
+                        .map(|v4| {
+                            freebird_crypto::build_scope_digest(&v4.verifier_id, &v4.audience)
+                                .map(|scope| {
+                                    base64ct::Base64UrlUnpadded::encode_string(&scope)
+                                })
+                                .map_err(|_| anyhow::anyhow!("invalid V4 graph issuance scope"))
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?;
+                    let authority = base64ct::Base64UrlUnpadded::encode_string(&[0u8; 32]);
+                    freebird_common::api::validate_graph_issuance_discovery_v2(
                         &discovery,
-                        &document.discovery(),
+                        &document.discovery(&authority, &scopes),
                     )
                     .map_err(anyhow::Error::msg)?;
                 }

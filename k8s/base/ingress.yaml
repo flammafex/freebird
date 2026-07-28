@@ -73,6 +73,15 @@ spec:
                 name: issuer
                 port:
                   number: 8081
+          # Includes the V2 replay-authority probe. Keep it behind this
+          # trusted HTTPS ingress; verifiers must not call the pod directly.
+          - path: /v1/public/graph/replay-authority/probe
+            pathType: Exact
+            backend:
+              service:
+                name: issuer
+                port:
+                  number: 8081
           - path: /webauthn
             pathType: Prefix
             backend:

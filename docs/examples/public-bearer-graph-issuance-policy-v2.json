@@ -1,0 +1,16 @@
+{
+  "version": "freebird/graph-blind-issuance-policy/v2",
+  "policies": [
+    {
+      "issuance_policy_id": "bootstrap-v2",
+      "graph_id": "e7ac9a7b24d4fdab6ba77b0c5d7fca19b821fbb981de45de7a7dda0c8615efa7",
+      "keyset_id": "b8024c13933bb4d27930935a43182aa5d28647bdd27927daaf2f10e85d246317",
+      "descriptor_id": "333778b2dc1df2fbafc181cc69da20fcdabb0a2d77c4f5d8bf97e6572aa6429e",
+      "budget_id": "bootstrap-lifetime-v2",
+      "budget_limit": 100000,
+      "quantity": 1,
+      "admission_state": "disabled",
+      "authorization_scheme": "hmac_sha256"
+    }
+  ]
+}

@@ -127,6 +127,26 @@ pub trait SpendStore: Send + Sync {
         v5_replay_expires_at(valid_until)?;
         anyhow::bail!("absolute replay expiry is unsupported by this store")
     }
+
+    /// Atomically publish a short-lived replay-authority probe challenge.
+    ///
+    /// Only the Redis-backed spend store implements this operation.  Keeping
+    /// it on the store trait ensures the authority probe uses the exact pool
+    /// used by token replay mutations rather than a separately configured
+    /// Redis client.
+    async fn put_replay_probe(
+        &self,
+        _key: &str,
+        _challenge: &[u8; 32],
+        _ttl: Duration,
+    ) -> Result<bool> {
+        anyhow::bail!("replay-authority probes require a Redis spend store")
+    }
+
+    /// Atomically read and delete a replay-authority acknowledgement.
+    async fn take_replay_ack(&self, _key: &str) -> Result<Option<Vec<u8>>> {
+        anyhow::bail!("replay-authority probes require a Redis spend store")
+    }
 }
 
 //
@@ -268,6 +288,35 @@ impl SpendStore for RedisStore {
             warn!("replay detected (redis)");
         }
         Ok(fresh)
+    }
+
+    async fn put_replay_probe(
+        &self,
+        key: &str,
+        challenge: &[u8; 32],
+        ttl: Duration,
+    ) -> Result<bool> {
+        let mut conn = self.pool.get().await?;
+        let result: Option<String> = redis::cmd("SET")
+            .arg(key)
+            .arg(challenge.as_slice())
+            .arg("NX")
+            .arg("EX")
+            .arg(ttl.as_secs().max(1))
+            .query_async(&mut *conn)
+            .await
+            .context("invoke Redis replay-authority probe SET")?;
+        Ok(result.is_some())
+    }
+
+    async fn take_replay_ack(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        let mut conn = self.pool.get().await?;
+        let value: Option<Vec<u8>> = redis::cmd("GETDEL")
+            .arg(key)
+            .query_async(&mut *conn)
+            .await
+            .context("invoke Redis replay-authority acknowledgement GETDEL")?;
+        Ok(value)
     }
 }
 

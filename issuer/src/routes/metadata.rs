@@ -1,7 +1,7 @@
 // issuer/src/routes/metadata.rs
 use crate::multi_key_voprf::MultiKeyVoprfCore;
 use crate::AppStateWithSybil;
-use axum::{extract::State, Json};
+use axum::{extract::State, http::StatusCode, Json};
 use freebird_common::api::{KeyDiscoveryResp, PublicKeyInfo, VoprfKeyInfo};
 use serde::Serialize;
 use std::sync::Arc;
@@ -63,11 +63,22 @@ pub async fn well_known_handler(State((state, voprf)): State<SharedState>) -> Js
 /// - Verify token metadata binding without trusting the issuer
 /// - Detect if issuer tries to modify token metadata (kid, exp, issuer_id)
 /// - Validate epoch is within acceptable range during verification
-pub async fn keys_handler(State((state, voprf)): State<SharedState>) -> Json<KeyDiscoveryResp> {
+pub async fn keys_handler(
+    State((state, voprf)): State<SharedState>,
+) -> Result<Json<KeyDiscoveryResp>, StatusCode> {
     let active_kid = voprf.active_kid().await;
     let active_pubkey = voprf.active_pubkey_b64().await;
+    let graph_issuance = match state.graph_issuance_engine.as_ref() {
+        Some(engine) => Some(
+            engine
+                .discovery_from_durable()
+                .await
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
+        ),
+        None => None,
+    };
 
-    Json(KeyDiscoveryResp {
+    Ok(Json(KeyDiscoveryResp {
         issuer_id: state.issuer_id.clone(),
         current_epoch: state.current_epoch(),
         valid_epochs: state.valid_epochs(),
@@ -83,8 +94,8 @@ pub async fn keys_handler(State((state, voprf)): State<SharedState>) -> Json<Key
             .map(|issuer| vec![issuer.metadata().clone()])
             .unwrap_or_default(),
         exchange: state.exchange_metadata.clone(),
-        graph_issuance: state.graph_issuance_metadata.clone(),
-    })
+        graph_issuance,
+    }))
 }
 
 fn public_mode_info(metadata: &PublicKeyInfo) -> PublicModeInfo {
@@ -146,7 +157,7 @@ mod tests {
             MultiKeyVoprfCore::new([7; 32], "pubkey".into(), "kid".into(), b"test").unwrap(),
         );
 
-        let response = keys_handler(State((state, voprf))).await.0;
+        let response = keys_handler(State((state, voprf))).await.unwrap().0;
         assert_eq!(response.exchange, Some(exchange));
         assert!(response
             .exchange

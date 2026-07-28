@@ -28,6 +28,9 @@ spec:
           - path: /v1/public
             pathType: Prefix
             backend: {service: {name: issuer, port: {number: 8081}}}
+          - path: /v1/public/graph/replay-authority/probe
+            pathType: Exact
+            backend: {service: {name: issuer, port: {number: 8081}}}
           - path: /webauthn
             pathType: Prefix
             backend: {service: {name: issuer, port: {number: 8081}}}

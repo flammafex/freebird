@@ -17,6 +17,8 @@ pub struct ReadinessReport {
     pub issuance_key: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exchange: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub graph_issuance: Option<bool>,
     pub stores: BTreeMap<String, bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub development_unsafe: Option<bool>,
@@ -36,6 +38,21 @@ pub(crate) struct ExchangeReadinessState {
     discovery: freebird_common::api::ExchangeDiscoveryV2,
     disabled_publication_ack_paths: Vec<PathBuf>,
     registry_failed_closed: Arc<AtomicBool>,
+}
+
+#[derive(Clone)]
+pub(crate) struct GraphIssuanceReadinessState {
+    engine: Arc<crate::graph_issuance::GraphIssuanceEngine>,
+}
+
+impl GraphIssuanceReadinessState {
+    pub(crate) fn new(engine: Arc<crate::graph_issuance::GraphIssuanceEngine>) -> Self {
+        Self { engine }
+    }
+
+    async fn check(&self) -> bool {
+        self.engine.readiness_check().await
+    }
 }
 
 impl ExchangeReadinessState {
@@ -152,6 +169,7 @@ impl ReadinessState {
         storage_paths: Vec<(String, PathBuf)>,
         voprf: Arc<MultiKeyVoprfCore>,
         exchange: Option<ExchangeReadinessState>,
+        graph_issuance: Option<GraphIssuanceReadinessState>,
     ) {
         let state = self.clone();
         tokio::spawn(async move {
@@ -164,6 +182,14 @@ impl ReadinessState {
                         .await
                         .is_ok_and(|ready| ready);
                     report.exchange = Some(ready);
+                    report.ready &= ready;
+                }
+                if let Some(graph_issuance) = &graph_issuance {
+                    let ready =
+                        tokio::time::timeout(Duration::from_secs(2), graph_issuance.check())
+                            .await
+                            .is_ok_and(|ready| ready);
+                    report.graph_issuance = Some(ready);
                     report.ready &= ready;
                 }
                 state.update(report);
@@ -207,6 +233,7 @@ pub async fn check_once(
         storage: storage_ready,
         issuance_key,
         exchange: None,
+        graph_issuance: None,
         stores: storage,
         development_unsafe: None,
     }

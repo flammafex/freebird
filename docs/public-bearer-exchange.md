@@ -13,8 +13,8 @@ previously been operated. V4 and V5 token formats and direct V5 issuance are not
 changed by this replacement.
 
 Before enabling exchange, use a dedicated Redis logical database that is empty
-of prior exchange records. That database must then be shared with every V5
-verifier as described under [Redis authority and durability](#redis-authority-and-durability).
+of prior exchange records. That database must then be shared with every
+participating verifier as described under [Redis authority and durability](#redis-authority-and-durability).
 Do not attempt an in-place V1 cutover.
 
 ## Configuration
@@ -347,10 +347,40 @@ recovery unit.
 
 `PUBLIC_BEARER_EXCHANGE_REDIS_URL` must identify the exact same Redis logical
 database as verifier `REDIS_URL` for every verifier that accepts participating
-V5 keys. Sharing only a server while selecting different database numbers is not
-sufficient. This preserves one spend/replay namespace across issuer exchange,
-single verification, and batch verification. Never use an in-memory verifier
-replay store with exchange.
+V5 keys or a matching V4-local graph-issuance scope. Sharing only a server
+while selecting different database numbers is not sufficient. This preserves
+one spend/replay namespace across issuer exchange, graph issuance, single
+verification, and batch verification. Never use an in-memory verifier replay
+store with exchange or graph issuance.
+
+The verifier's graph authority configuration is explicit and separate from
+ordinary issuer metadata:
+
+```bash
+VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS=https://issuer.example.org
+VERIFIER_REPLAY_AUTHORITY_PROBE_INTERVAL=30s
+VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS=60s
+```
+
+The same logical database requirement is proven by the bidirectional replay
+authority probe, not by comparing configuration strings. The verifier writes a
+one-use challenge through its actual `REDIS_URL` spend-store pool; the issuer
+consumes it and writes an acknowledgement through its graph/exchange store.
+Different endpoints, credentials, aliases, or URL spellings are acceptable
+when they reach the same logical database. A cloned database or split-brain
+store fails closed.
+
+The issuer permanently stores a random 32-byte authority identity at
+`freebird:v4-replay-authority:v1:id` and append-only V4 scope tombstones at
+`freebird:v4-replay-authority:v1:scope-tombstones`. These values remain in
+discovery after policies are disabled or removed and must be backed up with the
+Redis AOF. Never delete tombstones or reset the authority during restore.
+
+Configured verifiers probe immediately and every 30 seconds. Missing or failed
+probes become unhealthy after 60 seconds. If a verifier is a configured graph
+participant, `/v1/verify` and `/v1/verify/batch` reject V4 with `503` before
+replay mutation when discovery, authority identity, any retained scope, Redis,
+or probe freshness is unavailable. V5 verification is unaffected.
 
 Redis is authoritative security state, not a cache. The supported topology is a
 single standalone writable master with:
@@ -368,7 +398,13 @@ aof_last_write_status:ok
 Redis Cluster, a replica as writable endpoint, asynchronous AOF, RDB-only
 durability, eviction, and failover that can lose acknowledged writes are
 unsupported. Startup and readiness fail closed on topology, AOF health,
-connectivity, registry, publication, or signer-reference failures.
+connectivity, registry, publication, signer-reference, or replay-authority
+failures. The issuer probe endpoint is `POST
+/v1/public/graph/replay-authority/probe`; expose it through the same trusted
+HTTPS proxy and `/v1/public` route surface as graph issuance. The proxy must
+allow POST/JSON, preserve the body and path, overwrite forwarded headers, and
+avoid caching or logging capabilities/probe material. Do not use a direct
+backend port or an admin route.
 
 An AOF rollback, database flush, partial restore, or verifier/issuer split-brain
 can resurrect spent artifacts, reset lifetime budgets, lose registry tombstones,

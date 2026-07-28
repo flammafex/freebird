@@ -4,6 +4,11 @@ This is an operational baseline for a public self-hosted Freebird deployment.
 It is intentionally conservative and describes the implementation that exists
 today, not a future deployment profile.
 
+Before production rollout, obtain and verify issuer and verifier image digests
+from the release artifact and deploy operator-provided `@sha256:` references.
+No immutable GHCR digest is checked into these examples; do not substitute an
+older pre-feature image for this feature or use a floating tag.
+
 The configuration below applies to the current transitional, experimental
 issuance API. Issuance is transitional and experimental: no named production
 profile, claim policy, or profile guarantees are implemented here. Do not
@@ -22,7 +27,8 @@ production rotation procedure yet.
 - Redis-backed issuer Sybil replay store
 - reverse proxy with HTTPS
 - persistent storage for issuer keys, key rotation state, invitation/vouching
-  state, public bearer keys, and audit logs
+  state, public bearer keys, graph files/signers, replay authority state, and
+  audit logs
 
 Docker Compose is an explicit direct-development deployment probe only. It
 binds local HTTP ports and disables TLS/proxy enforcement; it is not the
@@ -37,8 +43,9 @@ For public deployment, Redis is a security requirement: `REDIS_URL` must be
 durable verifier nullifier storage and `SYBIL_REPLAY_REDIS_URL` must be durable
 issuer Sybil replay storage. Do not use in-memory defaults.
 
-Public bearer exchange additionally requires the issuer and every V5 verifier
-to share one standalone Redis database. The configured endpoint must report
+Public bearer exchange and V2 graph issuance additionally require the issuer and
+every participating verifier to share one standalone Redis logical database.
+The configured endpoint must report
 `role:master`, `appendonly yes`, `appendfsync always`,
 `maxmemory-policy noeviction`, non-cluster mode, active AOF, and
 `aof_last_write_status:ok`. Use persistent storage; RDB-only durability is not a
@@ -53,6 +60,13 @@ complete public graph and receipt verification keys to
 `PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH`. Keep that public history through
 the expiry of every corresponding output artifact and receipt; public history
 outlives private-key retention.
+
+Graph issuance creates a permanent replay authority identity and append-only
+V4 scope tombstones in the shared Redis database. A shared Redis hostname or
+equal URL strings are not proof of authority: the verifier proves the same
+logical database by a bidirectional challenge/probe through its actual spend
+store. Do not delete `freebird:v4-replay-authority:v1:id` or
+`freebird:v4-replay-authority:v1:scope-tombstones` during rotation or restore.
 
 ## Minimum Environment
 
@@ -87,6 +101,26 @@ SYBIL_POW_DIFFICULTY=20
 SYBIL_RATE_LIMIT=1h
 ```
 
+When the verifier participates in V2 graph issuance, add the explicit graph
+authority settings below. These values are intentionally not inferred from
+`ISSUER_URL`:
+
+```bash
+VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS=https://issuer.example.org
+VERIFIER_REPLAY_AUTHORITY_PROBE_INTERVAL=30s
+VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS=60s
+```
+
+Graph enablement is coupled across the deployment. Set
+`PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE=true` in the issuer and in every
+participating verifier environment; set it to `false` and leave
+`VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS` empty on non-participants. Before
+starting services outside Compose, run
+`scripts/validate-graph-coupling.sh <issuer.env> <verifier.env>` for each
+verifier environment. The preflight fails closed on an issuer-only graph
+configuration, an unconfigured verifier authority URL, or non-HTTPS authority
+URLs.
+
 If public bearer exchange is enabled, add reviewed deployment-specific paths:
 
 ```bash
@@ -101,6 +135,22 @@ PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH=/data/config/exchange-receip
 PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS=/data/keys/exchange-receipt-previous.key
 PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS=/data/config/exchange-receipt-previous.json
 ```
+
+For graph blind issuance, add a V2 policy and one authorizer. The old
+graph-issuance replay-URL setting is obsolete and must not be configured:
+
+```bash
+PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE=true
+PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH=/data/config/graph-issuance-policy-v2.json
+PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION=hmac_sha256
+PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64=<canonical-base64url-secret>
+```
+
+The policy quantity is always one. `v4_local` instead requires the issuer-local
+`PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64` secret keyring. See [Policy-
+authorized graph blind issuance](public-graph-blind-issuance.md) for the V2
+HMAC nonce framing/vector, signer validity and `0600` requirements, and the
+fresh/recovery SDK split.
 
 RSA keys used as outputs of accepting exchange transitions must be isolated from
 the direct V5 issuance key; receipt signing uses a separate Ed25519 key. Run
@@ -207,6 +257,13 @@ transport ambiguity must retry POST with the same public operation ID, same
 status capability, and exact body; 202 responses are retried after
 `Retry-After`, while a changed body or capability returns 409.
 
+For graph issuance, also expose `POST
+/v1/public/graph/replay-authority/probe` and `/.well-known/keys` through the
+same trusted HTTPS proxy. The probe is a fixed public issuer route used only
+for the bidirectional Redis authority check; allow POST/JSON, preserve the
+path and body, overwrite forwarded headers, disable caching and sensitive
+request logging, and never route it through `/admin` or a direct backend port.
+
 The public health model separates process liveness from dependency readiness:
 keep liveness process-local (or a private TCP probe) so it cannot bypass the
 proxy trust boundary. Route readiness through the trusted HTTPS proxy and use
@@ -214,6 +271,11 @@ it for traffic admission: issuer readiness requires Redis, writable
 authoritative state, and an active issuance key; verifier readiness requires
 Redis, its configured usable key families, and fresh issuer metadata. A
 successful liveness response does not mean the service is ready for traffic.
+For a configured graph participant, verifier readiness also requires valid
+authority discovery and a successful probe for every retained scope. Probes run
+every 30 seconds and become stale after 60 seconds. V4 `/v1/verify` and
+`/v1/verify/batch` fail closed with `503` before replay mutation when this
+authority is unavailable; V5 is unaffected.
 Do not publish backend ports or `/admin` on the public listener; use a separate
 private operator ingress with an explicit network allowlist if administration
 is required.
@@ -227,6 +289,7 @@ Back up:
 - public bearer key and metadata files
 - exchange active/retained V2 graphs and still-required RSA output private keys
 - exchange active/retained receipt seeds and public history
+- graph-issuance policy and still-required signer files
 - invitation signing key and state
 - multi-party vouching secret and state
 - audit log, if retained for operations
@@ -242,10 +305,12 @@ until old tokens expire. Losing the issuer Sybil replay store can allow replay
 of recently accepted PoW, WebAuthn, or vouching proofs. Use Redis persistence
 for public deployments.
 
-For exchange, Redis also stores authoritative source spends, pending operation
-state, the append-only key registry, lifetime budgets, and byte-exact committed
-responses. Back it up coherently with exchange graphs, output keys, receipt
-seeds, and public history. Never restore Redis or one side of the signer ring
+For exchange and graph issuance, Redis also stores authoritative source spends,
+pending operation state, the append-only key registry, lifetime budgets,
+byte-exact committed responses, the permanent replay authority identity,
+scope tombstones, and V4 spend markers. Back it up coherently with exchange
+graphs, graph policy, output keys, receipt seeds, public history, and the
+authority/tombstone state. Never restore Redis or one side of the signer ring
 independently. Follow
 [Backup and Restore](backup-restore.md) and verify readiness, discovery history,
 and a protected committed-operation retry before reopening traffic.

@@ -33,7 +33,6 @@ use tracing::{debug, error, info, instrument, warn};
 /// Convert a handler panic into a structured JSON 500 so that internal
 /// details (stack traces, key material) are never forwarded to clients.
 fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
-    use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
     let msg = if let Some(s) = err.downcast_ref::<&'static str>() {
@@ -58,6 +57,7 @@ fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response:
 
 // Import from the library crate
 use freebird_verifier::readiness::{self, MetadataStatus, StoreHealth, TokenFamily};
+use freebird_verifier::replay_authority::{ReplayAuthorityConfig, ReplayAuthorityHealth};
 use freebird_verifier::routes::admin::{self, AdminState, IssuerInfo, VerifierConfig};
 use freebird_verifier::routes::admin_rate_limit::AdminRateLimiter;
 use freebird_verifier::store::{SpendStore, StoreBackend};
@@ -82,6 +82,8 @@ struct AppState {
     accepted_token_families: Vec<TokenFamily>,
     refresh_interval: Duration,
     store_health: StoreHealth,
+    replay_authority: Arc<ReplayAuthorityHealth>,
+    store_is_memory: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -155,37 +157,6 @@ fn select_store_backend(
     } else {
         anyhow::bail!("REDIS_URL is required; development memory replay requires IN_MEMORY_REPLAY_STORE=true and VERIFIER_ENV=development")
     }
-}
-
-fn enforce_declared_v4_replay_authority(
-    redis_url: Option<&str>,
-    declared_graph_issuance_authority: Option<&str>,
-) -> anyhow::Result<()> {
-    if let Some(declared) = declared_graph_issuance_authority {
-        if redis_url != Some(declared) {
-            anyhow::bail!(
-                "REDIS_URL must exactly match the declared v4_local graph issuance replay authority"
-            )
-        }
-    }
-    Ok(())
-}
-
-fn enforce_graph_v4_replay_configuration(
-    redis_url: Option<&str>,
-    declared_graph_issuance_authority: Option<&str>,
-    graph_issuance_enabled: bool,
-    authorization_scheme: Option<&str>,
-) -> anyhow::Result<()> {
-    if graph_issuance_enabled
-        && authorization_scheme == Some("v4_local")
-        && declared_graph_issuance_authority.is_none()
-    {
-        anyhow::bail!(
-            "v4_local graph issuance requires an explicit shared replay Redis authority declaration"
-        )
-    }
-    enforce_declared_v4_replay_authority(redis_url, declared_graph_issuance_authority)
 }
 
 fn ensure_token_family_enabled(
@@ -334,16 +305,6 @@ async fn main() -> anyhow::Result<()> {
     let memory_opt_in =
         parse_in_memory_replay_store(std::env::var("IN_MEMORY_REPLAY_STORE").ok().as_deref())?;
     let redis_url = std::env::var("REDIS_URL").ok();
-    enforce_graph_v4_replay_configuration(
-        redis_url.as_deref(),
-        std::env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL")
-            .ok()
-            .as_deref(),
-        std::env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE").as_deref() == Ok("true"),
-        std::env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION")
-            .ok()
-            .as_deref(),
-    )?;
     let (backend, store_backend_name) = select_store_backend(
         redis_url,
         memory_opt_in,
@@ -383,6 +344,12 @@ async fn main() -> anyhow::Result<()> {
     let audience = std::env::var("VERIFIER_AUDIENCE").unwrap_or_else(|_| verifier_id.clone());
     let scope_digest = freebird_crypto::build_scope_digest(&verifier_id, &audience)
         .map_err(|e| anyhow!("invalid verifier scope: {:?}", e))?;
+    let replay_authority_config = ReplayAuthorityConfig::from_env()?;
+    let replay_authority = Arc::new(ReplayAuthorityHealth::new(
+        Arc::clone(&store),
+        replay_authority_config.clone(),
+        scope_digest,
+    )?);
     info!(
         verifier_id = %verifier_id,
         audience = %audience,
@@ -425,6 +392,8 @@ async fn main() -> anyhow::Result<()> {
         accepted_token_families: accepted_token_families.clone(),
         refresh_interval,
         store_health: store_health.clone(),
+        replay_authority: Arc::clone(&replay_authority),
+        store_is_memory: store_backend_name == "memory",
     });
 
     // Background refresh loop for all issuer URLs
@@ -454,6 +423,13 @@ async fn main() -> anyhow::Result<()> {
             sleep(Duration::from_secs(delay)).await;
         }
     });
+
+    if replay_authority.configured() {
+        let replay_authority_task = Arc::clone(&replay_authority);
+        tokio::spawn(async move {
+            replay_authority_task.run().await;
+        });
+    }
 
     // ---------- Router ----------
     let mut app = Router::new()
@@ -508,10 +484,14 @@ async fn main() -> anyhow::Result<()> {
                     .to_string()
                 })
                 .collect(),
+            graph_issuer_urls: replay_authority_config.graph_issuer_urls.clone(),
+            replay_authority_probe_interval_secs: replay_authority_config.probe_interval.as_secs(),
+            replay_authority_max_staleness_secs: replay_authority_config.max_staleness.as_secs(),
         },
         metadata,
         accepted_token_families,
         store_health,
+        replay_authority,
     });
 
     let rate_limiter_clone = Arc::clone(&admin_state);
@@ -707,6 +687,9 @@ async fn verify(
 ) -> Result<Json<VerifyResp>, (StatusCode, String)> {
     let version = decode_token_version(&req.token_b64)?;
     ensure_token_family_enabled(version, &st.accepted_token_families)?;
+    if version == freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 {
+        ensure_v4_replay_authority_ready(&st).await?;
+    }
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let (spend_key, valid_until) = match version {
         freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 => {
@@ -858,6 +841,21 @@ fn compute_throughput(successful: usize, total_time_ms: u64) -> f64 {
     }
 }
 
+async fn ensure_v4_replay_authority_ready(state: &AppState) -> Result<(), (StatusCode, String)> {
+    if !state
+        .replay_authority
+        .allows_v4_replay(state.store_is_memory)
+        .await
+    {
+        error!("V4 replay authority attestation is unavailable");
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            "replay authority unavailable".to_string(),
+        ));
+    }
+    Ok(())
+}
+
 // ---------- Batch Verification Handler (V4) ----------
 #[instrument(name = "batch_verify", skip_all, fields(batch_size = req.tokens.len()))]
 async fn batch_verify(
@@ -885,9 +883,15 @@ async fn batch_verify(
     }
 
     // Reject disabled families before taking issuer snapshots or doing crypto.
+    let mut contains_v4 = false;
     for token in &req.tokens {
         let version = decode_token_version(&token.token_b64)?;
         ensure_token_family_enabled(version, &st.accepted_token_families)?;
+        contains_v4 |= version == freebird_crypto::REDEMPTION_TOKEN_VERSION_V4;
+    }
+    if contains_v4 {
+        // Gate the entire batch before taking any spend-store mutation path.
+        ensure_v4_replay_authority_ready(&st).await?;
     }
 
     // Snapshot issuers map for parallel processing
@@ -1042,6 +1046,7 @@ async fn readiness_handler(State(st): State<Arc<AppState>>) -> impl axum::respon
         &st.issuer_urls,
         &st.accepted_token_families,
         st.refresh_interval,
+        Some(&st.replay_authority),
     )
     .await;
     if report.ready() {
@@ -1085,14 +1090,19 @@ async fn shutdown_signal() {
 #[cfg(test)]
 mod tests {
     use super::{
-        compute_throughput, enforce_declared_v4_replay_authority,
-        enforce_graph_v4_replay_configuration, ensure_token_family_enabled, family_enabled,
-        in_memory_replay_allowed, parse_accepted_token_families, parse_in_memory_replay_store,
-        record_spend, select_store_backend,
+        compute_throughput, ensure_token_family_enabled, ensure_v4_replay_authority_ready,
+        family_enabled, in_memory_replay_allowed, parse_accepted_token_families,
+        parse_in_memory_replay_store, record_spend, select_store_backend, AppState,
     };
     use freebird_verifier::readiness::TokenFamily;
+    use freebird_verifier::replay_authority::{ReplayAuthorityConfig, ReplayAuthorityHealth};
     use freebird_verifier::store::SpendStore;
-    use std::sync::Mutex;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+    use tokio::sync::RwLock;
 
     #[derive(Default)]
     struct RecordingStore {
@@ -1180,32 +1190,18 @@ mod tests {
     }
 
     #[test]
-    fn declared_graph_v4_replay_authority_must_exactly_match_redis_url() {
-        assert!(enforce_declared_v4_replay_authority(
-            Some("redis://redis:6379/4"),
-            Some("redis://redis:6379/4")
-        )
-        .is_ok());
-        assert!(enforce_declared_v4_replay_authority(
-            Some("redis://redis:6379/4"),
-            Some("redis://redis:6379/5")
-        )
-        .is_err());
-        assert!(enforce_declared_v4_replay_authority(None, Some("redis://redis:6379/4")).is_err());
-        assert!(enforce_graph_v4_replay_configuration(
-            Some("redis://redis:6379/4"),
-            None,
-            true,
-            Some("v4_local")
-        )
-        .is_err());
-        assert!(enforce_graph_v4_replay_configuration(
-            Some("redis://redis:6379/4"),
-            None,
-            false,
-            Some("v4_local")
-        )
-        .is_ok());
+    fn redis_backend_selection_has_no_graph_authority_url_policy() {
+        assert!(matches!(
+            select_store_backend(
+                Some("redis://verifier-store:6379/1".into()),
+                false,
+                Some("production"),
+                false,
+            )
+            .unwrap()
+            .0,
+            freebird_verifier::store::StoreBackend::Redis(_)
+        ));
     }
 
     #[tokio::test]
@@ -1224,5 +1220,40 @@ mod tests {
                 ("v4".to_string(), None),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn nonparticipating_memory_v4_does_not_gate_spend_mutation() {
+        let store = Arc::new(RecordingStore::default());
+        let authority = Arc::new(
+            ReplayAuthorityHealth::new(
+                store.clone(),
+                ReplayAuthorityConfig {
+                    graph_issuer_urls: vec![],
+                    probe_interval: Duration::from_secs(30),
+                    max_staleness: Duration::from_secs(60),
+                },
+                [0; 32],
+            )
+            .unwrap(),
+        );
+        let state = AppState {
+            issuers: Arc::new(RwLock::new(HashMap::new())),
+            store: store.clone(),
+            verifier_id: "verifier:test".into(),
+            audience: "test".into(),
+            scope_digest: [0; freebird_crypto::PRIVATE_TOKEN_SCOPE_DIGEST_LEN],
+            epoch_duration_sec: 86_400,
+            epoch_retention: 2,
+            issuer_urls: vec![],
+            metadata: Arc::new(RwLock::new(HashMap::new())),
+            accepted_token_families: vec![TokenFamily::V4],
+            refresh_interval: Duration::from_secs(60),
+            store_health: freebird_verifier::readiness::StoreHealth::new(store.clone()),
+            replay_authority: authority,
+            store_is_memory: true,
+        };
+        assert!(ensure_v4_replay_authority_ready(&state).await.is_ok());
+        assert!(store.calls.lock().unwrap().is_empty());
     }
 }

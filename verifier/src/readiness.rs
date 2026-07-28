@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use crate::{routes::admin::IssuerInfo, store::SpendStore};
+use crate::{
+    replay_authority::ReplayAuthorityHealth, routes::admin::IssuerInfo, store::SpendStore,
+};
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -80,10 +82,18 @@ pub async fn evaluate(
     issuer_urls: &[String],
     accepted: &[TokenFamily],
     refresh_interval: Duration,
+    replay_authority: Option<&ReplayAuthorityHealth>,
 ) -> ReadinessReport {
     let mut failures = Vec::new();
     if !store_health.healthy().await {
         failures.push("replay store is unreachable".into());
+    }
+    if accepted.contains(&TokenFamily::V4) {
+        if let Some(health) = replay_authority {
+            if health.configured() && !health.healthy().await {
+                failures.push("replay authority is unavailable or stale".into());
+            }
+        }
     }
     let max_age = refresh_interval.saturating_mul(2);
     let now = Instant::now();
@@ -232,6 +242,7 @@ mod tests {
             &urls,
             &[TokenFamily::V4, TokenFamily::V5],
             Duration::from_secs(60),
+            None,
         )
         .await;
         assert!(!report.ready());
@@ -247,6 +258,7 @@ mod tests {
             &urls,
             &[TokenFamily::V4, TokenFamily::V5],
             Duration::from_secs(60),
+            None,
         )
         .await;
         assert!(!report.ready());
@@ -277,6 +289,7 @@ mod tests {
             &["one".into()],
             &[TokenFamily::V4],
             Duration::from_secs(60),
+            None,
         )
         .await;
         assert!(!report.ready());

@@ -783,7 +783,7 @@ impl ExchangeProfileV2 {
     }
 }
 
-fn validate_output_signer_v2(key: &ExchangeKeyV2) -> Result<()> {
+pub(crate) fn validate_output_signer_v2(key: &ExchangeKeyV2) -> Result<()> {
     use freebird_crypto::provider::{software::SoftwareBlindRsaProvider, BlindRsaProvider};
 
     let path = Path::new(

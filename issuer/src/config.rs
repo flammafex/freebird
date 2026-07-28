@@ -252,7 +252,6 @@ pub struct GraphIssuanceConfig {
 pub enum GraphIssuanceAuthorizationConfig {
     HmacSha256(Vec<u8>),
     V4Local {
-        replay_redis_url: String,
         keys: Vec<GraphIssuanceV4VerificationKey>,
     },
     DevelopmentMock,
@@ -281,12 +280,8 @@ impl fmt::Debug for GraphIssuanceAuthorizationConfig {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::HmacSha256(_) => formatter.write_str("HmacSha256([REDACTED])"),
-            Self::V4Local {
-                replay_redis_url,
-                keys,
-            } => formatter
+            Self::V4Local { keys } => formatter
                 .debug_struct("V4Local")
-                .field("replay_redis_url", replay_redis_url)
                 .field("trusted_key_count", &keys.len())
                 .finish(),
             Self::DevelopmentMock => formatter.write_str("DevelopmentMock"),
@@ -403,14 +398,6 @@ impl ExchangeConfig {
         if config.graph_issuance.enabled && !config.enabled {
             anyhow::bail!("graph issuance requires PUBLIC_BEARER_EXCHANGE_ENABLE=true")
         }
-        if let GraphIssuanceAuthorizationConfig::V4Local {
-            replay_redis_url, ..
-        } = &config.graph_issuance.authorization
-        {
-            if config.redis_url.as_deref() != Some(replay_redis_url.as_str()) {
-                anyhow::bail!("v4_local graph issuance replay Redis must exactly match PUBLIC_BEARER_EXCHANGE_REDIS_URL")
-            }
-        }
         Ok(config)
     }
 
@@ -515,7 +502,7 @@ impl GraphIssuanceConfig {
         let enabled = env_bool("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE");
         let policy_path = env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| "public_bearer_graph_issuance_policy_v1.json".into());
+            .unwrap_or_else(|_| "public_bearer_graph_issuance_policy_v2.json".into());
         if !enabled {
             return Ok(Self {
                 enabled,
@@ -540,8 +527,6 @@ impl GraphIssuanceConfig {
                 GraphIssuanceAuthorizationConfig::HmacSha256(secret)
             }
             "v4_local" => {
-                let replay_redis_url = env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL")
-                    .context("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL is required")?;
                 let raw = env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64")
                     .context("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64 is required")?;
                 let encoded: std::collections::BTreeMap<
@@ -575,10 +560,7 @@ impl GraphIssuanceConfig {
                 if keys.is_empty() {
                     anyhow::bail!("graph issuance V4 keyring cannot be empty")
                 }
-                GraphIssuanceAuthorizationConfig::V4Local {
-                    replay_redis_url,
-                    keys,
-                }
+                GraphIssuanceAuthorizationConfig::V4Local { keys }
             }
             "development_mock" => {
                 if env::var("FREEBIRD_ENV").as_deref() != Ok("development")
@@ -1177,7 +1159,7 @@ mod tests {
 
     #[test]
     #[serial]
-    fn v4_local_requires_an_exact_shared_replay_redis_and_private_keyring() {
+    fn v4_local_uses_the_exchange_redis_authority_and_private_keyring() {
         use base64ct::{Base64UrlUnpadded, Encoding};
 
         let _env = EnvGuard::new();
@@ -1198,16 +1180,14 @@ mod tests {
             .to_string(),
         );
         env::remove_var("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL");
-        assert!(ExchangeConfig::from_env().is_err());
+        let config = ExchangeConfig::from_env().unwrap();
+        assert!(matches!(
+            config.graph_issuance.authorization,
+            GraphIssuanceAuthorizationConfig::V4Local { .. }
+        ));
         env::set_var(
             "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL",
             "redis://127.0.0.1:6379/5",
-        );
-        assert!(ExchangeConfig::from_env().is_err());
-
-        env::set_var(
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL",
-            "redis://127.0.0.1:6379/4",
         );
         let config = ExchangeConfig::from_env().unwrap();
         assert!(matches!(

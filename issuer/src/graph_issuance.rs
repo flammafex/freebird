@@ -6,28 +6,39 @@ use anyhow::{bail, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::{
     api::{
-        ExchangeAdmissionStateV2 as DiscoveryAdmissionState, GraphIssuanceDiscoveryV1,
-        GraphIssuancePolicyDiscoveryV1,
+        ExchangeAdmissionStateV2 as DiscoveryAdmissionState, GraphIssuanceDiscoveryV2,
+        GraphIssuancePolicyDiscoveryV2, GraphIssuanceReplayAuthorityDiscoveryV1,
     },
     graph_issuance_api::{
-        GraphIssuanceRequestV1, GraphIssuanceResultV1, GRAPH_ISSUANCE_VERSION_V1,
+        self, GraphIssuanceRequestV2, GraphIssuanceResultV2, ReplayAuthorityProbeV1,
+        GRAPH_ISSUANCE_AUTHORIZATION_V4_LOCAL, GRAPH_ISSUANCE_QUANTITY, GRAPH_ISSUANCE_VERSION_V2,
         MAX_BLINDED_MESSAGE,
     },
 };
-use hmac::{Hmac, Mac};
+use rand::RngCore;
 use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::Arc,
+};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
-const PREFIX: &str = "freebird:graph-issuance:v1:";
-const STATUS_DOMAIN: &[u8] = b"freebird graph issuance status capability v1\0";
+const PREFIX: &str = "freebird:graph-issuance:v2:";
+const STATUS_DOMAIN: &[u8] = b"freebird graph issuance status capability v2\0";
 const NULLIFIER_DOMAIN: &[u8] = b"freebird graph issuance authorization nullifier v1\0";
-const POLICY_DOMAIN: &[u8] = b"freebird graph issuance policy v1\0";
-const AUTH_TAG_DOMAIN: &[u8] = b"freebird graph issuance hmac authorization v1\0";
-pub const POLICY_DOCUMENT_VERSION: &str = "freebird/graph-blind-issuance-policy/v1";
+const POLICY_DOMAIN: &[u8] = b"freebird graph issuance policy v2\0";
+pub const POLICY_DOCUMENT_VERSION: &str = "freebird/graph-blind-issuance-policy/v2";
+
+pub const REPLAY_AUTHORITY_ID_KEY: &str = "freebird:v4-replay-authority:v1:id";
+const REPLAY_AUTHORITY_SCOPE_TOMBSTONES_KEY: &str =
+    "freebird:v4-replay-authority:v1:scope-tombstones";
+const REPLAY_AUTHORITY_PROBE_PREFIX: &str = "freebird:v4-replay-authority:v1:probe:";
+const REPLAY_AUTHORITY_ACK_PREFIX: &str = "freebird:v4-replay-authority:v1:ack:";
+const REPLAY_AUTHORITY_PROBE_TTL_SECS: u64 = 30;
 
 const RESERVE: &str = r#"
 local op=KEYS[1]
@@ -36,11 +47,20 @@ if redis.call('EXISTS',op)==1 then
   if redis.call('HGET',op,'status_capability_digest')~=ARGV[2] then return 3 end
   return 1
 end
+local time_reply=redis.call('TIME')
+if type(time_reply)~='table' or not time_reply[1] or not tonumber(time_reply[1]) then return 7 end
+local now=tonumber(time_reply[1])
+local descriptor_first=tonumber(ARGV[16]); local descriptor_last=tonumber(ARGV[17])
+if not descriptor_first or not descriptor_last or descriptor_first>descriptor_last or
+   now<descriptor_first or now>descriptor_last then return 7 end
 local auth=KEYS[2]; local budget=KEYS[3]; local global_spend=KEYS[4]
 local uses_global_spend=ARGV[15]=='1'
 if uses_global_spend then
   if redis.call('EXISTS',global_spend)==1 then return 4 end
 elseif redis.call('EXISTS',auth)==1 then return 4 end
+if not string.match(ARGV[11],'^[0-9]+$') or not string.match(ARGV[12],'^[0-9]+$') then return 6 end
+local quantity=tonumber(ARGV[11]); local limit=tonumber(ARGV[12])
+if not quantity or not limit or quantity~=1 or limit<1 then return 6 end
 local budget_type=redis.call('TYPE',budget)['ok']
 if budget_type~='none' and budget_type~='hash' then return 5 end
 local charged=0
@@ -49,11 +69,12 @@ if budget_type=='hash' then
      redis.call('HGET',budget,'policy_id')~=ARGV[3] or
      redis.call('HGET',budget,'limit')~=ARGV[12] or
      redis.call('HGET',budget,'charge_kind')~='issuance_quantity' then return 5 end
-  charged=tonumber(redis.call('HGET',budget,'charged'))
-  if not charged then return 5 end
+  local charged_raw=redis.call('HGET',budget,'charged')
+  if not charged_raw or not string.match(charged_raw,'^[0-9]+$') then return 5 end
+  charged=tonumber(charged_raw)
+  if not charged or charged<0 or charged>limit then return 5 end
 end
-local quantity=tonumber(ARGV[11]); local limit=tonumber(ARGV[12])
-if not quantity or not limit or quantity<1 or limit<1 or quantity>limit-charged then return 6 end
+if quantity>limit-charged then return 6 end
 -- No mutation is permitted above this line.
 if uses_global_spend then
   redis.call('SET',global_spend,'1')
@@ -74,6 +95,19 @@ redis.call('HSET',op,
   'quantity',ARGV[11],'budget_id',ARGV[13],'state','committed',
   'blind_signature',ARGV[8],'response',ARGV[14])
 return 0
+"#;
+
+// The authority identity check and challenge consumption are one Redis
+// operation. A changed/deleted authority can therefore never consume a
+// probe challenge.
+const REPLAY_AUTHORITY_PROBE: &str = r#"
+local authority=redis.call('GET',KEYS[1])
+if redis.call('TTL',KEYS[1])~=-1 or not authority or string.len(authority)~=32 or authority~=ARGV[1] then
+  return {1,''}
+end
+local challenge=redis.call('GETDEL',KEYS[2])
+if not challenge then return {2,''} end
+return {0,challenge}
 "#;
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -151,7 +185,6 @@ impl GraphIssuancePolicyDocument {
         retained: &[ExchangeProfileV2],
     ) -> Result<()> {
         if self.version != POLICY_DOCUMENT_VERSION
-            || self.policies.is_empty()
             || self.policies.len() > freebird_common::exchange_api::MAX_ITEMS
         {
             bail!("invalid graph issuance policy document bounds")
@@ -181,7 +214,7 @@ impl GraphIssuancePolicyDocument {
                 )
                 || policy.budget_limit == 0
                 || policy.budget_limit > freebird_common::api::EXCHANGE_MAX_BUDGET_LIMIT
-                || policy.quantity == 0
+                || policy.quantity != GRAPH_ISSUANCE_QUANTITY
                 || u64::from(policy.quantity) > policy.budget_limit
                 || !ids.insert(policy.issuance_policy_id.as_str())
                 || !budgets.insert(policy.budget_id.as_str())
@@ -200,13 +233,17 @@ impl GraphIssuancePolicyDocument {
         Ok(())
     }
 
-    pub fn discovery(&self) -> GraphIssuanceDiscoveryV1 {
-        GraphIssuanceDiscoveryV1 {
-            version: GRAPH_ISSUANCE_VERSION_V1,
+    pub fn discovery(
+        &self,
+        authority_id: &str,
+        v4_scope_digest_tombstones: &[String],
+    ) -> GraphIssuanceDiscoveryV2 {
+        GraphIssuanceDiscoveryV2 {
+            version: GRAPH_ISSUANCE_VERSION_V2,
             policies: self
                 .policies
                 .iter()
-                .map(|policy| GraphIssuancePolicyDiscoveryV1 {
+                .map(|policy| GraphIssuancePolicyDiscoveryV2 {
                     issuance_policy_id: policy.issuance_policy_id.clone(),
                     graph_id: policy.graph_id.clone(),
                     keyset_id: policy.keyset_id.clone(),
@@ -216,8 +253,19 @@ impl GraphIssuancePolicyDocument {
                     quantity: policy.quantity,
                     admission_state: policy.admission_state.discovery(),
                     authorization_scheme: policy.authorization_scheme.clone(),
+                    authorization_scope_digest_b64: policy
+                        .v4_local
+                        .as_ref()
+                        .and_then(|v4| {
+                            freebird_crypto::build_scope_digest(&v4.verifier_id, &v4.audience).ok()
+                        })
+                        .map(|scope| Base64UrlUnpadded::encode_string(&scope)),
                 })
                 .collect(),
+            replay_authority: GraphIssuanceReplayAuthorityDiscoveryV1 {
+                authority_id: authority_id.into(),
+                v4_scope_digest_tombstones: v4_scope_digest_tombstones.to_vec(),
+            },
         }
     }
 }
@@ -304,22 +352,15 @@ impl GraphIssuanceAuthorizer for HmacGraphIssuanceAuthorizer {
         if policy.authorization_scheme != "hmac_sha256" {
             bail!("unsupported graph issuance authorization scheme")
         }
-        let bytes = Base64UrlUnpadded::decode_vec(authorization)
-            .context("invalid graph issuance authorization")?;
-        if bytes.len() != 64 || Base64UrlUnpadded::encode_string(&bytes) != authorization {
-            bail!("invalid graph issuance authorization")
-        }
-        let (nonce, tag) = bytes.split_at(32);
-        let mut mac = Hmac::<Sha256>::new_from_slice(&self.secret)
-            .expect("HMAC accepts arbitrary key lengths");
-        mac.update(AUTH_TAG_DOMAIN);
-        mac.update(&(policy.issuance_policy_id.len() as u32).to_be_bytes());
-        mac.update(policy.issuance_policy_id.as_bytes());
-        mac.update(request_binding);
-        mac.verify_slice(tag)
-            .map_err(|_| anyhow::anyhow!("invalid graph issuance authorization"))?;
+        let nonce = graph_issuance_api::verify_hmac_authorization_v2(
+            &self.secret,
+            &policy.issuance_policy_id,
+            request_binding,
+            authorization,
+        )
+        .map_err(|_| anyhow::anyhow!("invalid graph issuance authorization"))?;
         Ok(AuthorizationClaim {
-            nullifier_digest: domain_digest(NULLIFIER_DOMAIN, nonce),
+            nullifier_digest: domain_digest(NULLIFIER_DOMAIN, &nonce),
             global_spend_key: None,
         })
     }
@@ -349,6 +390,21 @@ impl GraphIssuanceAuthorizer for DevelopmentMockAuthorizer {
     }
 }
 
+/// Keeps the durable authority and recovery/probe surface available while
+/// fresh graph issuance is disabled by configuration.
+pub struct DisabledGraphIssuanceAuthorizer;
+
+impl GraphIssuanceAuthorizer for DisabledGraphIssuanceAuthorizer {
+    fn authorize(
+        &self,
+        _policy: &GraphIssuancePolicy,
+        _request_binding: &[u8; 32],
+        _authorization: &str,
+    ) -> Result<AuthorizationClaim> {
+        bail!("graph issuance authorization is disabled")
+    }
+}
+
 /// Validate that the configured verifier can serve every accepting policy.
 /// Used by both runtime startup and the offline configuration validator.
 pub fn validate_configured_authorizer(
@@ -360,7 +416,7 @@ pub fn validate_configured_authorizer(
             "hmac_sha256",
             Arc::new(HmacGraphIssuanceAuthorizer::new(secret.clone())?),
         ),
-        crate::config::GraphIssuanceAuthorizationConfig::V4Local { keys, .. } => (
+        crate::config::GraphIssuanceAuthorizationConfig::V4Local { keys } => (
             "v4_local",
             Arc::new(V4LocalGraphIssuanceAuthorizer::new(keys.clone())?),
         ),
@@ -378,6 +434,27 @@ pub fn validate_configured_authorizer(
             }
             authorizer.validate_policy_configuration(policy)?;
         }
+    }
+    Ok(())
+}
+
+/// Use the same filtered signer loader as runtime startup without opening a
+/// Redis connection or mutating durable state. The offline validator calls
+/// this exact path so graph issuance cannot pass validation with a signer
+/// file runtime would reject.
+pub fn validate_runtime_graph_issuance_signers(
+    active: &ExchangeProfileV2,
+    retained: &[ExchangeProfileV2],
+    document: &GraphIssuancePolicyDocument,
+) -> Result<()> {
+    let required = document
+        .policies
+        .iter()
+        .filter(|policy| policy.admission_state == GraphIssuanceAdmissionState::AcceptingNew)
+        .map(|policy| policy.descriptor_id.clone())
+        .collect::<HashSet<_>>();
+    if !required.is_empty() {
+        let _ = PinnedTargetSignersV2::load_for_graph_issuance(active, retained, &required)?;
     }
     Ok(())
 }
@@ -534,7 +611,7 @@ fn policy_digest(policy: &GraphIssuancePolicy) -> [u8; 32] {
 }
 
 #[derive(Clone)]
-struct GraphIssuanceStore {
+pub struct GraphIssuanceStore {
     client: redis::Client,
 }
 
@@ -542,23 +619,290 @@ struct GraphIssuanceStore {
 struct StoredOperation {
     request_digest: [u8; 32],
     status_capability_digest: [u8; 32],
+    issuance_policy_id: String,
+    graph_id: String,
+    keyset_id: String,
+    descriptor_id: String,
+    signer_key_id: String,
+    quantity: u32,
     response: Vec<u8>,
 }
 
 enum ReserveOutcome {
     Created,
-    Existing(StoredOperation),
+    Existing(Box<StoredOperation>),
     Conflict,
     AuthorizationUsed,
     PolicyConflict,
     BudgetExhausted,
+    DescriptorWindow,
 }
 
 impl GraphIssuanceStore {
-    fn new(redis_url: &str) -> Result<Self> {
+    pub fn new(redis_url: &str) -> Result<Self> {
         Ok(Self {
             client: redis::Client::open(redis_url)?,
         })
+    }
+
+    async fn connection(&self) -> Result<redis::aio::Connection> {
+        Ok(self.client.get_async_connection().await?)
+    }
+
+    pub async fn redis_time(&self) -> Result<i64> {
+        let mut connection = self.connection().await?;
+        let reply: Vec<String> = redis::cmd("TIME")
+            .query_async(&mut connection)
+            .await
+            .context("invalid Redis TIME reply")?;
+        let seconds = reply
+            .first()
+            .context("Redis TIME omitted seconds")?
+            .parse::<i64>()
+            .context("Redis TIME seconds are invalid")?;
+        let micros = reply
+            .get(1)
+            .context("Redis TIME omitted microseconds")?
+            .parse::<u32>()
+            .context("Redis TIME microseconds are invalid")?;
+        if reply.len() != 2 || micros >= 1_000_000 || seconds < 0 {
+            bail!("Redis TIME descriptor validity reply is invalid")
+        }
+        Ok(seconds)
+    }
+
+    pub async fn initialize_replay_authority(
+        &self,
+        scopes: &[[u8; 32]],
+    ) -> Result<([u8; 32], Vec<[u8; 32]>)> {
+        let mut connection = self.connection().await?;
+        let authority_type: String = redis::cmd("TYPE")
+            .arg(REPLAY_AUTHORITY_ID_KEY)
+            .query_async(&mut connection)
+            .await?;
+        if authority_type != "none" && authority_type != "string" {
+            bail!("replay authority identity has an invalid Redis type")
+        }
+        if authority_type == "string" {
+            let ttl: i64 = redis::cmd("TTL")
+                .arg(REPLAY_AUTHORITY_ID_KEY)
+                .query_async(&mut connection)
+                .await?;
+            if ttl != -1 {
+                bail!("replay authority identity must not expire")
+            }
+        }
+        let _authority = if authority_type == "none" {
+            let mut generated = [0u8; 32];
+            rand::rngs::OsRng.fill_bytes(&mut generated);
+            let created: Option<String> = redis::cmd("SET")
+                .arg(REPLAY_AUTHORITY_ID_KEY)
+                .arg(generated.as_slice())
+                .arg("NX")
+                .query_async(&mut connection)
+                .await?;
+            if created.is_some() {
+                generated
+            } else {
+                let value: Vec<u8> = redis::cmd("GET")
+                    .arg(REPLAY_AUTHORITY_ID_KEY)
+                    .query_async(&mut connection)
+                    .await?;
+                value
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("replay authority identity is not 32 bytes"))?
+            }
+        } else {
+            let value: Vec<u8> = redis::cmd("GET")
+                .arg(REPLAY_AUTHORITY_ID_KEY)
+                .query_async(&mut connection)
+                .await?;
+            value
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("replay authority identity is not 32 bytes"))?
+        };
+
+        let tombstone_type: String = redis::cmd("TYPE")
+            .arg(REPLAY_AUTHORITY_SCOPE_TOMBSTONES_KEY)
+            .query_async(&mut connection)
+            .await?;
+        if tombstone_type != "none" && tombstone_type != "hash" {
+            bail!("replay authority scope tombstones have an invalid Redis type")
+        }
+        if tombstone_type == "hash" {
+            let ttl: i64 = redis::cmd("TTL")
+                .arg(REPLAY_AUTHORITY_SCOPE_TOMBSTONES_KEY)
+                .query_async(&mut connection)
+                .await?;
+            if ttl != -1 {
+                bail!("replay authority scope tombstones must not expire")
+            }
+        }
+        let existing: HashMap<Vec<u8>, Vec<u8>> = if tombstone_type == "hash" {
+            redis::cmd("HGETALL")
+                .arg(REPLAY_AUTHORITY_SCOPE_TOMBSTONES_KEY)
+                .query_async(&mut connection)
+                .await?
+        } else {
+            HashMap::new()
+        };
+        let mut retained = Vec::with_capacity(existing.len() + scopes.len());
+        for (field, value) in existing {
+            let field_text = String::from_utf8(field).context("invalid scope tombstone field")?;
+            let raw: [u8; 32] = hex::decode(&field_text)
+                .context("invalid scope tombstone encoding")?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("scope tombstone is not 32 bytes"))?;
+            if hex::encode(raw) != field_text {
+                bail!("scope tombstone encoding is not canonical")
+            }
+            if value.as_slice() != raw.as_slice() {
+                bail!("scope tombstone value does not match its identity")
+            }
+            retained.push(raw);
+        }
+        for scope in scopes {
+            if !retained.contains(scope) {
+                retained.push(*scope);
+            }
+        }
+        retained.sort_unstable();
+        retained.dedup();
+        if retained.len() > freebird_common::exchange_api::MAX_ITEMS {
+            bail!("too many replay authority scope tombstones")
+        }
+        for scope in &retained {
+            redis::cmd("HSET")
+                .arg(REPLAY_AUTHORITY_SCOPE_TOMBSTONES_KEY)
+                .arg(hex::encode(scope))
+                .arg(scope.as_slice())
+                .query_async::<_, i64>(&mut connection)
+                .await?;
+        }
+        drop(connection);
+        self.read_replay_authority_state().await
+    }
+
+    /// Read and validate the complete durable replay-authority container.
+    /// Callers must use this rather than a startup snapshot when publishing
+    /// discovery or determining readiness.
+    pub async fn read_replay_authority_state(&self) -> Result<([u8; 32], Vec<[u8; 32]>)> {
+        let mut connection = self.connection().await?;
+        let authority_type: String = redis::cmd("TYPE")
+            .arg(REPLAY_AUTHORITY_ID_KEY)
+            .query_async(&mut connection)
+            .await?;
+        if authority_type != "string" {
+            bail!("replay authority identity is missing or has an invalid Redis type")
+        }
+        let authority_ttl: i64 = redis::cmd("TTL")
+            .arg(REPLAY_AUTHORITY_ID_KEY)
+            .query_async(&mut connection)
+            .await?;
+        if authority_ttl != -1 {
+            bail!("replay authority identity must not expire")
+        }
+        let authority: [u8; 32] = {
+            let value: Vec<u8> = redis::cmd("GET")
+                .arg(REPLAY_AUTHORITY_ID_KEY)
+                .query_async(&mut connection)
+                .await?;
+            value
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("replay authority identity is not 32 bytes"))?
+        };
+        let tombstone_type: String = redis::cmd("TYPE")
+            .arg(REPLAY_AUTHORITY_SCOPE_TOMBSTONES_KEY)
+            .query_async(&mut connection)
+            .await?;
+        if tombstone_type != "none" && tombstone_type != "hash" {
+            bail!("replay authority scope tombstones have an invalid Redis type")
+        }
+        if tombstone_type == "hash" {
+            let tombstone_ttl: i64 = redis::cmd("TTL")
+                .arg(REPLAY_AUTHORITY_SCOPE_TOMBSTONES_KEY)
+                .query_async(&mut connection)
+                .await?;
+            if tombstone_ttl != -1 {
+                bail!("replay authority scope tombstones must not expire")
+            }
+        }
+        let existing: HashMap<Vec<u8>, Vec<u8>> = if tombstone_type == "hash" {
+            redis::cmd("HGETALL")
+                .arg(REPLAY_AUTHORITY_SCOPE_TOMBSTONES_KEY)
+                .query_async(&mut connection)
+                .await?
+        } else {
+            HashMap::new()
+        };
+        if existing.len() > freebird_common::exchange_api::MAX_ITEMS {
+            bail!("too many replay authority scope tombstones")
+        }
+        let mut tombstones = Vec::with_capacity(existing.len());
+        for (field, value) in existing {
+            let field_text = String::from_utf8(field).context("invalid scope tombstone field")?;
+            let scope: [u8; 32] = hex::decode(&field_text)
+                .context("invalid scope tombstone encoding")?
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("scope tombstone is not 32 bytes"))?;
+            if hex::encode(scope) != field_text || value.as_slice() != scope.as_slice() {
+                bail!("invalid replay authority scope tombstone")
+            }
+            tombstones.push(scope);
+        }
+        tombstones.sort_unstable();
+        Ok((authority, tombstones))
+    }
+
+    pub fn probe_key(probe_id: &[u8; 32]) -> String {
+        format!("{REPLAY_AUTHORITY_PROBE_PREFIX}{}", hex::encode(probe_id))
+    }
+
+    pub fn ack_key(probe_id: &[u8; 32]) -> String {
+        format!("{REPLAY_AUTHORITY_ACK_PREFIX}{}", hex::encode(probe_id))
+    }
+
+    pub async fn replay_authority_probe(
+        &self,
+        probe: &ReplayAuthorityProbeV1,
+        issuer_id: &str,
+    ) -> Result<Option<[u8; 32]>> {
+        let authority = probe.authority_id()?;
+        let probe_id = probe.probe_id()?;
+        let mut connection = self.connection().await?;
+        let (code, challenge): (i64, Vec<u8>) = redis::Script::new(REPLAY_AUTHORITY_PROBE)
+            .key(REPLAY_AUTHORITY_ID_KEY)
+            .key(Self::probe_key(&probe_id))
+            .arg(authority.as_slice())
+            .invoke_async(&mut connection)
+            .await?;
+        if code == 1 {
+            bail!("replay authority selector mismatch")
+        }
+        if code == 2 {
+            return Ok(None);
+        }
+        if code != 0 {
+            bail!("invalid replay authority probe result")
+        }
+        let challenge: [u8; 32] = challenge
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("replay authority challenge is not 32 bytes"))?;
+        let proof = graph_issuance_api::replay_authority_proof_v1(
+            &challenge, &authority, &probe_id, issuer_id,
+        )?;
+        let ack: Option<String> = redis::cmd("SET")
+            .arg(Self::ack_key(&probe_id))
+            .arg(proof.as_slice())
+            .arg("NX")
+            .arg("EX")
+            .arg(REPLAY_AUTHORITY_PROBE_TTL_SECS)
+            .query_async(&mut connection)
+            .await?;
+        if ack.is_none() {
+            bail!("replay authority acknowledgement already exists")
+        }
+        Ok(Some(proof))
     }
 
     fn operation_key(operation_id: &[u8; 16]) -> String {
@@ -566,7 +910,7 @@ impl GraphIssuanceStore {
     }
 
     async fn get(&self, operation_id: &[u8; 16]) -> Result<Option<StoredOperation>> {
-        let mut connection = self.client.get_async_connection().await?;
+        let mut connection = self.connection().await?;
         let values: HashMap<Vec<u8>, Vec<u8>> = connection
             .hgetall(Self::operation_key(operation_id))
             .await?;
@@ -586,6 +930,12 @@ impl GraphIssuanceStore {
             status_capability_digest: required(b"status_capability_digest")?
                 .try_into()
                 .map_err(|_| anyhow::anyhow!("invalid graph issuance capability digest"))?,
+            issuance_policy_id: String::from_utf8(required(b"issuance_policy_id")?)?,
+            graph_id: String::from_utf8(required(b"graph_id")?)?,
+            keyset_id: String::from_utf8(required(b"keyset_id")?)?,
+            descriptor_id: String::from_utf8(required(b"descriptor_id")?)?,
+            signer_key_id: String::from_utf8(required(b"signer_key_id")?)?,
+            quantity: String::from_utf8(required(b"quantity")?)?.parse()?,
             response: required(b"response")?,
         }))
     }
@@ -602,6 +952,8 @@ impl GraphIssuanceStore {
         signer_key_id: &str,
         blind_signature: &[u8],
         response: &[u8],
+        descriptor_valid_from: i64,
+        descriptor_valid_until: i64,
     ) -> Result<ReserveOutcome> {
         let capability_digest = status_digest(status_capability);
         let policy_digest = policy_digest(policy);
@@ -612,7 +964,7 @@ impl GraphIssuanceStore {
         );
         let budget_key = format!("{PREFIX}budget:{}", policy.budget_id);
         let no_global_spend = format!("{PREFIX}no-global-spend:{}", hex::encode(operation_id));
-        let mut connection = self.client.get_async_connection().await?;
+        let mut connection = self.connection().await?;
         let code: i64 = redis::Script::new(RESERVE)
             .key(Self::operation_key(operation_id))
             .key(authorization_key)
@@ -633,19 +985,22 @@ impl GraphIssuanceStore {
             .arg(&policy.budget_id)
             .arg(response)
             .arg(global_spend_key.is_some())
+            .arg(descriptor_valid_from)
+            .arg(descriptor_valid_until)
             .invoke_async(&mut connection)
             .await?;
         Ok(match code {
             0 => ReserveOutcome::Created,
-            1 => ReserveOutcome::Existing(
+            1 => ReserveOutcome::Existing(Box::new(
                 self.get(operation_id)
                     .await?
                     .context("existing graph issuance operation disappeared")?,
-            ),
+            )),
             2 | 3 => ReserveOutcome::Conflict,
             4 => ReserveOutcome::AuthorizationUsed,
             5 => ReserveOutcome::PolicyConflict,
             6 => ReserveOutcome::BudgetExhausted,
+            7 => ReserveOutcome::DescriptorWindow,
             _ => bail!("invalid graph issuance reservation result"),
         })
     }
@@ -656,6 +1011,7 @@ pub enum ProcessDecision {
     Committed(Vec<u8>),
     Conflict,
     Rejected,
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -666,9 +1022,11 @@ pub enum StatusDecision {
 }
 
 pub struct GraphIssuanceEngine {
+    enabled: bool,
     active_graph_id: String,
     policies: HashMap<String, GraphIssuancePolicy>,
-    signers: PinnedTargetSignersV2,
+    policy_order: Vec<String>,
+    signers: Option<PinnedTargetSignersV2>,
     store: GraphIssuanceStore,
     authorizer: Arc<dyn GraphIssuanceAuthorizer>,
 }
@@ -681,28 +1039,219 @@ impl GraphIssuanceEngine {
         redis_url: &str,
         authorizer: Arc<dyn GraphIssuanceAuthorizer>,
     ) -> Result<Self> {
+        Self::new_with_enabled(active, retained, document, redis_url, authorizer, true)
+    }
+
+    pub fn new_with_enabled(
+        active: &ExchangeProfileV2,
+        retained: &[ExchangeProfileV2],
+        document: GraphIssuancePolicyDocument,
+        redis_url: &str,
+        authorizer: Arc<dyn GraphIssuanceAuthorizer>,
+        enabled: bool,
+    ) -> Result<Self> {
         document.validate(active, retained)?;
         for policy in &document.policies {
             if policy.admission_state == GraphIssuanceAdmissionState::AcceptingNew {
                 authorizer.validate_policy_configuration(policy)?;
+                let descriptor = active
+                    .keysets
+                    .iter()
+                    .find(|keyset| keyset.id == policy.keyset_id)
+                    .and_then(|keyset| {
+                        keyset
+                            .keys
+                            .iter()
+                            .find(|key| key.descriptor.id == policy.descriptor_id)
+                    })
+                    .context("graph issuance signer descriptor is unavailable")?;
+                if descriptor.descriptor.valid_from <= 0
+                    || descriptor.descriptor.valid_from >= descriptor.descriptor.valid_until
+                    || descriptor.descriptor.valid_until
+                        > freebird_common::api::EXCHANGE_MAX_VALID_UNTIL
+                {
+                    bail!("graph issuance signer validity window is invalid")
+                }
             }
         }
+        let needs_signers = document
+            .policies
+            .iter()
+            .any(|policy| policy.admission_state == GraphIssuanceAdmissionState::AcceptingNew);
+        let required_descriptors = document
+            .policies
+            .iter()
+            .filter(|policy| policy.admission_state == GraphIssuanceAdmissionState::AcceptingNew)
+            .map(|policy| policy.descriptor_id.clone())
+            .collect::<HashSet<_>>();
         Ok(Self {
+            enabled,
             active_graph_id: active.graph_id.clone(),
+            policy_order: document
+                .policies
+                .iter()
+                .map(|policy| policy.issuance_policy_id.clone())
+                .collect(),
             policies: document
                 .policies
                 .into_iter()
                 .map(|policy| (policy.issuance_policy_id.clone(), policy))
                 .collect(),
-            signers: PinnedTargetSignersV2::load(active, retained)?,
+            signers: if needs_signers {
+                Some(PinnedTargetSignersV2::load_for_graph_issuance(
+                    active,
+                    retained,
+                    &required_descriptors,
+                )?)
+            } else {
+                None
+            },
             store: GraphIssuanceStore::new(redis_url)?,
             authorizer,
         })
     }
 
+    /// Complete durable authority initialization only after all policy and
+    /// signer validation has succeeded. This ordering keeps a failed fresh
+    /// configuration from leaving an authority identity behind.
+    pub async fn initialize(&mut self) -> Result<GraphIssuanceDiscoveryV2> {
+        self.store.redis_time().await?;
+        let scopes = self
+            .policies
+            .values()
+            .filter(|policy| policy.authorization_scheme == GRAPH_ISSUANCE_AUTHORIZATION_V4_LOCAL)
+            .filter_map(|policy| policy.v4_local.as_ref())
+            .map(|v4| {
+                freebird_crypto::build_scope_digest(&v4.verifier_id, &v4.audience)
+                    .map_err(|_| anyhow::anyhow!("invalid graph issuance V4 scope"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.store.initialize_replay_authority(&scopes).await?;
+        self.discovery_from_durable().await
+    }
+
+    fn discovery_from_state(
+        &self,
+        authority: &[u8; 32],
+        tombstones: &[[u8; 32]],
+    ) -> GraphIssuanceDiscoveryV2 {
+        let authority_id = Base64UrlUnpadded::encode_string(authority);
+        let tombstones = tombstones
+            .iter()
+            .map(|scope| Base64UrlUnpadded::encode_string(scope))
+            .collect::<Vec<_>>();
+        let document = GraphIssuancePolicyDocument {
+            version: POLICY_DOCUMENT_VERSION.into(),
+            policies: self
+                .policy_order
+                .iter()
+                .filter_map(|id| self.policies.get(id).cloned())
+                .collect(),
+        };
+        document.discovery(&authority_id, &tombstones)
+    }
+
+    /// Build discovery from the complete durable Redis authority state. This
+    /// is intentionally asynchronous so publication cannot use a startup
+    /// snapshot after Redis has been edited, restored, or corrupted.
+    pub async fn discovery_from_durable(&self) -> Result<GraphIssuanceDiscoveryV2> {
+        let (authority, tombstones) = self.store.read_replay_authority_state().await?;
+        Ok(self.discovery_from_state(&authority, &tombstones))
+    }
+
+    pub fn issuance_enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub async fn replay_authority_probe(
+        &self,
+        probe: &ReplayAuthorityProbeV1,
+        issuer_id: &str,
+    ) -> Result<Option<[u8; 32]>> {
+        probe
+            .validate()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        self.store.replay_authority_probe(probe, issuer_id).await
+    }
+
+    pub async fn readiness_check(&self) -> bool {
+        let Ok((_authority, tombstones)) = self.store.read_replay_authority_state().await else {
+            return false;
+        };
+        let required_scopes = self
+            .policies
+            .values()
+            .filter(|policy| policy.authorization_scheme == GRAPH_ISSUANCE_AUTHORIZATION_V4_LOCAL)
+            .filter_map(|policy| policy.v4_local.as_ref())
+            .filter_map(|v4| {
+                freebird_crypto::build_scope_digest(&v4.verifier_id, &v4.audience).ok()
+            })
+            .collect::<Vec<_>>();
+        if required_scopes
+            .iter()
+            .any(|scope| !tombstones.contains(scope))
+        {
+            return false;
+        }
+        let Ok(now) = self.store.redis_time().await else {
+            return false;
+        };
+        self.policies.values().all(|policy| {
+            if policy.admission_state != GraphIssuanceAdmissionState::AcceptingNew
+                || policy.graph_id != self.active_graph_id
+            {
+                return true;
+            }
+            self.signers
+                .as_ref()
+                .and_then(|signers| signers.graph_issuance_validity(&policy.descriptor_id).ok())
+                .is_some_and(|(first, last)| now >= first && now <= last)
+        })
+    }
+
+    fn validate_stored_response(
+        record: &StoredOperation,
+        expected_operation_id: Option<&[u8; 16]>,
+    ) -> Result<Vec<u8>> {
+        let result: GraphIssuanceResultV2 = serde_json::from_slice(&record.response)
+            .context("corrupt stored graph issuance response")?;
+        result
+            .validate()
+            .map_err(|error| anyhow::anyhow!("corrupt stored graph issuance response: {error}"))?;
+        let blind_signature = freebird_common::exchange_api::decode_base64url(
+            &result.blind_signature,
+            graph_issuance_api::MAX_BLIND_SIGNATURE,
+        )
+        .map_err(|error| anyhow::anyhow!("corrupt stored graph issuance response: {error}"))?;
+        if blind_signature.is_empty() {
+            bail!("corrupt stored graph issuance response signature")
+        }
+        if result.issuance_policy_id != record.issuance_policy_id
+            || result.graph_id != record.graph_id
+            || result.keyset_id != record.keyset_id
+            || result.descriptor_id != record.descriptor_id
+            || result.token_key_id != record.signer_key_id
+            || result.quantity != GRAPH_ISSUANCE_QUANTITY
+            || record.quantity != GRAPH_ISSUANCE_QUANTITY
+        {
+            bail!("corrupt stored graph issuance response selectors")
+        }
+        if let Some(operation_id) = expected_operation_id {
+            if result.public_operation_id != Base64UrlUnpadded::encode_string(operation_id) {
+                bail!("corrupt stored graph issuance operation selector")
+            }
+        }
+        let digest = graph_issuance_api::decode_digest(&result.request_digest)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if !bool::from(digest.ct_eq(&record.request_digest)) {
+            bail!("corrupt stored graph issuance request digest")
+        }
+        Ok(record.response.clone())
+    }
+
     pub async fn process(
         &self,
-        request: &GraphIssuanceRequestV1,
+        request: &GraphIssuanceRequestV2,
         status_capability: &[u8; 32],
     ) -> Result<ProcessDecision> {
         let operation_id = match request.operation_id() {
@@ -714,6 +1263,7 @@ impl GraphIssuanceEngine {
             Err(_) => return Ok(ProcessDecision::Rejected),
         };
         if let Some(existing) = self.store.get(&operation_id).await? {
+            let response = Self::validate_stored_response(&existing, Some(&operation_id))?;
             return Ok(
                 if existing.request_digest != request_digest
                     || !bool::from(
@@ -724,9 +1274,18 @@ impl GraphIssuanceEngine {
                 {
                     ProcessDecision::Conflict
                 } else {
-                    ProcessDecision::Committed(existing.response)
+                    let result: GraphIssuanceResultV2 = serde_json::from_slice(&response)?;
+                    result
+                        .validate_against(request, &existing.signer_key_id)
+                        .map_err(|error| {
+                            anyhow::anyhow!("corrupt stored graph issuance response: {error}")
+                        })?;
+                    ProcessDecision::Committed(response)
                 },
             );
+        }
+        if !self.enabled {
+            return Ok(ProcessDecision::Unavailable);
         }
         let Some(policy) = self.policies.get(&request.issuance_policy_id) else {
             return Ok(ProcessDecision::Rejected);
@@ -739,6 +1298,23 @@ impl GraphIssuanceEngine {
         {
             return Ok(ProcessDecision::Rejected);
         }
+        let signers = self
+            .signers
+            .as_ref()
+            .context("graph issuance signer set is unavailable")?;
+        let (descriptor_valid_from, descriptor_valid_until) =
+            signers.graph_issuance_validity(&policy.descriptor_id)?;
+        let now = self.store.redis_time().await?;
+        if now < descriptor_valid_from || now > descriptor_valid_until {
+            return Ok(ProcessDecision::Rejected);
+        }
+        let blinded = match freebird_common::exchange_api::decode_base64url(
+            &request.blinded_message,
+            MAX_BLINDED_MESSAGE,
+        ) {
+            Ok(value) if !value.is_empty() => value,
+            _ => return Ok(ProcessDecision::Rejected),
+        };
         let authorization_claim = match self.authorizer.authorize(
             policy,
             &request
@@ -749,23 +1325,15 @@ impl GraphIssuanceEngine {
             Ok(value) => value,
             Err(_) => return Ok(ProcessDecision::Rejected),
         };
-        let blinded = match freebird_common::exchange_api::decode_base64url(
-            &request.blinded_message,
-            MAX_BLINDED_MESSAGE,
-        ) {
-            Ok(value) => value,
-            Err(_) => return Ok(ProcessDecision::Rejected),
-        };
-        let (signer_key_id, blind_signature) = match self
-            .signers
+        let (signer_key_id, blind_signature) = match signers
             .sign_graph_issuance(&policy.keyset_id, &policy.descriptor_id, &blinded)
             .await
         {
             Ok(value) => value,
             Err(_) => return Ok(ProcessDecision::Rejected),
         };
-        let mut result = GraphIssuanceResultV1 {
-            version: GRAPH_ISSUANCE_VERSION_V1,
+        let mut result = GraphIssuanceResultV2 {
+            version: GRAPH_ISSUANCE_VERSION_V2,
             public_operation_id: request.public_operation_id.clone(),
             issuance_policy_id: policy.issuance_policy_id.clone(),
             graph_id: policy.graph_id.clone(),
@@ -777,13 +1345,16 @@ impl GraphIssuanceEngine {
             blind_signature: Base64UrlUnpadded::encode_string(&blind_signature),
             result_digest: String::new(),
         };
+        if blind_signature.is_empty() {
+            bail!("graph issuance signer returned an empty signature")
+        }
         result.result_digest = Base64UrlUnpadded::encode_string(
             &result
                 .calculated_result_digest()
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?,
         );
         result
-            .validate()
+            .validate_against(request, &signer_key_id)
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         let response = serde_json::to_vec(&result)?;
         Ok(
@@ -799,24 +1370,37 @@ impl GraphIssuanceEngine {
                     &signer_key_id,
                     &blind_signature,
                     &response,
+                    descriptor_valid_from,
+                    descriptor_valid_until,
                 )
                 .await?
             {
                 ReserveOutcome::Created => ProcessDecision::Committed(response),
-                ReserveOutcome::Existing(existing)
-                    if existing.request_digest == request_digest
-                        && bool::from(
+                ReserveOutcome::Existing(existing) => {
+                    let response = Self::validate_stored_response(&existing, Some(&operation_id))?;
+                    if existing.request_digest != request_digest
+                        || !bool::from(
                             existing
                                 .status_capability_digest
                                 .ct_eq(&status_digest(status_capability)),
-                        ) =>
-                {
-                    ProcessDecision::Committed(existing.response)
+                        )
+                    {
+                        ProcessDecision::Conflict
+                    } else {
+                        let stored: GraphIssuanceResultV2 = serde_json::from_slice(&response)?;
+                        stored
+                            .validate_against(request, &existing.signer_key_id)
+                            .map_err(|error| {
+                                anyhow::anyhow!("corrupt stored graph issuance response: {error}")
+                            })?;
+                        ProcessDecision::Committed(response)
+                    }
                 }
-                ReserveOutcome::Existing(_) | ReserveOutcome::Conflict => ProcessDecision::Conflict,
+                ReserveOutcome::Conflict => ProcessDecision::Conflict,
                 ReserveOutcome::AuthorizationUsed
                 | ReserveOutcome::PolicyConflict
-                | ReserveOutcome::BudgetExhausted => ProcessDecision::Rejected,
+                | ReserveOutcome::BudgetExhausted
+                | ReserveOutcome::DescriptorWindow => ProcessDecision::Rejected,
             },
         )
     }
@@ -837,7 +1421,10 @@ impl GraphIssuanceEngine {
             {
                 StatusDecision::Unauthorized
             }
-            Some(record) => StatusDecision::Committed(record.response),
+            Some(record) => {
+                let response = Self::validate_stored_response(&record, Some(operation_id))?;
+                StatusDecision::Committed(response)
+            }
         })
     }
 }
@@ -969,6 +1556,124 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn replay_authority_identity_probe_and_tombstones_are_durable() {
+        let Some(harness) = RedisHarness::start_if_available().unwrap() else {
+            return;
+        };
+        let store = GraphIssuanceStore::new(&harness.url).unwrap();
+        let first_scope = [7u8; 32];
+        let (authority, tombstones) = store
+            .initialize_replay_authority(&[first_scope])
+            .await
+            .unwrap();
+        assert_eq!(authority.len(), 32);
+        assert_eq!(tombstones, vec![first_scope]);
+        let (same_authority, tombstones) = store
+            .initialize_replay_authority(&[[8u8; 32]])
+            .await
+            .unwrap();
+        assert_eq!(same_authority, authority);
+        assert_eq!(tombstones.len(), 2);
+        let (durable_authority, durable_tombstones) =
+            store.read_replay_authority_state().await.unwrap();
+        assert_eq!(durable_authority, authority);
+        assert_eq!(durable_tombstones.len(), 2);
+
+        let probe_id = [9u8; 32];
+        let challenge = [10u8; 32];
+        let mut connection = redis::Client::open(harness.url.clone())
+            .unwrap()
+            .get_async_connection()
+            .await
+            .unwrap();
+        let _: String = redis::cmd("SET")
+            .arg(GraphIssuanceStore::probe_key(&probe_id))
+            .arg(challenge.as_slice())
+            .arg("NX")
+            .arg("EX")
+            .arg(REPLAY_AUTHORITY_PROBE_TTL_SECS)
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        drop(connection);
+
+        let probe = ReplayAuthorityProbeV1 {
+            version: freebird_common::graph_issuance_api::REPLAY_AUTHORITY_VERSION_V1,
+            authority_id: Base64UrlUnpadded::encode_string(&authority),
+            probe_id: Base64UrlUnpadded::encode_string(&probe_id),
+        };
+        let proof = store
+            .replay_authority_probe(&probe, "issuer:test")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            proof,
+            graph_issuance_api::replay_authority_proof_v1(
+                &challenge,
+                &authority,
+                &probe_id,
+                "issuer:test"
+            )
+            .unwrap()
+        );
+        assert!(store
+            .replay_authority_probe(&probe, "issuer:test")
+            .await
+            .unwrap()
+            .is_none());
+        let mut connection = redis::Client::open(harness.url.clone())
+            .unwrap()
+            .get_async_connection()
+            .await
+            .unwrap();
+        let _: i64 = redis::cmd("DEL")
+            .arg(REPLAY_AUTHORITY_ID_KEY)
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        assert!(store.read_replay_authority_state().await.is_err());
+        let _: String = redis::cmd("SET")
+            .arg(REPLAY_AUTHORITY_ID_KEY)
+            .arg(authority.as_slice())
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        let ack: Vec<u8> = redis::cmd("GETDEL")
+            .arg(GraphIssuanceStore::ack_key(&probe_id))
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(ack, proof);
+
+        let replacement_challenge = [12u8; 32];
+        let _: String = redis::cmd("SET")
+            .arg(REPLAY_AUTHORITY_ID_KEY)
+            .arg([11u8; 32].as_slice())
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        let _: String = redis::cmd("SET")
+            .arg(GraphIssuanceStore::probe_key(&probe_id))
+            .arg(replacement_challenge.as_slice())
+            .arg("EX")
+            .arg(REPLAY_AUTHORITY_PROBE_TTL_SECS)
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        assert!(store
+            .replay_authority_probe(&probe, "issuer:test")
+            .await
+            .is_err());
+        let retained_challenge: Vec<u8> = redis::cmd("GET")
+            .arg(GraphIssuanceStore::probe_key(&probe_id))
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        assert_eq!(retained_challenge, replacement_challenge);
+    }
+
     fn redis_policy(budget_id: &str, budget_limit: u64) -> GraphIssuancePolicy {
         GraphIssuancePolicy {
             issuance_policy_id: "redis-v4-policy".into(),
@@ -1004,8 +1709,98 @@ mod tests {
                 "target-key",
                 b"blind-signature",
                 b"durable-response",
+                1,
+                i64::MAX,
             )
             .await
+    }
+
+    #[tokio::test]
+    async fn malformed_budget_charge_is_rejected_without_any_mutation() {
+        let Some(harness) = RedisHarness::start_if_available().unwrap() else {
+            return;
+        };
+        let store = GraphIssuanceStore::new(&harness.url).unwrap();
+        let policy = redis_policy("malformed-budget", 10);
+        let budget_key = format!("{PREFIX}budget:{}", policy.budget_id);
+        let digest = policy_digest(&policy);
+        let mut connection = redis::Client::open(harness.url.clone())
+            .unwrap()
+            .get_async_connection()
+            .await
+            .unwrap();
+        let _: i64 = redis::cmd("HSET")
+            .arg(&budget_key)
+            .arg("policy_id")
+            .arg(&policy.issuance_policy_id)
+            .arg("policy_digest")
+            .arg(digest.as_slice())
+            .arg("limit")
+            .arg(policy.budget_limit)
+            .arg("charge_kind")
+            .arg("issuance_quantity")
+            .arg("charged")
+            .arg("0")
+            .query_async(&mut connection)
+            .await
+            .unwrap();
+        drop(connection);
+
+        for (index, malformed) in ["1.5", "-1"].into_iter().enumerate() {
+            let mut connection = redis::Client::open(harness.url.clone())
+                .unwrap()
+                .get_async_connection()
+                .await
+                .unwrap();
+            let _: i64 = redis::cmd("HSET")
+                .arg(&budget_key)
+                .arg("charged")
+                .arg(malformed)
+                .query_async(&mut connection)
+                .await
+                .unwrap();
+            drop(connection);
+
+            let operation = [20 + index as u8; 16];
+            let marker = format!("{PREFIX}malformed-marker-{index}");
+            assert!(matches!(
+                reserve_for_test(
+                    &store,
+                    operation,
+                    [30 + index as u8; 32],
+                    [40 + index as u8; 32],
+                    &policy,
+                    &marker,
+                )
+                .await
+                .unwrap(),
+                ReserveOutcome::PolicyConflict
+            ));
+            let mut connection = redis::Client::open(harness.url.clone())
+                .unwrap()
+                .get_async_connection()
+                .await
+                .unwrap();
+            let operation_value: i64 = redis::cmd("EXISTS")
+                .arg(GraphIssuanceStore::operation_key(&operation))
+                .query_async(&mut connection)
+                .await
+                .unwrap();
+            assert_eq!(operation_value, 0);
+            let marker_value: Option<Vec<u8>> = redis::cmd("GET")
+                .arg(&marker)
+                .query_async(&mut connection)
+                .await
+                .unwrap();
+            assert!(marker_value.is_none());
+            let stored: Vec<u8> = redis::cmd("HGET")
+                .arg(&budget_key)
+                .arg("charged")
+                .query_async(&mut connection)
+                .await
+                .unwrap();
+            assert_eq!(stored, malformed.as_bytes());
+        }
     }
 
     #[tokio::test]
@@ -1028,7 +1823,7 @@ mod tests {
             .get_async_connection()
             .await
             .unwrap();
-        let budget_key = "freebird:graph-issuance:v1:budget:redis-v4-budget";
+        let budget_key = "freebird:graph-issuance:v2:budget:redis-v4-budget";
         let budget: HashMap<Vec<u8>, Vec<u8>> = redis::cmd("HGETALL")
             .arg(budget_key)
             .query_async(&mut connection)
@@ -1162,14 +1957,13 @@ mod tests {
         let authorizer = HmacGraphIssuanceAuthorizer::new(secret.clone()).unwrap();
         let binding = [8; 32];
         let nonce = [9; 32];
-        let mut mac = Hmac::<Sha256>::new_from_slice(&secret).unwrap();
-        mac.update(AUTH_TAG_DOMAIN);
-        mac.update(&(policy.issuance_policy_id.len() as u32).to_be_bytes());
-        mac.update(policy.issuance_policy_id.as_bytes());
-        mac.update(&binding);
-        let mut authorization = nonce.to_vec();
-        authorization.extend_from_slice(&mac.finalize().into_bytes());
-        let authorization = Base64UrlUnpadded::encode_string(&authorization);
+        let authorization = graph_issuance_api::build_hmac_authorization_v2(
+            &secret,
+            &nonce,
+            &policy.issuance_policy_id,
+            &binding,
+        )
+        .unwrap();
         let claim = authorizer
             .authorize(&policy, &binding, &authorization)
             .unwrap();
@@ -1181,6 +1975,50 @@ mod tests {
         assert!(authorizer
             .authorize(&policy, &[0; 32], &authorization)
             .is_err());
+        let mut tampered = Base64UrlUnpadded::decode_vec(&authorization).unwrap();
+        tampered[0] ^= 1;
+        assert!(authorizer
+            .authorize(
+                &policy,
+                &binding,
+                &Base64UrlUnpadded::encode_string(&tampered)
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn issuer_rejects_quantity_and_digest_mutations_in_v2_results() {
+        let request = graph_issuance_api::GraphIssuanceRequestV2 {
+            version: GRAPH_ISSUANCE_VERSION_V2,
+            public_operation_id: Base64UrlUnpadded::encode_string(&[1; 16]),
+            issuance_policy_id: "policy".into(),
+            graph_id: "1".repeat(64),
+            keyset_id: "2".repeat(64),
+            descriptor_id: "3".repeat(64),
+            blinded_message: Base64UrlUnpadded::encode_string(&[4; 32]),
+            authorization: Base64UrlUnpadded::encode_string(&[5; 32]),
+        };
+        let mut result = GraphIssuanceResultV2 {
+            version: GRAPH_ISSUANCE_VERSION_V2,
+            public_operation_id: request.public_operation_id.clone(),
+            issuance_policy_id: request.issuance_policy_id.clone(),
+            graph_id: request.graph_id.clone(),
+            keyset_id: request.keyset_id.clone(),
+            descriptor_id: request.descriptor_id.clone(),
+            token_key_id: "a".repeat(64),
+            quantity: 1,
+            request_digest: Base64UrlUnpadded::encode_string(&request.request_digest().unwrap()),
+            blind_signature: Base64UrlUnpadded::encode_string(&[6; 32]),
+            result_digest: String::new(),
+        };
+        result.result_digest =
+            Base64UrlUnpadded::encode_string(&result.calculated_result_digest().unwrap());
+        assert!(result.validate_against(&request, &"a".repeat(64)).is_ok());
+        result.quantity = 2;
+        assert!(result.validate_against(&request, &"a".repeat(64)).is_err());
+        result.quantity = 1;
+        result.result_digest = Base64UrlUnpadded::encode_string(&[0; 32]);
+        assert!(result.validate_against(&request, &"a".repeat(64)).is_err());
     }
 
     #[test]

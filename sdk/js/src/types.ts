@@ -189,16 +189,24 @@ export interface GraphIssuancePolicyInfo {
   quantity: number;
   admission_state: ExchangeAdmissionState;
   authorization_scheme: string;
+  /** Published only for v4_local policies; binds the authorization namespace. */
+  authorization_scope_digest_b64?: string;
 }
 
 export interface GraphIssuanceDiscoveryMetadata {
-  version: 1;
+  version: 2;
   policies: GraphIssuancePolicyInfo[];
+  replay_authority: GraphIssuanceReplayAuthorityDiscovery;
 }
 
-/** Exact JSON body accepted by POST /v1/public/graph/issue. */
+export interface GraphIssuanceReplayAuthorityDiscovery {
+  authority_id: string;
+  v4_scope_digest_tombstones: string[];
+}
+
+/** Exact V2 JSON body accepted by POST /v1/public/graph/issue. */
 export interface GraphIssuanceRequest {
-  version: 1;
+  version: 2;
   public_operation_id: string;
   issuance_policy_id: string;
   graph_id: string;
@@ -209,7 +217,7 @@ export interface GraphIssuanceRequest {
 }
 
 export interface GraphIssuanceResult {
-  version: 1;
+  version: 2;
   public_operation_id: string;
   issuance_policy_id: string;
   graph_id: string;
@@ -220,6 +228,29 @@ export interface GraphIssuanceResult {
   request_digest: string;
   blind_signature: string;
   result_digest: string;
+}
+
+/**
+ * Exact persisted inputs needed to retry or observe an issuance operation.
+ *
+ * The nested request is retained verbatim, while the duplicated selectors and
+ * digests make accidental recovery-context mutation detectable without
+ * consulting issuer discovery. `blindingState` is intentionally opaque to the
+ * SDK and is returned to the caller for finalization.
+ */
+export interface GraphIssuanceRecoveryContext {
+  request: GraphIssuanceRequest;
+  requestDigest: string;
+  publicOperationId: string;
+  issuancePolicyId: string;
+  graphId: string;
+  keysetId: string;
+  descriptorId: string;
+  statusCapability: string;
+  /** The token key selected by the fresh issuance operation. */
+  expectedTokenKeyId: string;
+  /** Caller-owned RFC 9474 blinding state; the SDK never interprets it. */
+  blindingState: unknown;
 }
 
 export type GraphIssuanceOutcome =

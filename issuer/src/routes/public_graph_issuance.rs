@@ -11,7 +11,10 @@ use axum::{
     response::Response,
     Json,
 };
-use freebird_common::graph_issuance_api::GraphIssuanceRequestV1;
+use base64ct::Encoding;
+use freebird_common::graph_issuance_api::{
+    GraphIssuanceRequestV2, ReplayAuthorityProbeV1, ReplayAuthorityProofV1,
+};
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -26,7 +29,7 @@ type SharedState = (
 pub async fn post(
     State((state, _)): State<SharedState>,
     headers: HeaderMap,
-    request: Result<Json<GraphIssuanceRequestV1>, JsonRejection>,
+    request: Result<Json<GraphIssuanceRequestV2>, JsonRejection>,
 ) -> Response {
     let capability = match status_capability(&headers) {
         Ok(value) => value,
@@ -52,6 +55,10 @@ pub async fn post(
         Ok(ProcessDecision::Committed(bytes)) => exact(StatusCode::OK, bytes),
         Ok(ProcessDecision::Conflict) => error(StatusCode::CONFLICT, "operation_conflict"),
         Ok(ProcessDecision::Rejected) => error(StatusCode::BAD_REQUEST, "invalid_graph_issuance"),
+        Ok(ProcessDecision::Unavailable) => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "graph_issuance_unavailable",
+        ),
         Err(_) => error(
             StatusCode::SERVICE_UNAVAILABLE,
             "graph_issuance_unavailable",
@@ -75,9 +82,7 @@ pub async fn status(
         Err(()) => return error(StatusCode::BAD_REQUEST, "invalid_status_capability"),
     };
     let operation_id = match query.ok().and_then(|Query(query)| {
-        let bytes =
-            freebird_common::exchange_api::decode_base64url(&query.public_operation_id, 16).ok()?;
-        bytes.try_into().ok()
+        freebird_common::graph_issuance_api::parse_operation_id(&query.public_operation_id).ok()
     }) {
         Some(value) => value,
         None => return error(StatusCode::BAD_REQUEST, "invalid_public_operation_id"),
@@ -99,6 +104,61 @@ pub async fn status(
     }
 }
 
+/// Probe the permanent V4 replay authority. The engine performs GETDEL on the
+/// request-bound challenge before computing the proof and writes the matching
+/// acknowledgement through the same Redis client. No probe material is
+/// included in logs or error responses.
+pub async fn replay_authority_probe(
+    State((state, _)): State<SharedState>,
+    request: Result<Json<ReplayAuthorityProbeV1>, JsonRejection>,
+) -> Response {
+    let Json(probe) = match request {
+        Ok(value) => value,
+        Err(_) => return error(StatusCode::BAD_REQUEST, "invalid_replay_authority_probe"),
+    };
+    if probe.validate().is_err() {
+        return error(StatusCode::BAD_REQUEST, "invalid_replay_authority_probe");
+    }
+    let Some(engine) = state.graph_issuance_engine.as_ref() else {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "graph_issuance_unavailable",
+        );
+    };
+    match engine
+        .replay_authority_probe(&probe, &state.issuer_id)
+        .await
+    {
+        Ok(Some(proof)) => {
+            let authority_id = match probe.authority_id() {
+                Ok(value) => base64ct::Base64UrlUnpadded::encode_string(&value),
+                Err(_) => return error(StatusCode::BAD_REQUEST, "invalid_replay_authority_probe"),
+            };
+            let probe_id = match probe.probe_id() {
+                Ok(value) => base64ct::Base64UrlUnpadded::encode_string(&value),
+                Err(_) => return error(StatusCode::BAD_REQUEST, "invalid_replay_authority_probe"),
+            };
+            exact_json(
+                StatusCode::OK,
+                &ReplayAuthorityProofV1 {
+                    version: freebird_common::graph_issuance_api::REPLAY_AUTHORITY_VERSION_V1,
+                    authority_id,
+                    probe_id,
+                    proof: base64ct::Base64UrlUnpadded::encode_string(&proof),
+                },
+            )
+        }
+        Ok(None) => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "replay_authority_unavailable",
+        ),
+        Err(_) => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "replay_authority_unavailable",
+        ),
+    }
+}
+
 fn status_capability(headers: &HeaderMap) -> Result<[u8; 32], ()> {
     let mut values = headers.get_all(&STATUS_CAPABILITY).iter();
     let value = values.next().ok_or(())?;
@@ -106,10 +166,7 @@ fn status_capability(headers: &HeaderMap) -> Result<[u8; 32], ()> {
         return Err(());
     }
     let value = value.to_str().map_err(|_| ())?;
-    freebird_common::exchange_api::decode_base64url(value, 32)
-        .map_err(|_| ())?
-        .try_into()
-        .map_err(|_| ())
+    freebird_common::graph_issuance_api::decode_digest(value).map_err(|_| ())
 }
 
 fn exact(status: StatusCode, body: Vec<u8>) -> Response {
@@ -119,6 +176,13 @@ fn exact(status: StatusCode, body: Vec<u8>) -> Response {
         .header(header::CACHE_CONTROL, "no-store")
         .body(Body::from(body))
         .expect("static graph issuance response")
+}
+
+fn exact_json<T: serde::Serialize>(status: StatusCode, body: &T) -> Response {
+    exact(
+        status,
+        serde_json::to_vec(body).expect("static graph issuance response"),
+    )
 }
 
 fn error(status: StatusCode, code: &'static str) -> Response {

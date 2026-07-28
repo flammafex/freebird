@@ -20,6 +20,7 @@ import {
   GraphIssuanceRequest,
   GraphIssuanceResult,
   GraphIssuanceOutcome,
+  GraphIssuanceRecoveryContext,
   FreebirdToken,
   SybilProof,
 } from './types.js';
@@ -170,6 +171,19 @@ export class FreebirdClient {
   async getKeyDiscoveryMetadata(): Promise<KeyDiscoveryMetadata> {
     if (this.keyDiscoveryMetadata) return this.keyDiscoveryMetadata;
 
+    return this.fetchKeyDiscoveryMetadata();
+  }
+
+  /**
+   * Fresh graph issuance selection must not rely on an indefinitely cached
+   * accepting policy. Keep the ordinary discovery cache for unrelated APIs,
+   * but always replace it with a newly validated document on this path.
+   */
+  private async refreshKeyDiscoveryMetadata(): Promise<KeyDiscoveryMetadata> {
+    return this.fetchKeyDiscoveryMetadata();
+  }
+
+  private async fetchKeyDiscoveryMetadata(): Promise<KeyDiscoveryMetadata> {
     const url = `${this.config.issuerUrl}/.well-known/keys`;
     const res = await fetch(url);
     if (!res.ok) {
@@ -316,23 +330,28 @@ export class FreebirdClient {
     );
   }
 
-  /** Resolve one explicitly configured graph initial-issuance policy. */
+  /** Resolve one current policy for a fresh graph initial-issuance operation. */
   async selectGraphIssuancePolicy(policyId: string): Promise<GraphIssuancePolicyInfo> {
-    const metadata = await this.getKeyDiscoveryMetadata();
+    const metadata = await this.refreshKeyDiscoveryMetadata();
     const policy = metadata.graph_issuance?.policies.find(
       (candidate) => candidate.issuance_policy_id === policyId
     );
     if (!policy) throw new Error('Unknown graph issuance policy');
+    if (policy.admission_state !== 'accepting_new' ||
+      policy.graph_id !== metadata.exchange?.active_graph.graph_id) {
+      throw new Error('Graph issuance policy is not accepting new issuance');
+    }
+    this.graphIssuanceTokenKeyId(policy.graph_id, policy.keyset_id, policy.descriptor_id);
     return policy;
   }
 
-  /** Start or exactly retry policy-authorized graph blind issuance. */
+  /** Start a fresh policy-authorized graph blind issuance operation. */
   async issueGraphBlindSignature(
     request: GraphIssuanceRequest,
     statusCapability: string
   ): Promise<GraphIssuanceOutcome> {
     this.validateGraphStatusCapability(statusCapability);
-    await this.validateGraphIssuanceRequestSelection(request);
+    const selection = await this.validateGraphIssuanceRequestSelection(request);
     this.graphIssuanceRequestDigest(request);
     const response = await fetch(`${this.config.issuerUrl}/v1/public/graph/issue`, {
       method: 'POST',
@@ -342,28 +361,69 @@ export class FreebirdClient {
       },
       body: JSON.stringify(request),
     });
-    return this.parseGraphIssuanceResponse(response, request);
+    return this.parseGraphIssuanceResponse(response, request, selection.tokenKeyId);
   }
 
-  /** Observe a graph issuance result; exact POST remains the recovery action. */
-  async getGraphIssuanceStatus(
-    request: GraphIssuanceRequest,
-    statusCapability: string
+  /**
+   * Retry an already-created operation using persisted recovery context.
+   * Policy admission state and issuer discovery are deliberately not
+   * consulted on this path.
+   */
+  async retryGraphBlindSignature(
+    context: GraphIssuanceRecoveryContext
   ): Promise<GraphIssuanceOutcome> {
-    this.validateGraphStatusCapability(statusCapability);
-    await this.validateGraphIssuanceRequestSelection(request);
-    const url = `${this.config.issuerUrl}/v1/public/graph/issue/status?public_operation_id=${encodeURIComponent(request.public_operation_id)}`;
+    const recovery = this.graphIssuanceRecovery(context);
+    const response = await fetch(`${this.config.issuerUrl}/v1/public/graph/issue`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'graph-issuance-status-capability': recovery.statusCapability,
+      },
+      body: JSON.stringify(recovery.request),
+    });
+    return this.parseGraphIssuanceResponse(
+      response, recovery.request, recovery.expectedTokenKeyId
+    );
+  }
+
+  /** Alias with the protocol name used by recovery callers. */
+  async retryGraphIssuance(
+    context: GraphIssuanceRecoveryContext
+  ): Promise<GraphIssuanceOutcome> {
+    return this.retryGraphBlindSignature(context);
+  }
+
+  /** Build a complete context suitable for durable retry/status recovery. */
+  async createGraphIssuanceRecoveryContext(
+    request: GraphIssuanceRequest,
+    statusCapability: string,
+    expectedTokenKeyId: string,
+    blindingState: unknown
+  ): Promise<GraphIssuanceRecoveryContext> {
+    return this.buildGraphIssuanceRecoveryContext(
+      request, statusCapability, expectedTokenKeyId, blindingState
+    );
+  }
+
+  /** Observe a graph issuance result using persisted recovery context. */
+  async getGraphIssuanceStatus(
+    context: GraphIssuanceRecoveryContext
+  ): Promise<GraphIssuanceOutcome> {
+    const recovery = this.graphIssuanceRecovery(context);
+    const url = `${this.config.issuerUrl}/v1/public/graph/issue/status?public_operation_id=${encodeURIComponent(recovery.request.public_operation_id)}`;
     const response = await fetch(url, {
       method: 'GET',
-      headers: { 'graph-issuance-status-capability': statusCapability },
+      headers: { 'graph-issuance-status-capability': recovery.statusCapability },
     });
-    return this.parseGraphIssuanceResponse(response, request);
+    return this.parseGraphIssuanceResponse(
+      response, recovery.request, recovery.expectedTokenKeyId
+    );
   }
 
-  /** Canonical request digest matching `GraphIssuanceRequestV1::request_digest`. */
+  /** Canonical request digest matching `GraphIssuanceRequestV2::request_digest`. */
   graphIssuanceRequestDigest(request: GraphIssuanceRequest): string {
     return this.bytesToBase64Url(sha256(this.concatBytes(
-      this.ascii('freebird graph blind issuance request v1\0'),
+      this.ascii('freebird graph blind issuance request v2\0'),
       this.graphIssuanceRequestBytes(request, true)
     )));
   }
@@ -371,7 +431,7 @@ export class FreebirdClient {
   /** Binding an external policy verifier signs before adding opaque authorization. */
   graphIssuanceAuthorizationBindingDigest(request: GraphIssuanceRequest): string {
     return this.bytesToBase64Url(sha256(this.concatBytes(
-      this.ascii('freebird graph blind issuance authorization binding v1\0'),
+      this.ascii('freebird graph blind issuance authorization binding v2\0'),
       this.graphIssuanceRequestBytes(request, false)
     )));
   }
@@ -832,13 +892,13 @@ export class FreebirdClient {
     if (!this.hasExactKeys(request, [
       'version', 'public_operation_id', 'issuance_policy_id', 'graph_id', 'keyset_id',
       'descriptor_id', 'blinded_message', 'authorization',
-    ]) || request.version !== 1 || !this.isCanonicalBase64Url(request.public_operation_id, 16) ||
+    ]) || request.version !== 2 || !this.isCanonicalBase64Url(request.public_operation_id, 16) ||
       !this.isBoundedAscii(request.issuance_policy_id) || !this.isLowerHexId(request.graph_id) ||
       !this.isLowerHexId(request.keyset_id) || !this.isLowerHexId(request.descriptor_id) ||
       typeof request.blinded_message !== 'string' || typeof request.authorization !== 'string') {
       throw new Error('Invalid graph issuance request');
     }
-    const output: number[] = [1];
+    const output: number[] = [2];
     this.put(output, this.decodeCanonical(request.public_operation_id, 16));
     for (const selector of [request.issuance_policy_id, request.graph_id, request.keyset_id,
       request.descriptor_id]) this.put(output, this.ascii(selector));
@@ -851,19 +911,111 @@ export class FreebirdClient {
 
   private async validateGraphIssuanceRequestSelection(
     request: GraphIssuanceRequest
-  ): Promise<GraphIssuancePolicyInfo> {
+  ): Promise<{ policy: GraphIssuancePolicyInfo; tokenKeyId: string }> {
     this.graphIssuanceRequestBytes(request, true);
     const policy = await this.selectGraphIssuancePolicy(request.issuance_policy_id);
     if (policy.admission_state !== 'accepting_new' || policy.graph_id !== request.graph_id ||
       policy.keyset_id !== request.keyset_id || policy.descriptor_id !== request.descriptor_id) {
       throw new Error('Graph issuance request does not match the selected active policy');
     }
-    return policy;
+    return {
+      policy,
+      tokenKeyId: this.graphIssuanceTokenKeyId(
+        request.graph_id, request.keyset_id, request.descriptor_id
+      ),
+    };
+  }
+
+  private buildGraphIssuanceRecoveryContext(
+    request: GraphIssuanceRequest,
+    statusCapability: string,
+    expectedTokenKeyId: string,
+    blindingState: unknown
+  ): GraphIssuanceRecoveryContext {
+    this.validateGraphIssuanceRequest(request);
+    this.validateGraphStatusCapability(statusCapability);
+    if (!this.isLowerHexId(expectedTokenKeyId)) {
+      throw new Error('Invalid graph issuance token key ID');
+    }
+    if (blindingState === undefined || blindingState === null) {
+      throw new Error('Graph issuance blinding state is required for recovery');
+    }
+    return {
+      request,
+      requestDigest: this.graphIssuanceRequestDigest(request),
+      publicOperationId: request.public_operation_id,
+      issuancePolicyId: request.issuance_policy_id,
+      graphId: request.graph_id,
+      keysetId: request.keyset_id,
+      descriptorId: request.descriptor_id,
+      statusCapability,
+      expectedTokenKeyId,
+      blindingState,
+    };
+  }
+
+  private validateGraphIssuanceRequest(request: GraphIssuanceRequest): void {
+    this.graphIssuanceRequestBytes(request, true);
+  }
+
+  private graphIssuanceRecovery(
+    context: GraphIssuanceRecoveryContext
+  ): GraphIssuanceRecoveryContext {
+    if (typeof context !== 'object' || context === null ||
+      !this.hasExactKeys(context, [
+        'request', 'requestDigest', 'publicOperationId', 'issuancePolicyId', 'graphId',
+        'keysetId', 'descriptorId', 'statusCapability', 'expectedTokenKeyId', 'blindingState',
+      ])) {
+      throw new Error('Invalid graph issuance recovery context');
+    }
+    if (context.blindingState === undefined || context.blindingState === null ||
+      !this.isLowerHexId(context.expectedTokenKeyId)) {
+      throw new Error('Invalid graph issuance recovery context');
+    }
+    this.validateGraphIssuanceRequest(context.request);
+    if (!this.isCanonicalBase64Url(context.requestDigest, 32) ||
+      context.requestDigest !== this.graphIssuanceRequestDigest(context.request) ||
+      !this.isCanonicalBase64Url(context.publicOperationId, 16) ||
+      context.publicOperationId !== context.request.public_operation_id ||
+      context.issuancePolicyId !== context.request.issuance_policy_id ||
+      context.graphId !== context.request.graph_id ||
+      context.keysetId !== context.request.keyset_id ||
+      context.descriptorId !== context.request.descriptor_id) {
+      throw new Error('Invalid graph issuance recovery context');
+    }
+    this.validateGraphStatusCapability(context.statusCapability);
+    return context;
+  }
+
+  private graphIssuanceTokenKeyId(
+    graphId: string,
+    keysetId: string,
+    descriptorId: string
+  ): string {
+    const tokenKeyId = this.graphIssuanceTokenKeyIdFromDiscovery(
+      this.keyDiscoveryMetadata?.exchange, graphId, keysetId, descriptorId
+    );
+    if (!tokenKeyId) throw new Error('Graph issuance selection has no valid token key');
+    return tokenKeyId;
+  }
+
+  private graphIssuanceTokenKeyIdFromDiscovery(
+    exchange: ExchangeDiscoveryMetadata | undefined,
+    graphId: string,
+    keysetId: string,
+    descriptorId: string
+  ): string | undefined {
+    const graph = exchange && [exchange.active_graph, ...exchange.retained_graphs]
+      .find((candidate) => candidate.graph_id === graphId);
+    const keyset = graph?.keysets.find((candidate) => candidate.keyset_id === keysetId);
+    if (!keyset || !keyset.descriptor_ids.includes(descriptorId)) return undefined;
+    return graph?.descriptors.find((candidate) => candidate.descriptor_id === descriptorId)?.token_key_id;
   }
 
   private async parseGraphIssuanceResponse(
     response: Response,
-    request: GraphIssuanceRequest
+    request: GraphIssuanceRequest,
+    expectedTokenKeyId: string
   ): Promise<GraphIssuanceOutcome> {
     const cacheControl = response.headers.get('Cache-Control');
     if (!cacheControl?.split(',').some((value) => value.trim().toLowerCase() === 'no-store')) {
@@ -874,18 +1026,26 @@ export class FreebirdClient {
     try { body = JSON.parse(rawResponseBody) as unknown; }
     catch { throw new Error('Graph issuance endpoint returned malformed JSON'); }
     if (response.status === 200) {
-      if (!this.isGraphIssuanceResult(body, request)) {
+      if (!this.isGraphIssuanceResult(body, request, expectedTokenKeyId)) {
         throw new Error('Graph issuance endpoint returned malformed success JSON');
       }
       return { kind: 'committed', httpStatus: 200, response: body, rawResponseBody, cacheControl: 'no-store' };
     }
-    if (!this.hasExactKeys(body, ['error']) || typeof body.error !== 'string') {
+    if (!this.hasExactKeys(body, ['error']) || !this.isGraphIssuanceErrorCode(body.error)) {
       throw new Error('Graph issuance endpoint returned malformed error JSON');
     }
     if (response.status === 403 && body.error === 'status_unauthorized') {
       throw new Error('Graph issuance status capability was not authorized');
     }
-    if (![400, 404, 409, 413, 503].includes(response.status)) {
+    if (![400, 404, 409, 413, 503].includes(response.status) ||
+      (response.status === 400 && ![
+        'invalid_status_capability', 'invalid_public_operation_id',
+        'invalid_graph_issuance_request', 'invalid_graph_issuance',
+      ].includes(body.error)) ||
+      (response.status === 404 && body.error !== 'unknown_operation') ||
+      (response.status === 409 && body.error !== 'operation_conflict') ||
+      (response.status === 413 && body.error !== 'graph_issuance_request_too_large') ||
+      (response.status === 503 && body.error !== 'graph_issuance_unavailable')) {
       throw new Error('Graph issuance endpoint returned an unexpected error status');
     }
     return {
@@ -899,30 +1059,40 @@ export class FreebirdClient {
 
   private isGraphIssuanceResult(
     value: unknown,
-    request: GraphIssuanceRequest
+    request: GraphIssuanceRequest,
+    expectedTokenKeyId: string
   ): value is GraphIssuanceResult {
     if (!this.hasExactKeys(value, [
       'version', 'public_operation_id', 'issuance_policy_id', 'graph_id', 'keyset_id',
       'descriptor_id', 'token_key_id', 'quantity', 'request_digest', 'blind_signature',
       'result_digest',
-    ]) || value.version !== 1 || value.public_operation_id !== request.public_operation_id ||
+    ]) || value.version !== 2 || typeof value.public_operation_id !== 'string' ||
+      typeof value.issuance_policy_id !== 'string' || typeof value.graph_id !== 'string' ||
+      typeof value.keyset_id !== 'string' || typeof value.descriptor_id !== 'string' ||
+      typeof value.token_key_id !== 'string' || typeof value.quantity !== 'number' ||
+      typeof value.request_digest !== 'string' || typeof value.blind_signature !== 'string' ||
+      typeof value.result_digest !== 'string' ||
+      value.public_operation_id !== request.public_operation_id ||
       value.issuance_policy_id !== request.issuance_policy_id || value.graph_id !== request.graph_id ||
       value.keyset_id !== request.keyset_id || value.descriptor_id !== request.descriptor_id ||
-      !this.isLowerHexId(value.token_key_id as string) || !this.isSafePositive(value.quantity) ||
-      !this.isCanonicalBase64Url(value.request_digest as string, 32) ||
-      !this.isCanonicalBase64Url(value.blind_signature as string, undefined, 512, 1) ||
-      !this.isCanonicalBase64Url(value.result_digest as string, 32)) return false;
+      !this.isLowerHexId(value.graph_id) || !this.isLowerHexId(value.keyset_id) ||
+      !this.isLowerHexId(value.descriptor_id) || !this.isLowerHexId(value.token_key_id) ||
+      value.token_key_id !== expectedTokenKeyId || value.quantity !== 1 ||
+      !this.isCanonicalBase64Url(value.public_operation_id, 16) ||
+      !this.isCanonicalBase64Url(value.request_digest, 32) ||
+      !this.isCanonicalBase64Url(value.blind_signature, undefined, 512, 1) ||
+      !this.isCanonicalBase64Url(value.result_digest, 32)) return false;
     const requestDigest = this.graphIssuanceRequestDigest(request);
     if (value.request_digest !== requestDigest) return false;
-    const output: number[] = [1];
-    this.put(output, this.decodeCanonical(value.public_operation_id as string, 16));
+    const output: number[] = [2];
+    this.put(output, this.decodeCanonical(value.public_operation_id, 16));
     for (const selector of [value.issuance_policy_id, value.graph_id, value.keyset_id,
       value.descriptor_id, value.token_key_id] as string[]) this.put(output, this.ascii(selector));
-    this.pushU32(output, value.quantity as number);
-    this.put(output, this.decodeCanonical(value.request_digest as string, 32));
-    this.put(output, this.decodeCanonical(value.blind_signature as string, undefined, 512, 1));
+    this.pushU32(output, value.quantity);
+    this.put(output, this.decodeCanonical(value.request_digest, 32));
+    this.put(output, this.decodeCanonical(value.blind_signature, undefined, 512, 1));
     const digest = this.bytesToBase64Url(sha256(this.concatBytes(
-      this.ascii('freebird graph blind issuance result v1\0'), new Uint8Array(output)
+      this.ascii('freebird graph blind issuance result v2\0'), new Uint8Array(output)
     )));
     return digest === value.result_digest;
   }
@@ -932,19 +1102,41 @@ export class FreebirdClient {
     exchange: ExchangeDiscoveryMetadata
   ): void {
     const invalid = (): never => { throw new Error('Invalid graph issuance discovery metadata'); };
-    if (!this.hasExactKeys(issuance, ['version', 'policies']) || issuance.version !== 1 ||
-      !Array.isArray(issuance.policies) || issuance.policies.length === 0 || issuance.policies.length > 64) invalid();
+    if (!this.hasExactKeys(issuance, ['version', 'policies', 'replay_authority']) ||
+      issuance.version !== 2 || !Array.isArray(issuance.policies) || issuance.policies.length > 64 ||
+      !this.hasExactKeys(issuance.replay_authority, [
+        'authority_id', 'v4_scope_digest_tombstones',
+      ]) || !this.isCanonicalBase64Url(issuance.replay_authority.authority_id, 32) ||
+      !Array.isArray(issuance.replay_authority.v4_scope_digest_tombstones) ||
+      issuance.replay_authority.v4_scope_digest_tombstones.length > 64) invalid();
+    const tombstones = new Set<string>();
+    for (const tombstone of issuance.replay_authority.v4_scope_digest_tombstones) {
+      if (!this.isCanonicalBase64Url(tombstone, 32) || tombstones.has(tombstone)) invalid();
+      tombstones.add(tombstone);
+    }
     const ids = new Set<string>(); const budgets = new Set<string>();
     for (const policy of issuance.policies) {
-      if (!this.hasExactKeys(policy, [
-        'issuance_policy_id', 'graph_id', 'keyset_id', 'descriptor_id', 'budget_id',
-        'budget_limit', 'quantity', 'admission_state', 'authorization_scheme',
-      ]) || !this.isBoundedAscii(policy.issuance_policy_id) || !this.isLowerHexId(policy.graph_id) ||
+      if (typeof policy !== 'object' || policy === null || Array.isArray(policy)) invalid();
+      const policyKeys = Object.prototype.hasOwnProperty.call(policy, 'authorization_scope_digest_b64')
+        ? [
+            'issuance_policy_id', 'graph_id', 'keyset_id', 'descriptor_id', 'budget_id',
+            'budget_limit', 'quantity', 'admission_state', 'authorization_scheme',
+            'authorization_scope_digest_b64',
+          ]
+        : [
+            'issuance_policy_id', 'graph_id', 'keyset_id', 'descriptor_id', 'budget_id',
+            'budget_limit', 'quantity', 'admission_state', 'authorization_scheme',
+          ];
+      if (!this.hasExactKeys(policy, policyKeys) ||
+        !this.isBoundedAscii(policy.issuance_policy_id) || !this.isLowerHexId(policy.graph_id) ||
         !this.isLowerHexId(policy.keyset_id) || !this.isLowerHexId(policy.descriptor_id) ||
         !this.isBoundedAscii(policy.budget_id) || !this.isSafePositive(policy.budget_limit) ||
-        !this.isSafePositive(policy.quantity) || policy.quantity > policy.budget_limit ||
+        !this.isSafePositive(policy.quantity) || policy.quantity !== 1 ||
+        policy.quantity > policy.budget_limit ||
         !['accepting_new', 'recovery_only', 'disabled'].includes(policy.admission_state) ||
-        !this.isBoundedAscii(policy.authorization_scheme) || ids.has(policy.issuance_policy_id) ||
+        !this.isBoundedAscii(policy.authorization_scheme) ||
+        !['hmac_sha256', 'v4_local', 'development_mock'].includes(policy.authorization_scheme) ||
+        ids.has(policy.issuance_policy_id) ||
         budgets.has(policy.budget_id)) invalid();
       const active = exchange.active_graph.graph_id === policy.graph_id;
       const graph = [exchange.active_graph, ...exchange.retained_graphs]
@@ -952,6 +1144,13 @@ export class FreebirdClient {
       const keyset = graph?.keysets.find((candidate) => candidate.keyset_id === policy.keyset_id);
       if (!keyset?.descriptor_ids.includes(policy.descriptor_id) ||
         (policy.admission_state === 'accepting_new' && !active)) invalid();
+      if (policy.authorization_scheme === 'v4_local') {
+        if (typeof policy.authorization_scope_digest_b64 !== 'string' ||
+          !this.isCanonicalBase64Url(policy.authorization_scope_digest_b64, 32) ||
+          !tombstones.has(policy.authorization_scope_digest_b64)) invalid();
+      } else if (policy.authorization_scope_digest_b64 !== undefined) {
+        invalid();
+      }
       ids.add(policy.issuance_policy_id); budgets.add(policy.budget_id);
     }
   }
@@ -1180,8 +1379,8 @@ export class FreebirdClient {
     return new Uint8Array(output);
   }
 
-  private isLowerHexId(value: string): boolean {
-    return /^[0-9a-f]{64}$/.test(value);
+  private isLowerHexId(value: unknown): value is string {
+    return typeof value === 'string' && /^[0-9a-f]{64}$/.test(value);
   }
 
   private isSafeUnsigned(value: unknown): value is number {
@@ -1198,12 +1397,13 @@ export class FreebirdClient {
   }
 
   private isCanonicalBase64Url(
-    value: string,
+    value: unknown,
     exactBytes?: number,
     maxBytes?: number,
     minBytes = 0
   ): boolean {
-    if (!/^[A-Za-z0-9_-]*$/.test(value)) return false;
+    if (typeof value !== 'string' || value.length === 0 || !/^[A-Za-z0-9_-]+$/.test(value)) return false;
+    if (maxBytes !== undefined && value.length > Math.ceil(maxBytes / 3) * 4) return false;
     try {
       const decoded = this.base64UrlToBytes(value);
       return (
@@ -1238,6 +1438,20 @@ export class FreebirdClient {
         'status_unauthorized',
       ].includes(value)
     );
+  }
+
+  private isGraphIssuanceErrorCode(value: unknown): value is string {
+    return typeof value === 'string' && [
+      'invalid_status_capability',
+      'invalid_public_operation_id',
+      'graph_issuance_request_too_large',
+      'invalid_graph_issuance_request',
+      'invalid_graph_issuance',
+      'operation_conflict',
+      'unknown_operation',
+      'graph_issuance_unavailable',
+      'status_unauthorized',
+    ].includes(value);
   }
 
   private decodeCanonical(

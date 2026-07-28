@@ -1,12 +1,14 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
-import { FreebirdClient } from '../src/index.js';
+import { readFileSync } from 'node:fs';
+import { FreebirdClient, crypto as sdkCrypto } from '../src/index.js';
 import type {
   ExchangeRequest,
   ExchangeSuccessResponse,
   GraphIssuanceRequest,
   GraphIssuanceResult,
+  GraphIssuanceRecoveryContext,
   KeyDiscoveryMetadata,
 } from '../src/index.js';
 
@@ -48,6 +50,24 @@ const selectorBytes = (value: ExchangeRequest): number[] => {
 const fromB64 = (value: string): Uint8Array => {
   const binary = atob(value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '='));
   return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+};
+const fromHex = (value: string): Uint8Array => {
+  if (!/^[0-9a-f]+$/.test(value) || value.length % 2 !== 0) throw new Error('invalid hex fixture');
+  return Uint8Array.from(value.match(/../g)!, (byte) => Number.parseInt(byte, 16));
+};
+
+const hmacVector = JSON.parse(readFileSync(new URL(
+  '../../../docs/examples/public-bearer-graph-issuance-hmac-v2-vector.json',
+  import.meta.url,
+), 'utf8')) as {
+  version: number;
+  secret_ascii: string;
+  nonce_hex: string;
+  issuance_policy_id: string;
+  authorization_binding_digest_hex: string;
+  framing: string;
+  transcript_domain_hex: string;
+  authorization_base64url: string;
 };
 
 const operationId = b64(new Uint8Array(16));
@@ -397,43 +417,69 @@ function graphIssuanceFixture(): {
   const keyset = graph.keysets[1];
   const descriptor = graph.descriptors.find((item) => item.descriptor_id === keyset.descriptor_ids[0])!;
   metadata.graph_issuance = {
-    version: 1,
+    version: 2,
     policies: [{
       issuance_policy_id: 'bootstrap-v1', graph_id: graph.graph_id,
       keyset_id: keyset.keyset_id, descriptor_id: descriptor.descriptor_id,
       budget_id: 'graph-bootstrap-budget', budget_limit: 10, quantity: 1,
       admission_state: 'accepting_new', authorization_scheme: 'hmac_sha256',
     }],
+    replay_authority: {
+      authority_id: b64(new Uint8Array(32).fill(1)),
+      v4_scope_digest_tombstones: [],
+    },
   };
   const request: GraphIssuanceRequest = {
-    version: 1, public_operation_id: operationId, issuance_policy_id: 'bootstrap-v1',
+    version: 2, public_operation_id: operationId, issuance_policy_id: 'bootstrap-v1',
     graph_id: graph.graph_id, keyset_id: keyset.keyset_id,
     descriptor_id: descriptor.descriptor_id, blinded_message: b64(ascii('blinded graph message')),
     authorization: b64(new Uint8Array(64).fill(6)),
   };
   const sdk = client();
   const result: GraphIssuanceResult = {
-    version: 1, public_operation_id: request.public_operation_id,
+    version: 2, public_operation_id: request.public_operation_id,
     issuance_policy_id: request.issuance_policy_id, graph_id: request.graph_id,
     keyset_id: request.keyset_id, descriptor_id: request.descriptor_id,
     token_key_id: descriptor.token_key_id, quantity: 1,
     request_digest: sdk.graphIssuanceRequestDigest(request),
     blind_signature: b64(ascii('blind graph signature')), result_digest: '',
   };
-  const bytes: number[] = [1];
+  const bytes: number[] = [2];
   put(bytes, fromB64(result.public_operation_id));
   for (const field of [result.issuance_policy_id, result.graph_id, result.keyset_id,
     result.descriptor_id, result.token_key_id]) put(bytes, ascii(field));
   bytes.push(...u32(result.quantity));
   put(bytes, fromB64(result.request_digest)); put(bytes, fromB64(result.blind_signature));
-  result.result_digest = domainB64('freebird graph blind issuance result v1\0', new Uint8Array(bytes));
+  result.result_digest = domainB64('freebird graph blind issuance result v2\0', new Uint8Array(bytes));
   return { metadata, request, result };
+}
+
+function graphRecoveryContext(
+  value: ReturnType<typeof graphIssuanceFixture>,
+  blindingState: unknown = { opaque: 'rsa-blinding-state' },
+): GraphIssuanceRecoveryContext {
+  const request = value.request;
+  return {
+    request,
+    requestDigest: client().graphIssuanceRequestDigest(request),
+    publicOperationId: request.public_operation_id,
+    issuancePolicyId: request.issuance_policy_id,
+    graphId: request.graph_id,
+    keysetId: request.keyset_id,
+    descriptorId: request.descriptor_id,
+    statusCapability,
+    expectedTokenKeyId: value.result.token_key_id,
+    blindingState,
+  };
 }
 
 describe('policy-authorized graph blind issuance client', () => {
   it('treats v4_local as generic policy scheme metadata only', async () => {
     const value = graphIssuanceFixture();
     value.metadata.graph_issuance!.policies[0].authorization_scheme = 'v4_local';
+    const scope = b64(new Uint8Array(32).fill(2));
+    value.metadata.graph_issuance!.policies[0].authorization_scope_digest_b64 = scope;
+    value.metadata.graph_issuance!.replay_authority.v4_scope_digest_tombstones = [scope];
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify(value.metadata), 200)));
     await expect(client().selectGraphIssuancePolicy('bootstrap-v1')).resolves.toMatchObject({
       authorization_scheme: 'v4_local',
@@ -443,6 +489,7 @@ describe('policy-authorized graph blind issuance client', () => {
   it('validates discovery and exact result binding with a header-only capability', async () => {
     const value = graphIssuanceFixture();
     const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
       .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
       .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
     vi.stubGlobal('fetch', fetchMock);
@@ -466,15 +513,16 @@ describe('policy-authorized graph blind issuance client', () => {
 
   it('uses observation-only status and rejects wrong bindings or missing no-store', async () => {
     const value = graphIssuanceFixture();
+    const recovery = graphRecoveryContext(value);
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
       .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
     vi.stubGlobal('fetch', fetchMock);
-    await client().getGraphIssuanceStatus(value.request, statusCapability);
-    expect(fetchMock.mock.calls[1][0]).toBe(
+    await client().getGraphIssuanceStatus(recovery);
+    expect(fetchMock.mock.calls[0][0]).toBe(
       `https://issuer.example/v1/public/graph/issue/status?public_operation_id=${operationId}`
     );
-    expect(fetchMock.mock.calls[1][0]).not.toContain(statusCapability);
+    expect(fetchMock.mock.calls[0][0]).not.toContain(statusCapability);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
 
     const tampered = structuredClone(value.result); tampered.descriptor_id = 'a'.repeat(64);
     vi.stubGlobal('fetch', vi.fn()
@@ -501,5 +549,255 @@ describe('policy-authorized graph blind issuance client', () => {
     await expect(client().issueGraphBlindSignature(clean.request, operationId))
       .rejects.toThrow('exactly 32 bytes');
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('matches the V2 request, binding, result, and shared HMAC fixture', () => {
+    const sdk = client();
+    const vector: GraphIssuanceRequest = {
+      version: 2,
+      public_operation_id: b64(new Uint8Array(16).fill(7)),
+      issuance_policy_id: 'bootstrap-v2',
+      graph_id: '1'.repeat(64),
+      keyset_id: '2'.repeat(64),
+      descriptor_id: '3'.repeat(64),
+      blinded_message: b64(new Uint8Array(256).fill(4)),
+      authorization: b64(new Uint8Array(64).fill(5)),
+    };
+    expect(sdk.graphIssuanceAuthorizationBindingDigest(vector))
+      .toBe('XlKH0YegK8esWoKbeWQtIDCVzGwT1JLcrx0Uag_ykEw');
+    expect(sdk.graphIssuanceRequestDigest(vector))
+      .toBe('GmoCf632DNZaUd1RcVagcvRaJiKMMhVJZq7MVgtZFxI');
+    expect(hmacVector.version).toBe(2);
+    expect(hmacVector.framing).toBe('nonce_raw[32] || tag_raw[32]');
+    const secret = new TextEncoder().encode(hmacVector.secret_ascii);
+    const nonce = fromHex(hmacVector.nonce_hex);
+    const binding = fromHex(hmacVector.authorization_binding_digest_hex);
+    const transcript = sdkCrypto.graphIssuanceHmacAuthorizationTranscriptV2(
+      nonce,
+      hmacVector.issuance_policy_id,
+      binding,
+    );
+    const domain = fromHex(hmacVector.transcript_domain_hex);
+    expect(hmacVector.transcript_domain_hex)
+      .toBe('66726565626972642067726170682069737375616e636520686d616320617574686f72697a6174696f6e20763200');
+    expect(hex(transcript.slice(0, domain.length))).toBe(hmacVector.transcript_domain_hex);
+    expect(sdkCrypto.buildHmacAuthorizationV2(
+      secret,
+      nonce,
+      hmacVector.issuance_policy_id,
+      binding,
+    )).toBe(hmacVector.authorization_base64url);
+    expect(sdkCrypto.verifyHmacAuthorizationV2(
+      secret,
+      hmacVector.issuance_policy_id,
+      binding,
+      hmacVector.authorization_base64url,
+    )).toEqual(nonce);
+  });
+
+  it.each(['recovery_only', 'disabled'] as const)(
+    'requires accepting_new for fresh selection but recovers in %s', async (state) => {
+      const value = graphIssuanceFixture();
+      value.metadata.graph_issuance!.policies[0].admission_state = state;
+      const recovery = graphRecoveryContext(value);
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+        .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+      vi.stubGlobal('fetch', fetchMock);
+      await expect(client().issueGraphBlindSignature(value.request, statusCapability))
+        .rejects.toThrow('not accepting');
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      const recoveryFetch = vi.fn()
+        .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+      vi.stubGlobal('fetch', recoveryFetch);
+      await expect(client().retryGraphBlindSignature(recovery))
+        .resolves.toMatchObject({ kind: 'committed', response: value.result });
+      expect(recoveryFetch).toHaveBeenCalledTimes(1);
+      expect(recoveryFetch.mock.calls[0][0]).toBe('https://issuer.example/v1/public/graph/issue');
+    }
+  );
+
+  it.each(['disabled', 'removed'] as const)(
+    'refetches fresh metadata and rejects accepting policy after it becomes %s', async (state) => {
+      const value = graphIssuanceFixture();
+      const changedMetadata = structuredClone(value.metadata);
+      if (state === 'removed') {
+        changedMetadata.graph_issuance!.policies = [];
+      } else {
+        changedMetadata.graph_issuance!.policies[0].admission_state = 'disabled';
+      }
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+        .mockResolvedValueOnce(response(JSON.stringify(changedMetadata), 200));
+      vi.stubGlobal('fetch', fetchMock);
+      const sdk = client();
+      await expect(sdk.selectGraphIssuancePolicy('bootstrap-v1')).resolves.toMatchObject({
+        admission_state: 'accepting_new',
+      });
+      await expect(sdk.issueGraphBlindSignature(value.request, statusCapability))
+        .rejects.toThrow(state === 'removed' ? 'Unknown graph issuance policy' : 'not accepting');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[1][0]).toBe('https://issuer.example/.well-known/keys');
+    }
+  );
+
+  it('uses an exact context with request binding, selectors, key, capability, and opaque state', async () => {
+    const value = graphIssuanceFixture();
+    const context = graphRecoveryContext(value, { opaqueBytes: [1, 2, 3], nested: { keep: true } });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(client().retryGraphBlindSignature(context)).resolves.toMatchObject({
+      kind: 'committed', response: value.result,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://issuer.example/v1/public/graph/issue');
+
+    for (const mutate of [
+      (broken: any) => { delete broken.expectedTokenKeyId; },
+      (broken: any) => { broken.requestDigest = b64(new Uint8Array(32)); },
+      (broken: any) => { broken.publicOperationId = otherOperationId; },
+      (broken: any) => { broken.descriptorId = 'a'.repeat(64); },
+      (broken: any) => { broken.statusCapability = operationId; },
+      (broken: any) => { delete broken.blindingState; },
+      (broken: any) => { broken.unexpected = true; },
+    ]) {
+      const broken = structuredClone(context) as any;
+      mutate(broken);
+      const noFetch = vi.fn();
+      vi.stubGlobal('fetch', noFetch);
+      await expect(client().getGraphIssuanceStatus(broken)).rejects.toThrow();
+      expect(noFetch).not.toHaveBeenCalled();
+    }
+  });
+
+  it('creates recovery context without discovery and rejects raw recovery arguments', async () => {
+    const value = graphIssuanceFixture();
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const context = await client().createGraphIssuanceRecoveryContext(
+      value.request,
+      statusCapability,
+      value.result.token_key_id,
+      { opaque: 'caller-owned' },
+    );
+    expect(context).toMatchObject({
+      publicOperationId: value.request.public_operation_id,
+      expectedTokenKeyId: value.result.token_key_id,
+      blindingState: { opaque: 'caller-owned' },
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    await expect(client().retryGraphBlindSignature(
+      value.request as any,
+      statusCapability as any,
+    )).rejects.toThrow('recovery context');
+    await expect(client().getGraphIssuanceStatus(value.request as any))
+      .rejects.toThrow('recovery context');
+  });
+
+  it.each(['descriptor', 'graph', 'policy'] as const)(
+    'recovers with zero discovery after %s removal', async (_removed) => {
+      const value = graphIssuanceFixture();
+      const context = graphRecoveryContext(value);
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+      vi.stubGlobal('fetch', fetchMock);
+      await expect(client().getGraphIssuanceStatus(context)).resolves.toMatchObject({
+        kind: 'committed', response: value.result,
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).not.toContain('.well-known/keys');
+    }
+  );
+
+  it('keeps a completed issuance recoverable after the same client sees policy removal', async () => {
+    const value = graphIssuanceFixture();
+    const context = graphRecoveryContext(value, { opaque: 'must-survive-issuance' });
+    const freshFetch = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+      .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+    vi.stubGlobal('fetch', freshFetch);
+    const sdk = client();
+    await expect(sdk.issueGraphBlindSignature(value.request, statusCapability))
+      .resolves.toMatchObject({ kind: 'committed' });
+
+    const removedMetadata = structuredClone(value.metadata);
+    removedMetadata.graph_issuance!.policies = [];
+    const removalFetch = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(removedMetadata), 200));
+    vi.stubGlobal('fetch', removalFetch);
+    await expect(sdk.selectGraphIssuancePolicy('bootstrap-v1'))
+      .rejects.toThrow('Unknown graph issuance policy');
+    const recoveryFetch = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+    vi.stubGlobal('fetch', recoveryFetch);
+    await expect(sdk.getGraphIssuanceStatus(context)).resolves.toMatchObject({
+      kind: 'committed', response: value.result,
+    });
+    expect(removedMetadata.graph_issuance!.policies).toHaveLength(0);
+    expect(context.blindingState).toEqual({ opaque: 'must-survive-issuance' });
+    expect(recoveryFetch).toHaveBeenCalledTimes(1);
+    expect(recoveryFetch.mock.calls[0][0]).not.toContain('.well-known/keys');
+  });
+
+  it('recovers status after the policy is removed, using persisted key context', async () => {
+    const value = graphIssuanceFixture();
+    value.metadata.graph_issuance!.policies = [];
+    const context = graphRecoveryContext(value);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(client().getGraphIssuanceStatus(context)).resolves.toMatchObject({
+      kind: 'committed', response: value.result,
+    });
+  });
+
+  it.each([
+    ['digest length', (result: GraphIssuanceResult) => { result.result_digest = b64(new Uint8Array(31)); }],
+    ['request digest length', (result: GraphIssuanceResult) => { result.request_digest = b64(new Uint8Array(31)); }],
+    ['token key binding', (result: GraphIssuanceResult) => { result.token_key_id = 'a'.repeat(64); }],
+    ['quantity', (result: GraphIssuanceResult) => { result.quantity = 2; }],
+  ] as const)('rejects V2 result %s mismatch', async (_name, mutate) => {
+    const value = graphIssuanceFixture();
+    const result = structuredClone(value.result); mutate(result);
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+      .mockResolvedValueOnce(response(JSON.stringify(result), 200)));
+    await expect(client().issueGraphBlindSignature(value.request, statusCapability))
+      .rejects.toThrow('malformed success JSON');
+  });
+
+  it('rejects a status capability injected into the graph result', async () => {
+    const value = graphIssuanceFixture();
+    const result = { ...value.result, status_capability: statusCapability };
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+      .mockResolvedValueOnce(response(JSON.stringify(result), 200)));
+    await expect(client().issueGraphBlindSignature(value.request, statusCapability))
+      .rejects.toThrow('malformed success JSON');
+  });
+
+  it.each([
+    ['missing authority', (metadata: any) => { delete metadata.graph_issuance.replay_authority; }],
+    ['wrong authority length', (metadata: any) => { metadata.graph_issuance.replay_authority.authority_id = b64(new Uint8Array(31)); }],
+    ['duplicate tombstone', (metadata: any) => {
+      const tombstone = b64(new Uint8Array(32).fill(3));
+      metadata.graph_issuance.replay_authority.v4_scope_digest_tombstones = [tombstone, tombstone];
+    }],
+    ['scope without tombstone', (metadata: any) => {
+      metadata.graph_issuance.policies[0].authorization_scheme = 'v4_local';
+      metadata.graph_issuance.policies[0].authorization_scope_digest_b64 = b64(new Uint8Array(32).fill(4));
+    }],
+    ['unknown authority field', (metadata: any) => {
+      metadata.graph_issuance.replay_authority.capability = statusCapability;
+    }],
+  ] as const)('rejects malformed graph issuance authority metadata: %s', async (_name, mutate) => {
+    const value = graphIssuanceFixture();
+    mutate(value.metadata);
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify(value.metadata), 200)));
+    await expect(client().getKeyDiscoveryMetadata())
+      .rejects.toThrow('Invalid graph issuance discovery metadata');
   });
 });
