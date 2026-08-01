@@ -1,13 +1,7 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 resources:
-  - namespace.yaml
-  - rbac.yaml
-  - redis-deployment.yaml
-  - issuer-deployment.yaml
-  - verifier-deployment.yaml
-  - network-policy.yaml
-  - ingress.yaml
+  - base
 # Direct root rendering is fail-closed too: operators must supply release
 # artifact digests rather than deploying a floating image tag.
 images:

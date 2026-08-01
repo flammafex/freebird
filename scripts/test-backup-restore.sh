@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 set -euo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 bash -n "$root/scripts/backup-restore.sh"
-python3 -m py_compile "$root/scripts/backup_archive.py"
+PYTHONPYCACHEPREFIX="$tmp/pycache" python3 -m py_compile "$root/scripts/backup_archive.py"
 grep -Fq 'ISSUER_UID_GID=1000:1000' "$root/scripts/backup-restore.sh"
 grep -Fq 'REDIS_UID_GID=999:1000' "$root/scripts/backup-restore.sh"
 grep -Fq 'BACKUP_ROLLBACK_CONFIRM=%s' "$root/scripts/backup-restore.sh"
@@ -12,11 +13,36 @@ grep -Fq '&& !MUTATED' "$root/scripts/backup-restore.sh"
 grep -Fq 'REDIS_URL must target the Compose redis service' "$root/scripts/backup-restore.sh"
 grep -Fq 'FIXTURE_ISSUER_URL/readyz' "$root/scripts/backup-restore.sh"
 grep -Fq '8#$mode & 8#77' "$root/scripts/backup-restore.sh"
-tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 secret="$tmp/secret"; : >"$secret"; chmod 600 "$secret"
+# A same-UID 0600 key is accepted.
 BACKUP_RESTORE_TEST_SECURE_KEY=1 "$root/scripts/backup-restore.sh" test "$secret"
 chmod 644 "$secret"
+# A same-UID key with group/world write access is rejected.
 if BACKUP_RESTORE_TEST_SECURE_KEY=1 "$root/scripts/backup-restore.sh" test "$secret" 2>/dev/null; then exit 1; fi
+
+# Exercise the GNU/Linux stat path even when the host running this test is BSD/macOS.
+linux_tools="$tmp/linux-tools"; mkdir "$linux_tools"
+cat >"$linux_tools/uname" <<'SH'
+#!/bin/sh
+printf '%s\n' Linux
+SH
+cat >"$linux_tools/stat" <<'SH'
+#!/bin/sh
+: "${STAT_ARGS:?}"
+printf '%s %s\n' "$1" "$2" >>"$STAT_ARGS"
+case "$1:$2" in
+  -c:%u) id -u ;;
+  -c:%a) printf '600\n' ;;
+  *) exit 2 ;;
+esac
+SH
+chmod 700 "$linux_tools/uname" "$linux_tools/stat"
+linux_secret="$tmp/linux-secret"; : >"$linux_secret"; chmod 600 "$linux_secret"
+STAT_ARGS="$tmp/stat-args" PATH="$linux_tools:/usr/bin:/bin" BACKUP_RESTORE_TEST_SECURE_KEY=1 \
+  "$root/scripts/backup-restore.sh" test "$linux_secret"
+grep -Fxq -- '-c %u' "$tmp/stat-args"
+grep -Fxq -- '-c %a' "$tmp/stat-args"
+
 BACKUP_RESTORE_TEST_REDIS_URL=1 "$root/scripts/backup-restore.sh" test redis://redis:6379/0
 if BACKUP_RESTORE_TEST_REDIS_URL=1 "$root/scripts/backup-restore.sh" test redis://external.example:6379 2>/dev/null; then exit 1; fi
 grep -Fq 'recover_archive "$2"' "$root/scripts/backup-restore.sh"
@@ -30,7 +56,7 @@ stub="$root/scripts/backup-fixture-stub.sh"
 [[ -s "$tmp/fixture.json" ]]
 "$stub" validate-replay --input "$tmp/fixture.json"
 if "$stub" validate-replay --input "$tmp/missing"; then exit 1; fi
-python3 "$root/scripts/test-backup-archive.py"
+PYTHONPYCACHEPREFIX="$tmp/pycache" python3 "$root/scripts/test-backup-archive.py"
 state="$tmp/state"; BACKUP_STATE_DIR="$state" "$root/scripts/backup-restore.sh" init
 if BACKUP_STATE_DIR="$state" "$root/scripts/backup-restore.sh" init; then exit 1; fi
 

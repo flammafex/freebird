@@ -4,25 +4,20 @@
 use super::{
     load_or_generate_receipt_key,
     profiles::{
-        ExchangeAdmissionStateV2, ExchangeDescriptor, ExchangeDescriptorV2, ExchangeKeyV2,
-        ExchangeKeyset, ExchangeKeysetV2, ExchangeProfile, ExchangeProfileV2, ExchangeRule,
-        ExchangeRuleSlot, ExchangeSourceAllowlist, ExchangeTargetKey, ExchangeTransitionSlotV2,
-        ExchangeTransitionV2,
+        ExchangeAdmissionStateV2, ExchangeDescriptorV2, ExchangeKeyV2, ExchangeKeysetV2,
+        ExchangeProfileV2, ExchangeTransitionSlotV2, ExchangeTransitionV2,
     },
     redis_harness::RedisHarness,
     store::{
-        capacity_key, receipt_ref_key, target_ref_key, CapacityEntry, ClaimOutcome, ExchangeStore,
-        OutputWork, ReservationInput, ReserveOutcome, SourceWork, State, TransitionOutcome,
-        V2ReservationInput, V2ReserveOutcome, V2SourceSpend,
+        ExchangeStore, OutputWork, State, TransitionOutcome, V2ReservationInput, V2ReserveOutcome,
+        V2SourceSpend,
     },
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::exchange_api::{
-    keyset_id, rule_id, ExchangeOutput, ExchangeRequest, ExchangeRequestV2, ExchangeResult,
-    ExchangeResultOutput, ExchangeResultV2, ExchangeSlot, ExchangeSource, EXCHANGE_PROFILE_V1,
-    EXCHANGE_PROFILE_V2, EXCHANGE_VERSION_V2,
+    ExchangeOutput, ExchangeReceiptV2, ExchangeRequestV2, ExchangeResultOutput, ExchangeResultV2,
+    ExchangeSlot, ExchangeSource, EXCHANGE_PROFILE_V2, EXCHANGE_VERSION_V2,
 };
-use freebird_common::spend_key::v5_spend_key;
 use freebird_crypto::{
     build_public_bearer_message_from_parts, build_public_bearer_pass,
     provider::{software::SoftwareBlindRsaProvider, BlindRsaProvider},
@@ -47,14 +42,6 @@ fn output(id: &str) -> OutputWork {
         quantity: 1,
         blinded_value: vec![1, 2, 3],
     }
-}
-
-struct E2eFixture {
-    _dir: tempfile::TempDir,
-    profile: ExchangeProfile,
-    request: ExchangeRequest,
-    alternate_artifact: String,
-    receipt_path: std::path::PathBuf,
 }
 
 async fn issue_source_artifact(
@@ -109,124 +96,6 @@ async fn issue_source_artifact(
     let artifact = build_public_bearer_pass(&token).unwrap();
     freebird_crypto::verify_public_bearer_signature(provider.public_key_spki(), &token).unwrap();
     Base64UrlUnpadded::encode_string(&artifact)
-}
-
-async fn e2e_fixture(issuer_id: &str, output_count: usize) -> E2eFixture {
-    let dir = tempfile::tempdir().unwrap();
-    let source_provider = SoftwareBlindRsaProvider::generate(2048).unwrap();
-    let target_provider = SoftwareBlindRsaProvider::generate(2048).unwrap();
-    let target_path = dir.path().join("target.der");
-    std::fs::write(&target_path, target_provider.to_der().unwrap()).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
-    let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    let descriptor =
-        |role: &str, class: &str, provider: &SoftwareBlindRsaProvider| -> ExchangeDescriptor {
-            let mut descriptor = ExchangeDescriptor {
-                id: String::new(),
-                profile_id: EXCHANGE_PROFILE_V1.into(),
-                role: role.into(),
-                class: class.into(),
-                issuer_id: issuer_id.into(),
-                kid: hex::encode(provider.token_key_id()),
-                audience: None,
-                spki_b64: Base64UrlUnpadded::encode_string(provider.public_key_spki()),
-                suite: "RSABSSA-SHA384-PSS-Deterministic".into(),
-                max_quantity: u32::try_from(output_count.max(1)).unwrap(),
-                valid_from: now - 60,
-                valid_until: now + 3600,
-            };
-            descriptor.id = descriptor.canonical_id().unwrap();
-            descriptor
-        };
-    let source = descriptor("source", "source", &source_provider);
-    let target = descriptor("target", "target", &target_provider);
-    let target_keyset_id = keyset_id(std::slice::from_ref(&target.id));
-    let source_rule = ExchangeRuleSlot {
-        descriptor_id: source.id.clone(),
-        slot_id: "in".into(),
-        class: "source".into(),
-        quantity: 1,
-    };
-    let output_rules = (0..output_count)
-        .map(|index| ExchangeRuleSlot {
-            descriptor_id: target.id.clone(),
-            slot_id: format!("out-{index}"),
-            class: "target".into(),
-            quantity: 1,
-        })
-        .collect::<Vec<_>>();
-    let mut canonical_rule = Vec::new();
-    for rule_slot in std::iter::once(&source_rule).chain(&output_rules) {
-        for value in [
-            rule_slot.descriptor_id.as_bytes(),
-            rule_slot.slot_id.as_bytes(),
-            rule_slot.class.as_bytes(),
-        ] {
-            canonical_rule.extend_from_slice(&(value.len() as u32).to_be_bytes());
-            canonical_rule.extend_from_slice(value);
-        }
-        canonical_rule.extend_from_slice(&rule_slot.quantity.to_be_bytes());
-    }
-    let rule = ExchangeRule {
-        id: rule_id(&canonical_rule),
-        sources: vec![source_rule],
-        outputs: output_rules,
-    };
-    let mut representative = vec![0u8; usize::from(target_provider.modulus_bits()) / 8];
-    *representative.last_mut().unwrap() = 1;
-    let artifact = issue_source_artifact(&source_provider, issuer_id, [0x41; 32]).await;
-    let alternate_artifact = issue_source_artifact(&source_provider, issuer_id, [0x42; 32]).await;
-    let request = ExchangeRequest {
-        profile: EXCHANGE_PROFILE_V1.into(),
-        rule_id: rule.id.clone(),
-        sources: vec![ExchangeSource {
-            slot: ExchangeSlot {
-                descriptor_id: source.id.clone(),
-                keyset_id: source.kid.clone(),
-                slot_id: "in".into(),
-                quantity: 1,
-            },
-            artifact,
-        }],
-        outputs: (0..output_count)
-            .map(|index| ExchangeOutput {
-                slot: ExchangeSlot {
-                    descriptor_id: target.id.clone(),
-                    keyset_id: target_keyset_id.clone(),
-                    slot_id: format!("out-{index}"),
-                    quantity: 1,
-                },
-                blinded_value: Base64UrlUnpadded::encode_string(&representative),
-            })
-            .collect(),
-    };
-    let profile = ExchangeProfile {
-        profile_id: EXCHANGE_PROFILE_V1.into(),
-        sources: ExchangeSourceAllowlist {
-            descriptors: vec![source],
-        },
-        target_keyset: ExchangeKeyset {
-            id: target_keyset_id,
-            targets: vec![ExchangeTargetKey {
-                descriptor: target,
-                private_key_path: target_path.display().to_string(),
-            }],
-        },
-        rules: vec![rule],
-    };
-    profile.validate(None).unwrap();
-    let receipt_path = dir.path().join("receipt.key");
-    E2eFixture {
-        _dir: dir,
-        profile,
-        request,
-        alternate_artifact,
-        receipt_path,
-    }
 }
 
 struct V2EngineFixture {
@@ -402,50 +271,6 @@ async fn v2_engine_fixture(issuer_id: &str) -> V2EngineFixture {
     }
 }
 
-async fn reserve(
-    store: &ExchangeStore,
-    id: &[u8; 16],
-    hash: &[u8; 32],
-    source_key: &str,
-    target_id: &str,
-    capacities: &[CapacityEntry],
-) -> ReserveOutcome {
-    let now = store.redis_time().await.unwrap() as i64;
-    let sources = vec![SourceWork {
-        descriptor_id: "source-descriptor".into(),
-        spend_key: source_key.into(),
-        valid_from: now - 2,
-        valid_until: now + 120,
-    }];
-    let outputs = vec![output(target_id)];
-    let target_refs = vec![target_ref_key(target_id, now - 2, now + 120)];
-    let receipt_ref = receipt_ref_key("receipt-key");
-    store
-        .reserve(ReservationInput {
-            operation_id: id,
-            request_hash: hash,
-            profile_id: "profile",
-            rule_id: "rule",
-            target_keyset_id: &"k".repeat(64),
-            receipt_key_id: "receipt-key",
-            sources: &sources,
-            outputs: &outputs,
-            target_refs: &target_refs,
-            receipt_ref_key: &receipt_ref,
-            capacities,
-            receipt_lifetime_secs: 300,
-        })
-        .await
-        .unwrap()
-}
-
-fn created(outcome: ReserveOutcome) -> Vec<u8> {
-    match outcome {
-        ReserveOutcome::Created(reservation) => reservation.fence,
-        other => panic!("expected created, got {other:?}"),
-    }
-}
-
 fn created_v2(outcome: V2ReserveOutcome) -> Vec<u8> {
     match outcome {
         V2ReserveOutcome::Created(reservation) => reservation.fence,
@@ -476,6 +301,34 @@ async fn reserve_v2(
         ..output("v2-target")
     }];
     let signer_refs = [ExchangeStore::signer_ref_key_v2("v2-signer")];
+    reserve_v2_with(
+        store,
+        id,
+        hash,
+        capability,
+        &sources,
+        &outputs,
+        &signer_refs,
+        budget_id,
+        policy_digest,
+        budget_limit,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn reserve_v2_with(
+    store: &ExchangeStore,
+    id: &[u8; 16],
+    hash: &[u8; 32],
+    capability: &[u8; 32],
+    sources: &[V2SourceSpend],
+    outputs: &[OutputWork],
+    signer_refs: &[String],
+    budget_id: &str,
+    policy_digest: &[u8; 32],
+    budget_limit: u64,
+) -> V2ReserveOutcome {
     store
         .reserve_v2(V2ReservationInput {
             operation_id: id,
@@ -486,9 +339,9 @@ async fn reserve_v2(
             transition_id: "transition-v2",
             source_keyset_id: "source-keyset-v2",
             target_keyset_id: "target-keyset-v2",
-            sources: &sources,
-            outputs: &outputs,
-            signer_ref_keys: &signer_refs,
+            sources,
+            outputs,
+            signer_ref_keys: signer_refs,
             receipt_key_id: "receipt-v2",
             receipt_ref_key: &ExchangeStore::receipt_ref_key_v2("receipt-v2"),
             budget_id,
@@ -500,6 +353,128 @@ async fn reserve_v2(
         })
         .await
         .unwrap()
+}
+
+fn fixed_v2_wire_vector() -> (ExchangeRequestV2, ExchangeResultV2, ExchangeReceiptV2) {
+    let encoded = |bytes: &[u8]| Base64UrlUnpadded::encode_string(bytes);
+    let request = ExchangeRequestV2 {
+        version: EXCHANGE_VERSION_V2,
+        public_operation_id: encoded(&[7; 16]),
+        graph_id: "3".repeat(64),
+        transition_id: "4".repeat(64),
+        source_keyset_id: "1".repeat(64),
+        target_keyset_id: "2".repeat(64),
+        sources: vec![ExchangeSource {
+            slot: ExchangeSlot {
+                descriptor_id: "a".repeat(64),
+                keyset_id: "1".repeat(64),
+                slot_id: "source-0".into(),
+                quantity: 1,
+            },
+            artifact: encoded(b"source artifact"),
+        }],
+        outputs: vec![ExchangeOutput {
+            slot: ExchangeSlot {
+                descriptor_id: "b".repeat(64),
+                keyset_id: "2".repeat(64),
+                slot_id: "output-0".into(),
+                quantity: 2,
+            },
+            blinded_value: encoded(b"blinded output"),
+        }],
+    };
+    let mut result = ExchangeResultV2 {
+        version: request.version,
+        public_operation_id: request.public_operation_id.clone(),
+        graph_id: request.graph_id.clone(),
+        transition_id: request.transition_id.clone(),
+        source_keyset_id: request.source_keyset_id.clone(),
+        target_keyset_id: request.target_keyset_id.clone(),
+        outputs: vec![freebird_common::exchange_api::ExchangeResultOutput {
+            slot: request.outputs[0].slot.clone(),
+            blinded_value: request.outputs[0].blinded_value.clone(),
+            blind_signature: encoded(b"blind signature"),
+        }],
+        result_digest: String::new(),
+    };
+    result.result_digest = encoded(&result.result_digest().unwrap());
+    let receipt = ExchangeReceiptV2 {
+        version: result.version,
+        public_operation_id: result.public_operation_id.clone(),
+        graph_id: result.graph_id.clone(),
+        transition_id: result.transition_id.clone(),
+        source_keyset_id: result.source_keyset_id.clone(),
+        target_keyset_id: result.target_keyset_id.clone(),
+        result_digest: result.result_digest.clone(),
+        created_at: 1_700_000_000,
+        expires_at: 1_700_003_600,
+        receipt_key_id: "5".repeat(64),
+        signature: encoded(&[9; 64]),
+    };
+    (request, result, receipt)
+}
+
+#[test]
+fn exchange_v2_canonical_wire_bytes_and_digest_vectors_are_frozen() {
+    let (request, result, receipt) = fixed_v2_wire_vector();
+    let expected_request = concat!(
+        "02000000100707070707070707070707070707070700000040333333333333333333333333333333333333333333333333333333333333333333333333333333",
+        "33333333333333333333333333333333333333333333333333000000403434343434343434343434343434343434343434343434343434343434343434343434",
+        "34343434343434343434343434343434343434343434343434343434340000004031313131313131313131313131313131313131313131313131313131313131",
+        "31313131313131313131313131313131313131313131313131313131313131313100000040323232323232323232323232323232323232323232323232323232",
+        "32323232323232323232323232323232323232323232323232323232323232323232323232000000010000004061616161616161616161616161616161616161",
+        "61616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000040313131313131313131313131313131",
+        "3131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313131313100000008736f757263652d30000000",
+        "010000000f736f757263652061727469666163740000000100000040626262626262626262626262626262626262626262626262626262626262626262626262",
+        "62626262626262626262626262626262626262626262626262626262000000403232323232323232323232323232323232323232323232323232323232323232",
+        "3232323232323232323232323232323232323232323232323232323232323232000000086f75747075742d30000000020000000e626c696e646564206f757470",
+        "7574",
+    );
+    let expected_result = concat!(
+        "02000000100707070707070707070707070707070700000040333333333333333333333333333333333333333333333333333333333333333333333333333333",
+        "33333333333333333333333333333333333333333333333333000000403434343434343434343434343434343434343434343434343434343434343434343434",
+        "34343434343434343434343434343434343434343434343434343434340000004031313131313131313131313131313131313131313131313131313131313131",
+        "31313131313131313131313131313131313131313131313131313131313131313100000040323232323232323232323232323232323232323232323232323232",
+        "32323232323232323232323232323232323232323232323232323232323232323232323232000000010000004062626262626262626262626262626262626262",
+        "62626262626262626262626262626262626262626262626262626262626262626262626262626262626262626200000040323232323232323232323232323232",
+        "32323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232323232000000086f75747075742d30000000",
+        "020000000e626c696e646564206f75747075740000000f626c696e64207369676e617475726500000020da7314e61fde88e19256f3f4c54d056f9856a4974ee0",
+        "faf26dd23195f2ad1215",
+    );
+    let expected_receipt_payload = concat!(
+        "02000000100707070707070707070707070707070700000040333333333333333333333333333333333333333333333333333333333333333333333333333333",
+        "33333333333333333333333333333333333333333333333333000000403434343434343434343434343434343434343434343434343434343434343434343434",
+        "34343434343434343434343434343434343434343434343434343434340000004031313131313131313131313131313131313131313131313131313131313131",
+        "31313131313131313131313131313131313131313131313131313131313131313100000040323232323232323232323232323232323232323232323232323232",
+        "3232323232323232323232323232323232323232323232323232323232323232323232323200000020da7314e61fde88e19256f3f4c54d056f9856a4974ee0fa",
+        "f26dd23195f2ad1215000000006553f100000000006553ff10000000403535353535353535353535353535353535353535353535353535353535353535353535",
+        "3535353535353535353535353535353535353535353535353535353535",
+    );
+    assert_eq!(
+        hex::encode(request.canonical_bytes().unwrap()),
+        expected_request
+    );
+    assert_eq!(
+        hex::encode(request.request_digest().unwrap()),
+        "201624b62529476aa387900fb8ed97dfc59115b0b8ce6fa7837438758576d70a"
+    );
+    assert_eq!(
+        hex::encode(result.canonical_bytes().unwrap()),
+        expected_result
+    );
+    assert_eq!(
+        hex::encode(result.result_digest().unwrap()),
+        "da7314e61fde88e19256f3f4c54d056f9856a4974ee0faf26dd23195f2ad1215"
+    );
+    assert_eq!(
+        hex::encode(receipt.canonical_payload().unwrap()),
+        expected_receipt_payload
+    );
+    assert_eq!(
+        hex::encode(receipt.receipt_digest().unwrap()),
+        "620e2fdb0e255e5bc6a70bdfdf22a7d0381b6facae0d25d0f6e751a8ec040f9a"
+    );
+    assert!(receipt.validate_result(&result).is_ok());
 }
 
 #[tokio::test]
@@ -617,6 +592,427 @@ async fn exchange_v2_exact_lua_max_uses_absolute_inclusive_expiry() {
 }
 
 #[tokio::test]
+async fn exchange_v2_operation_record_has_no_ttl_in_any_durable_state() {
+    let Some(h) = harness() else { return };
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let operation = [0xd0; 16];
+    let fence = created_v2(
+        reserve_v2(
+            &store,
+            &operation,
+            &[0xd1; 32],
+            &[0xd2; 32],
+            "spend:v2:op-no-ttl",
+            "budget-v2:op-no-ttl",
+            &[0xd3; 32],
+            10,
+            1,
+        )
+        .await,
+    );
+    let ttl: i64 = store
+        .raw_command("TTL", &[ExchangeStore::op_v2(&operation).as_bytes()])
+        .await
+        .unwrap();
+    assert_eq!(ttl, -1);
+    assert_eq!(
+        store
+            .result_ready_v2(&operation, &fence, b"no-ttl-result", &[0xd4; 32])
+            .await
+            .unwrap(),
+        TransitionOutcome::Applied
+    );
+    let ttl: i64 = store
+        .raw_command("TTL", &[ExchangeStore::op_v2(&operation).as_bytes()])
+        .await
+        .unwrap();
+    assert_eq!(ttl, -1);
+    assert_eq!(
+        store
+            .commit_v2(&operation, &fence, b"no-ttl-receipt", b"no-ttl-response")
+            .await
+            .unwrap(),
+        TransitionOutcome::Applied
+    );
+    let ttl: i64 = store
+        .raw_command("TTL", &[ExchangeStore::op_v2(&operation).as_bytes()])
+        .await
+        .unwrap();
+    assert_eq!(ttl, -1);
+}
+
+#[tokio::test]
+async fn exchange_v2_duplicate_and_overlapping_sources_have_zero_mutation() {
+    let Some(h) = harness() else { return };
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let now = store.redis_time().await.unwrap() as i64;
+    let duplicate_source = V2SourceSpend {
+        spend_key: "spend:v2:duplicate".into(),
+        valid_from: now - 1,
+        valid_until: now + 120,
+    };
+    let duplicate_sources = [duplicate_source.clone(), duplicate_source];
+    let duplicate_outputs = [output("v2-duplicate")];
+    let duplicate_refs = [ExchangeStore::signer_ref_key_v2("duplicate")];
+    let duplicate_outcome = store
+        .reserve_v2(V2ReservationInput {
+            operation_id: &[0xe0; 16],
+            public_operation_id: &Base64UrlUnpadded::encode_string(&[0xe0; 16]),
+            status_capability: &[0xe1; 32],
+            request_hash: &[0xe0; 32],
+            graph_id: "graph-v2",
+            transition_id: "transition-v2",
+            source_keyset_id: "source-keyset-v2",
+            target_keyset_id: "target-keyset-v2",
+            sources: &duplicate_sources,
+            outputs: &duplicate_outputs,
+            signer_ref_keys: &duplicate_refs,
+            receipt_key_id: "receipt-v2",
+            receipt_ref_key: &ExchangeStore::receipt_ref_key_v2("receipt-v2"),
+            budget_id: "budget-v2-duplicate",
+            budget_policy_digest: &[0xe2; 32],
+            budget_limit: 10,
+            receipt_lifetime_secs: 300,
+            receipt_valid_from: 1,
+            receipt_valid_until: freebird_common::api::EXCHANGE_MAX_VALID_UNTIL as u64,
+        })
+        .await;
+    assert!(duplicate_outcome.is_err());
+    assert!(store.get_v2(&[0xe0; 16]).await.unwrap().is_none());
+    for key in [
+        "spend:v2:duplicate".to_owned(),
+        ExchangeStore::signer_ref_key_v2("duplicate"),
+        ExchangeStore::budget_key_v2("budget-v2-duplicate"),
+    ] {
+        let values: Vec<Vec<u8>> = store
+            .raw_command("HGETALL", &[key.as_bytes()])
+            .await
+            .unwrap_or_default();
+        let value: Option<Vec<u8>> = store.raw_command("GET", &[key.as_bytes()]).await.unwrap();
+        assert!(
+            values.is_empty() && value.is_none(),
+            "duplicate wrote {key}"
+        );
+    }
+
+    let shared = V2SourceSpend {
+        spend_key: "spend:v2:overlap".into(),
+        valid_from: now - 1,
+        valid_until: now + 120,
+    };
+    let first_sources = [shared.clone()];
+    let first_outputs = [output("v2-overlap-first")];
+    let first_refs = [ExchangeStore::signer_ref_key_v2("overlap-first")];
+    created_v2(
+        reserve_v2_with(
+            &store,
+            &[0xe3; 16],
+            &[0xe3; 32],
+            &[0xe4; 32],
+            &first_sources,
+            &first_outputs,
+            &first_refs,
+            "budget-v2-overlap",
+            &[0xe5; 32],
+            10,
+        )
+        .await,
+    );
+    let fresh = V2SourceSpend {
+        spend_key: "spend:v2:overlap-fresh".into(),
+        valid_from: now - 1,
+        valid_until: now + 120,
+    };
+    let overlapping_sources = [shared, fresh];
+    let overlapping_outputs = [output("v2-overlap-second")];
+    let overlapping_refs = [ExchangeStore::signer_ref_key_v2("overlap-second")];
+    assert_eq!(
+        reserve_v2_with(
+            &store,
+            &[0xe6; 16],
+            &[0xe6; 32],
+            &[0xe7; 32],
+            &overlapping_sources,
+            &overlapping_outputs,
+            &overlapping_refs,
+            "budget-v2-overlap",
+            &[0xe5; 32],
+            10,
+        )
+        .await,
+        V2ReserveOutcome::Spent
+    );
+    assert!(store.get_v2(&[0xe6; 16]).await.unwrap().is_none());
+    let fresh_spend: Option<Vec<u8>> = store
+        .raw_command("GET", &[b"spend:v2:overlap-fresh"])
+        .await
+        .unwrap();
+    let second_ref: Option<Vec<u8>> = store
+        .raw_command(
+            "GET",
+            &[ExchangeStore::signer_ref_key_v2("overlap-second").as_bytes()],
+        )
+        .await
+        .unwrap();
+    let charged: i64 = store
+        .raw_command(
+            "HGET",
+            &[
+                ExchangeStore::budget_key_v2("budget-v2-overlap").as_bytes(),
+                b"charged",
+            ],
+        )
+        .await
+        .unwrap();
+    let receipt_count: i64 = store
+        .raw_command(
+            "GET",
+            &[ExchangeStore::receipt_ref_key_v2("receipt-v2").as_bytes()],
+        )
+        .await
+        .unwrap();
+    assert!(fresh_spend.is_none() && second_ref.is_none());
+    assert_eq!(charged, 1, "overlap rejection must not overcharge");
+    assert_eq!(
+        receipt_count, 1,
+        "overlap rejection must not increment receipts"
+    );
+}
+
+#[tokio::test]
+async fn exchange_v2_independent_budgets_policy_conflicts_exhaustion_and_no_overcharge() {
+    let Some(h) = harness() else { return };
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let now = store.redis_time().await.unwrap() as i64;
+    let source = |name: &str| V2SourceSpend {
+        spend_key: format!("spend:v2:budget:{name}"),
+        valid_from: now - 1,
+        valid_until: now + 120,
+    };
+    let output = |name: &str, quantity| OutputWork {
+        quantity,
+        ..output(name)
+    };
+    let policy_a = [0xa1; 32];
+    let policy_b = [0xb1; 32];
+    let source_a = [source("a")];
+    let output_a = [output("budget-a", 2)];
+    let refs_a = [ExchangeStore::signer_ref_key_v2("budget-a")];
+    created_v2(
+        reserve_v2_with(
+            &store,
+            &[0xf0; 16],
+            &[0xf0; 32],
+            &[0xf1; 32],
+            &source_a,
+            &output_a,
+            &refs_a,
+            "budget-v2-a",
+            &policy_a,
+            3,
+        )
+        .await,
+    );
+    let source_b = [source("b")];
+    let output_b = [output("budget-b", 2)];
+    let refs_b = [ExchangeStore::signer_ref_key_v2("budget-b")];
+    created_v2(
+        reserve_v2_with(
+            &store,
+            &[0xf2; 16],
+            &[0xf2; 32],
+            &[0xf3; 32],
+            &source_b,
+            &output_b,
+            &refs_b,
+            "budget-v2-b",
+            &policy_b,
+            3,
+        )
+        .await,
+    );
+    let charged_a: i64 = store
+        .raw_command(
+            "HGET",
+            &[
+                ExchangeStore::budget_key_v2("budget-v2-a").as_bytes(),
+                b"charged",
+            ],
+        )
+        .await
+        .unwrap();
+    let charged_b: i64 = store
+        .raw_command(
+            "HGET",
+            &[
+                ExchangeStore::budget_key_v2("budget-v2-b").as_bytes(),
+                b"charged",
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!((charged_a, charged_b), (2, 2));
+
+    let conflict_source = [source("policy-conflict")];
+    let conflict_output = [output("policy-conflict", 1)];
+    let conflict_ref = [ExchangeStore::signer_ref_key_v2("policy-conflict")];
+    assert_eq!(
+        reserve_v2_with(
+            &store,
+            &[0xf4; 16],
+            &[0xf4; 32],
+            &[0xf5; 32],
+            &conflict_source,
+            &conflict_output,
+            &conflict_ref,
+            "budget-v2-a",
+            &[0xa2; 32],
+            3,
+        )
+        .await,
+        V2ReserveOutcome::BudgetPolicyConflict
+    );
+    assert!(store.get_v2(&[0xf4; 16]).await.unwrap().is_none());
+    let conflict_spend: Option<Vec<u8>> = store
+        .raw_command("GET", &[b"spend:v2:budget:policy-conflict"])
+        .await
+        .unwrap();
+    assert!(conflict_spend.is_none());
+
+    let exhausted_source = [source("exhausted")];
+    let exhausted_output = [output("exhausted", 2)];
+    let exhausted_ref = [ExchangeStore::signer_ref_key_v2("exhausted")];
+    assert_eq!(
+        reserve_v2_with(
+            &store,
+            &[0xf6; 16],
+            &[0xf6; 32],
+            &[0xf7; 32],
+            &exhausted_source,
+            &exhausted_output,
+            &exhausted_ref,
+            "budget-v2-a",
+            &policy_a,
+            3,
+        )
+        .await,
+        V2ReserveOutcome::BudgetExhausted
+    );
+    assert!(store.get_v2(&[0xf6; 16]).await.unwrap().is_none());
+    let exhausted_spend: Option<Vec<u8>> = store
+        .raw_command("GET", &[b"spend:v2:budget:exhausted"])
+        .await
+        .unwrap();
+    let exhausted_ref_value: Option<Vec<u8>> = store
+        .raw_command(
+            "GET",
+            &[ExchangeStore::signer_ref_key_v2("exhausted").as_bytes()],
+        )
+        .await
+        .unwrap();
+    let charged_after: i64 = store
+        .raw_command(
+            "HGET",
+            &[
+                ExchangeStore::budget_key_v2("budget-v2-a").as_bytes(),
+                b"charged",
+            ],
+        )
+        .await
+        .unwrap();
+    assert!(exhausted_spend.is_none() && exhausted_ref_value.is_none());
+    assert_eq!(charged_after, 2, "rejected work must not overcharge");
+}
+
+#[tokio::test]
+async fn exchange_v2_reserve_exact_retry_hash_and_capability_outcomes() {
+    let Some(h) = harness() else { return };
+    let store = ExchangeStore::new(&h.url).unwrap();
+    let operation = [0xf8; 16];
+    let request_hash = [0xf9; 32];
+    let capability = [0xfa; 32];
+    created_v2(
+        reserve_v2(
+            &store,
+            &operation,
+            &request_hash,
+            &capability,
+            "spend:v2:retry-original",
+            "budget-v2:retry-original",
+            &[0xfb; 32],
+            10,
+            1,
+        )
+        .await,
+    );
+    let retry = reserve_v2(
+        &store,
+        &operation,
+        &request_hash,
+        &capability,
+        "spend:v2:retry-ignored",
+        "budget-v2:retry-ignored",
+        &[0xfc; 32],
+        10,
+        1,
+    )
+    .await;
+    let existing = match retry {
+        V2ReserveOutcome::Existing(record) => record,
+        other => panic!("exact V2 retry was not Existing: {other:?}"),
+    };
+    assert_eq!(existing.request_hash, request_hash);
+    assert_eq!(existing.state, State::Reserved);
+    assert_eq!(existing.outputs[0].quantity, 1);
+
+    assert_eq!(
+        reserve_v2(
+            &store,
+            &operation,
+            &[0xfd; 32],
+            &capability,
+            "spend:v2:retry-changed-hash",
+            "budget-v2:retry-changed-hash",
+            &[0xfe; 32],
+            10,
+            1,
+        )
+        .await,
+        V2ReserveOutcome::Conflict
+    );
+    assert_eq!(
+        reserve_v2(
+            &store,
+            &operation,
+            &request_hash,
+            &[0xff; 32],
+            "spend:v2:retry-changed-capability",
+            "budget-v2:retry-changed-capability",
+            &[0x01; 32],
+            10,
+            1,
+        )
+        .await,
+        V2ReserveOutcome::CapabilityMismatch
+    );
+    assert!(store
+        .raw_command::<Option<Vec<u8>>>("GET", &[b"spend:v2:retry-ignored"])
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store
+        .raw_command::<Option<Vec<u8>>>("GET", &[b"spend:v2:retry-changed-hash"])
+        .await
+        .unwrap()
+        .is_none());
+    assert!(store
+        .raw_command::<Option<Vec<u8>>>("GET", &[b"spend:v2:retry-changed-capability"])
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
 async fn exchange_v2_registry_is_additive_and_detects_removal_or_conflict() {
     use super::store::{KeyRegistryEntry, KeyRegistryOutcome};
 
@@ -706,15 +1102,6 @@ async fn exchange_v2_accepting_requires_prior_durable_disabled_publication() {
     );
 }
 
-async fn force_lease(store: &ExchangeStore, id: &[u8; 16], lease: u64) {
-    let key = ExchangeStore::op(id);
-    let lease = lease.to_string();
-    let _: i64 = store
-        .raw_command("HSET", &[key.as_bytes(), b"lease_until", lease.as_bytes()])
-        .await
-        .unwrap();
-}
-
 async fn force_lease_v2(store: &ExchangeStore, id: &[u8; 16], lease: u64) {
     let key = ExchangeStore::op_v2(id);
     let lease = lease.to_string();
@@ -761,6 +1148,30 @@ async fn seed_v2_pending(
         .await
         .unwrap();
     created_v2(outcome)
+}
+
+fn canonical_result_v2(request: &ExchangeRequestV2) -> (Vec<u8>, [u8; 32]) {
+    let mut result = ExchangeResultV2 {
+        version: EXCHANGE_VERSION_V2,
+        public_operation_id: request.public_operation_id.clone(),
+        graph_id: request.graph_id.clone(),
+        transition_id: request.transition_id.clone(),
+        source_keyset_id: request.source_keyset_id.clone(),
+        target_keyset_id: request.target_keyset_id.clone(),
+        outputs: request
+            .outputs
+            .iter()
+            .map(|output| ExchangeResultOutput {
+                slot: output.slot.clone(),
+                blinded_value: output.blinded_value.clone(),
+                blind_signature: Base64UrlUnpadded::encode_string(&[1; 256]),
+            })
+            .collect(),
+        result_digest: String::new(),
+    };
+    let digest = result.result_digest().unwrap();
+    result.result_digest = Base64UrlUnpadded::encode_string(&digest);
+    (serde_json::to_vec(&result).unwrap(), digest)
 }
 
 async fn exchange_test_panic() -> axum::http::StatusCode {
@@ -854,7 +1265,15 @@ async fn exchange_v2_engine_bidirectional_exact_status_and_secret_non_persistenc
             .raw_command("HVALS", &[ExchangeStore::op_v2(&operation).as_bytes()])
             .await
             .unwrap();
+        let fields: Vec<Vec<u8>> = store
+            .raw_command("HKEYS", &[ExchangeStore::op_v2(&operation).as_bytes()])
+            .await
+            .unwrap();
         let raw_source = Base64UrlUnpadded::decode_vec(&request.sources[0].artifact).unwrap();
+        let encoded_capability = Base64UrlUnpadded::encode_string(capability);
+        assert!(!fields.iter().any(|field| {
+            field == b"status_capability" || field == b"source_artifact" || field == b"artifact"
+        }));
         assert!(!values.iter().any(|value| {
             value
                 .windows(raw_source.len())
@@ -862,6 +1281,9 @@ async fn exchange_v2_engine_bidirectional_exact_status_and_secret_non_persistenc
                 || value
                     .windows(capability.len())
                     .any(|window| window == capability.as_slice())
+                || value
+                    .windows(encoded_capability.len())
+                    .any(|window| window == encoded_capability.as_bytes())
         }));
     }
 }
@@ -1189,10 +1611,12 @@ async fn exchange_v2_http_pending_retry_conflict_status_and_exact_replay() {
 
     let capability = [0x62; 32];
     let encoded_capability = Base64UrlUnpadded::encode_string(&capability);
+    let request_body = serde_json::to_vec(&fixture.request_ab).unwrap();
     let committed = client
         .post(&exchange_url)
         .header(header, &encoded_capability)
-        .json(&fixture.request_ab)
+        .header("content-type", "application/json")
+        .body(request_body.clone())
         .send()
         .await
         .unwrap();
@@ -1201,7 +1625,8 @@ async fn exchange_v2_http_pending_retry_conflict_status_and_exact_replay() {
     let replay = client
         .post(&exchange_url)
         .header(header, &encoded_capability)
-        .json(&fixture.request_ab)
+        .header("content-type", "application/json")
+        .body(request_body)
         .send()
         .await
         .unwrap();
@@ -1231,193 +1656,6 @@ async fn exchange_v2_http_pending_retry_conflict_status_and_exact_replay() {
         .unwrap();
     assert_eq!(conflict.status(), reqwest::StatusCode::CONFLICT);
     server.abort();
-}
-
-#[tokio::test]
-async fn exchange_engine_fresh_valid_request_commits_and_spends_embedded_artifact() {
-    let Some(h) = harness() else { return };
-    let fixture = e2e_fixture("issuer:e2e:fresh", 1).await;
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let embedded = freebird_common::exchange_api::decode_base64url(
-        &fixture.request.sources[0].artifact,
-        freebird_common::exchange_api::MAX_ARTIFACT,
-    )
-    .unwrap();
-    let embedded_spend = super::source_v5::validate_source_v5(
-        &fixture.profile,
-        &fixture.request.sources[0].slot.descriptor_id,
-        &embedded,
-        "issuer:e2e:fresh",
-    )
-    .unwrap()
-    .spend_key;
-    let alternate = freebird_common::exchange_api::decode_base64url(
-        &fixture.alternate_artifact,
-        freebird_common::exchange_api::MAX_ARTIFACT,
-    )
-    .unwrap();
-    let alternate_spend = super::source_v5::validate_source_v5(
-        &fixture.profile,
-        &fixture.request.sources[0].slot.descriptor_id,
-        &alternate,
-        "issuer:e2e:fresh",
-    )
-    .unwrap()
-    .spend_key;
-    let engine = super::ExchangeEngine::new(
-        fixture.profile.clone(),
-        vec![],
-        store.clone(),
-        "issuer:e2e:fresh".into(),
-        super::ReceiptKeyRing::load(&fixture.receipt_path, &[]).unwrap(),
-        300,
-    )
-    .await
-    .unwrap();
-    let operation = [0x51; 16];
-    let response = match engine
-        .process_or_recover(&operation, &fixture.request)
-        .await
-        .unwrap()
-    {
-        super::ProcessDecision::Committed(response) => response,
-        decision => panic!("fresh exchange did not commit: {decision:?}"),
-    };
-    let record = store.get(&operation).await.unwrap().unwrap();
-    assert_eq!(record.state, State::Committed);
-    assert_eq!(record.response.as_deref(), Some(response.as_slice()));
-    assert_eq!(record.sources[0].spend_key, embedded_spend);
-    let embedded_value: Option<Vec<u8>> = store
-        .raw_command("GET", &[embedded_spend.as_bytes()])
-        .await
-        .unwrap();
-    let alternate_value: Option<Vec<u8>> = store
-        .raw_command("GET", &[alternate_spend.as_bytes()])
-        .await
-        .unwrap();
-    assert!(embedded_value.is_some());
-    assert!(alternate_value.is_none());
-    let mut changed = fixture.request.clone();
-    changed.sources[0].artifact = fixture.alternate_artifact;
-    assert_eq!(
-        engine
-            .process_or_recover(&operation, &changed)
-            .await
-            .unwrap(),
-        super::ProcessDecision::Conflict
-    );
-    let exact = engine
-        .process_or_recover(&operation, &fixture.request)
-        .await
-        .unwrap();
-    assert_eq!(exact, super::ProcessDecision::Committed(response));
-}
-
-#[tokio::test]
-async fn exchange_engine_malformed_later_output_leaves_no_reservation_or_spend() {
-    let Some(h) = harness() else { return };
-    let mut fixture = e2e_fixture("issuer:e2e:malformed-output", 2).await;
-    fixture.request.outputs[1].blinded_value = Base64UrlUnpadded::encode_string(&vec![0; 256]);
-    let source = freebird_common::exchange_api::decode_base64url(
-        &fixture.request.sources[0].artifact,
-        freebird_common::exchange_api::MAX_ARTIFACT,
-    )
-    .unwrap();
-    let spend_key = super::source_v5::validate_source_v5(
-        &fixture.profile,
-        &fixture.request.sources[0].slot.descriptor_id,
-        &source,
-        "issuer:e2e:malformed-output",
-    )
-    .unwrap()
-    .spend_key;
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let engine = super::ExchangeEngine::new(
-        fixture.profile.clone(),
-        vec![],
-        store.clone(),
-        "issuer:e2e:malformed-output".into(),
-        super::ReceiptKeyRing::load(&fixture.receipt_path, &[]).unwrap(),
-        300,
-    )
-    .await
-    .unwrap();
-    let operation = [0x52; 16];
-    assert_eq!(
-        engine
-            .process_or_recover(&operation, &fixture.request)
-            .await
-            .unwrap(),
-        super::ProcessDecision::Rejected
-    );
-    assert!(store.get(&operation).await.unwrap().is_none());
-    let spend: Option<Vec<u8>> = store
-        .raw_command("GET", &[spend_key.as_bytes()])
-        .await
-        .unwrap();
-    assert!(spend.is_none());
-}
-
-#[tokio::test]
-async fn exchange_engine_multi_input_multi_output_rule_commits_atomically() {
-    let Some(h) = harness() else { return };
-    let mut fixture = e2e_fixture("issuer:e2e:multi", 2).await;
-    let mut second_source = fixture.request.sources[0].clone();
-    second_source.slot.slot_id = "in-1".into();
-    second_source.artifact = fixture.alternate_artifact.clone();
-    fixture.request.sources.push(second_source);
-    let mut second_rule = fixture.profile.rules[0].sources[0].clone();
-    second_rule.slot_id = "in-1".into();
-    fixture.profile.rules[0].sources.push(second_rule);
-    let mut canonical = Vec::new();
-    for slot in fixture.profile.rules[0]
-        .sources
-        .iter()
-        .chain(&fixture.profile.rules[0].outputs)
-    {
-        for value in [
-            slot.descriptor_id.as_bytes(),
-            slot.slot_id.as_bytes(),
-            slot.class.as_bytes(),
-        ] {
-            canonical.extend_from_slice(&(value.len() as u32).to_be_bytes());
-            canonical.extend_from_slice(value);
-        }
-        canonical.extend_from_slice(&slot.quantity.to_be_bytes());
-    }
-    fixture.profile.rules[0].id = rule_id(&canonical);
-    fixture.request.rule_id = fixture.profile.rules[0].id.clone();
-    fixture.profile.validate(None).unwrap();
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let engine = super::ExchangeEngine::new(
-        fixture.profile,
-        vec![],
-        store.clone(),
-        "issuer:e2e:multi".into(),
-        super::ReceiptKeyRing::load(&fixture.receipt_path, &[]).unwrap(),
-        300,
-    )
-    .await
-    .unwrap();
-    let operation = [0x54; 16];
-    assert!(matches!(
-        engine
-            .process_or_recover(&operation, &fixture.request)
-            .await
-            .unwrap(),
-        super::ProcessDecision::Committed(_)
-    ));
-    let record = store.get(&operation).await.unwrap().unwrap();
-    assert_eq!(record.sources.len(), 2);
-    assert_eq!(record.outputs.len(), 2);
-    assert_ne!(record.sources[0].spend_key, record.sources[1].spend_key);
-    for source in record.sources {
-        let spent: Option<Vec<u8>> = store
-            .raw_command("GET", &[source.spend_key.as_bytes()])
-            .await
-            .unwrap();
-        assert!(spent.is_some());
-    }
 }
 
 #[tokio::test]
@@ -1643,160 +1881,6 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
     server.abort();
 }
 
-async fn seed_engine_work(
-    store: &ExchangeStore,
-    id: &[u8; 16],
-    request: &ExchangeRequest,
-    descriptor: &ExchangeDescriptor,
-    representative: &[u8],
-    receipt_key_id: &str,
-    now: i64,
-) -> Vec<u8> {
-    let sources = vec![SourceWork {
-        descriptor_id: "a".repeat(64),
-        spend_key: format!("spend:engine:{}", hex::encode(id)),
-        valid_from: now - 1,
-        valid_until: now + 120,
-    }];
-    let outputs = vec![OutputWork {
-        descriptor_id: descriptor.id.clone(),
-        keyset_id: request.outputs[0].slot.keyset_id.clone(),
-        slot_id: "out".into(),
-        quantity: 1,
-        blinded_value: representative.to_vec(),
-    }];
-    let refs = vec![target_ref_key(&descriptor.id, now - 1, now + 120)];
-    let rr = receipt_ref_key(receipt_key_id);
-    let hash = request.canonical_hash(id).unwrap();
-    let outcome = store
-        .reserve(ReservationInput {
-            operation_id: id,
-            request_hash: &hash,
-            profile_id: EXCHANGE_PROFILE_V1,
-            rule_id: &request.rule_id,
-            target_keyset_id: &request.outputs[0].slot.keyset_id,
-            receipt_key_id,
-            sources: &sources,
-            outputs: &outputs,
-            target_refs: &refs,
-            receipt_ref_key: &rr,
-            capacities: &[],
-            receipt_lifetime_secs: 300,
-        })
-        .await
-        .unwrap();
-    created(outcome)
-}
-
-async fn seed_fixture_work(
-    store: &ExchangeStore,
-    id: &[u8; 16],
-    fixture: &E2eFixture,
-    issuer_id: &str,
-    receipt_key_id: &str,
-) -> Vec<u8> {
-    let source_bytes = freebird_common::exchange_api::decode_base64url(
-        &fixture.request.sources[0].artifact,
-        freebird_common::exchange_api::MAX_ARTIFACT,
-    )
-    .unwrap();
-    let validated = super::source_v5::validate_source_v5(
-        &fixture.profile,
-        &fixture.request.sources[0].slot.descriptor_id,
-        &source_bytes,
-        issuer_id,
-    )
-    .unwrap();
-    let source_descriptor = &fixture.profile.sources.descriptors[0];
-    let sources = vec![SourceWork {
-        descriptor_id: source_descriptor.id.clone(),
-        spend_key: validated.spend_key,
-        valid_from: source_descriptor.valid_from,
-        valid_until: source_descriptor.valid_until,
-    }];
-    let outputs = fixture
-        .request
-        .outputs
-        .iter()
-        .map(|output| OutputWork {
-            descriptor_id: output.slot.descriptor_id.clone(),
-            keyset_id: output.slot.keyset_id.clone(),
-            slot_id: output.slot.slot_id.clone(),
-            quantity: output.slot.quantity,
-            blinded_value: freebird_common::exchange_api::decode_base64url(
-                &output.blinded_value,
-                freebird_common::exchange_api::MAX_ARTIFACT,
-            )
-            .unwrap(),
-        })
-        .collect::<Vec<_>>();
-    let target = &fixture.profile.target_keyset.targets[0].descriptor;
-    let refs = vec![target_ref_key(
-        &target.id,
-        target.valid_from,
-        target.valid_until,
-    )];
-    let receipt_ref = receipt_ref_key(receipt_key_id);
-    let hash = fixture.request.canonical_hash(id).unwrap();
-    created(
-        store
-            .reserve(ReservationInput {
-                operation_id: id,
-                request_hash: &hash,
-                profile_id: &fixture.request.profile,
-                rule_id: &fixture.request.rule_id,
-                target_keyset_id: &fixture.profile.target_keyset.id,
-                receipt_key_id,
-                sources: &sources,
-                outputs: &outputs,
-                target_refs: &refs,
-                receipt_ref_key: &receipt_ref,
-                capacities: &[],
-                receipt_lifetime_secs: 300,
-            })
-            .await
-            .unwrap(),
-    )
-}
-
-fn seeded_result(id: &[u8; 16], fixture: &E2eFixture) -> (Vec<u8>, [u8; 32]) {
-    let mut result = ExchangeResult {
-        operation_id: Base64UrlUnpadded::encode_string(id),
-        profile: fixture.request.profile.clone(),
-        target_keyset_id: fixture.profile.target_keyset.id.clone(),
-        outputs: fixture
-            .request
-            .outputs
-            .iter()
-            .map(|output| ExchangeResultOutput {
-                slot: output.slot.clone(),
-                blinded_value: output.blinded_value.clone(),
-                blind_signature: Base64UrlUnpadded::encode_string(&[1; 256]),
-            })
-            .collect(),
-        result_digest: String::new(),
-    };
-    let digest = result.result_digest().unwrap();
-    result.result_digest = Base64UrlUnpadded::encode_string(&digest);
-    (serde_json::to_vec(&result).unwrap(), digest)
-}
-
-#[tokio::test]
-async fn exchange_redis_reserve_creates_expected_typed_state() {
-    let Some(_h) = harness() else { return };
-    let store = ExchangeStore::new(&_h.url).unwrap();
-    let id = [1; 16];
-    let hash = [2; 32];
-    created(reserve(&store, &id, &hash, "spend:a", "target-a", &[]).await);
-    let record = store.get(&id).await.unwrap().unwrap();
-    assert_eq!(record.request_hash, hash);
-    assert_eq!(record.state, State::Reserved);
-    assert_eq!(record.sources[0].spend_key, "spend:a");
-    assert_eq!(record.outputs[0], output("target-a"));
-    assert!(record.result.is_none());
-    assert_eq!(record.receipt_key_id, "receipt-key");
-}
-
 #[tokio::test]
 async fn exchange_redis_durability_configuration_is_enforced() {
     let Some(h) = harness() else { return };
@@ -1830,887 +1914,4 @@ fn exchange_redis_readiness_rejects_replica_and_bad_aof_health() {
         healthy
     )
     .is_err());
-}
-
-#[tokio::test]
-async fn exchange_redis_exact_retry_no_double_increment_and_change_conflict() {
-    let Some(h) = harness() else { return };
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let id = [3; 16];
-    let hash = [4; 32];
-    let target = "target-retry";
-    created(reserve(&store, &id, &hash, "spend:retry", target, &[]).await);
-    let record = store.get(&id).await.unwrap().unwrap();
-    assert!(matches!(
-        reserve(&store, &id, &hash, "ignored", target, &[]).await,
-        ReserveOutcome::Existing(_)
-    ));
-    assert!(matches!(
-        reserve(&store, &id, &[5; 32], "ignored", target, &[]).await,
-        ReserveOutcome::Conflict
-    ));
-    // Retry cannot create its alternate source key or increment its counters.
-    let alternate: Option<Vec<u8>> = store.raw_command("GET", &[b"ignored"]).await.unwrap();
-    assert!(alternate.is_none());
-    let target_count: i64 = store
-        .raw_command("GET", &[record.target_refs[0].key.as_bytes()])
-        .await
-        .unwrap();
-    assert_eq!(target_count, 1);
-    let receipt_count: i64 = store
-        .raw_command("GET", &[record.receipt_ref.as_bytes()])
-        .await
-        .unwrap();
-    assert_eq!(receipt_count, 1);
-}
-
-#[tokio::test]
-async fn exchange_redis_concurrent_same_operation_is_single_reservation() {
-    let Some(h) = harness() else { return };
-    let a = ExchangeStore::new(&h.url).unwrap();
-    let b = a.clone();
-    let id = [6; 16];
-    let hash = [7; 32];
-    let (x, y) = tokio::join!(
-        reserve(&a, &id, &hash, "spend:race", "target-race", &[]),
-        reserve(&b, &id, &hash, "spend:race", "target-race", &[])
-    );
-    assert!(matches!(
-        (&x, &y),
-        (ReserveOutcome::Created(_), ReserveOutcome::Existing(_))
-            | (ReserveOutcome::Existing(_), ReserveOutcome::Created(_))
-    ));
-}
-
-#[tokio::test]
-async fn exchange_redis_overlapping_and_duplicate_sources_are_atomic() {
-    let Some(h) = harness() else { return };
-    let store = ExchangeStore::new(&h.url).unwrap();
-    created(
-        reserve(
-            &store,
-            &[8; 16],
-            &[8; 32],
-            "spend:shared",
-            "target-one",
-            &[],
-        )
-        .await,
-    );
-    assert!(matches!(
-        reserve(
-            &store,
-            &[9; 16],
-            &[9; 32],
-            "spend:shared",
-            "target-two",
-            &[]
-        )
-        .await,
-        ReserveOutcome::Spent
-    ));
-    let now = store.redis_time().await.unwrap() as i64;
-    let source = SourceWork {
-        descriptor_id: "s".into(),
-        spend_key: "spend:dup".into(),
-        valid_from: now - 1,
-        valid_until: now + 30,
-    };
-    let sources = vec![source.clone(), source];
-    let outputs = vec![output("dup")];
-    let refs = vec![target_ref_key("dup", now - 1, now + 30)];
-    let rr = receipt_ref_key("r");
-    let duplicate = store
-        .reserve(ReservationInput {
-            operation_id: &[10; 16],
-            request_hash: &[10; 32],
-            profile_id: "p",
-            rule_id: "r",
-            target_keyset_id: "k",
-            receipt_key_id: "r",
-            sources: &sources,
-            outputs: &outputs,
-            target_refs: &refs,
-            receipt_ref_key: &rr,
-            capacities: &[],
-            receipt_lifetime_secs: 10,
-        })
-        .await;
-    assert!(duplicate.is_err());
-    assert!(store.get(&[10; 16]).await.unwrap().is_none());
-}
-
-#[tokio::test]
-async fn exchange_redis_verifier_spend_exclusion_both_directions() {
-    let Some(h) = harness() else { return };
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let verifier_key = v5_spend_key("verifier-first");
-    let _: String = store
-        .raw_command("SET", &[verifier_key.as_bytes(), b"1", b"EX", b"120"])
-        .await
-        .unwrap();
-    assert!(matches!(
-        reserve(&store, &[11; 16], &[11; 32], &verifier_key, "t11", &[]).await,
-        ReserveOutcome::Spent
-    ));
-    let exchange_key = v5_spend_key("exchange-first");
-    created(reserve(&store, &[12; 16], &[12; 32], &exchange_key, "t12", &[]).await);
-    let result: Option<String> = store
-        .raw_command(
-            "SET",
-            &[exchange_key.as_bytes(), b"verifier", b"NX", b"EX", b"120"],
-        )
-        .await
-        .unwrap();
-    assert!(result.is_none());
-}
-
-#[tokio::test]
-async fn exchange_redis_window_and_spend_ttl_endpoint() {
-    let Some(h) = harness() else { return };
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let now = store.redis_time().await.unwrap() as i64;
-    let sources = vec![SourceWork {
-        descriptor_id: "s".into(),
-        spend_key: "spend:endpoint".into(),
-        valid_from: now,
-        valid_until: now + 3,
-    }];
-    let outputs = vec![output("endpoint")];
-    let refs = vec![target_ref_key("endpoint", now, now + 3)];
-    let rr = receipt_ref_key("r");
-    let outcome = store
-        .reserve(ReservationInput {
-            operation_id: &[13; 16],
-            request_hash: &[13; 32],
-            profile_id: "p",
-            rule_id: "r",
-            target_keyset_id: "k",
-            receipt_key_id: "r",
-            sources: &sources,
-            outputs: &outputs,
-            target_refs: &refs,
-            receipt_ref_key: &rr,
-            capacities: &[],
-            receipt_lifetime_secs: 10,
-        })
-        .await
-        .unwrap();
-    created(outcome);
-    let ttl: i64 = store
-        .raw_command("TTL", &[b"spend:endpoint"])
-        .await
-        .unwrap();
-    assert!((2..=4).contains(&ttl), "ttl={ttl}");
-    let future = vec![SourceWork {
-        valid_from: now + 100,
-        ..sources[0].clone()
-    }];
-    let rejected = store
-        .reserve(ReservationInput {
-            operation_id: &[14; 16],
-            request_hash: &[14; 32],
-            profile_id: "p",
-            rule_id: "r",
-            target_keyset_id: "k",
-            receipt_key_id: "r",
-            sources: &future,
-            outputs: &outputs,
-            target_refs: &refs,
-            receipt_ref_key: &rr,
-            capacities: &[],
-            receipt_lifetime_secs: 10,
-        })
-        .await
-        .unwrap();
-    assert_eq!(rejected, ReserveOutcome::SourceWindow);
-}
-
-#[tokio::test]
-async fn exchange_redis_independent_quotas_duplicate_and_exhaustion() {
-    let Some(h) = harness() else { return };
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let a = CapacityEntry {
-        key: capacity_key("qa"),
-        amount: 2,
-        limit: 3,
-    };
-    let b = CapacityEntry {
-        key: capacity_key("qb"),
-        amount: 1,
-        limit: 1,
-    };
-    created(
-        reserve(
-            &store,
-            &[15; 16],
-            &[15; 32],
-            "spend:q1",
-            "qt1",
-            &[a.clone(), b.clone()],
-        )
-        .await,
-    );
-    assert!(matches!(
-        reserve(
-            &store,
-            &[16; 16],
-            &[16; 32],
-            "spend:q2",
-            "qt2",
-            &[CapacityEntry {
-                amount: 2,
-                ..a.clone()
-            }]
-        )
-        .await,
-        ReserveOutcome::Capacity
-    ));
-    let duplicate = vec![a.clone(), a];
-    let now = store.redis_time().await.unwrap() as i64;
-    let sources = vec![SourceWork {
-        descriptor_id: "s".into(),
-        spend_key: "spend:qdup".into(),
-        valid_from: now - 1,
-        valid_until: now + 30,
-    }];
-    let outputs = vec![output("qdup")];
-    let refs = vec![target_ref_key("qdup", now - 1, now + 30)];
-    let rr = receipt_ref_key("r");
-    assert!(store
-        .reserve(ReservationInput {
-            operation_id: &[17; 16],
-            request_hash: &[17; 32],
-            profile_id: "p",
-            rule_id: "r",
-            target_keyset_id: "k",
-            receipt_key_id: "r",
-            sources: &sources,
-            outputs: &outputs,
-            target_refs: &refs,
-            receipt_ref_key: &rr,
-            capacities: &duplicate,
-            receipt_lifetime_secs: 10
-        })
-        .await
-        .is_err());
-    let qb: i64 = store
-        .raw_command("GET", &[capacity_key("qb").as_bytes()])
-        .await
-        .unwrap();
-    assert_eq!(qb, 1);
-}
-
-#[tokio::test]
-async fn exchange_redis_refs_two_to_one_to_zero() {
-    let Some(h) = harness() else { return };
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let target = "refs";
-    let f1 = created(reserve(&store, &[18; 16], &[18; 32], "spend:r1", target, &[]).await);
-    let f2 = created(reserve(&store, &[19; 16], &[19; 32], "spend:r2", target, &[]).await);
-    let r1 = store.get(&[18; 16]).await.unwrap().unwrap();
-    let key = &r1.target_refs[0].key;
-    let count: i64 = store.raw_command("GET", &[key.as_bytes()]).await.unwrap();
-    assert_eq!(count, 2);
-    assert_eq!(
-        store
-            .result_ready(&[18; 16], &f1, b"result-one", &[1; 32])
-            .await
-            .unwrap(),
-        TransitionOutcome::Applied
-    );
-    let count: i64 = store.raw_command("GET", &[key.as_bytes()]).await.unwrap();
-    assert_eq!(count, 1);
-    assert_eq!(
-        store
-            .result_ready(&[19; 16], &f2, b"result-two", &[2; 32])
-            .await
-            .unwrap(),
-        TransitionOutcome::Applied
-    );
-    let count: i64 = store.raw_command("GET", &[key.as_bytes()]).await.unwrap();
-    assert_eq!(count, 0);
-}
-
-#[tokio::test]
-async fn exchange_redis_live_and_expired_claims() {
-    let Some(h) = harness() else { return };
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let id = [20; 16];
-    created(reserve(&store, &id, &[20; 32], "spend:claim", "claim", &[]).await);
-    assert_eq!(store.claim(&id).await.unwrap(), ClaimOutcome::Live);
-    force_lease(&store, &id, 0).await;
-    assert!(matches!(
-        store.claim(&id).await.unwrap(),
-        ClaimOutcome::Claimed(_)
-    ));
-}
-
-#[tokio::test]
-async fn exchange_redis_stale_fence_repeated_conflict_and_underflow() {
-    let Some(h) = harness() else { return };
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let id = [21; 16];
-    let fence = created(
-        reserve(
-            &store,
-            &id,
-            &[21; 32],
-            "spend:transition",
-            "transition",
-            &[],
-        )
-        .await,
-    );
-    assert_eq!(
-        store
-            .result_ready(&id, b"stale", b"result", &[1; 32])
-            .await
-            .unwrap(),
-        TransitionOutcome::StaleFence
-    );
-    assert_eq!(
-        store
-            .result_ready(&id, &fence, b"result", &[1; 32])
-            .await
-            .unwrap(),
-        TransitionOutcome::Applied
-    );
-    assert_eq!(
-        store
-            .result_ready(&id, &fence, b"result", &[1; 32])
-            .await
-            .unwrap(),
-        TransitionOutcome::Repeated
-    );
-    assert_eq!(
-        store
-            .result_ready(&id, &fence, b"other", &[2; 32])
-            .await
-            .unwrap(),
-        TransitionOutcome::Conflict
-    );
-    assert_eq!(
-        store
-            .commit(&id, b"stale", b"receipt", b"response")
-            .await
-            .unwrap(),
-        TransitionOutcome::StaleFence
-    );
-    assert_eq!(
-        store
-            .commit(&id, &fence, b"receipt", b"response")
-            .await
-            .unwrap(),
-        TransitionOutcome::Applied
-    );
-    assert_eq!(
-        store
-            .commit(&id, &fence, b"receipt", b"response")
-            .await
-            .unwrap(),
-        TransitionOutcome::Repeated
-    );
-    assert_eq!(
-        store
-            .commit(&id, &fence, b"other", b"response")
-            .await
-            .unwrap(),
-        TransitionOutcome::Conflict
-    );
-    let id2 = [22; 16];
-    let fence2 =
-        created(reserve(&store, &id2, &[22; 32], "spend:underflow", "underflow", &[]).await);
-    let record = store.get(&id2).await.unwrap().unwrap();
-    let _: String = store
-        .raw_command("SET", &[record.target_refs[0].key.as_bytes(), b"0"])
-        .await
-        .unwrap();
-    assert_eq!(
-        store
-            .result_ready(&id2, &fence2, b"r", &[3; 32])
-            .await
-            .unwrap(),
-        TransitionOutcome::Underflow
-    );
-
-    let id3 = [31; 16];
-    let fence3 = created(
-        reserve(
-            &store,
-            &id3,
-            &[31; 32],
-            "spend:receipt-underflow",
-            "receipt-underflow",
-            &[],
-        )
-        .await,
-    );
-    assert_eq!(
-        store
-            .result_ready(&id3, &fence3, b"receipt-result", &[4; 32])
-            .await
-            .unwrap(),
-        TransitionOutcome::Applied
-    );
-    let record3 = store.get(&id3).await.unwrap().unwrap();
-    let _: String = store
-        .raw_command("SET", &[record3.receipt_ref.as_bytes(), b"0"])
-        .await
-        .unwrap();
-    assert_eq!(
-        store
-            .commit(&id3, &fence3, b"receipt", b"response")
-            .await
-            .unwrap(),
-        TransitionOutcome::Underflow
-    );
-}
-
-#[tokio::test]
-async fn exchange_redis_recovery_new_client_reserved_and_result_ready() {
-    let Some(h) = harness() else { return };
-    let first = ExchangeStore::new(&h.url).unwrap();
-    let reserved = [23; 16];
-    created(reserve(&first, &reserved, &[23; 32], "spend:new1", "new1", &[]).await);
-    force_lease(&first, &reserved, 0).await;
-    let second = ExchangeStore::new(&h.url).unwrap();
-    assert!(matches!(
-        second.claim(&reserved).await.unwrap(),
-        ClaimOutcome::Claimed(_)
-    ));
-    let ready = [24; 16];
-    let fence = created(reserve(&first, &ready, &[24; 32], "spend:new2", "new2", &[]).await);
-    assert_eq!(
-        first
-            .result_ready(&ready, &fence, b"result", &[4; 32])
-            .await
-            .unwrap(),
-        TransitionOutcome::Applied
-    );
-    force_lease(&first, &ready, 0).await;
-    assert!(matches!(
-        second.claim(&ready).await.unwrap(),
-        ClaimOutcome::Claimed(_)
-    ));
-}
-
-#[tokio::test]
-async fn exchange_engine_recovers_reserved_result_ready_and_exact_committed_bytes() {
-    let Some(h) = harness() else { return };
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let provider = SoftwareBlindRsaProvider::generate(2048).unwrap();
-    let target_path = dir.path().join("target.der");
-    std::fs::write(&target_path, provider.to_der().unwrap()).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&target_path, std::fs::Permissions::from_mode(0o600)).unwrap();
-    }
-    let descriptor = ExchangeDescriptor {
-        id: "b".repeat(64),
-        profile_id: EXCHANGE_PROFILE_V1.into(),
-        role: "target".into(),
-        class: "target".into(),
-        issuer_id: "issuer:recovery".into(),
-        kid: hex::encode(provider.token_key_id()),
-        audience: None,
-        spki_b64: Base64UrlUnpadded::encode_string(provider.public_key_spki()),
-        suite: "RSABSSA-SHA384-PSS-Deterministic".into(),
-        max_quantity: 10,
-        valid_from: 0,
-        valid_until: i64::MAX,
-    };
-    let source_descriptor = ExchangeDescriptor {
-        role: "source".into(),
-        class: "source".into(),
-        id: "a".repeat(64),
-        ..descriptor.clone()
-    };
-    let profile = ExchangeProfile {
-        profile_id: EXCHANGE_PROFILE_V1.into(),
-        sources: ExchangeSourceAllowlist {
-            descriptors: vec![source_descriptor],
-        },
-        target_keyset: ExchangeKeyset {
-            id: "2".repeat(64),
-            targets: vec![ExchangeTargetKey {
-                descriptor: descriptor.clone(),
-                private_key_path: target_path.display().to_string(),
-            }],
-        },
-        rules: Vec::<ExchangeRule>::new(),
-    };
-    let mut representative = vec![0; usize::from(provider.modulus_bits()) / 8];
-    *representative.last_mut().unwrap() = 1;
-    let request = ExchangeRequest {
-        profile: EXCHANGE_PROFILE_V1.into(),
-        rule_id: "c".repeat(64),
-        sources: vec![ExchangeSource {
-            slot: ExchangeSlot {
-                descriptor_id: "a".repeat(64),
-                keyset_id: "1".repeat(64),
-                slot_id: "in".into(),
-                quantity: 1,
-            },
-            artifact: Base64UrlUnpadded::encode_string(b"not-persisted"),
-        }],
-        outputs: vec![ExchangeOutput {
-            slot: ExchangeSlot {
-                descriptor_id: descriptor.id.clone(),
-                keyset_id: profile.target_keyset.id.clone(),
-                slot_id: "out".into(),
-                quantity: 1,
-            },
-            blinded_value: Base64UrlUnpadded::encode_string(&representative),
-        }],
-    };
-    let receipt_path = dir.path().join("receipt.key");
-    let receipt_key_id = load_or_generate_receipt_key(&receipt_path)
-        .unwrap()
-        .key_id();
-    let now = store.redis_time().await.unwrap() as i64;
-    let reserved = [29; 16];
-    seed_engine_work(
-        &store,
-        &reserved,
-        &request,
-        &descriptor,
-        &representative,
-        &receipt_key_id,
-        now,
-    )
-    .await;
-    force_lease(&store, &reserved, 0).await;
-    let engine = super::ExchangeEngine::new(
-        profile.clone(),
-        vec![],
-        ExchangeStore::new(&h.url).unwrap(),
-        "issuer:recovery".into(),
-        super::ReceiptKeyRing::load(&receipt_path, &[]).unwrap(),
-        300,
-    )
-    .await
-    .unwrap();
-    let response = match engine
-        .process_or_recover(&reserved, &request)
-        .await
-        .unwrap()
-    {
-        super::ProcessDecision::Committed(bytes) => bytes,
-        other => panic!("reserved recovery: {other:?}"),
-    };
-    assert_eq!(
-        engine
-            .process_or_recover(&reserved, &request)
-            .await
-            .unwrap(),
-        super::ProcessDecision::Committed(response.clone())
-    );
-
-    let ready = [30; 16];
-    let ready_fence = seed_engine_work(
-        &store,
-        &ready,
-        &request,
-        &descriptor,
-        &representative,
-        &receipt_key_id,
-        now,
-    )
-    .await;
-    let mut result = ExchangeResult {
-        operation_id: Base64UrlUnpadded::encode_string(&ready),
-        profile: EXCHANGE_PROFILE_V1.into(),
-        target_keyset_id: profile.target_keyset.id.clone(),
-        outputs: vec![ExchangeResultOutput {
-            slot: request.outputs[0].slot.clone(),
-            blinded_value: request.outputs[0].blinded_value.clone(),
-            blind_signature: Base64UrlUnpadded::encode_string(&[1; 256]),
-        }],
-        result_digest: String::new(),
-    };
-    let digest = result.result_digest().unwrap();
-    result.result_digest = Base64UrlUnpadded::encode_string(&digest);
-    let result_bytes = serde_json::to_vec(&result).unwrap();
-    assert_eq!(
-        store
-            .result_ready(&ready, &ready_fence, &result_bytes, &digest)
-            .await
-            .unwrap(),
-        TransitionOutcome::Applied
-    );
-    force_lease(&store, &ready, 0).await;
-    let new_engine = super::ExchangeEngine::new(
-        profile,
-        vec![],
-        ExchangeStore::new(&h.url).unwrap(),
-        "issuer:recovery".into(),
-        super::ReceiptKeyRing::load(&receipt_path, &[]).unwrap(),
-        300,
-    )
-    .await
-    .unwrap();
-    assert!(matches!(
-        new_engine
-            .process_or_recover(&ready, &request)
-            .await
-            .unwrap(),
-        super::ProcessDecision::Committed(_)
-    ));
-}
-
-#[tokio::test]
-async fn exchange_redis_committed_exact_response_no_raw_source_and_no_ttl() {
-    let Some(h) = harness() else { return };
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let id = [25; 16];
-    let marker = b"RAW-SOURCE-MUST-NOT-PERSIST";
-    let fence = created(reserve(&store, &id, &[25; 32], "spend:no-raw", "no-raw", &[]).await);
-    store
-        .result_ready(&id, &fence, b"canonical-result", &[5; 32])
-        .await
-        .unwrap();
-    let response = b"exact\0binary-response";
-    store
-        .commit(&id, &fence, b"signed-receipt", response)
-        .await
-        .unwrap();
-    let record = store.get(&id).await.unwrap().unwrap();
-    assert_eq!(record.response.as_deref(), Some(response.as_slice()));
-    let ttl: i64 = store
-        .raw_command("TTL", &[ExchangeStore::op(&id).as_bytes()])
-        .await
-        .unwrap();
-    assert_eq!(ttl, -1);
-    let raw: Vec<Vec<u8>> = store
-        .raw_command("HVALS", &[ExchangeStore::op(&id).as_bytes()])
-        .await
-        .unwrap();
-    assert!(!raw
-        .iter()
-        .any(|value| value.windows(marker.len()).any(|window| window == marker)));
-}
-
-#[tokio::test]
-async fn exchange_engine_rotation_and_aof_restart_recover_reserved_and_result_ready() {
-    let Some(mut harness) = harness() else { return };
-    let issuer_id = "issuer:e2e:rotation";
-    let mut old = e2e_fixture(issuer_id, 1).await;
-    let current = e2e_fixture(issuer_id, 1).await;
-    let old_receipt_id = load_or_generate_receipt_key(&old.receipt_path)
-        .unwrap()
-        .key_id();
-    let retained_ring = v2_receipt_ring(
-        &current.receipt_path,
-        std::slice::from_ref(&old.receipt_path),
-    );
-    let current_graph = v2_engine_fixture(issuer_id).await;
-    let mut retained_graph = v2_engine_fixture(issuer_id).await.graph;
-    for transition in &mut retained_graph.transitions {
-        transition.admission_state = ExchangeAdmissionStateV2::RecoveryOnly;
-    }
-    let receipt_metadata = retained_ring.discovery_metadata();
-    let discovery = crate::startup::exchange_discovery_v2(
-        &current_graph.graph,
-        std::slice::from_ref(&retained_graph),
-        &receipt_metadata,
-    )
-    .unwrap();
-    assert_eq!(discovery.retained_receipt_keys.len(), 1);
-    assert_eq!(
-        discovery.active_receipt_key.purpose,
-        "exchange_receipt_active"
-    );
-    assert!(discovery
-        .retained_receipt_keys
-        .iter()
-        .any(|key| key.key_id == old_receipt_id && key.purpose == "exchange_receipt_retained"));
-    let store = ExchangeStore::new(&harness.url).unwrap();
-    let current_only_engine = super::ExchangeEngine::new(
-        current.profile.clone(),
-        vec![],
-        store.clone(),
-        issuer_id.into(),
-        super::ReceiptKeyRing::load(&current.receipt_path, &[]).unwrap(),
-        300,
-    )
-    .await
-    .unwrap();
-    let reserved = [0x61; 16];
-    let reserved_request = old.request.clone();
-    seed_fixture_work(&store, &reserved, &old, issuer_id, &old_receipt_id).await;
-    force_lease(&store, &reserved, 0).await;
-    assert_eq!(
-        current_only_engine
-            .process_or_recover(&reserved, &reserved_request)
-            .await
-            .unwrap(),
-        super::ProcessDecision::Retryable
-    );
-    let unavailable_record = store.get(&reserved).await.unwrap().unwrap();
-    let unavailable_spend: Option<Vec<u8>> = store
-        .raw_command("GET", &[unavailable_record.sources[0].spend_key.as_bytes()])
-        .await
-        .unwrap();
-    assert!(unavailable_spend.is_some());
-    old.request.sources[0].artifact = old.alternate_artifact.clone();
-    let result_ready = [0x62; 16];
-    let result_fence =
-        seed_fixture_work(&store, &result_ready, &old, issuer_id, &old_receipt_id).await;
-    let (result_bytes, digest) = seeded_result(&result_ready, &old);
-    assert_eq!(
-        store
-            .result_ready(&result_ready, &result_fence, &result_bytes, &digest)
-            .await
-            .unwrap(),
-        TransitionOutcome::Applied
-    );
-    force_lease(&store, &result_ready, 0).await;
-    let reserved_before = store.get(&reserved).await.unwrap().unwrap();
-    let ready_before = store.get(&result_ready).await.unwrap().unwrap();
-    drop(store);
-    harness.restart().expect("durable Redis restart");
-
-    let missing = super::ExchangeEngine::new(
-        current.profile.clone(),
-        vec![],
-        ExchangeStore::new(&harness.url).unwrap(),
-        issuer_id.into(),
-        super::ReceiptKeyRing::load(&current.receipt_path, &[]).unwrap(),
-        300,
-    )
-    .await;
-    assert!(
-        missing.is_err(),
-        "pending signer readiness must fail closed"
-    );
-
-    let engine = super::ExchangeEngine::new(
-        current.profile.clone(),
-        vec![old.profile.clone()],
-        ExchangeStore::new(&harness.url).unwrap(),
-        issuer_id.into(),
-        super::ReceiptKeyRing::load(
-            &current.receipt_path,
-            std::slice::from_ref(&old.receipt_path),
-        )
-        .unwrap(),
-        300,
-    )
-    .await
-    .unwrap();
-    let reserved_response = match engine
-        .process_or_recover(&reserved, &reserved_request)
-        .await
-        .unwrap()
-    {
-        super::ProcessDecision::Committed(response) => response,
-        decision => panic!("reserved rotation recovery failed: {decision:?}"),
-    };
-    let ready_response = match engine
-        .process_or_recover(&result_ready, &old.request)
-        .await
-        .unwrap()
-    {
-        super::ProcessDecision::Committed(response) => response,
-        decision => panic!("result-ready rotation recovery failed: {decision:?}"),
-    };
-    assert_eq!(
-        engine
-            .process_or_recover(&reserved, &reserved_request)
-            .await
-            .unwrap(),
-        super::ProcessDecision::Committed(reserved_response.clone())
-    );
-    assert_eq!(
-        engine
-            .process_or_recover(&result_ready, &old.request)
-            .await
-            .unwrap(),
-        super::ProcessDecision::Committed(ready_response.clone())
-    );
-    let recovered_store = ExchangeStore::new(&harness.url).unwrap();
-    for (id, original, response) in [
-        (reserved, reserved_before, reserved_response),
-        (result_ready, ready_before, ready_response),
-    ] {
-        let record = recovered_store.get(&id).await.unwrap().unwrap();
-        assert_eq!(record.state, State::Committed);
-        assert_eq!(record.response, Some(response));
-        let spend: Option<Vec<u8>> = recovered_store
-            .raw_command("GET", &[original.sources[0].spend_key.as_bytes()])
-            .await
-            .unwrap();
-        assert!(
-            spend.is_some(),
-            "source spend must survive restart/recovery"
-        );
-        for target in original.target_refs {
-            let count: i64 = recovered_store
-                .raw_command("GET", &[target.key.as_bytes()])
-                .await
-                .unwrap();
-            assert_eq!(count, 0);
-        }
-        let receipt_count: i64 = recovered_store
-            .raw_command("GET", &[original.receipt_ref.as_bytes()])
-            .await
-            .unwrap();
-        assert_eq!(receipt_count, 0);
-    }
-}
-
-#[tokio::test]
-async fn exchange_redis_aof_restart_reserved_result_ready_committed() {
-    let Some(mut h) = harness() else { return };
-    let store = ExchangeStore::new(&h.url).unwrap();
-    let reserved = [26; 16];
-    created(reserve(&store, &reserved, &[26; 32], "spend:aof1", "aof1", &[]).await);
-    let ready = [27; 16];
-    let ready_fence = created(reserve(&store, &ready, &[27; 32], "spend:aof2", "aof2", &[]).await);
-    store
-        .result_ready(&ready, &ready_fence, b"durable-result", &[7; 32])
-        .await
-        .unwrap();
-    let committed = [28; 16];
-    let committed_fence =
-        created(reserve(&store, &committed, &[28; 32], "spend:aof3", "aof3", &[]).await);
-    store
-        .result_ready(&committed, &committed_fence, b"result", &[8; 32])
-        .await
-        .unwrap();
-    store
-        .commit(
-            &committed,
-            &committed_fence,
-            b"receipt",
-            b"durable-response",
-        )
-        .await
-        .unwrap();
-    drop(store);
-    h.restart().expect("AOF Redis restart");
-    let recovered = ExchangeStore::new(&h.url).unwrap();
-    assert_eq!(
-        recovered.get(&reserved).await.unwrap().unwrap().state,
-        State::Reserved
-    );
-    assert_eq!(
-        recovered
-            .get(&ready)
-            .await
-            .unwrap()
-            .unwrap()
-            .result
-            .as_deref(),
-        Some(b"durable-result".as_slice())
-    );
-    let record = recovered.get(&committed).await.unwrap().unwrap();
-    assert_eq!(record.state, State::Committed);
-    assert_eq!(
-        record.response.as_deref(),
-        Some(b"durable-response".as_slice())
-    );
 }

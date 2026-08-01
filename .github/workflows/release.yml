@@ -12,6 +12,7 @@ on:
 jobs:
   gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 65
     permissions:
       contents: read
       checks: read
@@ -30,15 +31,22 @@ jobs:
           set -euo pipefail
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid release tag" >&2; exit 1; }
           [[ "${GITHUB_REF}" == refs/tags/* || "${{ github.event_name }}" == workflow_dispatch ]] || exit 1
-          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
-          sha="$(git rev-list -n1 "refs/tags/${TAG}")"
+          git fetch --force --no-tags origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/tags/${TAG}:refs/tags/${TAG}"
+          sha="$(git rev-parse "refs/tags/${TAG}^{commit}")"
           [[ "$sha" == "${GITHUB_SHA}" || "${{ github.event_name }}" == workflow_dispatch ]] || { echo "tag SHA differs from event SHA" >&2; exit 1; }
+          git merge-base --is-ancestor "$sha" refs/remotes/origin/main || {
+            echo "release tag must point to a commit already reachable from origin/main" >&2
+            exit 1
+          }
           python3 scripts/release-gate.py "$sha" "build,test,feature-tests,lint,security,javascript-sdk,repository-hygiene,compose-smoke"
           printf 'tag=%s\nsha=%s\n' "$TAG" "$sha" >> "$GITHUB_OUTPUT"
 
   package:
     needs: gate
     runs-on: ubuntu-latest
+    timeout-minutes: 50
     permissions:
       contents: write
     steps:
@@ -46,6 +54,7 @@ jobs:
         with:
           ref: ${{ needs.gate.outputs.sha }}
           fetch-depth: 1
+          persist-credentials: false
       - name: Build and package
         env:
           TAG: ${{ needs.gate.outputs.tag }}

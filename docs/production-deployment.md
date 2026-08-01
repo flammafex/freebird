@@ -214,9 +214,28 @@ prefer `SYBIL_RESISTANCE=combined` with `SYBIL_COMBINED_MODE=and` or `threshold`
 so social-graph attestations compose with another gate. See
 [Social Graph Sybil Gate](social-graph-gate.md) for the full design.
 
-The PKCS#11 integration currently supports key storage with software VOPRF
-operations only. HSM-native/full VOPRF is unsupported; `HSM_MODE=full` must not
-be presented as native HSM protection.
+The current Social Graph integration has important production limitations:
+
+- **No JWKS refresh:** the issuer loads trusted attester keys from
+  `SOCIAL_GRAPH_ATTESTERS_PATH`; `SOCIAL_GRAPH_JWKS_URL` and
+  `SOCIAL_GRAPH_KEY_REFRESH_INTERVAL` do not refresh keys at runtime. Rotate
+  keys by updating the local trusted-key configuration and coordinating
+  attester retirement.
+- **No persistent revocation:** `SOCIAL_GRAPH_STATE_PATH` is not a persistent
+  revocation store. Do not claim durable key or attestation revocation from
+  this setting; use short attestation lifetimes and an operator-controlled key
+  replacement procedure.
+- **No reference quota-nullifier enforcement:** the reference attester does
+  not emit `quota_nullifier` or enforce a per-identity epoch quota. Setting
+  `SOCIAL_GRAPH_REQUIRE_QUOTA_NULLIFIER=true` makes the issuer require and
+  replay-check a supplied nullifier, but does not add attester-side quota
+  enforcement; use an attester that supplies that control if it is required.
+
+Issuer HSM startup integration is currently unsupported. `HSM_ENABLE=true` is
+rejected by issuer configuration validation and `freebird-validate-config`
+until the startup provider integration exists. The optional PKCS#11 provider
+remains separately scoped to provider-level experiments and must not be
+presented as an issuer HSM deployment.
 
 ## Reverse Proxy
 

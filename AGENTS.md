@@ -10,7 +10,8 @@ context.
 ```
 issuer/          Axum issuer service + admin CLI + config validator
                  bins: freebird-issuer, freebird-cli, freebird-validate-config
-verifier/        Axum verifier service (monolithic src/main.rs)
+verifier/        Axum verifier service (modular application, settings, state,
+                  verification, discovery, metadata, replay, and route modules)
 interface/       V4-only smoke-test client (freebird-interface)
 attester/        Social Graph Attester service (HTTP API, scoring, JWKS)
 crypto/          VOPRF, blind RSA, token wire formats, nullifier derivation,
@@ -34,9 +35,14 @@ launch.sh         Docker quickstart helper
 ```
 
 Key files to know:
-- `issuer/src/startup.rs` — issuer wiring (`Application::build`), Sybil gate assembly
+- `issuer/src/startup.rs` — issuer `Application::build`/`run` orchestration;
+  extracted startup stages live under `issuer/src/startup/`
 - `issuer/src/sybil_resistance/mod.rs` — `SybilResistance` trait + `CombinedOr/And/Threshold`
-- `verifier/src/main.rs` — verifier config, metadata refresh, all handlers (~936 lines)
+- `verifier/src/main.rs` — verifier process entry point
+- `verifier/src/application.rs` — verifier application construction, metadata
+  refresh, replay-authority task, and router assembly
+- `verifier/src/settings.rs` — staged verifier configuration and replay-store selection
+- `verifier/src/routes/public.rs` — public verification, check, and batch handlers
 - `crypto/src/lib.rs` — V4/V5 token wire formats, constants, nullifier derivation
 - `common/src/api.rs` — shared request/response types, `SybilProof` enum
 - `.env.example` — canonical config reference
@@ -120,7 +126,7 @@ docker-compose build issuer verifier
 ## Coding conventions
 
 - **Edition 2021**, workspace `resolver = "2"`, all crates versioned in
-  lockstep (currently `0.7.0`). Bump all crates together.
+  lockstep (currently `0.9.0`). Bump all crates together for each release.
 - **License header** on source files:
   `// SPDX-License-Identifier: Apache-2.0 OR MIT`
   Manifests: `license = "MIT OR Apache-2.0"`.
@@ -144,8 +150,7 @@ docker-compose build issuer verifier
 - **Feature flags**: `human-gate-webauthn` (issuer), `pkcs11` (crypto),
   `voprf-p256` (crypto, default). Gate WebAuthn code with `#[cfg(feature = ...)]`.
 - **No `std::env::set_var` at runtime** — it is unsafe in multi-threaded
-  contexts. (Existing call in `startup.rs:204-206` is a known smell; do not
-  add more.)
+  contexts. Do not add runtime environment mutation.
 
 ## Testing expectations
 
@@ -174,8 +179,9 @@ docker-compose build issuer verifier
 - **Update docs in the same PR** when changing: HTTP API, env vars, Sybil
   modes, token wire formats, or deployment. Docs live in `docs/` and
   `README.md`.
-- **Keep crate versions in lockstep.** If you bump `freebird-crypto` to
-  `0.5.2`, bump all six crates and update `Cargo.lock`.
+- **Keep crate versions in lockstep.** The current release is `0.9.0`; when
+  preparing a release, bump all workspace crates together and update
+  `Cargo.lock`.
 - **Do not introduce dependency version skew.** Currently issuer uses
   `redis = "0.24"` and verifier uses `redis = "0.25"`; `integration_tests`
   uses `tower = "0.5"` while services use `tower = "0.4"`. Do not add a
@@ -213,7 +219,7 @@ changing:
   `AdminRateLimiter`) and **TLS enforcement** (`common/src/tls_enforcement.rs`).
 - **Key rotation / epoch logic** (`issuer/src/multi_key_voprf.rs`,
   `issuer/src/keys.rs`).
-- **Batch verify concurrency** in `verifier/src/main.rs` — uses
+- **Batch verify concurrency** in `verifier/src/routes/public.rs` — uses
   `runtime_handle.block_on` inside `rayon par_iter`. Known smell; do not
   refactor without confirming the deadlock/starvation story.
 - **Default values** for `SYBIL_RESISTANCE`, `REQUIRE_TLS`,

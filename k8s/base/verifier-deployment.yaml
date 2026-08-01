@@ -159,6 +159,8 @@ spec:
                   matchExpressions:
                     - key: app
                       operator: In
+                      values:
+                        - freebird
                     - key: component
                       operator: In
                       values:
@@ -184,6 +186,28 @@ metadata:
 spec:
   type: ClusterIP
   sessionAffinity: None
+  ports:
+    - port: 8082
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: freebird
+    component: verifier
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: verifier-probe
+  namespace: freebird
+  labels:
+    app: freebird
+    component: verifier
+spec:
+  type: ClusterIP
+  sessionAffinity: None
+  publishNotReadyAddresses: true
   ports:
     - port: 8082
       targetPort: http

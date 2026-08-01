@@ -44,7 +44,30 @@ need() { command -v "$1" >/dev/null 2>&1 || die "required command unavailable: $
 helper() { python3 "$HELPER" "$@"; }
 sha() { if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi; }
 check_ciphertext_limit() { [[ $(wc -c <"$1") -le ${BACKUP_MAX_CIPHERTEXT_BYTES:-4294967296} ]] || die 'encrypted archive ciphertext limit exceeded'; }
-secure_key() { local p=$1 label=$2 policy=$3 mode; [[ -f $p ]] || die "$label is not a regular file"; [[ $(stat -f '%u' "$p" 2>/dev/null || stat -c '%u' "$p") == "$(id -u)" ]] || die "$label ownership is unsafe"; mode=$(stat -f '%Lp' "$p" 2>/dev/null || stat -c '%a' "$p"); [[ $mode =~ ^[0-7]+$ ]] || die "$label mode is unsafe"; if [[ $policy == secret ]]; then (( (8#$mode & 8#77) == 0 )) || die "$label mode is unsafe"; else (( (8#$mode & 8#22) == 0 )) || die "$label mode is unsafe"; fi; }
+secure_key() {
+  local p=$1 label=$2 policy=$3 owner mode
+  [[ -f $p ]] || die "$label is not a regular file"
+  case $(uname -s) in
+    Linux)
+      owner=$(stat -c '%u' "$p" 2>/dev/null) || die "$label ownership is unsafe"
+      mode=$(stat -c '%a' "$p" 2>/dev/null) || die "$label mode is unsafe"
+      ;;
+    Darwin|FreeBSD|OpenBSD|NetBSD|DragonFly)
+      owner=$(stat -f '%u' "$p" 2>/dev/null) || die "$label ownership is unsafe"
+      mode=$(stat -f '%Lp' "$p" 2>/dev/null) || die "$label mode is unsafe"
+      ;;
+    *)
+      die "$label ownership is unsafe"
+      ;;
+  esac
+  [[ $owner == "$(id -u)" ]] || die "$label ownership is unsafe"
+  [[ $mode =~ ^[0-7]+$ ]] || die "$label mode is unsafe"
+  if [[ $policy == secret ]]; then
+    (( (8#$mode & 8#77) == 0 )) || die "$label mode is unsafe"
+  else
+    (( (8#$mode & 8#22) == 0 )) || die "$label mode is unsafe"
+  fi
+}
 publish_no_replace() { python3 - "$1" "$2" <<'PY'
 import os, sys
 source, target = sys.argv[1:]

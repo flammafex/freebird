@@ -12,6 +12,8 @@ use std::path::PathBuf;
 
 pub(crate) const EXCHANGE_DISABLED_PUBLICATION_ACK_VERSION: &str =
     "freebird/exchange-disabled-publication-ack/v1";
+pub(crate) const HSM_ENABLE_UNSUPPORTED_MESSAGE: &str =
+    "HSM_ENABLE=true is unsupported: issuer startup provider integration is not implemented; set HSM_ENABLE=false or omit HSM_ENABLE";
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -66,15 +68,16 @@ pub struct PublicKeyConfig {
 
 #[derive(Clone)]
 pub struct HsmConfig {
-    /// Path to PKCS#11 module (e.g., /usr/lib/softhsm/libsofthsm2.so)
+    /// Reserved path to a PKCS#11 module (e.g., /usr/lib/softhsm/libsofthsm2.so).
+    /// Issuer startup currently rejects HSM_ENABLE=true.
     pub module_path: String,
-    /// HSM slot number
+    /// Reserved HSM slot number.
     pub slot: u64,
-    /// HSM PIN for authentication
+    /// Reserved HSM PIN for authentication.
     pub pin: String,
-    /// Key label in HSM
+    /// Reserved key label in HSM.
     pub key_label: String,
-    /// Mode: "storage" (key in HSM, ops in software) or "full" (all ops in HSM, not yet supported)
+    /// Reserved mode: "storage" or "full". Neither is available through issuer startup.
     pub mode: HsmMode,
 }
 
@@ -92,11 +95,9 @@ impl fmt::Debug for HsmConfig {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum HsmMode {
-    /// Keys stored in HSM, extracted for software VOPRF operations
-    /// Provides: Key protection at rest, fast operations
+    /// Reserved storage mode; issuer startup integration is not implemented.
     Storage,
-    /// All operations in HSM (not yet implemented)
-    /// Provides: Full HSM protection, slower operations
+    /// Reserved full mode; issuer startup integration is not implemented.
     Full,
 }
 
@@ -196,6 +197,10 @@ impl Config {
                 "ALLOW_UNSAFE_V4_ROTATION=true is only permitted when FREEBIRD_ENV=development"
             );
         }
+        let hsm_enabled = parse_hsm_enable()?;
+        if hsm_enabled {
+            anyhow::bail!(HSM_ENABLE_UNSUPPORTED_MESSAGE);
+        }
 
         // Epoch configuration for key rotation (supports human-readable: "1d", "24h", etc.)
         let epoch_duration_sec = env_duration("EPOCH_DURATION", 86400); // Default: 1 day
@@ -206,7 +211,7 @@ impl Config {
             bind_addr,
             require_tls,
             behind_proxy,
-            key_config: KeyConfig::from_env(),
+            key_config: KeyConfig::from_env()?,
             public_key_config: PublicKeyConfig::from_env(),
             exchange_config: ExchangeConfig::from_env()?,
             sybil_config: SybilConfig::from_env(),
@@ -299,6 +304,7 @@ pub struct LoadedExchangeConfigV2 {
 
 impl ExchangeConfig {
     pub fn from_env() -> Result<Self> {
+        reject_removed_v1_exchange_env()?;
         let enabled = env_bool("PUBLIC_BEARER_EXCHANGE_ENABLE");
         let comma_paths = |name: &str| -> Result<Vec<PathBuf>> {
             let Some(value) = env::var(name).ok() else {
@@ -319,15 +325,9 @@ impl ExchangeConfig {
                 .collect()
         };
         let active_graph_path = env::var("PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH")
-            .or_else(|_| env::var("PUBLIC_BEARER_EXCHANGE_PROFILE_PATH"))
             .map(PathBuf::from)
             .unwrap_or_else(|_| "public_bearer_exchange_graph_v2.json".into());
-        let retained_graph_paths =
-            if env::var("PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS").is_ok() {
-                comma_paths("PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS")?
-            } else {
-                comma_paths("PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS")?
-            };
+        let retained_graph_paths = comma_paths("PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS")?;
         let config = Self {
             enabled,
             active_graph_path,
@@ -340,7 +340,6 @@ impl ExchangeConfig {
                 "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
             )?,
             active_receipt_key_path: env::var("PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH")
-                .or_else(|_| env::var("PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH"))
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| "public_bearer_exchange_receipt.key".into()),
             active_receipt_metadata_path: env::var(
@@ -495,6 +494,21 @@ impl ExchangeConfig {
     }
 }
 
+/// V1 fixed-profile exchange configuration was removed. Reject its former
+/// aliases instead of silently interpreting or ignoring them.
+pub fn reject_removed_v1_exchange_env() -> Result<()> {
+    for name in [
+        "PUBLIC_BEARER_EXCHANGE_PROFILE_PATH",
+        "PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS",
+        "PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH",
+    ] {
+        if env::var_os(name).is_some() {
+            anyhow::bail!("{name} was removed with V1 fixed-profile exchange")
+        }
+    }
+    Ok(())
+}
+
 impl GraphIssuanceConfig {
     fn from_env() -> Result<Self> {
         use base64ct::{Base64UrlUnpadded, Encoding};
@@ -639,8 +653,8 @@ fn validate_disabled_publication_acknowledgement(
 }
 
 impl KeyConfig {
-    fn from_env() -> Self {
-        Self {
+    fn from_env() -> Result<Self> {
+        Ok(Self {
             sk_path: env::var("ISSUER_SK_PATH")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| "issuer_sk.bin".into()),
@@ -648,8 +662,8 @@ impl KeyConfig {
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| "key_rotation_state.json".into()),
             kid_override: env::var("KID").ok(),
-            hsm: HsmConfig::from_env(),
-        }
+            hsm: HsmConfig::from_env()?,
+        })
     }
 }
 
@@ -676,10 +690,10 @@ impl PublicKeyConfig {
 }
 
 impl HsmConfig {
-    fn from_env() -> Option<Self> {
+    fn from_env() -> Result<Option<Self>> {
         // Only create HSM config if HSM_ENABLE is set to true
-        if !env_bool("HSM_ENABLE") {
-            return None;
+        if !parse_hsm_enable()? {
+            return Ok(None);
         }
 
         // Parse HSM mode
@@ -703,13 +717,13 @@ impl HsmConfig {
         let key_label =
             env::var("HSM_KEY_LABEL").expect("HSM_KEY_LABEL required when HSM_ENABLE=true");
 
-        Some(Self {
+        Ok(Some(Self {
             module_path,
             slot,
             pin,
             key_label,
             mode,
-        })
+        }))
     }
 }
 
@@ -896,6 +910,23 @@ impl WebAuthnConfig {
 }
 
 // Helpers
+/// Parse the issuer's HSM enable flag without applying the permissive parsing
+/// used by unrelated boolean configuration.
+pub fn parse_hsm_enable() -> Result<bool> {
+    match env::var("HSM_ENABLE") {
+        Ok(value) if value.eq_ignore_ascii_case("true") || value == "1" => Ok(true),
+        Ok(value) if value.eq_ignore_ascii_case("false") || value == "0" => Ok(false),
+        Ok(value) => anyhow::bail!(
+            "HSM_ENABLE must be one of true, false, 1, or 0; got {:?}",
+            value
+        ),
+        Err(env::VarError::NotPresent) => Ok(false),
+        Err(env::VarError::NotUnicode(_)) => {
+            anyhow::bail!("HSM_ENABLE must be one of true, false, 1, or 0")
+        }
+    }
+}
+
 fn env_bool(key: &str) -> bool {
     env_bool_default(key, false)
 }
@@ -934,12 +965,28 @@ mod tests {
                 "FREEBIRD_ENV",
                 "FREEBIRD_UNSAFE_DEVELOPMENT_MODE",
                 "ALLOW_UNSAFE_V4_ROTATION",
+                "ISSUER_ID",
+                "BIND_ADDR",
+                "REQUIRE_TLS",
+                "BEHIND_PROXY",
+                "TRUSTED_PROXY_CIDRS",
+                "ADMIN_API_KEY",
+                "AUDIT_LOG_PATH",
+                "ISSUER_SK_PATH",
+                "KEY_ROTATION_STATE_PATH",
+                "KID",
                 "HSM_ENABLE",
                 "HSM_MODE",
                 "HSM_MODULE_PATH",
                 "HSM_SLOT",
                 "HSM_PIN",
                 "HSM_KEY_LABEL",
+                "PUBLIC_BEARER_ENABLE",
+                "PUBLIC_BEARER_SK_PATH",
+                "PUBLIC_BEARER_METADATA_PATH",
+                "PUBLIC_BEARER_VALIDITY",
+                "PUBLIC_BEARER_AUDIENCE",
+                "PUBLIC_BEARER_MODULUS_BITS",
                 "PUBLIC_BEARER_EXCHANGE_ENABLE",
                 "PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH",
                 "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
@@ -963,6 +1010,16 @@ mod tests {
                 "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL",
                 "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64",
                 "PUBLIC_BEARER_GRAPH_ISSUANCE_ALLOW_DEVELOPMENT_MOCK",
+                "SYBIL_RESISTANCE",
+                "SYBIL_PROGRESSIVE_TRUST_SALT",
+                "SYBIL_PROOF_OF_DIVERSITY_SALT",
+                "SYBIL_MULTI_PARTY_VOUCHING_SALT",
+                "WEBAUTHN_RP_ID",
+                "WEBAUTHN_RP_NAME",
+                "WEBAUTHN_RP_ORIGIN",
+                "WEBAUTHN_REDIS_URL",
+                "WEBAUTHN_CRED_TTL",
+                "WEBAUTHN_MAX_PROOF_AGE",
             ];
             Self {
                 values: keys
@@ -987,6 +1044,77 @@ mod tests {
     fn clear_rotation_env() {
         env::remove_var("FREEBIRD_ENV");
         env::remove_var("ALLOW_UNSAFE_V4_ROTATION");
+    }
+
+    fn clean_config_env() -> EnvGuard {
+        let guard = EnvGuard::new();
+        for key in [
+            "FREEBIRD_ENV",
+            "FREEBIRD_UNSAFE_DEVELOPMENT_MODE",
+            "ALLOW_UNSAFE_V4_ROTATION",
+            "ISSUER_ID",
+            "BIND_ADDR",
+            "REQUIRE_TLS",
+            "BEHIND_PROXY",
+            "TRUSTED_PROXY_CIDRS",
+            "ADMIN_API_KEY",
+            "AUDIT_LOG_PATH",
+            "ISSUER_SK_PATH",
+            "KEY_ROTATION_STATE_PATH",
+            "KID",
+            "HSM_ENABLE",
+            "HSM_MODE",
+            "HSM_MODULE_PATH",
+            "HSM_SLOT",
+            "HSM_PIN",
+            "HSM_KEY_LABEL",
+            "PUBLIC_BEARER_ENABLE",
+            "PUBLIC_BEARER_SK_PATH",
+            "PUBLIC_BEARER_METADATA_PATH",
+            "PUBLIC_BEARER_VALIDITY",
+            "PUBLIC_BEARER_AUDIENCE",
+            "PUBLIC_BEARER_MODULUS_BITS",
+            "PUBLIC_BEARER_EXCHANGE_ENABLE",
+            "PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH",
+            "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
+            "PUBLIC_BEARER_EXCHANGE_PROFILE_PATH",
+            "PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS",
+            "PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH",
+            "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
+            "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH",
+            "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
+            "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS",
+            "PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH",
+            "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
+            "PUBLIC_BEARER_EXCHANGE_REDIS_URL",
+            "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
+            "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
+            "PUBLIC_BEARER_EXCHANGE_TIMEOUT",
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE",
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH",
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64",
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL",
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64",
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_ALLOW_DEVELOPMENT_MOCK",
+            "SYBIL_RESISTANCE",
+            "SYBIL_PROGRESSIVE_TRUST_SALT",
+            "SYBIL_PROOF_OF_DIVERSITY_SALT",
+            "SYBIL_MULTI_PARTY_VOUCHING_SALT",
+            "WEBAUTHN_RP_ID",
+            "WEBAUTHN_RP_NAME",
+            "WEBAUTHN_RP_ORIGIN",
+            "WEBAUTHN_REDIS_URL",
+            "WEBAUTHN_CRED_TTL",
+            "WEBAUTHN_MAX_PROOF_AGE",
+        ] {
+            env::remove_var(key);
+        }
+        env::set_var("BIND_ADDR", "127.0.0.1:0");
+        env::set_var("REQUIRE_TLS", "false");
+        env::set_var("BEHIND_PROXY", "false");
+        env::set_var("HSM_ENABLE", "false");
+        guard
     }
 
     #[test]
@@ -1015,6 +1143,195 @@ mod tests {
 
     #[test]
     #[serial]
+    fn config_from_env_rejects_unsafe_development_mode_outside_development() {
+        let _env = clean_config_env();
+        env::set_var("FREEBIRD_ENV", "production");
+        env::set_var("FREEBIRD_UNSAFE_DEVELOPMENT_MODE", "true");
+
+        let error = Config::from_env().expect_err("unsafe development mode must be rejected");
+        assert!(error
+            .to_string()
+            .contains("FREEBIRD_UNSAFE_DEVELOPMENT_MODE=true is only permitted"));
+    }
+
+    #[test]
+    #[serial]
+    fn config_from_env_rejects_graph_issuance_without_exchange() {
+        use base64ct::{Base64UrlUnpadded, Encoding};
+
+        let _env = clean_config_env();
+        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "false");
+        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE", "true");
+        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION", "hmac_sha256");
+        env::set_var(
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64",
+            Base64UrlUnpadded::encode_string(&[0x31; 32]),
+        );
+
+        let error = Config::from_env().expect_err("graph issuance requires exchange");
+        assert!(error
+            .to_string()
+            .contains("graph issuance requires PUBLIC_BEARER_EXCHANGE_ENABLE=true"));
+    }
+
+    #[test]
+    #[serial]
+    fn config_from_env_rejects_malformed_disabled_exchange_inputs() {
+        let _env = clean_config_env();
+        for (name, value, graph_enabled, message) in [
+            (
+                "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
+                "not-a-duration",
+                false,
+                "invalid duration",
+            ),
+            (
+                "PUBLIC_BEARER_EXCHANGE_TIMEOUT",
+                "not-a-duration",
+                false,
+                "invalid duration",
+            ),
+            (
+                "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
+                "not-a-number",
+                false,
+                "invalid digit",
+            ),
+            (
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
+                "/one.json,",
+                false,
+                "contains an empty path",
+            ),
+            (
+                "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
+                "unsupported",
+                true,
+                "unsupported graph issuance authorization verifier",
+            ),
+        ] {
+            env::remove_var("PUBLIC_BEARER_EXCHANGE_ENABLE");
+            env::remove_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE");
+            for candidate in [
+                "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
+                "PUBLIC_BEARER_EXCHANGE_TIMEOUT",
+                "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
+                "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
+                "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
+            ] {
+                env::remove_var(candidate);
+            }
+            env::set_var(name, value);
+            if graph_enabled {
+                env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE", "true");
+            }
+
+            let error = Config::from_env().expect_err("malformed exchange input must fail");
+            assert!(error.to_string().contains(message));
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn config_from_env_parses_require_tls_one_as_enabled() {
+        let _env = clean_config_env();
+        env::set_var("REQUIRE_TLS", "1");
+
+        let config = Config::from_env().expect("REQUIRE_TLS=1 must parse");
+        assert!(config.require_tls);
+    }
+
+    #[test]
+    #[serial]
+    fn config_parser_failure_is_fail_fast_before_runtime_preflight_side_effects() {
+        let _env = clean_config_env();
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let issuer_key = root.join("issuer.key");
+        let v5_key = root.join("public-bearer.der");
+        let exchange_graph = root.join("exchange.json");
+        let v5_metadata = root.join("public-bearer.json");
+        let receipt_key = root.join("receipt.key");
+        let receipt_metadata = root.join("receipt.json");
+        let invalid_issuer_key = b"not-an-issuer-key";
+        let invalid_v5_key = b"not-a-v5-key";
+        let invalid_graph = b"not-an-exchange-graph";
+        std::fs::write(&issuer_key, invalid_issuer_key).unwrap();
+        std::fs::write(&v5_key, invalid_v5_key).unwrap();
+        std::fs::write(&exchange_graph, invalid_graph).unwrap();
+
+        env::set_var("BIND_ADDR", "not-an-address");
+        env::set_var("PUBLIC_BEARER_ENABLE", "true");
+        env::set_var("PUBLIC_BEARER_SK_PATH", &v5_key);
+        env::set_var("PUBLIC_BEARER_METADATA_PATH", &v5_metadata);
+        env::set_var("ISSUER_SK_PATH", &issuer_key);
+        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
+        env::set_var("PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH", &exchange_graph);
+        env::set_var("PUBLIC_BEARER_EXCHANGE_REDIS_URL", "redis://127.0.0.1:1/");
+        env::set_var(
+            "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
+            &receipt_key,
+        );
+        env::set_var(
+            "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH",
+            &receipt_metadata,
+        );
+
+        let error = Config::from_env().expect_err("invalid bind address must fail first");
+        assert!(error.to_string().contains("Invalid BIND_ADDR"));
+        assert!(std::fs::read(&issuer_key).unwrap() == invalid_issuer_key);
+        assert!(std::fs::read(&v5_key).unwrap() == invalid_v5_key);
+        assert!(std::fs::read(&exchange_graph).unwrap() == invalid_graph);
+        assert!(!v5_metadata.exists());
+        assert!(!receipt_key.exists());
+        assert!(!receipt_metadata.exists());
+    }
+
+    #[test]
+    #[serial]
+    fn config_from_env_preserves_raw_admin_salt_and_webauthn_boundaries() {
+        let _env = clean_config_env();
+
+        let missing = Config::from_env().expect("missing raw values should parse");
+        assert!(missing.admin_api_key.is_none());
+        assert_eq!(missing.sybil_config.progressive_trust_salt.len(), 64);
+        assert_eq!(
+            missing
+                .sybil_config
+                .proof_of_diversity_fingerprint_salt
+                .len(),
+            64
+        );
+        assert_eq!(missing.sybil_config.multi_party_vouching_salt.len(), 64);
+        assert!(missing.webauthn_config.is_none());
+
+        env::set_var("ADMIN_API_KEY", "");
+        env::set_var("SYBIL_PROGRESSIVE_TRUST_SALT", "");
+        env::set_var("SYBIL_PROOF_OF_DIVERSITY_SALT", "");
+        env::set_var("SYBIL_MULTI_PARTY_VOUCHING_SALT", "");
+        let empty = Config::from_env().expect("empty raw values should parse");
+        assert!(empty.admin_api_key.is_none());
+        assert!(empty.sybil_config.progressive_trust_salt.is_empty());
+        assert!(empty
+            .sybil_config
+            .proof_of_diversity_fingerprint_salt
+            .is_empty());
+        assert!(empty.sybil_config.multi_party_vouching_salt.is_empty());
+
+        env::set_var("WEBAUTHN_RP_ID", "example.test");
+        let partial_id = Config::from_env().expect("partial WebAuthn fields should parse");
+        assert!(partial_id.webauthn_config.is_none());
+        env::remove_var("WEBAUTHN_RP_ID");
+        env::set_var("WEBAUTHN_RP_ORIGIN", "https://example.test");
+        let partial_origin = Config::from_env().expect("partial WebAuthn fields should parse");
+        assert!(partial_origin.webauthn_config.is_none());
+        env::set_var("SYBIL_RESISTANCE", "webauthn");
+        let selected_without_rp = Config::from_env().expect("selected WebAuthn should parse");
+        assert!(selected_without_rp.webauthn_config.is_none());
+    }
+
+    #[test]
+    #[serial]
     fn test_hsm_config_disabled_by_default() {
         let _env = EnvGuard::new();
         // Clear HSM environment variables
@@ -1024,8 +1341,140 @@ mod tests {
         env::remove_var("HSM_PIN");
         env::remove_var("HSM_KEY_LABEL");
 
-        let hsm_config = HsmConfig::from_env();
+        let hsm_config = HsmConfig::from_env().expect("disabled HSM should parse");
         assert!(hsm_config.is_none(), "HSM should be disabled by default");
+    }
+
+    #[test]
+    #[serial]
+    fn runtime_rejects_enabled_hsm_until_startup_integration_exists() {
+        let _env = EnvGuard::new();
+        for value in ["true", "1"] {
+            env::set_var("HSM_ENABLE", value);
+
+            let error = Config::from_env().expect_err("enabled HSM must be rejected");
+            assert!(error
+                .to_string()
+                .contains("issuer startup provider integration is not implemented"));
+        }
+    }
+
+    #[test]
+    #[serial]
+    fn runtime_rejects_malformed_hsm_enable_value() {
+        let _env = EnvGuard::new();
+        env::set_var("HSM_ENABLE", "yes");
+
+        let error = Config::from_env().expect_err("malformed HSM_ENABLE must be rejected");
+        assert!(error.to_string().contains("HSM_ENABLE must be one of"));
+        assert!(error.to_string().contains("yes"));
+    }
+
+    #[test]
+    #[serial]
+    fn runtime_accepts_zero_as_disabled_hsm() {
+        let _env = EnvGuard::new();
+        env::set_var("HSM_ENABLE", "0");
+
+        let config = Config::from_env().expect("HSM_ENABLE=0 must preserve software startup");
+        assert!(config.key_config.hsm.is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn runtime_uses_software_key_configuration_when_hsm_is_disabled() {
+        let _env = EnvGuard::new();
+        env::set_var("HSM_ENABLE", "false");
+        env::set_var("HSM_MODULE_PATH", "/reserved/unused/pkcs11.so");
+        env::set_var("HSM_SLOT", "7");
+        env::set_var("HSM_PIN", "reserved");
+        env::set_var("HSM_KEY_LABEL", "reserved-key");
+
+        let config = Config::from_env().expect("disabled HSM must preserve software startup");
+        assert!(config.key_config.hsm.is_none());
+    }
+
+    #[test]
+    #[serial]
+    fn config_from_env_preserves_top_level_first_error_precedence() {
+        let _env = clean_config_env();
+
+        env::set_var("BIND_ADDR", "not-an-address");
+        env::set_var("REQUIRE_TLS", "true");
+        env::set_var("BEHIND_PROXY", "true");
+        env::remove_var("TRUSTED_PROXY_CIDRS");
+        env::set_var("HSM_ENABLE", "yes");
+        let error = Config::from_env().expect_err("BIND_ADDR must be the first error");
+        assert!(error.to_string().contains("Invalid BIND_ADDR"));
+
+        env::set_var("BIND_ADDR", "127.0.0.1:0");
+        let error = Config::from_env().expect_err("proxy configuration must precede safety fences");
+        assert!(error
+            .to_string()
+            .contains("TRUSTED_PROXY_CIDRS is required"));
+
+        env::set_var("TRUSTED_PROXY_CIDRS", "127.0.0.0/8");
+        env::set_var("FREEBIRD_ENV", "production");
+        env::set_var("FREEBIRD_UNSAFE_DEVELOPMENT_MODE", "true");
+        let error = Config::from_env().expect_err("development safety fence must precede HSM");
+        assert!(error
+            .to_string()
+            .contains("only permitted when FREEBIRD_ENV=development"));
+
+        env::remove_var("FREEBIRD_UNSAFE_DEVELOPMENT_MODE");
+        env::set_var("HSM_ENABLE", "true");
+        let error = Config::from_env().expect_err("HSM must precede downstream configuration");
+        assert!(error
+            .to_string()
+            .contains("issuer startup provider integration is not implemented"));
+
+        env::remove_var("HSM_ENABLE");
+        env::set_var("PUBLIC_BEARER_EXCHANGE_PROFILE_PATH", "/removed/v1");
+        let error = Config::from_env().expect_err("removed aliases must remain a hard error");
+        assert!(error
+            .to_string()
+            .contains("was removed with V1 fixed-profile exchange"));
+    }
+
+    #[test]
+    #[serial]
+    fn unsafe_rotation_precedes_downstream_graph_configuration() {
+        use base64ct::{Base64UrlUnpadded, Encoding};
+
+        let _env = clean_config_env();
+        env::set_var("BIND_ADDR", "127.0.0.1:0");
+        env::set_var("REQUIRE_TLS", "false");
+        env::set_var("BEHIND_PROXY", "false");
+        env::remove_var("TRUSTED_PROXY_CIDRS");
+        env::set_var("FREEBIRD_ENV", "production");
+        env::remove_var("FREEBIRD_UNSAFE_DEVELOPMENT_MODE");
+        env::set_var("ALLOW_UNSAFE_V4_ROTATION", "true");
+        env::set_var("HSM_ENABLE", "false");
+        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
+        env::set_var("PUBLIC_BEARER_EXCHANGE_REDIS_URL", "redis://127.0.0.1:1/");
+        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE", "true");
+        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION", "hmac_sha256");
+        env::remove_var("PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64");
+
+        let error = Config::from_env().expect_err("production rotation must precede graph parsing");
+        assert!(error.to_string().contains("ALLOW_UNSAFE_V4_ROTATION=true"));
+
+        env::set_var("FREEBIRD_ENV", "development");
+        let error = Config::from_env().expect_err("graph authorization must be the next error");
+        assert!(error
+            .to_string()
+            .contains("PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64 is required"));
+
+        env::set_var(
+            "PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64",
+            Base64UrlUnpadded::encode_string(&[0x55; 32]),
+        );
+        let config = Config::from_env().expect("valid downstream graph configuration");
+        assert!(config.allow_unsafe_v4_rotation);
+        assert!(matches!(
+            config.exchange_config.graph_issuance.authorization,
+            GraphIssuanceAuthorizationConfig::HmacSha256(_)
+        ));
     }
 
     #[test]
@@ -1076,6 +1525,22 @@ mod tests {
         assert_eq!(config.retained_receipt_key_paths.len(), 2);
         assert_eq!(config.retained_receipt_metadata_paths.len(), 2);
         assert_eq!(config.retained_graph_paths.len(), 2);
+    }
+
+    #[test]
+    #[serial]
+    fn removed_v1_exchange_aliases_are_rejected() {
+        let _env = EnvGuard::new();
+        for name in [
+            "PUBLIC_BEARER_EXCHANGE_PROFILE_PATH",
+            "PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS",
+            "PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH",
+        ] {
+            env::set_var(name, "/removed/v1");
+            let error = ExchangeConfig::from_env().expect_err("removed V1 alias must be rejected");
+            assert!(error.to_string().contains("was removed"));
+            env::remove_var(name);
+        }
     }
 
     #[test]
@@ -1208,7 +1673,7 @@ mod tests {
         env::set_var("HSM_PIN", "1234");
         env::set_var("HSM_KEY_LABEL", "test-key");
 
-        let hsm_config = HsmConfig::from_env();
+        let hsm_config = HsmConfig::from_env().expect("HSM config should parse");
         assert!(hsm_config.is_some(), "HSM should be enabled");
 
         let config = hsm_config.unwrap();
@@ -1238,7 +1703,9 @@ mod tests {
         env::set_var("HSM_PIN", "5678");
         env::set_var("HSM_KEY_LABEL", "yubikey");
 
-        let hsm_config = HsmConfig::from_env().expect("Should parse HSM config");
+        let hsm_config = HsmConfig::from_env()
+            .expect("HSM config should parse")
+            .expect("HSM config should be enabled");
         assert_eq!(hsm_config.mode, HsmMode::Full);
 
         // Cleanup
@@ -1269,7 +1736,9 @@ mod tests {
         env::set_var("HSM_PIN", "1234");
         env::set_var("HSM_KEY_LABEL", "test");
 
-        let hsm_config = HsmConfig::from_env().expect("Should parse HSM config");
+        let hsm_config = HsmConfig::from_env()
+            .expect("HSM config should parse")
+            .expect("HSM config should be enabled");
         assert_eq!(
             hsm_config.mode,
             HsmMode::Storage,
@@ -1296,7 +1765,7 @@ mod tests {
         env::set_var("HSM_PIN", "1234");
         env::set_var("HSM_KEY_LABEL", "test");
 
-        HsmConfig::from_env();
+        let _ = HsmConfig::from_env();
     }
 
     #[test]
@@ -1310,6 +1779,6 @@ mod tests {
         env::set_var("HSM_PIN", "1234");
         env::set_var("HSM_KEY_LABEL", "test");
 
-        HsmConfig::from_env();
+        let _ = HsmConfig::from_env();
     }
 }

@@ -4,10 +4,11 @@
 use anyhow::{Context, Result};
 use axum::{
     body::Body,
-    http::{header, Method, Request, StatusCode},
+    http::{header, HeaderMap, Method, Request, StatusCode},
     Router,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
+use freebird_common::tls_enforcement::ValidatedClientIp;
 use freebird_crypto::{Server, VOPRF_CONTEXT_V4};
 use freebird_issuer::{
     audit::{AuditConfig, AuditLog},
@@ -24,6 +25,7 @@ use freebird_issuer::{
 use p256::ecdsa::{signature::Signer, Signature, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use serde_json::{json, Value};
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use tempfile::TempDir;
 use tower::ServiceExt;
@@ -44,6 +46,15 @@ async fn build_admin_router(
 async fn build_admin_router_with_rotation(
     vouching: Option<Arc<MultiPartyVouchingSystem>>,
     allow_unsafe_v4_rotation: bool,
+) -> Result<AdminHarness> {
+    build_admin_router_with_options(vouching, allow_unsafe_v4_rotation, false, false).await
+}
+
+async fn build_admin_router_with_options(
+    vouching: Option<Arc<MultiPartyVouchingSystem>>,
+    allow_unsafe_v4_rotation: bool,
+    behind_proxy: bool,
+    require_tls: bool,
 ) -> Result<AdminHarness> {
     let tmp = tempfile::tempdir()?;
 
@@ -100,8 +111,8 @@ async fn build_admin_router_with_rotation(
         },
         epoch_duration_secs: 86400,
         epoch_retention: 2,
-        require_tls: false,
-        behind_proxy: false,
+        require_tls,
+        behind_proxy,
         webauthn_enabled: false,
         allow_unsafe_v4_rotation,
     };
@@ -112,8 +123,8 @@ async fn build_admin_router_with_rotation(
         voprf,
         audit_log,
         ADMIN_KEY.to_string(),
-        false,
-        false,
+        behind_proxy,
+        require_tls,
         allow_unsafe_v4_rotation,
         config_summary,
     );
@@ -145,6 +156,60 @@ async fn admin_request(
     };
 
     Ok((status, value))
+}
+
+async fn dispatch_admin_request(
+    router: &Router,
+    method: Method,
+    path: &str,
+    body: Value,
+    api_key: Option<&str>,
+    cookie: Option<&str>,
+    client_ip: Option<IpAddr>,
+) -> Result<(StatusCode, HeaderMap, Vec<u8>)> {
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(path)
+        .header(header::CONTENT_TYPE, "application/json");
+
+    if let Some(api_key) = api_key {
+        builder = builder.header("x-admin-key", api_key);
+    }
+    if let Some(cookie) = cookie {
+        builder = builder.header(header::COOKIE, cookie);
+    }
+
+    let mut request = builder.body(Body::from(serde_json::to_vec(&body)?))?;
+    if let Some(client_ip) = client_ip {
+        request
+            .extensions_mut()
+            .insert(ValidatedClientIp(client_ip));
+    }
+
+    let response = router.clone().oneshot(request).await?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    Ok((status, headers, bytes.to_vec()))
+}
+
+async fn dispatch_admin_json_request(
+    router: &Router,
+    method: Method,
+    path: &str,
+    body: Value,
+    api_key: Option<&str>,
+    cookie: Option<&str>,
+    client_ip: Option<IpAddr>,
+) -> Result<(StatusCode, HeaderMap, Value)> {
+    let (status, headers, bytes) =
+        dispatch_admin_request(router, method, path, body, api_key, cookie, client_ip).await?;
+    let value = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).context("admin response was not JSON")?
+    };
+    Ok((status, headers, value))
 }
 
 #[tokio::test]
@@ -408,4 +473,395 @@ async fn admin_can_manage_multi_party_vouching() -> Result<()> {
     assert_eq!(body["total"], 0);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn admin_auth_rejects_missing_and_invalid_keys_with_same_body() -> Result<()> {
+    let harness = build_admin_router(None).await?;
+    let client_ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 41));
+
+    let (status, _, missing_body) = dispatch_admin_json_request(
+        &harness.router,
+        Method::GET,
+        "/health",
+        json!({}),
+        None,
+        None,
+        Some(client_ip),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(missing_body, json!({ "error": "unauthorized" }));
+
+    let (status, _, invalid_body) = dispatch_admin_json_request(
+        &harness.router,
+        Method::GET,
+        "/health",
+        json!({}),
+        Some("not-the-admin-key"),
+        None,
+        Some(client_ip),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(invalid_body, json!({ "error": "unauthorized" }));
+    assert_eq!(missing_body, invalid_body);
+
+    let (status, _, invalid_cookie_body) = dispatch_admin_json_request(
+        &harness.router,
+        Method::GET,
+        "/health",
+        json!({}),
+        None,
+        Some("freebird_session=not-a-session-token"),
+        Some(client_ip),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(invalid_cookie_body, json!({ "error": "unauthorized" }));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn admin_login_session_and_logout_cookie_attributes_are_stable() -> Result<()> {
+    for (require_tls, secure_suffix) in [(false, ""), (true, "; Secure")] {
+        let harness = build_admin_router_with_options(None, true, false, require_tls).await?;
+        let (status, headers, body) = dispatch_admin_json_request(
+            &harness.router,
+            Method::POST,
+            "/login",
+            json!({ "api_key": ADMIN_KEY }),
+            None,
+            None,
+            None,
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, json!({ "status": "ok" }));
+
+        let set_cookie = headers
+            .get(header::SET_COOKIE)
+            .context("login did not set a session cookie")?
+            .to_str()?;
+        let cookie_value = set_cookie
+            .strip_prefix("freebird_session=")
+            .and_then(|value| value.split(';').next())
+            .context("login cookie did not contain a session value")?;
+        assert!(!cookie_value.is_empty());
+        assert_eq!(
+            set_cookie,
+            format!(
+                "freebird_session={}; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=86400{}",
+                cookie_value, secure_suffix
+            )
+        );
+
+        let session_cookie = format!("freebird_session={cookie_value}");
+        let (status, _, health_body) = dispatch_admin_json_request(
+            &harness.router,
+            Method::GET,
+            "/health",
+            json!({}),
+            None,
+            Some(&session_cookie),
+            Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 42))),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(health_body["status"], "ok");
+
+        let (status, headers, logout_body) = dispatch_admin_json_request(
+            &harness.router,
+            Method::POST,
+            "/logout",
+            json!({}),
+            None,
+            None,
+            None,
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(logout_body, json!({ "status": "ok" }));
+        assert_eq!(
+            headers
+                .get(header::SET_COOKIE)
+                .context("logout did not set a clearing cookie")?
+                .to_str()?,
+            "freebird_session=; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=0"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn admin_auth_rate_limit_returns_status_and_generic_body() -> Result<()> {
+    let harness = build_admin_router(None).await?;
+    let client_ip = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 43));
+
+    for _ in 0..5 {
+        let (status, _, body) = dispatch_admin_json_request(
+            &harness.router,
+            Method::GET,
+            "/health",
+            json!({}),
+            Some("wrong-admin-key"),
+            None,
+            Some(client_ip),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(body, json!({ "error": "unauthorized" }));
+    }
+
+    let (status, _, body) = dispatch_admin_json_request(
+        &harness.router,
+        Method::GET,
+        "/health",
+        json!({}),
+        Some("wrong-admin-key"),
+        None,
+        Some(client_ip),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    let error = body["error"].as_str().context("missing rate-limit error")?;
+    assert!(error.starts_with("too many failed attempts, try again in "));
+    assert!(error.ends_with(" seconds"));
+    assert!(!error.contains(ADMIN_KEY));
+    assert!(!error.contains("192.0.2.43"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn admin_representative_error_bodies_are_stable() -> Result<()> {
+    let harness = build_admin_router(None).await?;
+
+    let cases = [
+        (
+            Method::POST,
+            "/invitations/create",
+            json!({ "inviter_id": "operator", "count": 0 }),
+            StatusCode::BAD_REQUEST,
+            json!({ "error": "invalid request: count must be greater than 0" }),
+        ),
+        (
+            Method::GET,
+            "/users/missing-user",
+            json!({}),
+            StatusCode::NOT_FOUND,
+            json!({ "error": "user not found: missing-user" }),
+        ),
+        (
+            Method::GET,
+            "/readiness",
+            json!({}),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({ "error": "internal server error" }),
+        ),
+    ];
+
+    for (method, path, request_body, expected_status, expected_body) in cases {
+        let (status, _, body) = dispatch_admin_json_request(
+            &harness.router,
+            method,
+            path,
+            request_body,
+            Some(ADMIN_KEY),
+            None,
+            None,
+        )
+        .await?;
+        assert_eq!(status, expected_status, "unexpected status for {path}");
+        assert_eq!(body, expected_body, "unexpected body for {path}");
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn admin_public_route_and_method_inventory_is_stable() -> Result<()> {
+    let harness = build_admin_router(None).await?;
+    let inventory = vec![
+        ("/", vec![Method::GET, Method::HEAD]),
+        ("/login", vec![Method::POST]),
+        ("/logout", vec![Method::POST]),
+        ("/health", vec![Method::GET, Method::HEAD]),
+        ("/readiness", vec![Method::GET, Method::HEAD]),
+        ("/stats", vec![Method::GET, Method::HEAD]),
+        ("/config", vec![Method::GET, Method::HEAD]),
+        ("/metrics", vec![Method::GET, Method::HEAD]),
+        ("/users", vec![Method::GET, Method::HEAD]),
+        ("/users/operator", vec![Method::GET, Method::HEAD]),
+        ("/invites/grant", vec![Method::POST]),
+        ("/invitations", vec![Method::GET, Method::HEAD]),
+        ("/invitations/create", vec![Method::POST]),
+        (
+            "/invitations/not-found",
+            vec![Method::GET, Method::HEAD, Method::DELETE],
+        ),
+        ("/users/ban", vec![Method::POST]),
+        ("/users/unban", vec![Method::POST]),
+        ("/bootstrap/add", vec![Method::POST]),
+        ("/register-owner", vec![Method::POST]),
+        ("/save", vec![Method::POST]),
+        ("/keys", vec![Method::GET, Method::HEAD]),
+        ("/keys/rotate", vec![Method::POST]),
+        ("/keys/cleanup", vec![Method::POST]),
+        ("/keys/not-found", vec![Method::DELETE]),
+        (
+            "/vouching/vouchers",
+            vec![Method::GET, Method::HEAD, Method::POST],
+        ),
+        ("/vouching/vouchers/not-found", vec![Method::DELETE]),
+        ("/vouching/vouches", vec![Method::POST]),
+        (
+            "/vouching/pending",
+            vec![Method::GET, Method::HEAD, Method::DELETE],
+        ),
+        ("/vouching/mark-successful", vec![Method::POST]),
+        ("/vouching/mark-problematic", vec![Method::POST]),
+        ("/audit", vec![Method::GET, Method::HEAD]),
+        ("/export/invitations", vec![Method::GET, Method::HEAD]),
+        ("/export/users", vec![Method::GET, Method::HEAD]),
+        ("/export/audit", vec![Method::GET, Method::HEAD]),
+        ("/webauthn/credentials", vec![Method::GET, Method::HEAD]),
+        ("/webauthn/credentials/not-found", vec![Method::DELETE]),
+        ("/webauthn/stats", vec![Method::GET, Method::HEAD]),
+        ("/webauthn/policy", vec![Method::GET, Method::HEAD]),
+    ];
+    assert_eq!(inventory.len(), 37);
+
+    let all_methods = [
+        Method::GET,
+        Method::POST,
+        Method::PUT,
+        Method::PATCH,
+        Method::DELETE,
+        Method::OPTIONS,
+        Method::HEAD,
+    ];
+
+    for (path, methods) in &inventory {
+        for method in methods {
+            let request_body = if path == &"/login" && method == Method::POST {
+                json!({ "api_key": ADMIN_KEY })
+            } else {
+                json!({})
+            };
+            let (status, _, _) = dispatch_admin_request(
+                &harness.router,
+                method.clone(),
+                path,
+                request_body,
+                Some(ADMIN_KEY),
+                None,
+                None,
+            )
+            .await?;
+            assert_ne!(
+                status,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "declared route method was rejected: {method} {path}"
+            );
+        }
+
+        for method in &all_methods {
+            if methods.contains(method) {
+                continue;
+            }
+            let (status, _, _) = dispatch_admin_request(
+                &harness.router,
+                method.clone(),
+                path,
+                json!({}),
+                Some(ADMIN_KEY),
+                None,
+                None,
+            )
+            .await?;
+            assert_eq!(
+                status,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "undeclared route method was accepted: {method} {path}"
+            );
+        }
+    }
+
+    for method in [Method::GET, Method::POST] {
+        let (status, _, _) = dispatch_admin_request(
+            &harness.router,
+            method,
+            "/not-a-public-admin-route",
+            json!({}),
+            Some(ADMIN_KEY),
+            None,
+            None,
+        )
+        .await?;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    Ok(())
+}
+
+#[test]
+fn downstream_public_admin_dto_paths_compile() {
+    fn assert_public_type<T>() {}
+
+    use freebird_issuer::routes::admin;
+
+    assert_public_type::<admin::ConfigSummary>();
+    assert_public_type::<admin::GrantInvitesRequest>();
+    assert_public_type::<admin::GrantInvitesResponse>();
+    assert_public_type::<admin::BanUserRequest>();
+    assert_public_type::<admin::BanUserResponse>();
+    assert_public_type::<admin::UnbanUserRequest>();
+    assert_public_type::<admin::UnbanUserResponse>();
+    assert_public_type::<admin::AddBootstrapUserRequest>();
+    assert_public_type::<admin::AddBootstrapUserResponse>();
+    assert_public_type::<admin::RegisterOwnerRequest>();
+    assert_public_type::<admin::RegisterOwnerResponse>();
+    assert_public_type::<admin::CreateInvitationsRequest>();
+    assert_public_type::<admin::InvitationCode>();
+    assert_public_type::<admin::CreateInvitationsResponse>();
+    assert_public_type::<admin::StatsResponse>();
+    assert_public_type::<admin::HealthResponse>();
+    assert_public_type::<admin::SybilConfigSummary>();
+    assert_public_type::<admin::SybilModeSettings>();
+    assert_public_type::<admin::TrustLevelSummary>();
+    assert_public_type::<admin::ConfigResponse>();
+    assert_public_type::<admin::RotateKeyRequest>();
+    assert_public_type::<admin::RotateKeyResponse>();
+    assert_public_type::<admin::ListKeysResponse>();
+    assert_public_type::<admin::CleanupKeysResponse>();
+    assert_public_type::<admin::ForceRemoveKeyResponse>();
+    assert_public_type::<admin::UserSummary>();
+    assert_public_type::<admin::UserDetailsResponse>();
+    assert_public_type::<admin::ListInvitationsParams>();
+    assert_public_type::<admin::ListInvitationsResponse>();
+    assert_public_type::<admin::GetInvitationResponse>();
+    assert_public_type::<admin::RevokeInvitationResponse>();
+    assert_public_type::<admin::AddVoucherRequest>();
+    assert_public_type::<admin::VoucherMutationResponse>();
+    assert_public_type::<admin::ListVouchersResponse>();
+    assert_public_type::<admin::ListPendingVouchesResponse>();
+    assert_public_type::<admin::SubmitVouchRequest>();
+    assert_public_type::<admin::SubmitVouchResponse>();
+    assert_public_type::<admin::VoucheeRequest>();
+    assert_public_type::<admin::ClearPendingVouchesResponse>();
+    assert_public_type::<admin::ListUsersParams>();
+    assert_public_type::<admin::ListUsersResponse>();
+    assert_public_type::<admin::ListAuditParams>();
+    assert_public_type::<admin::ListAuditResponse>();
+    assert_public_type::<admin::ExportParams>();
+    assert_public_type::<admin::UserExport>();
+    assert_public_type::<admin::InvitationExport>();
+    assert_public_type::<admin::AuditExport>();
+    assert_public_type::<admin::WebAuthnCredentialSummary>();
+    assert_public_type::<admin::ListWebAuthnCredentialsResponse>();
+    assert_public_type::<admin::DeleteWebAuthnCredentialResponse>();
+    assert_public_type::<admin::WebAuthnPolicyResponse>();
 }

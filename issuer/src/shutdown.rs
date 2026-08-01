@@ -62,6 +62,11 @@ impl ShutdownCoordinator {
     pub async fn flush(self, timeout: Duration) -> Result<()> {
         self.flush_until(Instant::now() + timeout).await
     }
+
+    #[cfg(test)]
+    pub(crate) fn registration_names(&self) -> Vec<&'static str> {
+        self.flushes.iter().map(|(name, _)| *name).collect()
+    }
 }
 
 pub async fn wait_for_signal() {

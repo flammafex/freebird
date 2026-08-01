@@ -766,7 +766,7 @@ impl RedisCredStore {
         }
 
         // Sort by registered_at descending (newest first)
-        credentials.sort_by(|a, b| b.registered_at.cmp(&a.registered_at));
+        credentials.sort_by_key(|credential| std::cmp::Reverse(credential.registered_at));
 
         debug!(count = credentials.len(), "Listed all WebAuthn credentials");
         Ok(credentials)
@@ -934,7 +934,7 @@ impl InMemoryCredStore {
         let creds = self.credentials.read().await;
         let mut credentials: Vec<StoredCredential> = creds.values().cloned().collect();
         // Sort by registered_at descending (newest first)
-        credentials.sort_by(|a, b| b.registered_at.cmp(&a.registered_at));
+        credentials.sort_by_key(|credential| std::cmp::Reverse(credential.registered_at));
         Ok(credentials)
     }
 }

@@ -55,10 +55,13 @@ post-restore proof, not URL string equality.
 Never snapshot or restore only one side. Before backup, require Redis to be the
 standalone writable master with AOF active, `appendfsync always`, healthy last
 write status, and `maxmemory-policy noeviction`. Quiesce writers before the
-synchronous Redis save and volume capture. Keep operation IDs out of commands,
-filenames, normal logs, and manifests: they are private 16-byte capabilities.
-Any operation IDs retained for recovery probes belong in separately encrypted,
-access-controlled operator evidence.
+synchronous Redis save and volume capture. Public operation IDs are non-secret,
+non-authorizing 16-byte correlation IDs; avoid putting them in commands,
+filenames, normal logs, or manifests when they are not needed, but do not treat
+them as capabilities. The separate 32-byte exchange or graph-issuance status
+capability is a private bearer secret: retain it for recovery only in separately
+encrypted, access-controlled operator evidence and never expose it in a body,
+URL, log, or manifest.
 
 Private historical target and receipt keys remain configured until readiness
 confirms that their pending-reference counts are zero. Public history has a
@@ -75,8 +78,9 @@ After restore, before admitting traffic:
 4. compare discovered target descriptor/keyset IDs, replay authority ID,
    retained scope tombstones, and receipt key IDs/public
    keys with the protected pre-backup inventory;
-5. retry a protected committed operation through the fixed status endpoint and
-   require the pre-backup response bytes exactly; and
+5. retry a protected committed operation through the fixed status endpoint,
+   using its public operation ID plus separately protected status capability,
+   and require the pre-backup response bytes exactly; and
 6. confirm spent fixtures remain rejected.
 
 Restoring response bytes without their target and Ed25519 verification metadata

@@ -2,20 +2,11 @@
 
 use anyhow::{bail, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use freebird_common::{
-    api::{
-        ExchangeDiscoveryV2, ExchangeGraphDiscoveryV2, ExchangePublicHistory,
-        ExchangeReceiptKeyInfo, PublicKeyInfo,
-    },
-    exchange_api::validate_receipt_key_id,
+use freebird_common::api::{
+    ExchangeDiscoveryV2, ExchangeGraphDiscoveryV2, ExchangeReceiptKeyInfo, PublicKeyInfo,
 };
 use sha2::{Digest, Sha256};
-use std::{
-    collections::{BTreeMap, HashSet},
-    path::Path,
-};
-
-use super::receipt::validate_receipt_key_metadata;
+use std::{collections::BTreeMap, path::Path};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
@@ -198,109 +189,15 @@ fn insert_global_identity(
     Ok(())
 }
 
-pub fn load_public_history(
-    path: &Path,
-    issuer_id: &str,
-    legacy_public_spki: Option<&[u8]>,
-) -> Result<ExchangePublicHistory> {
-    let history: ExchangePublicHistory = serde_json::from_slice(
-        &std::fs::read(path).with_context(|| format!("read {}", path.display()))?,
-    )?;
-    validate_public_history(&history, issuer_id, legacy_public_spki)?;
-    Ok(history)
-}
-
-pub fn validate_public_history(
-    history: &ExchangePublicHistory,
-    issuer_id: &str,
-    legacy_public_spki: Option<&[u8]>,
-) -> Result<()> {
-    let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    freebird_common::api::validate_exchange_target_metadata(
-        freebird_common::exchange_api::EXCHANGE_PROFILE_V1,
-        issuer_id,
-        &history.target_keysets,
-        &history.target_descriptors,
-    )
-    .map_err(anyhow::Error::msg)?;
-    for descriptor in &history.target_descriptors {
-        if descriptor.purpose != "exchange_target" || descriptor.valid_until < now {
-            bail!("invalid historical exchange target descriptor")
-        }
-        if let Some(legacy_spki) = legacy_public_spki {
-            let descriptor_spki = Base64UrlUnpadded::decode_vec(&descriptor.pubkey_spki_b64)
-                .context("invalid historical target SPKI")?;
-            let legacy_key_id = hex::encode(Sha256::digest(legacy_spki));
-            if descriptor_spki == legacy_spki || descriptor.token_key_id == legacy_key_id {
-                bail!("historical exchange target overlaps active legacy public issuance key")
-            }
-        }
-    }
-    let mut receipt_ids = HashSet::new();
-    for receipt in &history.receipt_keys {
-        validate_receipt_key_id(&receipt.key_id).map_err(|e| anyhow::anyhow!(e.to_string()))?;
-        validate_receipt_key_metadata(receipt, "exchange_receipt_retained")
-            .context("invalid historical receipt verification key")?;
-        // Validity is immutable identity metadata, not a startup admission
-        // window. Expired keys remain published so old receipts can be checked.
-        if !receipt_ids.insert(&receipt.key_id) {
-            bail!("invalid historical receipt verification key")
-        }
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::SigningKey;
     use freebird_common::api::{
-        ExchangeDescriptorDiscoveryV2, ExchangeDescriptorInfo, ExchangeGraphDiscoveryV2,
-        ExchangeReceiptKeyInfo, ExchangeTargetKeysetInfo, PublicKeyInfo,
+        ExchangeDescriptorDiscoveryV2, ExchangeGraphDiscoveryV2, ExchangeReceiptKeyInfo,
+        PublicKeyInfo,
     };
     use freebird_crypto::provider::{software::SoftwareBlindRsaProvider, BlindRsaProvider};
-
-    #[test]
-    fn rejects_historical_target_overlapping_active_legacy_public_key() {
-        let provider = SoftwareBlindRsaProvider::generate(2048).unwrap();
-        let spki = provider.public_key_spki();
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        let mut descriptor = ExchangeDescriptorInfo {
-            descriptor_id: String::new(),
-            keyset_id: String::new(),
-            purpose: "exchange_target".into(),
-            profile_id: freebird_common::exchange_api::EXCHANGE_PROFILE_V1.into(),
-            role: "target".into(),
-            issuer_id: "issuer:test:history".into(),
-            class: "target".into(),
-            token_key_id: hex::encode(provider.token_key_id()),
-            pubkey_spki_b64: Base64UrlUnpadded::encode_string(spki),
-            suite: "RSABSSA-SHA384-PSS-Deterministic".into(),
-            valid_from: now - 60,
-            valid_until: now + 3600,
-            max_quantity: 1,
-            audience: None,
-        };
-        descriptor.descriptor_id = descriptor.canonical_descriptor_id().unwrap();
-        let mut keyset = ExchangeTargetKeysetInfo {
-            keyset_id: String::new(),
-            descriptor_ids: vec![descriptor.descriptor_id.clone()],
-        };
-        keyset.keyset_id = keyset.canonical_keyset_id();
-        descriptor.keyset_id = keyset.keyset_id.clone();
-        let history = ExchangePublicHistory {
-            target_keysets: vec![keyset],
-            target_descriptors: vec![descriptor],
-            receipt_keys: vec![],
-        };
-
-        validate_public_history(&history, "issuer:test:history", None).unwrap();
-        let error =
-            validate_public_history(&history, "issuer:test:history", Some(spki)).unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("overlaps active legacy public issuance key"));
-    }
 
     fn retained_receipt_key(valid_from: u64, valid_until: u64) -> ExchangeReceiptKeyInfo {
         let public = SigningKey::from_bytes(&[7; 32]).verifying_key();
@@ -312,76 +209,6 @@ mod tests {
             valid_from,
             valid_until,
         }
-    }
-
-    fn history_with_receipts(receipt_keys: Vec<ExchangeReceiptKeyInfo>) -> ExchangePublicHistory {
-        let provider = SoftwareBlindRsaProvider::generate(2048).unwrap();
-        let now = time::OffsetDateTime::now_utc().unix_timestamp();
-        let mut descriptor = ExchangeDescriptorInfo {
-            descriptor_id: String::new(),
-            keyset_id: String::new(),
-            purpose: "exchange_target".into(),
-            profile_id: freebird_common::exchange_api::EXCHANGE_PROFILE_V1.into(),
-            role: "target".into(),
-            issuer_id: "issuer:test:history".into(),
-            class: "target".into(),
-            token_key_id: hex::encode(provider.token_key_id()),
-            pubkey_spki_b64: Base64UrlUnpadded::encode_string(provider.public_key_spki()),
-            suite: "RSABSSA-SHA384-PSS-Deterministic".into(),
-            valid_from: now - 60,
-            valid_until: now + 3600,
-            max_quantity: 1,
-            audience: None,
-        };
-        descriptor.descriptor_id = descriptor.canonical_descriptor_id().unwrap();
-        let mut keyset = ExchangeTargetKeysetInfo {
-            keyset_id: String::new(),
-            descriptor_ids: vec![descriptor.descriptor_id.clone()],
-        };
-        keyset.keyset_id = keyset.canonical_keyset_id();
-        descriptor.keyset_id = keyset.keyset_id.clone();
-        ExchangePublicHistory {
-            target_keysets: vec![keyset],
-            target_descriptors: vec![descriptor],
-            receipt_keys,
-        }
-    }
-
-    #[test]
-    fn expired_immutable_receipt_validity_survives_restart_and_history_load() {
-        let history = history_with_receipts(vec![retained_receipt_key(1, 2)]);
-        validate_public_history(&history, "issuer:test:history", None).unwrap();
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("history.json");
-        std::fs::write(&path, serde_json::to_vec(&history).unwrap()).unwrap();
-        let first = load_public_history(&path, "issuer:test:history", None).unwrap();
-        let second = load_public_history(&path, "issuer:test:history", None).unwrap();
-        assert_eq!(first, history);
-        assert_eq!(second.receipt_keys, first.receipt_keys);
-    }
-
-    #[test]
-    fn history_rejects_conflicting_receipt_metadata() {
-        let key = retained_receipt_key(1, 100);
-        let mut conflict = key.clone();
-        conflict.valid_until = 101;
-        let history = history_with_receipts(vec![key, conflict]);
-        assert!(validate_public_history(&history, "issuer:test:history", None).is_err());
-    }
-
-    #[test]
-    fn public_history_has_no_private_key_fields() {
-        let history = history_with_receipts(vec![retained_receipt_key(1, 100)]);
-        let serialized = serde_json::to_value(&history).unwrap();
-        let text = serde_json::to_string(&serialized).unwrap();
-        assert!(!text.contains("private_key"));
-        assert!(!text.contains("private_key_path"));
-
-        let mut with_private_path = serialized;
-        with_private_path["receipt_keys"][0]["private_key_path"] =
-            serde_json::json!("/private/receipt.key");
-        assert!(serde_json::from_value::<ExchangePublicHistory>(with_private_path).is_err());
     }
 
     #[test]

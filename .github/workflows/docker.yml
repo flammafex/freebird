@@ -15,7 +15,39 @@ env:
   REGISTRY: ghcr.io
   IMAGE_PREFIX: ghcr.io/flammafex/freebird
 jobs:
+  gate:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Resolve and gate release tag
+        env:
+          TAG: ${{ github.ref_name }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid release tag" >&2; exit 1; }
+          git fetch --force --no-tags origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/tags/${TAG}:refs/tags/${TAG}"
+          sha="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          [[ "$sha" == "${GITHUB_SHA}" ]] || { echo "tag SHA differs from event SHA" >&2; exit 1; }
+          git merge-base --is-ancestor "$sha" refs/remotes/origin/main || {
+            echo "release tag must point to a commit already reachable from origin/main" >&2
+            exit 1
+          }
+          python3 scripts/release-gate.py "$sha" "build,test,feature-tests,lint,security,javascript-sdk,repository-hygiene,compose-smoke"
+
   build:
+    needs: gate
+    if: ${{ always() && (needs.gate.result == 'success' || needs.gate.result == 'skipped') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -23,9 +55,10 @@ jobs:
       id-token: write
     strategy: {matrix: {target: [issuer, verifier]}}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
         with:
           ref: ${{ github.sha }}
+          persist-credentials: false
       - id: image
         env:
           TARGET: ${{ matrix.target }}
@@ -40,8 +73,28 @@ jobs:
             tags="${IMAGE_PREFIX}-${TARGET}:${version} ${IMAGE_PREFIX}-${TARGET}:${minor}"
           else tags="${IMAGE_PREFIX}-${TARGET}:${GITHUB_SHA} ${IMAGE_PREFIX}-${TARGET}:latest"; fi
           echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver: docker-container
+          use: true
+      - name: Validate Docker Buildx builder
+        run: |
+          set -euo pipefail
+          docker buildx inspect --bootstrap
+          driver="$(docker buildx inspect --format '{{.Driver}}')"
+          if [[ "$driver" != "docker-container" ]]; then
+            echo "Expected docker-container builder driver, got: $driver" >&2
+            exit 1
+          fi
       - name: Login
-        run: echo "${{ github.token }}" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
       - name: Build and push
         id: build
         env:
@@ -63,7 +116,7 @@ jobs:
           /tmp/cosign sign --yes "${IMAGE_PREFIX}-${TARGET}@${DIGEST}"
           mkdir -p release-metadata
           printf '%s@%s\n' "${IMAGE_PREFIX}-${TARGET}" "$DIGEST" > "release-metadata/${TARGET}.image"
-      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08
+      - uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
           name: release-image-${{ matrix.target }}-${{ github.sha }}
           path: release-metadata/*.image
@@ -76,11 +129,13 @@ jobs:
     timeout-minutes: 15
     permissions: {contents: read, actions: read, packages: read}
     steps:
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: release-image-*-${{ github.sha }}
           merge-multiple: true
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.2.2
+        with:
+          persist-credentials: false
       - name: Load unique images and smoke manifests
         run: |
           set -euo pipefail

@@ -302,7 +302,7 @@ fn contains_cbor_string(data: &[u8], needle: &str) -> bool {
     // Look for short string encoding (len < 24)
     if len < 24 {
         let header = 0x60 + len as u8;
-        if data.len() >= len + 1 {
+        if data.len() > len {
             for i in 0..=data.len() - (len + 1) {
                 if data[i] == header && &data[i + 1..i + 1 + len] == needle_bytes {
                     return true;
@@ -312,15 +312,13 @@ fn contains_cbor_string(data: &[u8], needle: &str) -> bool {
     }
 
     // Look for 1-byte length encoding
-    if len < 256 {
-        if data.len() >= len + 2 {
-            for i in 0..=data.len() - (len + 2) {
-                if data[i] == 0x78
-                    && data[i + 1] == len as u8
-                    && &data[i + 2..i + 2 + len] == needle_bytes
-                {
-                    return true;
-                }
+    if len < 256 && data.len() >= len + 2 {
+        for i in 0..=data.len() - (len + 2) {
+            if data[i] == 0x78
+                && data[i + 1] == len as u8
+                && &data[i + 2..i + 2 + len] == needle_bytes
+            {
+                return true;
             }
         }
     }
@@ -342,7 +340,7 @@ fn find_auth_data_offset(data: &[u8]) -> Option<usize> {
             if value_start < data.len() {
                 let header = data[value_start];
                 // Check for byte string headers
-                if header >= 0x40 && header < 0x58 {
+                if (0x40..0x58).contains(&header) {
                     // Short byte string (length in header)
                     return Some(value_start + 1);
                 } else if header == 0x58 && value_start + 2 < data.len() {

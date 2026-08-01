@@ -34,8 +34,9 @@ esac
 # validation checks files and cryptographic material; this lightweight check
 # catches missing environment wiring before the service is started.
 if [ "${PUBLIC_BEARER_EXCHANGE_PROFILE_PATH+x}" = x ] ||
-   [ "${PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS+x}" = x ]; then
-  error "V1 exchange profile settings are obsolete; use V2 graph paths"
+   [ "${PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS+x}" = x ] ||
+   [ "${PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH+x}" = x ]; then
+  error "V1 fixed-profile exchange settings are removed; use V2 graph and receipt paths"
 fi
 if [ "${PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL+x}" = x ]; then
   error "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL is obsolete; use the shared authority probe"

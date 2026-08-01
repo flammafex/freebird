@@ -404,8 +404,8 @@ export type SybilProof =
       user_id: string;
     }
   | {
-      type: 'webauthn';
-      username: string;
+      type: 'web_authn';
+      subject_hash: string;
       auth_proof: string;
       timestamp: number;
     }
@@ -432,6 +432,13 @@ export type SybilProof =
       vouches: VouchProof[];
       hmac_proof: string;
       timestamp: number;
+    }
+  | {
+      type: 'social_graph';
+      /** Complete cred.presentation artifact encoded as a JSON string. */
+      attestation: string;
+      /** The presentation_signature field encoded as a hexadecimal string. */
+      presentation: string;
     }
   | {
       type: 'multi';

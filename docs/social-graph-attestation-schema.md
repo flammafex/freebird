@@ -268,22 +268,25 @@ The Freebird issuer's `verify_with_context` then:
 }
 ```
 
-## Key rotation
+## Key distribution and rotation status
 
-Attester keys follow the JWKS pattern:
+The reference attester publishes its current Ed25519 public key at a JWKS
+endpoint, and `kid` in the attestation identifies that key. The current issuer
+does **not** fetch or refresh `SOCIAL_GRAPH_JWKS_URL`; it loads trusted keys from
+`SOCIAL_GRAPH_ATTESTERS_PATH`. Durable revocation state and automated rotation
+are not implemented.
 
-1. Attester generates Ed25519 keypair
-2. Attester publishes public key at a well-known JWKS URL
-3. `kid` in the attestation maps to the JWKS key ID
-4. Issuer fetches and caches keys, refreshes on
-   `SOCIAL_GRAPH_KEY_REFRESH_INTERVAL` (default 1h)
-5. Rotation: attester generates new keypair, publishes new JWKS entry,
-   signs new attestations with new key. Old key remains valid until
-   attestations signed with it expire.
-6. Revocation: attester publishes revoked `kid` list. Issuer checks on
-   each verification.
-7. Emergency revocation: issuer operator adds `kid` to local revocation
-   list in `SOCIAL_GRAPH_STATE_PATH`.
+For the current runtime, operators must update the issuer's local trusted-key
+file and coordinate attester key retirement manually. The following JWKS
+refresh, rotation, and revocation lifecycle remains the intended future
+contract:
+
+1. Attester generates an Ed25519 keypair and publishes a new JWKS entry.
+2. Issuer refreshes and caches trusted keys on
+   `SOCIAL_GRAPH_KEY_REFRESH_INTERVAL` (default 1h).
+3. Old keys remain valid until attestations signed with them expire.
+4. Issuer checks published revoked `kid` values and local emergency
+   revocations stored in `SOCIAL_GRAPH_STATE_PATH`.
 
 ## Open implementation notes
 

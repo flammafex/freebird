@@ -277,7 +277,7 @@ pub async fn handle_batch(
                     warn!("❌ Sybil resistance check failed: {}", e);
                     return Err((
                         StatusCode::FORBIDDEN,
-                        format!("Sybil resistance verification failed: {}", e),
+                        "Sybil resistance verification failed".to_string(),
                     ));
                 }
             }

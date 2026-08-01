@@ -21,10 +21,10 @@ spec:
             backend: {service: {name: issuer, port: {number: 8081}}}
           - path: /healthz
             pathType: Exact
-            backend: {service: {name: issuer, port: {number: 8081}}}
+            backend: {service: {name: issuer-probe, port: {number: 8081}}}
           - path: /readyz
             pathType: Exact
-            backend: {service: {name: issuer, port: {number: 8081}}}
+            backend: {service: {name: issuer-probe, port: {number: 8081}}}
           - path: /v1/oprf
             pathType: Prefix
             backend: {service: {name: issuer, port: {number: 8081}}}
@@ -57,19 +57,21 @@ metadata:
   name: verifier-ingress
   namespace: freebird
   annotations:
-    nginx.ingress.kubernetes.io/ssl-redirect: "false"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
 spec:
-  tls: []
+  tls:
+    - hosts: [verifier.freebird.test]
+      secretName: issuer-tls-cert
   rules:
     - host: verifier.freebird.test
       http:
         paths:
           - path: /health
             pathType: Exact
-            backend: {service: {name: verifier, port: {number: 8082}}}
+            backend: {service: {name: verifier-probe, port: {number: 8082}}}
           - path: /ready
             pathType: Exact
-            backend: {service: {name: verifier, port: {number: 8082}}}
+            backend: {service: {name: verifier-probe, port: {number: 8082}}}
           - path: /.well-known/verifier
             pathType: Exact
             backend: {service: {name: verifier, port: {number: 8082}}}

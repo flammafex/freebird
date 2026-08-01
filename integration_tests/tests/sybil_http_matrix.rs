@@ -109,13 +109,21 @@ async fn build_app(sybil_checker: Option<Arc<dyn SybilResistance>>) -> Result<Te
 }
 
 async fn post_json(router: &Router, path: &str, body: Value) -> Result<StatusCode> {
+    Ok(post_json_response(router, path, body).await?.status())
+}
+
+async fn post_json_response(
+    router: &Router,
+    path: &str,
+    body: Value,
+) -> Result<axum::response::Response> {
     let req = Request::builder()
         .method("POST")
         .uri(path)
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::USER_AGENT, USER_AGENT)
         .body(Body::from(serde_json::to_vec(&body)?))?;
-    Ok(router.clone().oneshot(req).await?.status())
+    Ok(router.clone().oneshot(req).await?)
 }
 
 fn blinded_element_b64(byte: u8) -> String {
@@ -275,6 +283,33 @@ async fn http_pow_accepts_bound_proofs_and_rejects_replay_or_wrong_binding() -> 
         post_json(&app.router, endpoint.path, with_proof(endpoint.body, wrong)).await?,
         StatusCode::FORBIDDEN
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_batch_sybil_failure_does_not_leak_internal_detail() -> Result<()> {
+    let checker: Arc<dyn SybilResistance> = Arc::new(MockSybil {
+        kind: MockKind::None,
+        allow: false,
+    });
+    let app = build_app(Some(checker)).await?;
+    let endpoint = endpoint_requests(&app.public_issuer)?
+        .into_iter()
+        .find(|endpoint| endpoint.path == "/v1/oprf/issue/batch")
+        .context("missing batch issuance endpoint")?;
+
+    let response = post_json_response(
+        &app.router,
+        endpoint.path,
+        with_proof(endpoint.body, SybilProof::None),
+    )
+    .await?;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+    let body = std::str::from_utf8(&body)?;
+    assert_eq!(body, "Sybil resistance verification failed");
+    assert!(!body.contains("mock failure"));
     Ok(())
 }
 

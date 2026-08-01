@@ -1,0 +1,83 @@
+{
+  "variants": [
+    {
+      "type": "proof_of_work",
+      "nonce": 9007199254740991,
+      "input": "freebird:test:proof-of-work",
+      "timestamp": 1700000000
+    },
+    {
+      "type": "rate_limit",
+      "client_id": "client:test",
+      "timestamp": 1700000001
+    },
+    {
+      "type": "invitation",
+      "code": "invite-code-test",
+      "signature": "invite-signature-test"
+    },
+    {
+      "type": "registered_user",
+      "user_id": "user:test"
+    },
+    {
+      "type": "web_authn",
+      "subject_hash": "subject-hash-test",
+      "auth_proof": "auth-proof-test",
+      "timestamp": 1700000002
+    },
+    {
+      "type": "progressive_trust",
+      "user_id_hash": "user-hash-progressive-test",
+      "first_seen": 1690000000,
+      "tokens_issued": 4294967295,
+      "last_issuance": 1700000003,
+      "hmac_proof": "progressive-hmac-test"
+    },
+    {
+      "type": "proof_of_diversity",
+      "user_id_hash": "user-hash-diversity-test",
+      "diversity_score": 100,
+      "unique_networks": 4294967295,
+      "unique_devices": 4294967294,
+      "first_seen": 1690000001,
+      "hmac_proof": "diversity-hmac-test"
+    },
+    {
+      "type": "multi_party_vouching",
+      "vouchee_id_hash": "vouchee-hash-test",
+      "vouches": [
+        {
+          "voucher_id": "voucher:test",
+          "vouchee_id": "vouchee:test",
+          "timestamp": 1700000004,
+          "signature": "vouch-signature-test",
+          "voucher_pubkey_b64": "vouch-public-key-test"
+        }
+      ],
+      "hmac_proof": "vouching-hmac-test",
+      "timestamp": 1700000005
+    },
+    {
+      "type": "social_graph",
+      "attestation": "{\"contract_version\":\"sophia/v1\",\"artifact_type\":\"cred.presentation\",\"artifacts\":[{\"artifact\":{\"artifact_type\":\"social_graph.attestation\"}}],\"controller_public_key\":\"controller-key-test\",\"presentation_signature\":\"presentation-signature-test\"}",
+      "presentation": "presentation-signature-hex-test"
+    },
+    {
+      "type": "multi",
+      "proofs": [
+        {
+          "type": "none"
+        },
+        {
+          "type": "rate_limit",
+          "client_id": "nested-client:test",
+          "timestamp": 1700000006
+        }
+      ]
+    },
+    {
+      "type": "none"
+    }
+  ]
+}

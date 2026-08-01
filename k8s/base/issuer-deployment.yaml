@@ -273,6 +273,27 @@ spec:
     component: issuer
 
 ---
+apiVersion: v1
+kind: Service
+metadata:
+  name: issuer-probe
+  namespace: freebird
+  labels:
+    app: freebird
+    component: issuer
+spec:
+  type: ClusterIP
+  publishNotReadyAddresses: true
+  ports:
+    - port: 8081
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    app: freebird
+    component: issuer
+
+---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:

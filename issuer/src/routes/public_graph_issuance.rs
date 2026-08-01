@@ -72,6 +72,13 @@ pub struct StatusQuery {
     public_operation_id: String,
 }
 
+#[cfg(test)]
+pub(crate) fn status_query_for_test(public_operation_id: String) -> StatusQuery {
+    StatusQuery {
+        public_operation_id,
+    }
+}
+
 pub async fn status(
     State((state, _)): State<SharedState>,
     headers: HeaderMap,

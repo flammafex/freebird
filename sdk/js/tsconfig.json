@@ -1,15 +1,17 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",            // Changed from ESNext
-    "moduleResolution": "NodeNext",  // Changed from Bundler
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "lib": ["ES2022", "DOM"],
     "declaration": true,
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "outDir": "./dist"
+    "outDir": "./dist",
+    "resolveJsonModule": true
   },
-  "include": ["src"]
+  "include": ["src", "tests", "../../common/test-fixtures/sybil-proofs.json"],
+  "exclude": ["tests/package-consumers"]
 }

@@ -1,0 +1,48 @@
+{
+  "version": "freebird/graph-blind-issuance-policy/v2",
+  "policies": [
+    {
+      "issuance_policy_id": "hmac-policy",
+      "graph_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "keyset_id": "2222222222222222222222222222222222222222222222222222222222222222",
+      "descriptor_id": "3333333333333333333333333333333333333333333333333333333333333333",
+      "budget_id": "hmac-budget",
+      "budget_limit": 3,
+      "quantity": 1,
+      "admission_state": "accepting_new",
+      "authorization_scheme": "hmac_sha256"
+    },
+    {
+      "issuance_policy_id": "v4-policy",
+      "graph_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "keyset_id": "2222222222222222222222222222222222222222222222222222222222222222",
+      "descriptor_id": "3333333333333333333333333333333333333333333333333333333333333333",
+      "budget_id": "v4-budget",
+      "budget_limit": 4,
+      "quantity": 1,
+      "admission_state": "recovery_only",
+      "authorization_scheme": "v4_local",
+      "v4_local": {
+        "verifier_id": "verifier:characterization",
+        "audience": "graph-issuance-characterization",
+        "trusted_issuers": [
+          {
+            "issuer_id": "issuer:characterization",
+            "key_ids": ["kid-characterization"]
+          }
+        ]
+      }
+    },
+    {
+      "issuance_policy_id": "mock-policy",
+      "graph_id": "1111111111111111111111111111111111111111111111111111111111111111",
+      "keyset_id": "2222222222222222222222222222222222222222222222222222222222222222",
+      "descriptor_id": "3333333333333333333333333333333333333333333333333333333333333333",
+      "budget_id": "mock-budget",
+      "budget_limit": 5,
+      "quantity": 1,
+      "admission_state": "disabled",
+      "authorization_scheme": "development_mock"
+    }
+  ]
+}

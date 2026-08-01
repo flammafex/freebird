@@ -1,9 +1,30 @@
-# Social Graph Sybil Gate — Design Blueprint
+# Social Graph Sybil Gate — Status and Design Blueprint
 
-> Status: **Design phase, not implemented.** This document is the blueprint
-> for a future Freebird Sybil gate. It was produced by parallel research
+> Status: **Phase 1 core implemented, experimental.** The issuer validates
+> `SybilProof::SocialGraph`, and the `attester/` crate provides signed-edge
+> scoring, attestation issuance, and JWKS publication. The implementation is
+> not proof-of-personhood or a production-complete trust system; this document
+> records both the shipped core and the remaining design work. It was produced
+> by parallel research
 > (Freebird architecture, app signal survey, Sybil detection literature)
 > followed by architectural design review.
+
+### Current implementation boundary
+
+The issuer-side gate currently implements Cred-shaped presentation parsing and
+verification, trusted local attester keys, Ed25519 signature checks, policy and
+eligibility checks, time and request-binding checks, and replay protection. The
+standalone attester implements `POST /v1/attest`,
+`GET /.well-known/jwks.json`, and `GET /health`; it verifies signed Clout trust
+edges and issues short-lived signed attestations.
+
+The repository does not include the Cred proof agent or a Clout client. A
+client/integration must obtain the attestation and construct the presentation
+shape accepted by the issuer. `SOCIAL_GRAPH_JWKS_URL` refresh and persistent
+revocation state are configured surfaces but are not implemented yet: local
+attester keys remain authoritative and `SOCIAL_GRAPH_STATE_PATH` is not a
+persistent revocation store. The current reference attester also does not emit
+`quota_nullifier`; requiring one therefore needs an attester that supplies it.
 
 ## 1. Overview
 
@@ -237,8 +258,8 @@ Environment variables:
 | Variable | Purpose | Default |
 |---|---|---|
 | `SOCIAL_GRAPH_ATTESTERS_PATH` | Path to trusted attester key config | none (required) |
-| `SOCIAL_GRAPH_JWKS_URL` | Optional JWKS URL for key refresh | none |
-| `SOCIAL_GRAPH_KEY_REFRESH_INTERVAL` | How often to refresh attester keys | `1h` |
+| `SOCIAL_GRAPH_JWKS_URL` | Reserved JWKS URL; refresh is not implemented | none |
+| `SOCIAL_GRAPH_KEY_REFRESH_INTERVAL` | Reserved refresh interval; currently unused | `1h` |
 | `SOCIAL_GRAPH_MIN_LEVEL` | Minimum eligibility level to accept | `1` |
 | `SOCIAL_GRAPH_ACCEPTED_POLICY_IDS` | Comma-separated accepted policy IDs | none (required) |
 | `SOCIAL_GRAPH_ATTESTATION_MAX_AGE` | Maximum age of accepted attestations | `5m` |
@@ -246,21 +267,21 @@ Environment variables:
 | `SOCIAL_GRAPH_REQUIRE_REQUEST_BINDING` | Require request binding match | `true` |
 | `SOCIAL_GRAPH_REQUIRE_QUOTA_NULLIFIER` | Require epoch-scoped quota | `false` |
 | `SOCIAL_GRAPH_REPLAY_TTL` | Replay store TTL | `10m` |
-| `SOCIAL_GRAPH_STATE_PATH` | Persistent state path | `social_graph_state.json` |
+| `SOCIAL_GRAPH_STATE_PATH` | Reserved revocation-state path; persistence is not implemented | `social_graph_state.json` |
 | `SOCIAL_GRAPH_FAIL_CLOSED` | Reject if attester keys unavailable | `true` |
 
 ### State struct
 
-The issuer persists only verifier-side state:
+The current issuer gate keeps the following in memory:
 
-- Trusted attester metadata and public keys
-- Accepted policy versions
-- Key refresh timestamps
-- Optional revoked attestation IDs or revoked key IDs
-- Local metrics/counters
+- Trusted attester public keys loaded from `SOCIAL_GRAPH_ATTESTERS_PATH`
+- Accepted policy IDs
+- Key-load timestamp
+- An in-memory revoked-key set (not persisted)
 
-It does **not** persist graph records, Clout identities, score
-histories, or edge snapshots.
+The configured state path is not currently read or written. Persistent key
+rotation/revocation state is planned. The implementation does not persist graph
+records, Clout identities, score histories, or edge snapshots.
 
 ### `verify_with_context` flow
 
@@ -355,7 +376,7 @@ consume.**
 
 ### Does this preserve issuance-redemption unlinkability?
 
-**Yes**, if implemented as designed.
+**The core flow preserves this property when used as designed.**
 
 The issuer learns that a requester had a valid social-graph attestation
 at issuance time. Redemption remains unlinkable because the redemption
@@ -546,53 +567,56 @@ The cold-start problem is solved by separating concerns:
 
 ## 8. Implementation Phases
 
-### Pre-Phase 1: Research and prototyping
+### Remaining Pre-Phase 1 integration work
 
-Before implementation:
+The following design and external-integration work remains:
 
-- [ ] Define attestation schema (fields, encoding, signature format)
+- [x] Define attestation schema (fields, encoding, signature format)
 - [ ] Define Cred `social_graph` adapter contract (import + present)
 - [ ] Define SophiaDOS `schemas/social-graph-attestation.schema.json`
-- [ ] Decide signing format: JWS, COSE, or canonical JSON signature
-- [ ] Confirm Clout trust records are signed and independently verifiable
+- [x] Decide signing format: canonical JSON with Ed25519 signature
+- [x] Confirm Clout trust records are signed and independently verifiable
 - [ ] Prototype Cred presentation with request binding
-- [ ] Prototype replay/quota handling
-- [ ] Choose initial thresholds
+- [x] Prototype replay handling
+- [ ] Complete attester-side quota/nullifier handling
+- [x] Choose initial thresholds
 - [ ] Test false positives/false negatives on sample graphs
 - [ ] Define attester key rotation and revocation
-- [ ] Document privacy boundary and logging rules
+- [x] Document privacy boundary and logging rules
 
-**If Clout cannot produce verifiable trust evidence, Phase 1 should not
-ship.**
+**If a deployment's Clout source cannot produce verifiable trust evidence, it
+must not use the gate.**
 
 > **Update:** Investigation confirmed Clout trust edges ARE signed with
 > Ed25519 and are independently verifiable by a third party. The Phase 1
 > prerequisite is met. See resolved open question #1 below.
 
-### Phase 1: MVP
+### Phase 1: MVP (core implemented; experimental)
 
-**Build (Freebird):**
+**Implemented (Freebird):**
 - `SybilProof::SocialGraph` variant
 - Issuer-side verifier gate (verifies Cred presentation + attester sig)
-- Trusted attester key config (JWKS)
+- Trusted attester key config from local JSON
 - Replay-store integration
 - Coarse eligibility levels
 
-**Build (Cred):**
+**Implemented (Social Graph Attester):**
+- Signed Clout-edge verification
+- Seed-rooted path and threshold scoring with temporal age and fanout limits
+- Signed short-lived attestation issuance
+- JWKS publication endpoint
+
+**External or deferred integration:**
 - `social_graph` adapter: `import-attestation` + `present-attestation`
 - Permission grant type: `social_graph.present`
 - Presentation binding to Freebird `app_id` + `request_id` +
   `request_binding_hash`
 
-**Build (Social Graph Attester):**
-- New service: accepts Clout trust evidence from Cred
-- Validates Ed25519 signatures on trust edges
-- Runs scoring heuristic
-- Issues signed attestation to Cred controller key
-- JWKS key publication endpoint
-- Key rotation support
+The issuer accepts the resulting presentation shape and enforces its request
+binding, but the Cred adapter and user-agent custody model are outside this
+repository.
 
-**Build (SophiaDOS):**
+**Deferred SophiaDOS integration:**
 - `schemas/social-graph-attestation.schema.json`
 - `scripts/run-social-graph-live-seam.sh` smoke test
 
@@ -611,13 +635,15 @@ ship.**
 
 **Privacy:**
 - Freebird issuer sees only Cred presentation + eligibility level
-- Attester sees Cred controller key + Clout evidence, but NOT which
+- Attester sees the holder commitment + Clout evidence, but NOT which
   Freebird instance the user will present to
 - Cred enforces per-use human approval before presentation
 
 **Limitations:**
 - Attester is trusted (sees graph evidence)
 - No full privacy-preserving graph analytics
+- Issuer JWKS URL refresh and persistent revocation state are not implemented
+- The reference attester does not enforce identity quotas or emit quota nullifiers
 - Collusion and bridge farming remain possible
 - Heuristic thresholds require tuning
 
@@ -696,22 +722,21 @@ ship.**
    distribution.
 3. ~~Is the attester allowed to know the user is requesting Freebird
    eligibility?~~
-   **Resolved (technical): Yes, in Phase 1.** The attester issues a
-   request-bound attestation (`request_binding_hash` field), so it
-   inherently knows the user is seeking Freebird eligibility. The attester
-   learns: Clout identity + that the user wants Freebird eligibility +
-   the request binding hash. It does NOT learn: what the token will be
-   used for, when redemption happens, or who the verifier is. Phase 3
-   targets blind attestations to close this gap.
+   **Resolved for the shipped protocol: the attester is not given the
+   Freebird request binding.** The reference attester receives a holder
+   commitment, subject, and signed graph evidence; it does not receive a
+   Freebird request ID or binding hash. The Cred-shaped presentation binds
+   the attestation to the Freebird request, and the issuer checks that
+   binding. The attester can still know that its attestation may be used for
+   Freebird eligibility from deployment context. Phase 3 targets blind
+   attestations to reduce that knowledge further.
 4. ~~Should quota be enforced by the attester only, or also via
    issuer-visible epoch nullifiers?~~
-   **Resolved (technical): Both layers.** The attester enforces
-   per-Clout-identity quota (how many attestations per identity per
-   epoch) — this is the primary quota. The issuer also checks the
-   `quota_nullifier` via replay store (`mark_once("social_graph:quota",
-   nullifier, ttl)`) to prevent attestation reuse across issuers or
-   attesters — this is the secondary defense. Controlled by
-   `SOCIAL_GRAPH_REQUIRE_QUOTA_NULLIFIER` config flag.
+   **Partially resolved in the shipped implementation.** The issuer can
+   optionally check `quota_nullifier` through the replay store, controlled by
+   `SOCIAL_GRAPH_REQUIRE_QUOTA_NULLIFIER`. The reference attester currently
+   emits no quota nullifier and does not enforce a per-identity epoch quota,
+   so a deployment requiring that defense must provide an attester that does.
 5. ~~What is the minimum acceptable eligibility threshold for Phase 1?~~
    **Confirmed: Conservative starting values:**
    - At least 2 independent trust edges from distinct Clout identities
@@ -724,19 +749,13 @@ ship.**
    while accepting genuine community members. They'll need tuning with
    real graph data during Pre-Phase 1 prototyping.
 6. ~~How are attester keys rotated and revoked?~~
-   **Resolved (technical): Standard JWKS pattern.**
-   - Attester generates Ed25519 keypair, publishes public key at a
-     well-known URL (JWKS format)
-   - Issuer fetches and caches keys, refreshes on
-     `SOCIAL_GRAPH_KEY_REFRESH_INTERVAL` (default 1h)
-   - Rotation: attester generates new keypair, publishes new JWKS, signs
-     new attestations with new key. Old key remains valid for a grace
-     period (controlled by `SOCIAL_GRAPH_ATTESTATION_MAX_AGE`).
-   - Revocation: attester publishes a key revocation list (revoked `kid`
-     values). Issuer checks on each verification. Short key TTL (e.g.,
-     24h) means revoked keys expire quickly.
-   - Emergency revocation: issuer operator can manually add a `kid` to
-     a local revocation list in `SOCIAL_GRAPH_STATE_PATH`.
+   **Partially implemented.** The reference attester publishes its current
+   Ed25519 public key at a JWKS endpoint, but the issuer currently loads
+   trusted keys from `SOCIAL_GRAPH_ATTESTERS_PATH`;
+   `SOCIAL_GRAPH_JWKS_URL` refresh, durable revocation, and automated
+   rotation are not implemented. Operators must change the local trusted-key
+   configuration and coordinate key retirement manually until that lifecycle
+   is added.
 7. ~~What abuse feedback can Freebird safely send back without
    deanonymizing redeemers?~~
    **Resolved (technical): Very little, by design.**

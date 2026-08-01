@@ -261,7 +261,7 @@ function exchangeFetch(body: unknown, status = 200, headers: Record<string, stri
     .mockResolvedValueOnce(response(typeof body === 'string' ? body : JSON.stringify(body), status, headers));
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('V2 public bearer exchange client', () => {
   it('validates discovery, selects an explicit transition, and completes a bound graph flow', async () => {
@@ -387,6 +387,23 @@ describe('V2 public bearer exchange client', () => {
 });
 
 describe('strict V2 graph discovery', () => {
+  it('validates exchange before graph issuance and commits no partial discovery', async () => {
+    const invalid = structuredClone(fixture.metadata) as any;
+    invalid.exchange.active_graph.graph_id = 'a'.repeat(64);
+    invalid.graph_issuance = {};
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(invalid), 200))
+      .mockResolvedValueOnce(response(JSON.stringify(fixture.metadata), 200));
+    vi.stubGlobal('fetch', fetchMock);
+    const sdk = client();
+
+    await expect(sdk.getKeyDiscoveryMetadata()).rejects.toThrow(
+      'Invalid V2 exchange discovery metadata',
+    );
+    await expect(sdk.getKeyDiscoveryMetadata()).resolves.toEqual(fixture.metadata);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ['graph ID', (metadata: any) => { metadata.exchange.active_graph.graph_id = 'a'.repeat(64); }],
     ['transition ID', (metadata: any) => { metadata.exchange.active_graph.transitions[0].transition_id = 'a'.repeat(64); }],
@@ -676,23 +693,27 @@ describe('policy-authorized graph blind issuance client', () => {
     const value = graphIssuanceFixture();
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
+    const blindingState = { opaque: 'caller-owned' };
     const context = await client().createGraphIssuanceRecoveryContext(
       value.request,
       statusCapability,
       value.result.token_key_id,
-      { opaque: 'caller-owned' },
+      blindingState,
     );
     expect(context).toMatchObject({
       publicOperationId: value.request.public_operation_id,
       expectedTokenKeyId: value.result.token_key_id,
       blindingState: { opaque: 'caller-owned' },
     });
+    expect(context.request).toBe(value.request);
+    expect(context.blindingState).toBe(blindingState);
     expect(fetchMock).not.toHaveBeenCalled();
 
-    await expect(client().retryGraphBlindSignature(
-      value.request as any,
-      statusCapability as any,
-    )).rejects.toThrow('recovery context');
+    const rawArgumentClient = client();
+    const retryWithRawArguments = rawArgumentClient.retryGraphBlindSignature.bind(rawArgumentClient) as
+      (...args: any[]) => Promise<unknown>;
+    await expect(retryWithRawArguments(value.request as any, statusCapability as any))
+      .rejects.toThrow('recovery context');
     await expect(client().getGraphIssuanceStatus(value.request as any))
       .rejects.toThrow('recovery context');
   });
@@ -799,5 +820,336 @@ describe('policy-authorized graph blind issuance client', () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(JSON.stringify(value.metadata), 200)));
     await expect(client().getKeyDiscoveryMetadata())
       .rejects.toThrow('Invalid graph issuance discovery metadata');
+  });
+});
+
+describe('exchange status, retry, and durable-response characterization', () => {
+  it('supports the request overload and preserves the exact durable response body', async () => {
+    const rawBody = JSON.stringify(fixture.success, null, 2);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(fixture.metadata), 200))
+      .mockResolvedValueOnce(response(rawBody, 200));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const outcome = await client().getExchangeStatus(fixture.request, statusCapability);
+
+    expect(outcome).toMatchObject({
+      kind: 'committed',
+      httpStatus: 200,
+      rawResponseBody: rawBody,
+      cacheControl: 'no-store',
+    });
+    expect(fetchMock.mock.calls[1][0]).toBe(
+      `https://issuer.example/v2/public/exchange/status?public_operation_id=${operationId}`,
+    );
+    expect(fetchMock.mock.calls[1][1]).toEqual({
+      method: 'GET',
+      headers: { 'exchange-status-capability': statusCapability },
+    });
+  });
+
+  it('requires no-store for status responses as well as exchange responses', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(fixture.metadata), 200))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'unknown_operation' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(client().getExchangeStatus(fixture.request, statusCapability))
+      .rejects.toThrow('Cache-Control: no-store');
+  });
+
+  it('retries the same public operation with the same wire body and capability header', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(fixture.metadata), 200))
+      .mockResolvedValueOnce(response(JSON.stringify(fixture.success), 200))
+      .mockResolvedValueOnce(response(JSON.stringify(fixture.success), 200));
+    vi.stubGlobal('fetch', fetchMock);
+    const sdk = client();
+
+    await expect(sdk.exchange(fixture.request, statusCapability)).resolves.toMatchObject({
+      kind: 'committed',
+    });
+    await expect(sdk.exchange(fixture.request, statusCapability)).resolves.toMatchObject({
+      kind: 'committed',
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls[1]).toEqual(fetchMock.mock.calls[2]);
+    expect(fetchMock.mock.calls[1][1].body).toBe(JSON.stringify(fixture.request));
+    expect(fetchMock.mock.calls[1][1].headers['exchange-status-capability']).toBe(statusCapability);
+  });
+
+  it('models every ordinary durable exchange error code with raw body and no-store', async () => {
+    const cases = [
+      [400, 'invalid_status_capability'],
+      [400, 'invalid_public_operation_id'],
+      [400, 'invalid_exchange_request'],
+      [400, 'invalid_exchange'],
+      [404, 'unknown_operation'],
+      [409, 'operation_conflict'],
+      [413, 'exchange_request_too_large'],
+      [503, 'exchange_unavailable'],
+    ] as const;
+    for (const [status, code] of cases) {
+      const rawBody = JSON.stringify({ error: code, durable: true });
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(response(JSON.stringify(fixture.metadata), 200))
+        .mockResolvedValueOnce(response(JSON.stringify({ error: code }), status));
+      vi.stubGlobal('fetch', fetchMock);
+
+      // The endpoint's error body is intentionally exact-key JSON; the raw
+      // response assertion below separately covers whitespace-preserving reads.
+      const exactRawBody = JSON.stringify({ error: code });
+      await expect(client().exchange(fixture.request, statusCapability)).resolves.toMatchObject({
+        kind: 'error',
+        httpStatus: status,
+        response: { error: code },
+        rawResponseBody: exactRawBody,
+        cacheControl: 'no-store',
+      });
+      expect(rawBody).toContain(code);
+    }
+  });
+
+  it.each(['', '01', '-1', '1.5', '1x'] as const)(
+    'rejects malformed Retry-After values: %s', async (retryAfter) => {
+      const fetchMock = exchangeFetch(
+        '{"error":"exchange_retryable"}',
+        202,
+        retryAfter === '' ? {} : { 'Retry-After': retryAfter },
+      );
+      vi.stubGlobal('fetch', fetchMock);
+      await expect(client().exchange(fixture.request, statusCapability))
+        .rejects.toThrow('invalid Retry-After');
+    },
+  );
+
+  it('keeps capabilities out of exchange URLs and response records', async () => {
+    const body = structuredClone(fixture.success) as any;
+    body.receipt.exchange_status_capability = statusCapability;
+    const fetchMock = exchangeFetch(body);
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(client().exchange(fixture.request, statusCapability))
+      .rejects.toThrow('malformed success JSON');
+    expect(fetchMock.mock.calls[1][0]).not.toContain(statusCapability);
+    expect(fetchMock.mock.calls[1][1].body).not.toContain(statusCapability);
+  });
+});
+
+describe('graph issuance error, alias, and capability characterization', () => {
+  it('dispatches recovery-context, retry, and status through public digest overrides', async () => {
+    class DigestProbe extends FreebirdClient {
+      digestRequests: GraphIssuanceRequest[] = [];
+
+      override graphIssuanceRequestDigest(request: GraphIssuanceRequest): string {
+        this.digestRequests.push(request);
+        return super.graphIssuanceRequestDigest(request);
+      }
+    }
+    const value = graphIssuanceFixture();
+    const sdk = new DigestProbe({ issuerUrl: 'https://issuer.example' });
+    const blindingState = { opaque: 'digest-dispatch' };
+    const context = await sdk.createGraphIssuanceRecoveryContext(
+      value.request,
+      statusCapability,
+      value.result.token_key_id,
+      blindingState,
+    );
+    expect(sdk.digestRequests).toHaveLength(1);
+    expect(sdk.digestRequests[0]).toBe(value.request);
+    expect(context.request).toBe(value.request);
+    expect(context.blindingState).toBe(blindingState);
+
+    const retryFetch = vi.fn().mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+    vi.stubGlobal('fetch', retryFetch);
+    await expect(sdk.retryGraphBlindSignature(context)).resolves.toMatchObject({
+      kind: 'committed', response: value.result,
+    });
+    expect(sdk.digestRequests).toHaveLength(3);
+    expect(sdk.digestRequests[1]).toBe(value.request);
+    expect(sdk.digestRequests[2]).toBe(value.request);
+
+    const statusFetch = vi.fn().mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+    vi.stubGlobal('fetch', statusFetch);
+    await expect(sdk.getGraphIssuanceStatus(context)).resolves.toMatchObject({
+      kind: 'committed', response: value.result,
+    });
+    expect(sdk.digestRequests).toHaveLength(5);
+    expect(sdk.digestRequests[3]).toBe(value.request);
+    expect(sdk.digestRequests[4]).toBe(value.request);
+  });
+
+  it('retains the last committed discovery when a fresh graph fetch fails', async () => {
+    const value = graphIssuanceFixture();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+      .mockResolvedValueOnce(new Response('temporarily unavailable', { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const sdk = client();
+
+    await expect(sdk.selectGraphIssuancePolicy('bootstrap-v1')).resolves.toMatchObject({
+      admission_state: 'accepting_new',
+    });
+    await expect(sdk.selectGraphIssuancePolicy('bootstrap-v1')).rejects.toThrow('503');
+    await expect(sdk.selectExchangeTransition(
+      value.request.graph_id,
+      value.metadata.exchange!.active_graph.transitions[0].transition_id,
+    )).resolves.toBeDefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('dispatches public exchange/graph hooks with live request and recovery identities', async () => {
+    class PublicHookProbe extends FreebirdClient {
+      exchangeSelectionCalls = 0;
+      graphPolicyCalls = 0;
+      exchangeDigestRequest: ExchangeRequest | undefined;
+      graphDigestRequest: GraphIssuanceRequest | undefined;
+      retryContext: GraphIssuanceRecoveryContext | undefined;
+
+      override async selectExchangeTransition(graphId: string, transitionId: string) {
+        this.exchangeSelectionCalls++;
+        expect(graphId).toBe(fixture.request.graph_id);
+        expect(transitionId).toBe(fixture.request.transition_id);
+        return {
+          graph: fixture.metadata.exchange!.active_graph,
+          transition: fixture.metadata.exchange!.active_graph.transitions[0],
+        };
+      }
+
+      override exchangeRequestDigest(request: ExchangeRequest): string {
+        this.exchangeDigestRequest = request;
+        return super.exchangeRequestDigest(request);
+      }
+
+      override async selectGraphIssuancePolicy(policyId: string) {
+        this.graphPolicyCalls++;
+        expect(policyId).toBe('bootstrap-v1');
+        return graphIssuanceFixture().metadata.graph_issuance!.policies[0];
+      }
+
+      override graphIssuanceRequestDigest(request: GraphIssuanceRequest): string {
+        this.graphDigestRequest = request;
+        return super.graphIssuanceRequestDigest(request);
+      }
+
+      override async retryGraphBlindSignature(context: GraphIssuanceRecoveryContext) {
+        this.retryContext = context;
+        return {
+          kind: 'error' as const,
+          httpStatus: 503 as const,
+          response: { error: 'graph_issuance_unavailable' },
+          rawResponseBody: '{"error":"graph_issuance_unavailable"}',
+          cacheControl: 'no-store' as const,
+        };
+      }
+    }
+
+    const exchangeProbe = new PublicHookProbe({
+      issuerUrl: 'https://issuer.example', verifierId: 'v', audience: 'a',
+    });
+    const exchangeFetchMock = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify({ error: 'exchange_unavailable' }), 503))
+      .mockResolvedValueOnce(response(JSON.stringify({ error: 'exchange_unavailable' }), 503));
+    vi.stubGlobal('fetch', exchangeFetchMock);
+    await expect(exchangeProbe.exchange(fixture.request, statusCapability))
+      .resolves.toMatchObject({ kind: 'error', httpStatus: 503 });
+    expect(exchangeProbe.exchangeSelectionCalls).toBe(1);
+    expect(exchangeProbe.exchangeDigestRequest).toBe(fixture.request);
+    await expect(exchangeProbe.getExchangeStatus(fixture.request, statusCapability))
+      .resolves.toMatchObject({ kind: 'error', httpStatus: 503 });
+    expect(exchangeProbe.exchangeSelectionCalls).toBe(2);
+    expect(exchangeProbe.exchangeDigestRequest).toBe(fixture.request);
+
+    const value = graphIssuanceFixture();
+    const recovery = graphRecoveryContext(value);
+    const graphFetchMock = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+      .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+    vi.stubGlobal('fetch', graphFetchMock);
+    const graphProbe = new PublicHookProbe({
+      issuerUrl: 'https://issuer.example', verifierId: 'v', audience: 'a',
+    });
+    await graphProbe.getKeyDiscoveryMetadata();
+    await expect(graphProbe.issueGraphBlindSignature(value.request, statusCapability))
+      .resolves.toMatchObject({ kind: 'committed' });
+    expect(graphProbe.graphPolicyCalls).toBe(1);
+    expect(graphProbe.graphDigestRequest).toBe(value.request);
+
+    const aliasProbe = new PublicHookProbe({ issuerUrl: 'https://issuer.example' });
+    await expect(aliasProbe.retryGraphIssuance(recovery)).resolves.toMatchObject({
+      kind: 'error', httpStatus: 503,
+    });
+    expect(aliasProbe.retryContext).toBe(recovery);
+  });
+
+  it('models fresh graph issuance errors and preserves the durable raw body', async () => {
+    const cases = [
+      [400, 'invalid_status_capability'],
+      [400, 'invalid_public_operation_id'],
+      [400, 'invalid_graph_issuance_request'],
+      [400, 'invalid_graph_issuance'],
+      [404, 'unknown_operation'],
+      [409, 'operation_conflict'],
+      [413, 'graph_issuance_request_too_large'],
+      [503, 'graph_issuance_unavailable'],
+    ] as const;
+    for (const [status, code] of cases) {
+      const value = graphIssuanceFixture();
+      const rawBody = JSON.stringify({ error: code });
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+        .mockResolvedValueOnce(response(rawBody, status));
+      vi.stubGlobal('fetch', fetchMock);
+
+      await expect(client().issueGraphBlindSignature(value.request, statusCapability))
+        .resolves.toMatchObject({
+          kind: 'error',
+          httpStatus: status,
+          response: { error: code },
+          rawResponseBody: rawBody,
+          cacheControl: 'no-store',
+        });
+    }
+  });
+
+  it('rejects unauthorized graph status and uses the recovery alias without discovery', async () => {
+    const value = graphIssuanceFixture();
+    const recovery = graphRecoveryContext(value);
+    const unauthorized = vi.fn().mockResolvedValueOnce(response(JSON.stringify({
+      error: 'status_unauthorized',
+    }), 403));
+    vi.stubGlobal('fetch', unauthorized);
+    await expect(client().getGraphIssuanceStatus(recovery)).rejects.toThrow('not authorized');
+
+    const retry = vi.fn().mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+    vi.stubGlobal('fetch', retry);
+    await expect(client().retryGraphIssuance(recovery)).resolves.toMatchObject({
+      kind: 'committed', response: value.result,
+    });
+    expect(retry).toHaveBeenCalledTimes(1);
+    expect(retry.mock.calls[0][0]).toBe('https://issuer.example/v1/public/graph/issue');
+    expect(retry.mock.calls[0][1]).toEqual({
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'graph-issuance-status-capability': statusCapability,
+      },
+      body: JSON.stringify(value.request),
+    });
+  });
+
+  it('keeps the graph capability header-only on fresh and recovery requests', async () => {
+    const value = graphIssuanceFixture();
+    const fresh = vi.fn()
+      .mockResolvedValueOnce(response(JSON.stringify(value.metadata), 200))
+      .mockResolvedValueOnce(response(JSON.stringify(value.result), 200));
+    vi.stubGlobal('fetch', fresh);
+    await client().issueGraphBlindSignature(value.request, statusCapability);
+    expect(fresh.mock.calls[1][0]).not.toContain(statusCapability);
+    expect(fresh.mock.calls[1][1].body).not.toContain(statusCapability);
+    expect(fresh.mock.calls[1][1].headers['graph-issuance-status-capability'])
+      .toBe(statusCapability);
   });
 });

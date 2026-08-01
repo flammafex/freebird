@@ -121,8 +121,10 @@ issuer and verifier admin access (use separate operator credentials where
 possible). Invitation configuration must use the actual parser keys:
 `SYBIL_INVITE_COOLDOWN`, `SYBIL_INVITE_EXPIRES`,
 `SYBIL_INVITE_NEW_USER_WAIT`, and `SYBIL_INVITE_AUTOSAVE_INTERVAL`; `_SECS`
-variants are ignored. PKCS#11 can store key material, but HSM-native/full
-VOPRF is unsupported.
+variants are ignored. PKCS#11 provider support is not integrated with issuer
+startup. `HSM_ENABLE=true` is rejected by the issuer and
+`freebird-validate-config`; keep it disabled until the startup provider
+integration exists.
 
 ## WebAuthn
 

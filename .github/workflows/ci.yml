@@ -100,6 +100,11 @@ jobs:
         run: |
           python3 scripts/test-backup-archive.py
           bash scripts/test-backup-restore.sh
+      - name: Run release gate tests without source-tree bytecode
+        run: |
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+          TMPDIR="$tmp" PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-release-gate.py
       - name: Validate documentation links and profile matrix
         run: python3 scripts/ci-static-checks.py
       - name: Validate JSON manifests

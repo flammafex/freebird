@@ -1,8 +1,9 @@
 #!/bin/bash
-# Setup SoftHSM for Freebird testing
+# Setup SoftHSM for provider-level testing
 #
 # This script initializes a SoftHSM token and generates a P-256 key
-# for testing Freebird's HSM integration.
+# for testing the optional PKCS#11 provider. Issuer startup HSM integration is
+# not implemented, so HSM_ENABLE=true is rejected by the issuer.
 #
 # Prerequisites:
 #   - softhsm2
@@ -13,7 +14,7 @@
 
 set -e
 
-echo "🔐 Setting up SoftHSM for Freebird testing..."
+echo "🔐 Setting up SoftHSM for PKCS#11 provider-level testing..."
 
 # Configuration
 TOKEN_LABEL="freebird-test"
@@ -75,15 +76,12 @@ pkcs11-tool --module "$MODULE_PATH" \
 echo ""
 echo "✅ SoftHSM setup complete!"
 echo ""
-echo "Configuration for .env.hsm:"
-echo "  HSM_ENABLE=true"
-echo "  HSM_MODE=storage"
+echo "Provider-level test values (do not enable issuer HSM startup):"
+echo "  HSM_ENABLE=true is rejected by the issuer until startup integration exists"
+echo "  HSM_MODE=storage (reserved)"
 echo "  HSM_MODULE_PATH=$MODULE_PATH"
 echo "  HSM_SLOT=$SLOT"
 echo "  HSM_PIN=$USER_PIN"
 echo "  HSM_KEY_LABEL=$KEY_LABEL"
 echo ""
-echo "Test with:"
-echo "  cp .env.hsm.example .env.hsm"
-echo "  # Edit .env.hsm with the values above"
-echo "  # Then run: cargo run --bin issuer"
+echo "Use these values only with the optional PKCS#11 provider tests."

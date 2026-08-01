@@ -20,6 +20,7 @@ does not need to know which issuance request produced a redeemed token.
 | --- | --- |
 | `issuer` | HTTP issuer, key management, Sybil gates, admin routes, WebAuthn support. |
 | `verifier` | HTTP verifier, issuer metadata refresh, nullifier storage, admin routes. |
+| `attester` | Optional Social Graph Attester service: signed-edge scoring, short-lived attestations, and JWKS publication. |
 | `interface` | Local V4 smoke-test client for source builds. |
 | `crypto` | VOPRF, blind RSA, token, and provider primitives. |
 | `common` | Shared API types, metrics, TLS enforcement, duration parsing, rate limits. |
@@ -60,6 +61,25 @@ V5 uses blind RSA signatures for public bearer passes.
 
 Batch V5 issuance uses `POST /v1/public/issue/batch`.
 
+## Durable Public Operations
+
+The optional V2 public-bearer exchange and V2 graph-issuance routes are
+durable Redis-backed operations. Each request carries two independent values:
+
+- `public_operation_id` is a canonical 16-byte, base64url-encoded,
+  non-secret correlation ID. It identifies the operation but does not
+  authorize access to its result.
+- The exchange or graph-issuance status capability is a separate canonical
+  32-byte random bearer value. It is sent only in the corresponding status
+  header and authorizes retries and status reads. It must not be placed in a
+  body, URL, discovery document, or log.
+
+The public operation ID may appear in a status query because it has no
+authority without the separate capability. Status reads are observation-only;
+after an ambiguous response, clients retry the exact original request with the
+same operation ID and capability. See [Public Bearer Exchange](public-bearer-exchange.md)
+and [Public Graph Blind Issuance](public-graph-blind-issuance.md).
+
 ## Metadata
 
 The issuer exposes discovery endpoints:
@@ -79,16 +99,20 @@ Issuer storage includes:
 - optional V5 RSA private key and metadata
 - optional Sybil-state files for invitation, progressive trust,
   proof-of-diversity, and multi-party vouching
+- optional Redis-backed V2 exchange/graph-issuance operation records, spend
+  markers, budgets, and replay-authority state
 - audit log JSON
 - optional WebAuthn credential storage in Redis
 
 Verifier storage includes:
 
-- nullifier store, in-memory by default
-- Redis nullifier store when `REDIS_URL` is configured
+- Redis nullifier/replay store, required by default
+- process-local in-memory replay only when `IN_MEMORY_REPLAY_STORE=true` and
+  `VERIFIER_ENV=development`; it is not restart-safe and is never suitable for
+  production, exchange, or graph issuance
 - optional V4 private verification key or keyring
 
-For public deployments, verifier nullifier storage should be Redis-backed.
+For public deployments, verifier nullifier/replay storage must be Redis-backed.
 
 ## Sybil Gate Placement
 
@@ -100,6 +124,24 @@ context can include client IP/User-Agent derived data and a request-binding
 string. Mechanisms that use the context can reject caller-chosen identities or
 proofs computed for a different issuance request.
 
+## Optional Social Graph Attester
+
+When `SYBIL_RESISTANCE=social_graph` is enabled, a separate `attester` service
+evaluates signed social-graph evidence and issues a short-lived Ed25519-signed
+attestation. A client or proof agent presents that attestation in the
+Cred-shaped `SybilProof::SocialGraph` payload. The issuer verifies the
+attestation and presentation signatures, accepted policy, expiry, eligibility
+level, request binding, and replay state; it does not receive or analyze raw
+graph edges.
+
+The attester is an optional, independently operated trust boundary. The issuer
+currently trusts public keys loaded from `SOCIAL_GRAPH_ATTESTERS_PATH`; its
+configured JWKS URL is not refreshed at runtime, revocation state is not
+persistent, and the reference attester does not enforce per-identity quotas or
+emit quota nullifiers. See the [Social Graph Sybil Gate](social-graph-gate.md)
+and [Production Deployment](production-deployment.md) guidance before using
+this experimental gate.
+
 ## Trust Boundaries
 
 The main trust boundaries are:
@@ -107,6 +149,10 @@ The main trust boundaries are:
 - client to issuer over HTTP
 - client to verifier over HTTP
 - verifier to issuer metadata discovery
+- client/proof agent to the optional Social Graph Attester, which receives
+  graph evidence and becomes a separate trust boundary
+- attester to issuer through signed social-graph presentations; the issuer
+  trusts configured attester keys and policy, not the underlying graph analysis
 - admin client to admin routes
 - service process to Redis or local persistence
 

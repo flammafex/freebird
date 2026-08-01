@@ -1,7 +1,7 @@
 ---
 # Kubernetes Ingress for Freebird Issuer
-# Requires ingress-nginx with the controller-level proxy-set-headers ConfigMap
-# configured; see docs/deployment-kubernetes.md. Hosts and source CIDRs are
+# Requires ingress-nginx built-in forwarded-header handling at the HTTPS
+# boundary; see docs/deployment-kubernetes.md. Hosts and source CIDRs are
 # overlay values.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -49,14 +49,14 @@ spec:
             pathType: Exact
             backend:
               service:
-                name: issuer
+                name: issuer-probe
                 port:
                   number: 8081
           - path: /readyz
             pathType: Exact
             backend:
               service:
-                name: issuer
+                name: issuer-probe
                 port:
                   number: 8081
           - path: /v1/oprf
@@ -159,13 +159,13 @@ spec:
             pathType: Exact
             backend:
               service:
-                name: verifier
+                name: verifier-probe
                 port:
                   number: 8082
           - path: /ready
             pathType: Exact
             backend:
               service:
-                name: verifier
+                name: verifier-probe
                 port:
                   number: 8082

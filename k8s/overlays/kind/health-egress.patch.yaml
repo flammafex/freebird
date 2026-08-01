@@ -20,6 +20,4 @@ spec:
               app.kubernetes.io/component: controller
       ports:
         - protocol: TCP
-          port: 80
-        - protocol: TCP
           port: 443

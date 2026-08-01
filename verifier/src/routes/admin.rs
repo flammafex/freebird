@@ -36,45 +36,9 @@ use std::time::Instant;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 
-// ============================================================================
-// Issuer Info - Shared type used by both main.rs and admin
-// ============================================================================
-
-/// Information about a trusted issuer
-/// This type is shared between main.rs and the admin module
-#[derive(Clone, Debug)]
-pub struct IssuerInfo {
-    pub pubkey_bytes: Vec<u8>,
-    pub kid: String,
-    pub ctx: Vec<u8>,
-    pub verification_key: Option<[u8; 32]>,
-    pub deprecated_verification_keys: HashMap<String, [u8; 32]>,
-    pub public_keys:
-        HashMap<[u8; freebird_crypto::PUBLIC_BEARER_TOKEN_KEY_ID_LEN], PublicIssuerKey>,
-    /// When this issuer's metadata was last refreshed
-    pub last_refreshed: Option<Instant>,
-}
-
-#[derive(Clone, Debug)]
-pub struct PublicIssuerKey {
-    pub token_key_id: [u8; freebird_crypto::PUBLIC_BEARER_TOKEN_KEY_ID_LEN],
-    pub token_key_id_hex: String,
-    pub pubkey_spki: Vec<u8>,
-    pub issuer_id: String,
-    pub valid_from: i64,
-    pub valid_until: i64,
-    pub audience: Option<String>,
-}
-
-impl IssuerInfo {
-    pub fn verification_key_for(&self, kid: &str) -> Option<[u8; 32]> {
-        if self.kid == kid {
-            self.verification_key
-        } else {
-            self.deprecated_verification_keys.get(kid).copied()
-        }
-    }
-}
+// Issuer metadata types are owned by the metadata module but remain available
+// at their established public admin paths.
+pub use crate::metadata::{IssuerInfo, PublicIssuerKey};
 
 // ============================================================================
 // Admin State

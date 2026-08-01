@@ -385,7 +385,8 @@ For production:
 - Use a high-entropy `ADMIN_API_KEY` from a secret manager.
 - Use Redis for verifier nullifier storage.
 - Use `SYBIL_REPLAY_STORE=redis` for issuer Sybil proof replay protection.
-- Keep issuer key material on protected storage or an HSM-backed path.
+- Keep issuer key material on protected filesystem storage. HSM-backed issuer
+  startup integration is not implemented; `HSM_ENABLE=true` is rejected.
 - Do not use `SYBIL_RESISTANCE=none` for a public issuer.
 - Pin container image versions or digests instead of `latest`.
 - Keep `/admin` on a private hostname, VPN, or explicit source allowlist.

@@ -194,7 +194,7 @@ check_configuration() {
 
     # V2 graph/exchange configuration checks. URL spelling is deliberately not
     # compared: the replay-authority probe proves the shared logical database.
-    if grep -Eq '^[[:space:]]*(PUBLIC_BEARER_EXCHANGE_PROFILE_PATH|PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS|PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL)=' "$ENV_FILE"; then
+    if grep -Eq '^[[:space:]]*(PUBLIC_BEARER_EXCHANGE_PROFILE_PATH|PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS|PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH|PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL)=' "$ENV_FILE"; then
         check_fail "Obsolete V1 graph/exchange configuration is present"
     fi
     if grep -Eq '^[[:space:]]*PUBLIC_BEARER_EXCHANGE_ENABLE=(true|1)' "$ENV_FILE"; then

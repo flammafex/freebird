@@ -47,6 +47,8 @@ Use only the canonical V2 environment names:
 `PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH`,
 `PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS`, the separate receipt metadata
 paths, and disabled-publication acknowledgement paths shown above.
+The removed fixed-profile aliases are rejected by the issuer, configuration
+validator, and deployment checks; they are not compatibility fallbacks.
 
 Run the configuration validator against the same files, environment, direct V5
 key, issuer ID, and Redis database that production will use:

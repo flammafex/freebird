@@ -24,4 +24,4 @@ spec:
         - name: verifier
           readinessProbe:
             exec:
-              command: ["sh", "-c", "curl -fsS --connect-to verifier.freebird.test:80:ingress-nginx-controller.ingress-nginx.svc.cluster.local:80 http://verifier.freebird.test/ready"]
+              command: ["sh", "-c", "curl -fsS --connect-to verifier.freebird.test:443:ingress-nginx-controller.ingress-nginx.svc.cluster.local:443 https://verifier.freebird.test/ready"]

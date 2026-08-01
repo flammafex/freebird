@@ -5,3 +5,4 @@
 
 pub mod admin;
 pub mod admin_rate_limit;
+pub mod public;
