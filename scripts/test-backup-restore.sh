@@ -85,7 +85,12 @@ if BOUND_TIMER_MARKER="$tmp/timer" PATH="$tools:/usr/bin:/bin" BACKUP_RESTORE_TE
   "$root/scripts/backup-restore.sh" "$runner" "$args" ok; then exit 1; else [[ $? == 7 ]]; fi
 [[ $(basename "$(cat "$tmp/timer")") == timeout ]]
 rm "$tools/timeout"
-if BOUND_TIMER_MARKER="$tmp/timer" PATH="$tools:/usr/bin:/bin" BACKUP_RESTORE_TEST_RUN_BOUNDED=1 \
+# A system GNU timeout (coreutils, /usr/bin/timeout on Linux) shadows the
+# gtimeout stub once the stub is removed, so run this preference check in a
+# PATH exposing only the stubs and the minimal tools the script needs to boot.
+ln -s "$(command -v bash)" "$tools/bash"
+ln -s "$(command -v dirname)" "$tools/dirname"
+if BOUND_TIMER_MARKER="$tmp/timer" PATH="$tools" BACKUP_RESTORE_TEST_RUN_BOUNDED=1 \
   "$root/scripts/backup-restore.sh" "$runner" "$args" ok; then exit 1; else [[ $? == 7 ]]; fi
 [[ $(basename "$(cat "$tmp/timer")") == gtimeout ]]
 PATH="/usr/bin:/bin" BACKUP_RESTORE_TEST_RUN_BOUNDED=1 \
