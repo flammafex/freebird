@@ -118,8 +118,7 @@ jobs:
           PY
       - name: Validate YAML manifests
         run: |
-          ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path); puts "valid YAML: #{path}" }' \
-            $(git ls-files '*.yml' '*.yaml')
+          git ls-files -z '*.yml' '*.yaml' | xargs -0 ruby -e 'require "yaml"; ARGV.each { |path| YAML.load_file(path); puts "valid YAML: #{path}" }'
       - name: Validate GitHub Actions workflows
         uses: docker://rhysd/actionlint:1.7.7
 
