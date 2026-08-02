@@ -211,7 +211,9 @@ def check_docker_action_pins_and_order() -> list[str]:
     buildx = _workflow_job(text, "build")
     if "driver: docker-container" not in buildx or "use: true" not in buildx:
         errors.append("docker workflow must use the active docker-container Buildx builder")
-    if "driver=\"$(docker buildx inspect --format '{{.Driver}}')\"" not in buildx:
+    # docker buildx inspect has no --format flag on buildx >= 0.32; the
+    # workflow asserts the driver by parsing "Driver:" from its output.
+    if "driver=\"$(docker buildx inspect --builder \"${{ steps.buildx.outputs.name }}\" | grep '^Driver:' | awk '{print $2}')\"" not in buildx:
         errors.append("docker workflow must assert the active Buildx driver")
     return errors
 

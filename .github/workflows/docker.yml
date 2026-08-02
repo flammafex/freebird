@@ -109,7 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           args=(); for tag in $TAGS; do args+=(--tag "$tag"); done
-          docker buildx build --builder "${{ steps.buildx.outputs.name }}" --platform linux/amd64,linux/arm64 --target "$TARGET" --push "${args[@]}" --build-arg VERSION="$GITHUB_REF_NAME" --build-arg VCS_REF="$GITHUB_SHA" --metadata-file metadata.json .
+          docker buildx build --platform linux/amd64,linux/arm64 --builder "${{ steps.buildx.outputs.name }}" --target "$TARGET" --push "${args[@]}" --build-arg VERSION="$GITHUB_REF_NAME" --build-arg VCS_REF="$GITHUB_SHA" --metadata-file metadata.json .
           digest="$(python3 -c 'import json; print(json.load(open("metadata.json"))["containerimage.digest"])')"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Install cosign
