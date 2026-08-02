@@ -76,6 +76,7 @@ jobs:
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
       - name: Set up Docker Buildx
+        id: buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         with:
           driver: docker-container
@@ -83,8 +84,12 @@ jobs:
       - name: Validate Docker Buildx builder
         run: |
           set -euo pipefail
-          docker buildx inspect --bootstrap
-          driver="$(docker buildx inspect --format '{{.Driver}}')"
+          # Hosted runners do not reliably honour the ambient "current builder"
+          # set by the setup action's --use (buildx >= 0.32). Reference the
+          # builder by name everywhere instead of relying on the default.
+          docker buildx use "${{ steps.buildx.outputs.name }}"
+          docker buildx inspect --bootstrap --builder "${{ steps.buildx.outputs.name }}"
+          driver="$(docker buildx inspect --builder "${{ steps.buildx.outputs.name }}" --format '{{.Driver}}')"
           if [[ "$driver" != "docker-container" ]]; then
             echo "Expected docker-container builder driver, got: $driver" >&2
             exit 1
@@ -103,7 +108,7 @@ jobs:
         run: |
           set -euo pipefail
           args=(); for tag in $TAGS; do args+=(--tag "$tag"); done
-          docker buildx build --platform linux/amd64,linux/arm64 --target "$TARGET" --push "${args[@]}" --build-arg VERSION="$GITHUB_REF_NAME" --build-arg VCS_REF="$GITHUB_SHA" --metadata-file metadata.json .
+          docker buildx build --builder "${{ steps.buildx.outputs.name }}" --platform linux/amd64,linux/arm64 --target "$TARGET" --push "${args[@]}" --build-arg VERSION="$GITHUB_REF_NAME" --build-arg VCS_REF="$GITHUB_SHA" --metadata-file metadata.json .
           digest="$(python3 -c 'import json; print(json.load(open("metadata.json"))["containerimage.digest"])')"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Install cosign
