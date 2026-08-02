@@ -48,3 +48,6 @@ public_bearer_sk.der
 
 # Local deep-work planning state
 .slim/deepwork/
+
+# Landing page WIP (uncommitted design work)
+landing/
