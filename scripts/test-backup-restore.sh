@@ -60,9 +60,11 @@ PYTHONPYCACHEPREFIX="$tmp/pycache" python3 "$root/scripts/test-backup-archive.py
 state="$tmp/state"; BACKUP_STATE_DIR="$state" "$root/scripts/backup-restore.sh" init
 if BACKUP_STATE_DIR="$state" "$root/scripts/backup-restore.sh" init; then exit 1; fi
 
-# Exercise the portable runner without Docker.  Verify GNU timeout is preferred
-# to gtimeout, then verify fixed argv, timeout status, and child cleanup in the
-# Python fallback.
+# Exercise the portable runner without Docker.  Verify timeout is preferred to
+# gtimeout, then exercise the Python fallback for fixed argv, timeout status,
+# and child cleanup.  Each bounded run uses a sandboxed PATH so the results do
+# not depend on which timer binaries the host ships (Linux coreutils timeout vs
+# macOS, where only Homebrew gtimeout exists).
 runner="$tmp/runner"; args="$tmp/args"
 cat >"$runner" <<'SH'
 #!/bin/sh
@@ -93,10 +95,18 @@ ln -s "$(command -v dirname)" "$tools/dirname"
 if BOUND_TIMER_MARKER="$tmp/timer" PATH="$tools" BACKUP_RESTORE_TEST_RUN_BOUNDED=1 \
   "$root/scripts/backup-restore.sh" "$runner" "$args" ok; then exit 1; else [[ $? == 7 ]]; fi
 [[ $(basename "$(cat "$tmp/timer")") == gtimeout ]]
-PATH="/usr/bin:/bin" BACKUP_RESTORE_TEST_RUN_BOUNDED=1 \
-  "$root/scripts/backup-restore.sh" "$runner" "$args" 'literal;not-shell' || [[ $? == 7 ]]
+# Force the Python fallback deterministically: a PATH containing python3 (and
+# the minimal boot tools) but no timeout/gtimeout. On Linux /usr/bin/timeout
+# would otherwise shadow the fallback and return 128+signal on kill instead of
+# the fallback's 124.
+mkdir "$tmp/fallback"
+ln -s "$(command -v bash)" "$tmp/fallback/bash"
+ln -s "$(command -v dirname)" "$tmp/fallback/dirname"
+ln -s "$(command -v python3)" "$tmp/fallback/python3"
+if PATH="$tmp/fallback" BACKUP_RESTORE_TEST_RUN_BOUNDED=1 \
+  "$root/scripts/backup-restore.sh" "$runner" "$args" 'literal;not-shell'; then exit 1; else [[ $? == 7 ]]; fi
 [[ $(wc -l <"$args.args") == 2 ]] && [[ $(sed -n '2p' "$args.args") == 'literal;not-shell' ]]
 sleepy="$tmp/sleepy"; printf '#!/bin/sh\nsleep 30\n' >"$sleepy"; chmod 700 "$sleepy"
-if PATH="/usr/bin:/bin" BACKUP_RESTORE_TEST_RUN_BOUNDED=1 BACKUP_HELPER_TIMEOUT=0.1 \
+if PATH="$tmp/fallback" BACKUP_RESTORE_TEST_RUN_BOUNDED=1 BACKUP_HELPER_TIMEOUT=0.1 \
   "$root/scripts/backup-restore.sh" "$sleepy"; then exit 1; else [[ $? == 124 ]]; fi
 printf 'backup behavioural tests passed\n'
