@@ -341,7 +341,6 @@ Run:
 ```bash
 freebird-validate-config
 cargo test --workspace
-cargo test -p freebird-issuer --features human-gate-webauthn
 ```
 
 Then exercise the deployed services:

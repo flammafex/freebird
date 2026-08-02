@@ -4,8 +4,6 @@
 // WebAuthn Attestation Extension - Final working version for webauthn-rs 0.5.3
 // Provides policy-based enforcement with the API limitations
 
-#![cfg(feature = "human-gate-webauthn")]
-
 use axum::{
     extract::{Json, State},
     http::StatusCode,

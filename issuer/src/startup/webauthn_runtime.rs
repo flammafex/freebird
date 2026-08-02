@@ -49,7 +49,7 @@ pub(super) fn build(
     Ok(Some(webauthn::WebAuthnState::new(ctx, store, behind_proxy)))
 }
 
-#[cfg(all(test, feature = "human-gate-webauthn"))]
+#[cfg(test)]
 mod tests {
     use super::build;
     use crate::config::WebAuthnConfig;

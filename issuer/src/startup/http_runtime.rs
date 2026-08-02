@@ -4,7 +4,6 @@
 use crate::readiness::ReadinessState;
 use crate::routes;
 use crate::sybil_resistance::{invitation::InvitationSystem, ReplayStore, SybilResistance};
-#[cfg(feature = "human-gate-webauthn")]
 use crate::webauthn;
 use crate::AppStateWithSybil;
 use anyhow::Result;
@@ -41,7 +40,6 @@ pub(super) struct HttpRuntimeInputs {
     pub(super) storage_paths: Vec<(String, PathBuf)>,
     pub(super) exchange_readiness: Option<crate::readiness::ExchangeReadinessState>,
     pub(super) graph_issuance_readiness: Option<crate::readiness::GraphIssuanceReadinessState>,
-    #[cfg(feature = "human-gate-webauthn")]
     pub(super) webauthn_state: Option<Arc<crate::webauthn::WebAuthnState>>,
 }
 
@@ -181,7 +179,6 @@ impl HttpRuntime {
             storage_paths,
             exchange_readiness,
             graph_issuance_readiness,
-            #[cfg(feature = "human-gate-webauthn")]
             webauthn_state,
         } = inputs;
 
@@ -261,7 +258,6 @@ impl HttpRuntime {
         // Use `let app` to shadow the variable, allowing the type change from Router<S> to Router<()>
         let mut app = app.with_state(app_state);
 
-        #[cfg(feature = "human-gate-webauthn")]
         if let Some(wa) = &webauthn_state {
             // Redirect /webauthn/ (trailing slash) to /webauthn.
             // axum 0.7's nest("/webauthn", ...) + inner route("/") registers
@@ -274,10 +270,7 @@ impl HttpRuntime {
         }
 
         if let Some(inv_sys) = invitation_system.clone() {
-            #[cfg(feature = "human-gate-webauthn")]
             let webauthn_enabled = webauthn_state.is_some();
-            #[cfg(not(feature = "human-gate-webauthn"))]
-            let webauthn_enabled = false;
 
             let config_summary = routes::admin::ConfigSummary {
                 issuer_id: config.issuer_id.clone(),
@@ -290,7 +283,6 @@ impl HttpRuntime {
                 allow_unsafe_v4_rotation: config.allow_unsafe_v4_rotation,
             };
 
-            #[cfg(feature = "human-gate-webauthn")]
             let admin = routes::admin_router(
                 inv_sys,
                 multi_party_vouching_system.clone(),
@@ -301,18 +293,6 @@ impl HttpRuntime {
                 config.require_tls,
                 config.allow_unsafe_v4_rotation,
                 webauthn_state.as_ref().map(|ws| ws.cred_store.clone()),
-                config_summary,
-            );
-            #[cfg(not(feature = "human-gate-webauthn"))]
-            let admin = routes::admin_router(
-                inv_sys,
-                multi_party_vouching_system.clone(),
-                voprf.clone(),
-                audit_log.clone(),
-                admin_api_key,
-                config.behind_proxy,
-                config.require_tls,
-                config.allow_unsafe_v4_rotation,
                 config_summary,
             );
             app = app.nest("/admin", admin.layer(axum::Extension(readiness.clone())));

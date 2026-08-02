@@ -130,7 +130,6 @@ integration exists.
 
 If WebAuthn is used as a recommended Sybil gate:
 
-- build the issuer with `--features human-gate-webauthn`
 - set `WEBAUTHN_RP_ID` to the issuer host name
 - set `WEBAUTHN_RP_ORIGIN` to the exact HTTPS origin
 - set a high-entropy `WEBAUTHN_PROOF_SECRET`

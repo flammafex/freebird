@@ -10,7 +10,6 @@ use crate::sybil_resistance::{
     replay_store_from_env, CombinedAnd, CombinedOr, CombinedThreshold, ProofOfWork, RateLimit,
     SybilResistance,
 };
-#[cfg(feature = "human-gate-webauthn")]
 use crate::webauthn;
 use anyhow::{bail, Context, Result};
 use p256::ecdsa::SigningKey;
@@ -154,9 +153,7 @@ impl SybilAuditRuntime {
     pub(super) async fn build(
         config: &Config,
         voprf: Arc<crate::multi_key_voprf::MultiKeyVoprfCore>,
-        #[cfg(feature = "human-gate-webauthn")] webauthn_state: &Option<
-            Arc<crate::webauthn::WebAuthnState>,
-        >,
+        webauthn_state: &Option<Arc<crate::webauthn::WebAuthnState>>,
     ) -> Result<Self> {
         // 3. Audit Log Setup
         let audit_config = AuditConfig {
@@ -228,7 +225,6 @@ impl SybilAuditRuntime {
                 invitation_system = Some(sys_arc.clone());
                 Some(sys_arc)
             }
-            #[cfg(feature = "human-gate-webauthn")]
             "webauthn" => {
                 if let Some(wa) = webauthn_state {
                     info!("✅ Sybil resistance: WebAuthn");
@@ -429,7 +425,6 @@ impl SybilAuditRuntime {
                             invitation_system = Some(sys_arc.clone());
                             mechanisms.push(sys_arc);
                         }
-                        #[cfg(feature = "human-gate-webauthn")]
                         "webauthn" => {
                             if let Some(wa) = webauthn_state {
                                 mechanisms.push(Arc::new(

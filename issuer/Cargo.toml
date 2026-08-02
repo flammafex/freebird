@@ -21,15 +21,6 @@ path = "src/bin/validate_config.rs"
 name = "freebird-cli"
 path = "src/bin/cli.rs"
 
-[features]
-default = []
-human-gate-webauthn = [
-    "dep:webauthn-rs",
-    "dep:url",
-    "dep:uuid",
-    "dep:chrono",
-]
-
 [dependencies]
 freebird-common = { version = "0.9.0", path = "../common" }
 freebird-crypto = { version = "0.9.0", path = "../crypto", features = ["voprf-p256"] }
@@ -57,11 +48,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
 tower_governor = "0.5"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["trace", "timeout", "set-header", "util", "request-id", "catch-panic", "cors"] }
-# WebAuthn dependencies (conditional on feature flag)
-webauthn-rs = { version = "0.5.3", optional = true }
-url = { version = "2", optional = true }
-uuid = { version = "1", features = ["v4", "serde"], optional = true }
-chrono = { version = "0.4", optional = true }
+# WebAuthn dependencies
+webauthn-rs = { version = "0.5.3" }
+url = { version = "2" }
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4" }
 async-trait = "0.1"  # For async trait implementations
 redis = { version = "0.24", features = ["aio", "tokio-comp"] }
 reqwest = { version = "0.12.24", features = ["json"] }

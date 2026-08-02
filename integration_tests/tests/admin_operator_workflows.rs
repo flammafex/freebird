@@ -126,6 +126,7 @@ async fn build_admin_router_with_options(
         behind_proxy,
         require_tls,
         allow_unsafe_v4_rotation,
+        None, // webauthn_store: WebAuthn not configured in this harness
         config_summary,
     );
 

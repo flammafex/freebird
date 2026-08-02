@@ -20,7 +20,6 @@ mod http_runtime;
 mod key_material;
 mod preflight;
 mod sybil_audit_runtime;
-#[cfg(feature = "human-gate-webauthn")]
 mod webauthn_runtime;
 pub use exchange_runtime::exchange_discovery_v2;
 pub(crate) use exchange_runtime::validate_disabled_publication_acknowledgements_v2;
@@ -67,17 +66,11 @@ impl Application {
         } = exchange_runtime;
 
         // 2. WebAuthn Setup
-        #[cfg(feature = "human-gate-webauthn")]
         let webauthn_state =
             webauthn_runtime::build(config.webauthn_config.as_ref(), config.behind_proxy)?;
 
-        let sybil_audit_runtime = SybilAuditRuntime::build(
-            &config,
-            voprf.clone(),
-            #[cfg(feature = "human-gate-webauthn")]
-            &webauthn_state,
-        )
-        .await?;
+        let sybil_audit_runtime =
+            SybilAuditRuntime::build(&config, voprf.clone(), &webauthn_state).await?;
         let SybilAuditRuntime {
             audit_log,
             sybil_replay_store,
@@ -106,7 +99,6 @@ impl Application {
             storage_paths,
             exchange_readiness,
             graph_issuance_readiness,
-            #[cfg(feature = "human-gate-webauthn")]
             webauthn_state: webauthn_state.clone(),
         })?;
         let HttpRuntime {

@@ -92,7 +92,6 @@ Docker: `./launch.sh up` (interactive pull/build) or `docker-compose up --build`
 cargo test --workspace                            # Redis tests auto-skip without REDIS_URL
 cargo test -p integration_tests --test sybil_http_matrix
 cargo test -p integration_tests --test admin_operator_workflows
-cargo test -p freebird-issuer --features human-gate-webauthn   # WebAuthn feature gate
 
 # JS SDK
 cd sdk/js && npm install && npm test
@@ -147,8 +146,7 @@ docker-compose build issuer verifier
 - **Tests**: inline `#[cfg(test)] mod tests` per module + `integration_tests`
   crate. Use `serial_test` for stateful tests. Redis tests must self-skip
   when Redis is unreachable.
-- **Feature flags**: `human-gate-webauthn` (issuer), `pkcs11` (crypto),
-  `voprf-p256` (crypto, default). Gate WebAuthn code with `#[cfg(feature = ...)]`.
+- **Feature flags**: `pkcs11` (crypto), `voprf-p256` (crypto, default).
 - **No `std::env::set_var` at runtime** — it is unsafe in multi-threaded
   contexts. Do not add runtime environment mutation.
 
@@ -238,7 +236,7 @@ A change is done when **all** of these hold:
 - [ ] `cargo test --workspace` passes (and Redis tests pass if you have
       Redis; otherwise confirm they skip, not fail)
 - [ ] `cargo audit` clean (no new advisories introduced)
-- [ ] Feature-gated code compiles: `cargo check -p freebird-issuer --features human-gate-webauthn`
+- [ ] Feature-gated code compiles: `cargo check -p freebird-crypto --features pkcs11`
 - [ ] JS SDK touched? `cd sdk/js && npm run lint && npm test` passes
 - [ ] New behavior has tests (positive + negative/tamper cases)
 - [ ] No secrets, key files, or `.env` staged

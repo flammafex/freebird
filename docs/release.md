@@ -112,6 +112,5 @@ Use the verifier image digest for the verifier command.
 - Update all workspace crate versions in Cargo manifests.
 - Update `CHANGELOG.md`.
 - Run `cargo test --workspace`.
-- Run `cargo test -p freebird-issuer --features human-gate-webauthn`.
 - Run `cargo clippy --workspace --all-targets -- -D warnings`.
 - Build and smoke-test the Docker images if deployment assets changed.

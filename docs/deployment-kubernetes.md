@@ -294,7 +294,7 @@ stored in Redis.
 
 For WebAuthn as a recommended Sybil gate:
 
-- build and publish issuer images with `--features human-gate-webauthn`
+- build and publish issuer images
 - set `WEBAUTHN_RP_ID` to the issuer host
 - set `WEBAUTHN_RP_ORIGIN` to `https://issuer.example.com`
 - keep `/webauthn` on the public issuer ingress

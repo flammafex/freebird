@@ -1,6 +1,6 @@
 # WebAuthn Browser Flow
 
-When the issuer is built with `--features human-gate-webauthn`, it serves a
+When WebAuthn is configured (a `WEBAUTHN_RP_ID` is set), the issuer serves a
 browser client at:
 
 ```text

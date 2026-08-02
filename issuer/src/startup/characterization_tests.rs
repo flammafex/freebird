@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use super::Application;
-#[cfg(feature = "human-gate-webauthn")]
 use crate::config::WebAuthnConfig;
 use crate::config::{
     Config, ExchangeConfig, GraphIssuanceAuthorizationConfig, GraphIssuanceConfig, HsmConfig,
@@ -1200,7 +1199,6 @@ async fn public_layers_preserve_connect_info_tls_rejection_and_panic_suppression
     Ok(())
 }
 
-#[cfg(feature = "human-gate-webauthn")]
 #[tokio::test]
 #[serial]
 async fn missing_webauthn_secret_precedes_audit_replay_and_sybil() -> Result<()> {
@@ -1248,7 +1246,6 @@ async fn missing_webauthn_secret_precedes_audit_replay_and_sybil() -> Result<()>
     Ok(())
 }
 
-#[cfg(feature = "human-gate-webauthn")]
 #[tokio::test]
 #[serial]
 async fn webauthn_startup_branch_initializes_before_routes_and_shutdown() -> Result<()> {

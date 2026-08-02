@@ -641,7 +641,7 @@ fn validate_sybil_config(config: &Config) -> ValidationSection {
                 ));
             } else {
                 section.add(CheckResult::Ok(
-                    "WebAuthn configuration is present (feature-gated at runtime)".to_string(),
+                    "WebAuthn configuration is present".to_string(),
                 ));
             }
         }

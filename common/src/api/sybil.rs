@@ -37,8 +37,8 @@ pub enum SybilProof {
     RegisteredUser {
         user_id: String,
     },
-    // Note: WebAuthn fields are strings/integers, so they verify
-    // fine even if the backend doesn't have the webauthn crate enabled.
+    // WebAuthn proof fields are plain strings/integers; the issuer
+    // verifies them against its WebAuthn gate when WebAuthn is configured.
     WebAuthn {
         subject_hash: String,
         auth_proof: String,

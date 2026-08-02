@@ -55,9 +55,9 @@ salt and rejects vouches from unknown voucher keys.
 
 ## WebAuthn Workflows
 
-WebAuthn operator routes are available even when the issuer binary was built
-without the `human-gate-webauthn` feature. In that case they return disabled or
-empty state rather than disappearing.
+WebAuthn operator routes are available in every build. When WebAuthn is not
+configured (no `WEBAUTHN_RP_ID` is set), the routes are still present but return
+a "WebAuthn not configured" error rather than disabled or empty state.
 
 | Action | Endpoint |
 | --- | --- |

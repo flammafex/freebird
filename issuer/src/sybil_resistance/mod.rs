@@ -36,7 +36,6 @@ pub mod social_graph;
 mod social_graph_replay_test;
 
 // Re-export the main types so they can be imported as `use sybil_resistance::ProofOfWork`
-#[cfg(feature = "human-gate-webauthn")]
 pub use crate::webauthn::gate::WebAuthnGate;
 pub use invitation::ClientData;
 pub use multi_party_vouching::{MultiPartyVouchingConfig, MultiPartyVouchingSystem};

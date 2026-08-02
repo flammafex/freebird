@@ -67,8 +67,7 @@ pub struct AdminState {
     pub require_tls: bool,
     /// Whether the explicitly unsafe V4 rotation endpoint is enabled.
     pub allow_unsafe_v4_rotation: bool,
-    /// Optional WebAuthn credential store (only if webauthn feature enabled)
-    #[cfg(feature = "human-gate-webauthn")]
+    /// Optional WebAuthn credential store
     pub webauthn_store: Option<crate::webauthn::CredentialStore>,
     /// Configuration summary for the admin API
     pub config_summary: ConfigSummary,
@@ -1825,7 +1824,6 @@ pub async fn export_audit_handler(
 // ============================================================================
 
 /// List all WebAuthn credentials (admin only)
-#[cfg(feature = "human-gate-webauthn")]
 pub async fn list_webauthn_credentials_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -1866,7 +1864,6 @@ pub async fn list_webauthn_credentials_handler(
 }
 
 /// Delete a WebAuthn credential by ID (admin only)
-#[cfg(feature = "human-gate-webauthn")]
 pub async fn delete_webauthn_credential_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -1906,7 +1903,6 @@ pub async fn delete_webauthn_credential_handler(
 }
 
 /// Get WebAuthn stats (admin only)
-#[cfg(feature = "human-gate-webauthn")]
 pub async fn webauthn_stats_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -1932,7 +1928,6 @@ pub async fn webauthn_stats_handler(
     })))
 }
 
-#[cfg(feature = "human-gate-webauthn")]
 pub async fn webauthn_policy_handler(
     State(state): State<Arc<AdminState>>,
     headers: HeaderMap,
@@ -1959,78 +1954,10 @@ pub async fn webauthn_policy_handler(
     }))
 }
 
-// Fallback handlers when WebAuthn is not enabled
-#[cfg(not(feature = "human-gate-webauthn"))]
-pub async fn list_webauthn_credentials_handler(
-    State(state): State<Arc<AdminState>>,
-    headers: HeaderMap,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
-    validated_ip: Option<Extension<ValidatedClientIp>>,
-) -> Result<Json<ListWebAuthnCredentialsResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
-    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
-    Ok(Json(ListWebAuthnCredentialsResponse {
-        credentials: vec![],
-        total: 0,
-    }))
-}
-
-#[cfg(not(feature = "human-gate-webauthn"))]
-pub async fn delete_webauthn_credential_handler(
-    State(state): State<Arc<AdminState>>,
-    headers: HeaderMap,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
-    validated_ip: Option<Extension<ValidatedClientIp>>,
-    Path(_cred_id_b64): Path<String>,
-) -> Result<Json<DeleteWebAuthnCredentialResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
-    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
-    Err(AdminError::Internal(
-        "WebAuthn feature not enabled".to_string(),
-    ))
-}
-
-#[cfg(not(feature = "human-gate-webauthn"))]
-pub async fn webauthn_stats_handler(
-    State(state): State<Arc<AdminState>>,
-    headers: HeaderMap,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
-    validated_ip: Option<Extension<ValidatedClientIp>>,
-) -> Result<Json<serde_json::Value>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
-    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
-    Ok(Json(serde_json::json!({
-        "total_credentials": 0,
-        "enabled": false
-    })))
-}
-
-#[cfg(not(feature = "human-gate-webauthn"))]
-pub async fn webauthn_policy_handler(
-    State(state): State<Arc<AdminState>>,
-    headers: HeaderMap,
-    connect_info: Option<ConnectInfo<SocketAddr>>,
-    validated_ip: Option<Extension<ValidatedClientIp>>,
-) -> Result<Json<WebAuthnPolicyResponse>, AdminError> {
-    let client_ip = extract_client_ip(&headers, state.behind_proxy, connect_info, validated_ip);
-    verify_api_key_with_rate_limit(&headers, &state, client_ip).await?;
-    Ok(Json(WebAuthnPolicyResponse {
-        enabled: false,
-        attestation_required: false,
-        policy: "disabled".to_string(),
-        allowed_aaguids: vec![],
-        audit_logging: false,
-        max_credentials_per_user: 0,
-        require_resident_key: false,
-        allow_credential_revocation: false,
-    }))
-}
-
 // ============================================================================
 // Router Configuration
 // ============================================================================
 
-#[cfg(feature = "human-gate-webauthn")]
 #[allow(clippy::too_many_arguments)]
 pub fn admin_router(
     invitation_system: Arc<InvitationSystem>,
@@ -2057,37 +1984,6 @@ pub fn admin_router(
         require_tls,
         allow_unsafe_v4_rotation,
         webauthn_store,
-        config_summary,
-    });
-
-    build_admin_router(state)
-}
-
-#[cfg(not(feature = "human-gate-webauthn"))]
-#[allow(clippy::too_many_arguments)]
-pub fn admin_router(
-    invitation_system: Arc<InvitationSystem>,
-    multi_party_vouching: Option<Arc<MultiPartyVouchingSystem>>,
-    multi_key_voprf: Arc<MultiKeyVoprfCore>,
-    audit_log: Arc<AuditLog>,
-    api_key: String,
-    behind_proxy: bool,
-    require_tls: bool,
-    allow_unsafe_v4_rotation: bool,
-    config_summary: ConfigSummary,
-) -> axum::Router {
-    let session_key = derive_session_key(&api_key);
-    let state = Arc::new(AdminState {
-        invitation_system,
-        multi_party_vouching,
-        multi_key_voprf,
-        audit_log,
-        api_key,
-        session_key,
-        rate_limiter: AdminRateLimiter::new(),
-        behind_proxy,
-        require_tls,
-        allow_unsafe_v4_rotation,
         config_summary,
     });
 
