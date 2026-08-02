@@ -89,7 +89,8 @@ jobs:
           # builder by name everywhere instead of relying on the default.
           docker buildx use "${{ steps.buildx.outputs.name }}"
           docker buildx inspect --bootstrap --builder "${{ steps.buildx.outputs.name }}"
-          driver="$(docker buildx inspect --builder "${{ steps.buildx.outputs.name }}" --format '{{.Driver}}')"
+          # docker buildx inspect has no --format flag (buildx >= 0.32); parse Driver from its output.
+          driver="$(docker buildx inspect --builder "${{ steps.buildx.outputs.name }}" | grep '^Driver:' | awk '{print $2}')"
           if [[ "$driver" != "docker-container" ]]; then
             echo "Expected docker-container builder driver, got: $driver" >&2
             exit 1
