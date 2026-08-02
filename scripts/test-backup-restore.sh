@@ -96,16 +96,20 @@ if BOUND_TIMER_MARKER="$tmp/timer" PATH="$tools" BACKUP_RESTORE_TEST_RUN_BOUNDED
   "$root/scripts/backup-restore.sh" "$runner" "$args" ok; then exit 1; else [[ $? == 7 ]]; fi
 [[ $(basename "$(cat "$tmp/timer")") == gtimeout ]]
 # Force the Python fallback deterministically: a PATH containing python3 (and
-# the minimal boot tools) but no timeout/gtimeout. On Linux /usr/bin/timeout
-# would otherwise shadow the fallback and return 128+signal on kill instead of
-# the fallback's 124.
+# the minimal boot tools plus a real sleep) but no timeout/gtimeout. On Linux
+# /usr/bin/timeout would otherwise shadow the fallback and return 128+signal
+# on kill instead of the fallback's 124.
 mkdir "$tmp/fallback"
 ln -s "$(command -v bash)" "$tmp/fallback/bash"
 ln -s "$(command -v dirname)" "$tmp/fallback/dirname"
 ln -s "$(command -v python3)" "$tmp/fallback/python3"
+ln -s "$(command -v sleep)" "$tmp/fallback/sleep"
 if PATH="$tmp/fallback" BACKUP_RESTORE_TEST_RUN_BOUNDED=1 \
   "$root/scripts/backup-restore.sh" "$runner" "$args" 'literal;not-shell'; then exit 1; else [[ $? == 7 ]]; fi
 [[ $(wc -l <"$args.args") == 2 ]] && [[ $(sed -n '2p' "$args.args") == 'literal;not-shell' ]]
+# The sleepy child must be able to find sleep, otherwise it exits 127 instead
+# of being killed by the timeout (dash reports this on Linux; macOS bash is
+# slow enough to mask it). With sleep available the kill path is deterministic.
 sleepy="$tmp/sleepy"; printf '#!/bin/sh\nsleep 30\n' >"$sleepy"; chmod 700 "$sleepy"
 if PATH="$tmp/fallback" BACKUP_RESTORE_TEST_RUN_BOUNDED=1 BACKUP_HELPER_TIMEOUT=0.1 \
   "$root/scripts/backup-restore.sh" "$sleepy"; then exit 1; else [[ $? == 124 ]]; fi
