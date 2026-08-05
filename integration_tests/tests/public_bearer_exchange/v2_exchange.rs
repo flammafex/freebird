@@ -53,6 +53,7 @@ pub(super) async fn disabled_v2_exchange_routes_are_generic_and_require_status_c
         epoch_duration_sec: 86_400,
         epoch_retention: 2,
         admin_api_key: None,
+        sybil_summary: None,
     });
     let voprf = Arc::new(MultiKeyVoprfCore::new(
         [7; 32],

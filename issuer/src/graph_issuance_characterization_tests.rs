@@ -941,6 +941,7 @@ fn route_state(engine: Arc<GraphIssuanceEngine>) -> Arc<AppStateWithSybil> {
         epoch_duration_sec: 86_400,
         epoch_retention: 1,
         admin_api_key: None,
+        sybil_summary: None,
     })
 }
 

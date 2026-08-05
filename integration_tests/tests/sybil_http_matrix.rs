@@ -92,6 +92,7 @@ async fn build_app(sybil_checker: Option<Arc<dyn SybilResistance>>) -> Result<Te
         graph_issuance_metadata: None,
         epoch_duration_sec: 86400,
         epoch_retention: 2,
+        sybil_summary: None,
     });
 
     let router = Router::new()

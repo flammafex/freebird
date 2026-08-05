@@ -1574,6 +1574,7 @@ async fn exchange_v2_http_pending_retry_conflict_status_and_exact_replay() {
         epoch_duration_sec: 86_400,
         epoch_retention: 2,
         admin_api_key: None,
+        sybil_summary: None,
     });
     let app = crate::startup::apply_public_layers(
         crate::startup::exchange_router(3 * 1024 * 1024, 30).with_state((state, voprf)),
@@ -1705,6 +1706,7 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
         epoch_duration_sec: 86_400,
         epoch_retention: 2,
         admin_api_key: None,
+        sybil_summary: None,
     });
     let app = axum::Router::new()
         .route(

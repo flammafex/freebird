@@ -47,6 +47,10 @@ pub mod main_state {
         /// (e.g. the `/v1/oprf/renew` route). `None` means admin auth is
         /// disabled and such endpoints return 503.
         pub admin_api_key: Option<String>,
+        /// Sanitized Sybil resistance configuration summary, published in the
+        /// `/.well-known/issuer` metadata so clients can auto-select PoW
+        /// difficulty and know which sybil mechanisms are required.
+        pub sybil_summary: Option<crate::routes::admin::SybilConfigSummary>,
     }
 
     impl AppStateWithSybil {

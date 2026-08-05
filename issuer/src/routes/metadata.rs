@@ -13,6 +13,8 @@ pub struct WellKnown {
     voprf: VoprfInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     public: Option<PublicModeInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sybil: Option<crate::routes::admin::SybilConfigSummary>,
 }
 
 #[derive(Serialize)]
@@ -51,6 +53,7 @@ pub async fn well_known_handler(State((state, voprf)): State<SharedState>) -> Js
             .public_issuer
             .as_ref()
             .map(|issuer| public_mode_info(issuer.metadata())),
+        sybil: state.sybil_summary.clone(),
     })
 }
 
@@ -152,6 +155,7 @@ mod tests {
             epoch_duration_sec: 86_400,
             epoch_retention: 2,
             admin_api_key: None,
+            sybil_summary: None,
         });
         let voprf = Arc::new(
             MultiKeyVoprfCore::new([7; 32], "pubkey".into(), "kid".into(), b"test").unwrap(),
@@ -163,5 +167,99 @@ mod tests {
             .exchange
             .as_ref()
             .is_some_and(|exchange| exchange.active_graph.profile_id.ends_with("/v2")));
+    }
+
+    #[tokio::test]
+    async fn well_known_publishes_sybil_summary_when_configured() {
+        use crate::config::SybilConfig;
+        use std::path::PathBuf;
+
+        let sybil_config = SybilConfig {
+            mode: "pow".into(),
+            pow_difficulty: 20,
+            rate_limit_secs: 3600,
+            invite_per_user: 5,
+            invite_cooldown_secs: 3600,
+            invite_expires_secs: 30 * 24 * 3600,
+            invite_new_user_wait_secs: 30 * 24 * 3600,
+            invite_persistence_path: PathBuf::from("invitations.json"),
+            invite_autosave_interval_secs: 300,
+            invite_signing_key_path: PathBuf::from("invitation_signing_key.bin"),
+            bootstrap_users: None,
+            webauthn_max_proof_age: None,
+            progressive_trust_levels: vec![],
+            progressive_trust_persistence_path: PathBuf::from("progressive_trust.json"),
+            progressive_trust_autosave_interval: 300,
+            progressive_trust_hmac_secret: None,
+            progressive_trust_hmac_secret_path: PathBuf::from("progressive_trust_secret.bin"),
+            progressive_trust_salt: "salt".into(),
+            progressive_trust_allow_insecure: false,
+            proof_of_diversity_min_score: 40,
+            proof_of_diversity_persistence_path: PathBuf::from("proof_of_diversity.json"),
+            proof_of_diversity_autosave_interval: 300,
+            proof_of_diversity_hmac_secret: None,
+            proof_of_diversity_hmac_secret_path: PathBuf::from("proof_of_diversity_secret.bin"),
+            proof_of_diversity_fingerprint_salt: "salt".into(),
+            proof_of_diversity_allow_insecure: false,
+            multi_party_vouching_required_vouchers: 3,
+            multi_party_vouching_cooldown_secs: 3600,
+            multi_party_vouching_expires_secs: 30 * 24 * 3600,
+            multi_party_vouching_new_user_wait_secs: 30 * 24 * 3600,
+            multi_party_vouching_persistence_path: PathBuf::from("mpv.json"),
+            multi_party_vouching_autosave_interval: 300,
+            multi_party_vouching_hmac_secret: None,
+            multi_party_vouching_hmac_secret_path: PathBuf::from("mpv_secret.bin"),
+            multi_party_vouching_salt: "salt".into(),
+            multi_party_vouching_allow_insecure: false,
+            social_graph_attesters_path: PathBuf::from("attesters.json"),
+            social_graph_jwks_url: None,
+            social_graph_key_refresh_interval_secs: 3600,
+            social_graph_min_level: 1,
+            social_graph_accepted_policy_ids: vec![],
+            social_graph_attestation_max_age_secs: 3600,
+            social_graph_clock_skew_secs: 60,
+            social_graph_require_request_binding: false,
+            social_graph_require_quota_nullifier: false,
+            social_graph_replay_ttl_secs: 3600,
+            social_graph_state_path: PathBuf::from("social_graph.json"),
+            social_graph_fail_closed: false,
+            combined_mechanisms: vec![],
+            combined_mode: "or".into(),
+            combined_threshold: 1,
+        };
+
+        let state = Arc::new(crate::AppStateWithSybil {
+            issuer_id: "issuer:test".into(),
+            kid: "kid".into(),
+            pubkey_b64: "pubkey".into(),
+            require_tls: false,
+            behind_proxy: false,
+            sybil_checker: None,
+            invitation_system: None,
+            public_issuer: None,
+            exchange_engine: None,
+            exchange_metadata: None,
+            graph_issuance_engine: None,
+            graph_issuance_metadata: None,
+            epoch_duration_sec: 86_400,
+            epoch_retention: 2,
+            admin_api_key: None,
+            sybil_summary: Some(crate::routes::admin::SybilConfigSummary::from_config(
+                &sybil_config,
+            )),
+        });
+        let voprf = Arc::new(
+            MultiKeyVoprfCore::new([7; 32], "pubkey".into(), "kid".into(), b"test").unwrap(),
+        );
+
+        let response = well_known_handler(State((state, voprf))).await.0;
+        let sybil = response.sybil.expect("sybil summary should be published");
+        assert_eq!(sybil.mode, "pow");
+        match sybil.settings {
+            crate::routes::admin::SybilModeSettings::ProofOfWork { difficulty } => {
+                assert_eq!(difficulty, 20);
+            }
+            other => panic!("expected ProofOfWork settings, got {other:?}"),
+        }
     }
 }

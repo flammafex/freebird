@@ -74,6 +74,7 @@ async fn build_state(
         graph_issuance_metadata: None,
         epoch_duration_sec: 86400,
         epoch_retention: 2,
+        sybil_summary: None,
     });
 
     Ok((state, voprf))

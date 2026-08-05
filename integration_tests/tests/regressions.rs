@@ -110,6 +110,7 @@ async fn build_issuer_state(
         epoch_duration_sec: 86400,
         epoch_retention: 2,
         admin_api_key: None,
+        sybil_summary: None,
     });
     Ok((state, voprf))
 }

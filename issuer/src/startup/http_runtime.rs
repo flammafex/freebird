@@ -199,6 +199,9 @@ impl HttpRuntime {
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
             admin_api_key: Some(admin_api_key.clone()),
+            sybil_summary: Some(routes::admin::SybilConfigSummary::from_config(
+                &config.sybil_config,
+            )),
         });
 
         let app_state = (state.clone(), voprf.clone());
