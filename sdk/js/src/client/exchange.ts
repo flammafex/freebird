@@ -14,6 +14,7 @@ import type {
   ExchangeTransitionSelection,
 } from '../types.js';
 import type { ClientState } from './state.js';
+import { ExchangeError } from '../errors.js';
 import {
   ascii,
   base64UrlToBytes,
@@ -36,22 +37,22 @@ export type ExchangeDigest = (request: ExchangeRequest) => string;
 
 function validateExchangeOperationId(operationId: string): void {
   if (!/^[A-Za-z0-9_-]{22}$/.test(operationId)) {
-    throw new Error('Exchange operation ID must be canonical base64url for exactly 16 bytes');
+    throw new ExchangeError('Exchange operation ID must be canonical base64url for exactly 16 bytes');
   }
   let decoded: Uint8Array;
   try {
     decoded = base64UrlToBytes(operationId);
   } catch {
-    throw new Error('Exchange operation ID must be canonical base64url for exactly 16 bytes');
+    throw new ExchangeError('Exchange operation ID must be canonical base64url for exactly 16 bytes');
   }
   if (decoded.length !== 16 || bytesToBase64Url(decoded) !== operationId) {
-    throw new Error('Exchange operation ID must be canonical base64url for exactly 16 bytes');
+    throw new ExchangeError('Exchange operation ID must be canonical base64url for exactly 16 bytes');
   }
 }
 
 function validateStatusCapability(capability: string): void {
   if (!isCanonicalBase64Url(capability, 32)) {
-    throw new Error('Exchange status capability must be canonical base64url for exactly 32 bytes');
+    throw new ExchangeError('Exchange status capability must be canonical base64url for exactly 32 bytes');
   }
 }
 
@@ -76,7 +77,7 @@ function v2SelectorBytes(value: {
     !isLowerHexId(value.graph_id) || !isLowerHexId(value.transition_id) ||
     !isLowerHexId(value.source_keyset_id) || !isLowerHexId(value.target_keyset_id) ||
     value.source_keyset_id === value.target_keyset_id) {
-    throw new Error('Invalid V2 exchange selectors');
+    throw new ExchangeError('Invalid V2 exchange selectors');
   }
   const output: number[] = [2];
   put(output, base64UrlToBytes(value.public_operation_id));
@@ -98,18 +99,18 @@ function requestBytes(request: ExchangeRequest): Uint8Array {
   if (!hasExactKeys(request, [
     'version', 'public_operation_id', 'graph_id', 'transition_id', 'source_keyset_id',
     'target_keyset_id', 'sources', 'outputs',
-  ])) throw new Error('Invalid V2 exchange request');
+  ])) throw new ExchangeError('Invalid V2 exchange request');
   const output: number[] = [...v2SelectorBytes(request)];
   if (!Array.isArray(request.sources) || !Array.isArray(request.outputs) ||
     request.sources.length === 0 || request.sources.length > 64 ||
     request.outputs.length === 0 || request.outputs.length > 64) {
-    throw new Error('Invalid V2 exchange request');
+    throw new ExchangeError('Invalid V2 exchange request');
   }
   pushU32(output, request.sources.length);
   for (const source of request.sources) {
     if (!hasExactKeys(source, ['slot', 'artifact']) || !isExchangeSlot(source.slot) ||
       source.slot.keyset_id !== request.source_keyset_id || typeof source.artifact !== 'string') {
-      throw new Error('Invalid V2 exchange request');
+      throw new ExchangeError('Invalid V2 exchange request');
     }
     const artifact = decodeCanonical(source.artifact, undefined, 16 * 1024, 1);
     output.push(...slotBytes(source.slot));
@@ -121,7 +122,7 @@ function requestBytes(request: ExchangeRequest): Uint8Array {
       !isExchangeSlot(requestedOutput.slot) ||
       requestedOutput.slot.keyset_id !== request.target_keyset_id ||
       typeof requestedOutput.blinded_value !== 'string') {
-      throw new Error('Invalid V2 exchange request');
+      throw new ExchangeError('Invalid V2 exchange request');
     }
     const blinded = decodeCanonical(requestedOutput.blinded_value, undefined, 16 * 1024, 1);
     output.push(...slotBytes(requestedOutput.slot));
@@ -185,11 +186,11 @@ export async function getExchangeStatus(
   const publicOperationId = typeof publicOperationIdOrRequest === 'string'
     ? publicOperationIdOrRequest
     : publicOperationIdOrRequest.public_operation_id;
-  if (!submittedRequest) throw new Error('Original exchange request is required for status');
+  if (!submittedRequest) throw new ExchangeError('Original exchange request is required for status');
   validateExchangeOperationId(publicOperationId);
   validateStatusCapability(statusCapability);
   if (submittedRequest.public_operation_id !== publicOperationId) {
-    throw new Error('Exchange status request does not match the submitted request');
+    throw new ExchangeError('Exchange status request does not match the submitted request');
   }
   const selection = await validateExchangeRequestSelection(submittedRequest, selectTransition);
   digest(submittedRequest);
@@ -219,7 +220,7 @@ async function validateExchangeRequestSelection(
     transition.target_keyset_id !== request.target_keyset_id ||
     request.sources.length !== transition.source_slots.length ||
     request.outputs.length !== transition.output_slots.length) {
-    throw new Error('Exchange request does not match the selected transition');
+    throw new ExchangeError('Exchange request does not match the selected transition');
   }
   const slotsMatch = (
     actual: ExchangeRequest['sources'][number]['slot'],
@@ -231,7 +232,7 @@ async function validateExchangeRequestSelection(
     slotsMatch(source.slot, transition.source_slots[index], request.source_keyset_id)) ||
     !request.outputs.every((output, index) =>
       slotsMatch(output.slot, transition.output_slots[index], request.target_keyset_id))) {
-    throw new Error('Exchange request does not match the selected transition');
+    throw new ExchangeError('Exchange request does not match the selected transition');
   }
   return selection;
 }
@@ -244,15 +245,15 @@ async function parseExchangeResponse(
 ): Promise<ExchangeOutcome> {
   const cacheControl = response.headers.get('Cache-Control');
   if (!cacheControl?.split(',').some((value) => value.trim().toLowerCase() === 'no-store')) {
-    throw new Error('Exchange response did not enforce Cache-Control: no-store');
+    throw new ExchangeError('Exchange response did not enforce Cache-Control: no-store');
   }
   const rawResponseBody = await response.text();
   let body: unknown;
   try { body = JSON.parse(rawResponseBody) as unknown; }
-  catch { throw new Error('Exchange endpoint returned malformed JSON'); }
+  catch { throw new ExchangeError('Exchange endpoint returned malformed JSON'); }
   if (response.status === 200) {
     if (!await isExchangeSuccessResponse(state, body, submittedRequest, selectedGraph)) {
-      throw new Error('Exchange endpoint returned malformed success JSON');
+      throw new ExchangeError('Exchange endpoint returned malformed success JSON');
     }
     return {
       kind: 'committed', httpStatus: 200, response: body as ExchangeSuccessResponse,
@@ -261,11 +262,11 @@ async function parseExchangeResponse(
   }
   if (response.status === 202) {
     if (!hasExactKeys(body, ['error']) || body.error !== 'exchange_retryable') {
-      throw new Error('Exchange endpoint returned malformed pending JSON');
+      throw new ExchangeError('Exchange endpoint returned malformed pending JSON');
     }
     const retryAfterHeader = response.headers.get('Retry-After');
     if (!retryAfterHeader || !/^(0|[1-9][0-9]*)$/.test(retryAfterHeader)) {
-      throw new Error('Exchange pending response has invalid Retry-After');
+      throw new ExchangeError('Exchange pending response has invalid Retry-After');
     }
     return {
       kind: 'pending', httpStatus: 202, response: { error: 'exchange_retryable' },
@@ -273,10 +274,10 @@ async function parseExchangeResponse(
     };
   }
   if (!hasExactKeys(body, ['error']) || !isExchangeErrorCode(body.error)) {
-    throw new Error('Exchange endpoint returned malformed error JSON');
+    throw new ExchangeError('Exchange endpoint returned malformed error JSON');
   }
   if (response.status === 403 && body.error === 'status_unauthorized') {
-    throw new Error('Exchange status capability was not authorized');
+    throw new ExchangeError('Exchange status capability was not authorized');
   }
   const common = { rawResponseBody, cacheControl: 'no-store' as const };
   if (response.status === 400 && (
@@ -296,7 +297,7 @@ async function parseExchangeResponse(
   if (response.status === 503 && body.error === 'exchange_unavailable') {
     return { ...common, kind: 'error', httpStatus: 503, response: { error: 'exchange_unavailable' } };
   }
-  throw new Error('Exchange endpoint returned an unexpected error status');
+  throw new ExchangeError('Exchange endpoint returned an unexpected error status');
 }
 
 async function isExchangeSuccessResponse(

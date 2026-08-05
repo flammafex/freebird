@@ -18,6 +18,10 @@ vi.mock('../src/crypto/voprf.js', () => ({
 }));
 
 import { FreebirdClient } from '../src/index.js';
+import {
+  DiscoveryError,
+  VerifierNotConfiguredError,
+} from '../src/index.js';
 import * as voprf from '../src/crypto/voprf.js';
 
 const issuerMetadata = {
@@ -143,7 +147,7 @@ describe('issuer key discovery cache and initialization characterization', () =>
     vi.stubGlobal('fetch', fetchMock);
     const sdk = client({ issuerUrl: 'https://issuer.example', verifierId: 'v', audience: 'a' });
 
-    await expect(sdk.getKeyDiscoveryMetadata()).rejects.toThrow('503');
+    await expect(sdk.getKeyDiscoveryMetadata()).rejects.toBeInstanceOf(DiscoveryError);
     await expect(sdk.getKeyDiscoveryMetadata()).resolves.toEqual(keyDiscoveryMetadata);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -187,7 +191,7 @@ describe('issuer key discovery cache and initialization characterization', () =>
     vi.stubGlobal('fetch', fetchMock);
     const sdk = client();
 
-    await expect(sdk.init()).rejects.toThrow('Failed to fetch verifier metadata: 503');
+    await expect(sdk.init()).rejects.toBeInstanceOf(DiscoveryError);
     await expect(sdk.init()).resolves.toBeUndefined();
     expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
       'https://issuer.example/.well-known/issuer',
@@ -203,7 +207,7 @@ describe('issuer key discovery cache and initialization characterization', () =>
     vi.stubGlobal('fetch', fetchMock);
     const sdk = client();
 
-    await expect(sdk.init()).rejects.toThrow('Failed to fetch verifier metadata: 503');
+    await expect(sdk.init()).rejects.toBeInstanceOf(DiscoveryError);
     await expect(sdk.issueToken()).rejects.toThrow();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -220,7 +224,7 @@ describe('issuer key discovery cache and initialization characterization', () =>
       audience: 'fallback-audience',
     });
 
-    await expect(sdk.init()).rejects.toThrow('Failed to fetch verifier metadata: 503');
+    await expect(sdk.init()).rejects.toBeInstanceOf(DiscoveryError);
     expect(fetchMock.mock.calls[1][0]).toBe('https://verifier.example/.well-known/verifier');
   });
 
@@ -351,30 +355,49 @@ describe('V4 private issuance and verifier HTTP characterization', () => {
       .mockResolvedValueOnce(new Response('rejected', { status }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(client().issueToken()).rejects.toThrow(`Issuer rejected request: rejected`);
+    await expect(client().issueToken()).rejects.toMatchObject({ code: 'issuance' });
   });
 
-  it('maps non-policy issuer failures separately and rejects metadata changes', async () => {
+  it('maps non-policy issuer failures separately and auto-refreshes on key rotation', async () => {
     const failedFetch = vi.fn()
       .mockResolvedValueOnce(json(issuerMetadata))
       .mockResolvedValueOnce(json(verifierMetadata))
       .mockResolvedValueOnce(new Response('backend failure', { status: 500 }));
     vi.stubGlobal('fetch', failedFetch);
-    await expect(client().issueToken()).rejects.toThrow('Token issuance failed (500): backend failure');
+    await expect(client().issueToken()).rejects.toMatchObject({ code: 'issuance' });
 
-    const changedFetch = vi.fn()
+    // First issue returns a rotated kid; the SDK refreshes discovery and
+    // retries successfully with the new key.
+    const rotatedMetadata = {
+      ...keyDiscoveryMetadata,
+      voprf: { ...keyDiscoveryMetadata.voprf, kid: 'kid-2' },
+    };
+    const rotatedFetch = vi.fn()
       .mockResolvedValueOnce(json(issuerMetadata))
       .mockResolvedValueOnce(json(verifierMetadata))
-      .mockResolvedValueOnce(json({ token: 'evaluation', kid: 'changed-kid', issuer_id: 'issuer:test' }));
-    vi.stubGlobal('fetch', changedFetch);
-    await expect(client().issueToken()).rejects.toThrow('Issuer metadata changed during issuance');
+      .mockResolvedValueOnce(json({ token: 'evaluation', kid: 'kid-2', issuer_id: 'issuer:test' }))
+      .mockResolvedValueOnce(json(rotatedMetadata))
+      .mockResolvedValueOnce(json({ token: 'evaluation', kid: 'kid-2', issuer_id: 'issuer:test' }));
+    vi.stubGlobal('fetch', rotatedFetch);
+    const token = await client().issueToken();
+    expect(token.kid).toBe('kid-2');
+
+    // Persistent mismatch after refresh still throws DiscoveryError.
+    const persistentFetch = vi.fn()
+      .mockResolvedValueOnce(json(issuerMetadata))
+      .mockResolvedValueOnce(json(verifierMetadata))
+      .mockResolvedValueOnce(json({ token: 'evaluation', kid: 'kid-2', issuer_id: 'issuer:test' }))
+      .mockResolvedValueOnce(json(rotatedMetadata))
+      .mockResolvedValueOnce(json({ token: 'evaluation', kid: 'kid-3', issuer_id: 'issuer:test' }));
+    vi.stubGlobal('fetch', persistentFetch);
+    await expect(client().issueToken()).rejects.toBeInstanceOf(DiscoveryError);
   });
 
   it('preserves verifier wire behavior for accepted, rejected, and unconfigured clients', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(json({ ok: true }))
-      .mockResolvedValueOnce(json({ ok: false }))
-      .mockResolvedValueOnce(new Response('invalid', { status: 400 }));
+      .mockResolvedValueOnce(json({ ok: true, verified_at: 1 }))
+      .mockResolvedValueOnce(new Response('invalid', { status: 400 }))
+      .mockResolvedValueOnce(new Response('replay', { status: 401 }));
     vi.stubGlobal('fetch', fetchMock);
     const sdk = client();
     const v5Token = {
@@ -384,9 +407,9 @@ describe('V4 private issuance and verifier HTTP characterization', () => {
       tokenKeyId: 'a'.repeat(64),
     };
 
-    await expect(sdk.verifyToken(v5Token)).resolves.toBe(true);
-    await expect(sdk.verifyToken(v5Token)).resolves.toBe(false);
-    await expect(sdk.verifyToken(v5Token)).resolves.toBe(false);
+    await expect(sdk.verifyToken(v5Token)).resolves.toEqual({ ok: true, verified_at: 1 });
+    await expect(sdk.verifyToken(v5Token)).rejects.toMatchObject({ code: 'invalid_token' });
+    await expect(sdk.verifyToken(v5Token)).rejects.toMatchObject({ code: 'replayed_token' });
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'https://verifier.example/v1/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -394,7 +417,7 @@ describe('V4 private issuance and verifier HTTP characterization', () => {
     });
 
     const noVerifier = client({ issuerUrl: 'https://issuer.example' });
-    await expect(noVerifier.verifyToken(v5Token)).rejects.toThrow('Verifier URL not configured');
+    await expect(noVerifier.verifyToken(v5Token)).rejects.toBeInstanceOf(VerifierNotConfiguredError);
   });
 });
 
@@ -484,6 +507,6 @@ describe('V5 public bearer issuance HTTP characterization', () => {
     const errorFetch = vi.fn().mockResolvedValue(new Response('rejected', { status: 422 }));
     vi.stubGlobal('fetch', errorFetch);
     await expect(client().issuePublicBlindSignature('message', undefined, 'b'.repeat(64)))
-      .rejects.toThrow('Public bearer issuance failed (422): rejected');
+      .rejects.toMatchObject({ code: 'issuance' });
   });
 });

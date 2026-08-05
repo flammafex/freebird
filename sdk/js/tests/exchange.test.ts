@@ -2,7 +2,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { ed25519 } from '@noble/curves/ed25519';
 import { sha256 } from '@noble/hashes/sha256';
 import { readFileSync } from 'node:fs';
-import { FreebirdClient, crypto as sdkCrypto } from '../src/index.js';
+import { FreebirdClient, DiscoveryError, crypto as sdkCrypto } from '../src/index.js';
 import type {
   ExchangeRequest,
   ExchangeSuccessResponse,
@@ -992,7 +992,7 @@ describe('graph issuance error, alias, and capability characterization', () => {
     await expect(sdk.selectGraphIssuancePolicy('bootstrap-v1')).resolves.toMatchObject({
       admission_state: 'accepting_new',
     });
-    await expect(sdk.selectGraphIssuancePolicy('bootstrap-v1')).rejects.toThrow('503');
+    await expect(sdk.selectGraphIssuancePolicy('bootstrap-v1')).rejects.toBeInstanceOf(DiscoveryError);
     await expect(sdk.selectExchangeTransition(
       value.request.graph_id,
       value.metadata.exchange!.active_graph.transitions[0].transition_id,

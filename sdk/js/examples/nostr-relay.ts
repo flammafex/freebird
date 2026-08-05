@@ -67,7 +67,7 @@ wss.on('connection', (ws: WebSocket) => {
     try {
       // Use the SDK to verify the token against the Dockerized verifier
       // This checks: 1. Signature Validity 2. Expiration 3. Double-Spend
-      const isValid = await freebird.verifyToken(tokenObj);
+      const isValid = await freebird.verifyTokenValid(tokenObj);
 
       if (isValid) {
         isAuthenticated = true;

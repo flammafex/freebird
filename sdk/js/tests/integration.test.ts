@@ -97,7 +97,7 @@ describe('existing SDK issuance, discovery, and verification APIs', () => {
   it('preserves successful and rejected verifier behavior', async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(json({ ok: true }))
+      .mockResolvedValueOnce(json({ ok: true, verified_at: 1 }))
       .mockResolvedValueOnce(json({ error: 'invalid_token' }, 400));
     vi.stubGlobal('fetch', fetchMock);
     const client = new FreebirdClient({
@@ -106,8 +106,8 @@ describe('existing SDK issuance, discovery, and verification APIs', () => {
     });
     const token = { tokenValue: 'token', issuerId: 'issuer:test' };
 
-    await expect(client.verifyToken(token)).resolves.toBe(true);
-    await expect(client.verifyToken(token)).resolves.toBe(false);
+    await expect(client.verifyToken(token)).resolves.toEqual({ ok: true, verified_at: 1 });
+    await expect(client.verifyToken(token)).rejects.toMatchObject({ code: 'invalid_token' });
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'https://verifier.example/v1/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

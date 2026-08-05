@@ -6,6 +6,7 @@ import type {
   GraphIssuanceRequest,
 } from '../types.js';
 import type { ClientState } from './state.js';
+import { GraphIssuanceError } from '../errors.js';
 import {
   refreshKeyDiscoveryMetadata,
 } from './discovery.js';
@@ -27,10 +28,10 @@ export async function selectGraphIssuancePolicy(
   const policy = metadata.graph_issuance?.policies.find(
     (candidate) => candidate.issuance_policy_id === policyId,
   );
-  if (!policy) throw new Error('Unknown graph issuance policy');
+  if (!policy) throw new GraphIssuanceError('Unknown graph issuance policy');
   if (policy.admission_state !== 'accepting_new' ||
     policy.graph_id !== metadata.exchange?.active_graph.graph_id) {
-    throw new Error('Graph issuance policy is not accepting new issuance');
+    throw new GraphIssuanceError('Graph issuance policy is not accepting new issuance');
   }
   graphIssuanceTokenKeyId(metadata.exchange, policy.graph_id, policy.keyset_id, policy.descriptor_id);
   return policy;
@@ -68,7 +69,7 @@ async function validateGraphIssuanceRequestSelection(
   const policy = await selectPolicy(request.issuance_policy_id);
   if (policy.admission_state !== 'accepting_new' || policy.graph_id !== request.graph_id ||
     policy.keyset_id !== request.keyset_id || policy.descriptor_id !== request.descriptor_id) {
-    throw new Error('Graph issuance request does not match the selected active policy');
+    throw new GraphIssuanceError('Graph issuance request does not match the selected active policy');
   }
   return {
     policy,
@@ -91,11 +92,11 @@ function graphIssuanceTokenKeyId(
     .find((candidate) => candidate.graph_id === graphId);
   const keyset = graph?.keysets.find((candidate) => candidate.keyset_id === keysetId);
   if (!keyset || !keyset.descriptor_ids.includes(descriptorId)) {
-    throw new Error('Graph issuance selection has no valid token key');
+    throw new GraphIssuanceError('Graph issuance selection has no valid token key');
   }
   const tokenKeyId = graph?.descriptors.find(
     (candidate) => candidate.descriptor_id === descriptorId,
   )?.token_key_id;
-  if (!tokenKeyId) throw new Error('Graph issuance selection has no valid token key');
+  if (!tokenKeyId) throw new GraphIssuanceError('Graph issuance selection has no valid token key');
   return tokenKeyId;
 }

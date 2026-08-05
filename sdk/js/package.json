@@ -1,8 +1,23 @@
 {
   "name": "@freebird/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Anonymous authentication using VOPRF (Freebird SDK)",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://git.carpocratian.org/sibyl/freebird.git"
+  },
+  "homepage": "https://git.carpocratian.org/sibyl/freebird",
+  "keywords": [
+    "freebird",
+    "voprf",
+    "anonymous",
+    "authentication",
+    "privacy",
+    "token",
+    "blind-signature"
+  ],
   "files": ["dist"],
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
@@ -23,12 +38,14 @@
     "build": "tsup",
     "dev": "tsup --watch",
     "test": "vitest",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm run test"
   },
   "peerDependencies": {
     "typescript": "^5.0.0"
   },
   "dependencies": {
+    "@cloudflare/blindrsa-ts": "^0.4.6",
     "@noble/curves": "^1.7.0",
     "@noble/hashes": "^1.6.0"
   },

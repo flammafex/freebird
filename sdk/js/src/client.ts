@@ -1,18 +1,26 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 import type {
+  BatchVerifyResp,
   ClientConfig,
   ExchangeOutcome,
   ExchangeRequest,
+  ExchangeRequestSource,
   ExchangeTransitionSelection,
   FreebirdToken,
   GraphIssuanceOutcome,
   GraphIssuancePolicyInfo,
   GraphIssuanceRecoveryContext,
   GraphIssuanceRequest,
+  IssuePublicTokenOptions,
+  IssuePublicTokensOptions,
+  IssueTokensOptions,
   KeyDiscoveryMetadata,
+  PublicBearerPass,
   PublicIssueResponse,
+  PublicKeyInfo,
   SybilProof,
+  VerifyResp,
 } from './types.js';
 import * as discovery from './client/discovery.js';
 import * as exchangeProtocol from './client/exchange.js';
@@ -20,14 +28,31 @@ import * as graphIssuance from './client/graph_issuance.js';
 import * as graphProtocol from './client/graph_protocol.js';
 import * as graphRecovery from './client/graph_recovery.js';
 import * as issuance from './client/issuance.js';
+import * as poll from './client/poll.js';
+import type { PollOptions } from './client/poll.js';
+import * as protocol from './client/protocol.js';
+import type { ExchangePassesOptions } from './client/protocol.js';
 import { createClientState, type ClientState } from './client/state.js';
+import type { TokenStore } from './types.js';
 import * as verification from './client/verification.js';
+import { base64UrlToBytes } from './client/wire.js';
+import * as rsa from './crypto/rsa.js';
+import * as voprf from './crypto/voprf.js';
+import { DiscoveryError } from './errors.js';
 
 export class FreebirdClient {
   private state: ClientState;
 
   constructor(config: ClientConfig) {
     this.state = createClientState(config);
+  }
+
+  /**
+   * The optional {@link TokenStore} configured for this client, or `undefined`
+   * if none was provided.
+   */
+  get tokenStore(): TokenStore | undefined {
+    return this.state.config.tokenStore;
   }
 
   /** Initializes the client by fetching the issuer's public key. */
@@ -37,11 +62,47 @@ export class FreebirdClient {
 
   /** Issues a new anonymous V4 token. */
   async issueToken(sybilProof?: SybilProof): Promise<FreebirdToken> {
-    return issuance.issueToken(this.state, sybilProof, () => this.init());
+    return issuance.issueToken(
+      this.state,
+      sybilProof,
+      () => this.init(),
+      () => this.refreshKeyDiscoveryMetadata(),
+    );
+  }
+
+  /**
+   * Issues a batch of anonymous V4 tokens.
+   *
+   * `msgs` determines how many tokens to issue (one per element; the element
+   * content is not part of the V4 input). Inputs larger than 10_000 are
+   * chunked into multiple requests. If any token fails, a
+   * {@link BatchIssuanceError} is thrown carrying the per-token outcomes and
+   * the successfully finalized tokens.
+   */
+  async issueTokens(
+    msgs: Uint8Array[],
+    opts: IssueTokensOptions = {},
+  ): Promise<FreebirdToken[]> {
+    return issuance.issueTokens(
+      this.state,
+      msgs,
+      opts,
+      () => this.init(),
+      () => this.refreshKeyDiscoveryMetadata(),
+    );
   }
 
   async getKeyDiscoveryMetadata(): Promise<KeyDiscoveryMetadata> {
     return discovery.getKeyDiscoveryMetadata(this.state);
+  }
+
+  /**
+   * Forces a fresh fetch of the issuer's `/.well-known/keys` discovery
+   * metadata, bypassing the TTL-based cache. Useful for long-lived clients
+   * that want to observe key rotation proactively.
+   */
+  async refreshKeyDiscoveryMetadata(): Promise<KeyDiscoveryMetadata> {
+    return discovery.refreshKeyDiscoveryMetadata(this.state);
   }
 
   /** Requests a V5 public bearer pass blind signature. */
@@ -56,7 +117,84 @@ export class FreebirdClient {
       sybilProof,
       tokenKeyId,
       () => this.getKeyDiscoveryMetadata(),
+      () => this.refreshKeyDiscoveryMetadata(),
     );
+  }
+
+  /**
+   * Issues a complete V5 public bearer pass in one call.
+   *
+   * `msg` is the message to be blindly signed (typically the output of
+   * `crypto.buildPublicBearerMessage(nonce, tokenKeyId, issuerId)`). The
+   * caller supplies the nonce, token key ID, and issuer ID via `opts`, which
+   * are also embedded in the returned pass.
+   *
+   * The blinding factor is held only in memory for the duration of the call
+   * and is never persisted.
+   */
+  async issuePublicToken(
+    msg: Uint8Array,
+    opts: IssuePublicTokenOptions,
+  ): Promise<PublicBearerPass> {
+    const { nonce, tokenKeyId, issuerId, sybilProof } = opts;
+    const metadata = await this.getKeyDiscoveryMetadata();
+    const key = metadata.public.find((candidate) => candidate.token_key_id === tokenKeyId);
+    if (!key) throw new DiscoveryError('No V5 public bearer key is available');
+    const { blinded, state } = await rsa.rsaBlind(base64UrlToBytes(key.pubkey_spki_b64), msg);
+    const resp = await issuance.issuePublicBlindSignature(
+      this.state,
+      blinded,
+      sybilProof,
+      tokenKeyId,
+      () => this.getKeyDiscoveryMetadata(),
+      () => this.refreshKeyDiscoveryMetadata(),
+    );
+    if (resp.token_key_id !== tokenKeyId || resp.issuer_id !== issuerId) {
+      throw new DiscoveryError('Issuer metadata changed during public issuance');
+    }
+    const signature = await rsa.rsaUnblind(
+      state,
+      base64UrlToBytes(resp.blind_signature_b64),
+    );
+    return voprf.buildPublicBearerPass(nonce, voprf.tokenKeyIdFromHex(tokenKeyId), issuerId, signature);
+  }
+
+  /**
+   * Issues a batch of V5 public bearer passes in one call.
+   *
+   * Each `msgs[i]` is the message to be blindly signed (typically the output of
+   * `crypto.buildPublicBearerMessage(nonces[i], tokenKeyId, issuerId)`).
+   * `opts.nonces[i]` and `opts.issuerId` are embedded in the returned pass.
+   * Inputs larger than 10_000 are chunked into multiple requests.
+   */
+  async issuePublicTokens(
+    msgs: Uint8Array[],
+    opts: IssuePublicTokensOptions,
+  ): Promise<PublicBearerPass[]> {
+    return issuance.issuePublicTokens(
+      this.state,
+      msgs,
+      opts,
+      () => this.getKeyDiscoveryMetadata(),
+      () => this.refreshKeyDiscoveryMetadata(),
+    );
+  }
+
+  /**
+   * Locally verifies the RSA-PSS signature of a V5 public bearer pass against
+   * the given public key.
+   *
+   * NOTE: local verification checks only cryptographic validity. It does NOT
+   * check spend status (whether the pass has already been used). Only the
+   * verifier's `/v1/verify` endpoint enforces single-use replay protection.
+   */
+  async verifyPublicBearerPassLocally(
+    pass: PublicBearerPass,
+    keyInfo: PublicKeyInfo,
+  ): Promise<boolean> {
+    const { nonce, tokenKeyId, issuerId, signature } = voprf.parsePublicBearerPass(pass);
+    const msg = voprf.buildPublicBearerMessage(nonce, tokenKeyId, issuerId);
+    return rsa.rsaVerify(base64UrlToBytes(keyInfo.pubkey_spki_b64), msg, signature);
   }
 
   /** Resolves an explicit immutable graph and transition selection. */
@@ -107,6 +245,33 @@ export class FreebirdClient {
 
   exchangeRequestDigest(request: ExchangeRequest): string {
     return exchangeProtocol.exchangeRequestDigest(request);
+  }
+
+  /** Generates a canonical 16-byte base64url exchange operation id. */
+  generateOperationId(): string {
+    return protocol.generateOperationId();
+  }
+
+  /** Generates a canonical 32-byte base64url exchange status capability. */
+  generateStatusCapability(): string {
+    return protocol.generateStatusCapability();
+  }
+
+  /**
+   * Assembles a valid V2 `ExchangeRequest` from an explicit graph/transition
+   * selection, blinding the output slots with the target descriptors' keys.
+   */
+  async exchangePasses(
+    sources: ExchangeRequestSource[],
+    transition: { graphId: string; transitionId: string },
+    opts: ExchangePassesOptions = {},
+  ): Promise<ExchangeRequest> {
+    return protocol.exchangePasses(
+      sources,
+      transition,
+      opts,
+      (graphId, transitionId) => this.selectExchangeTransition(graphId, transitionId),
+    );
   }
 
   /** Resolves one current graph issuance policy. */
@@ -173,6 +338,40 @@ export class FreebirdClient {
     );
   }
 
+  /**
+   * Polls an exchange operation until it is committed or fails terminally.
+   *
+   * Retries while the status is `pending`, honoring the server's `retryAfter`
+   * as the floor for the next poll. Throws {@link PollTimeoutError} on
+   * `timeoutMs` and {@link PollAbortedError} on `signal` abort.
+   */
+  async pollExchangeStatus(
+    request: ExchangeRequest,
+    statusCapability: string,
+    options: PollOptions = {},
+  ): Promise<ExchangeOutcome> {
+    return poll.pollExchangeStatus(
+      () => this.getExchangeStatus(request, statusCapability),
+      options,
+    );
+  }
+
+  /**
+   * Polls a graph issuance operation until it is committed or fails
+   * terminally. Retries on retryable 503 outcomes. Throws
+   * {@link PollTimeoutError} on `timeoutMs` and {@link PollAbortedError} on
+   * `signal` abort.
+   */
+  async pollGraphIssuanceStatus(
+    context: GraphIssuanceRecoveryContext,
+    options: PollOptions = {},
+  ): Promise<GraphIssuanceOutcome> {
+    return poll.pollGraphIssuanceStatus(
+      () => this.getGraphIssuanceStatus(context),
+      options,
+    );
+  }
+
   graphIssuanceRequestDigest(request: GraphIssuanceRequest): string {
     return graphProtocol.graphIssuanceRequestDigest(request);
   }
@@ -181,7 +380,32 @@ export class FreebirdClient {
     return graphProtocol.graphIssuanceAuthorizationBindingDigest(request);
   }
 
-  async verifyToken(token: FreebirdToken): Promise<boolean> {
+  /**
+   * Verifies a token against the configured verifier, consuming it. Throws
+   * typed errors on failure (see {@link verification.verifyToken}).
+   */
+  async verifyToken(token: FreebirdToken): Promise<VerifyResp> {
     return verification.verifyToken(this.state, token);
+  }
+
+  /**
+   * Boolean convenience over {@link verifyToken}. Returns `false` for invalid
+   * or replayed tokens; rethrows infrastructure errors (verifier unavailable,
+   * rate limited, not configured).
+   */
+  async verifyTokenValid(token: FreebirdToken): Promise<boolean> {
+    return verification.verifyTokenValid(this.state, token);
+  }
+
+  /**
+   * Checks token validity WITHOUT consuming it (distinct `/v1/check` endpoint).
+   */
+  async checkToken(token: FreebirdToken): Promise<VerifyResp> {
+    return verification.checkToken(this.state, token);
+  }
+
+  /** Verifies a batch of tokens in one request, consuming each. */
+  async verifyBatch(tokens: FreebirdToken[]): Promise<BatchVerifyResp> {
+    return verification.verifyBatch(this.state, tokens);
   }
 }

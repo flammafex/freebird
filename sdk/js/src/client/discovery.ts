@@ -13,6 +13,7 @@ import type {
   VerifierMetadata,
 } from '../types.js';
 import type { ClientState } from './state.js';
+import { DiscoveryError, VerifierNotConfiguredError } from '../errors.js';
 import {
   ascii,
   bytesToBase64Url,
@@ -37,7 +38,7 @@ export async function init(state: ClientState): Promise<void> {
     const url = `${state.config.issuerUrl}/.well-known/issuer`;
     const res = await fetch(url);
     if (!res.ok) {
-      throw new Error(`Failed to fetch issuer metadata: ${res.status} ${res.statusText}`);
+      throw new DiscoveryError('Failed to fetch issuer metadata');
     }
     state.metadata = (await res.json()) as IssuerMetadata;
   }
@@ -47,7 +48,7 @@ export async function init(state: ClientState): Promise<void> {
       const url = `${state.config.verifierUrl}/.well-known/verifier`;
       const res = await fetch(url);
       if (!res.ok) {
-        throw new Error(`Failed to fetch verifier metadata: ${res.status} ${res.statusText}`);
+        throw new DiscoveryError('Failed to fetch verifier metadata');
       }
       state.verifierMetadata = (await res.json()) as VerifierMetadata;
     } else if (state.config.verifierId && state.config.audience) {
@@ -59,13 +60,15 @@ export async function init(state: ClientState): Promise<void> {
         ),
       };
     } else {
-      throw new Error('Verifier scope required: configure verifierUrl or verifierId+audience');
+      throw new VerifierNotConfiguredError('Verifier scope required: configure verifierUrl or verifierId+audience');
     }
   }
 }
 
 export async function getKeyDiscoveryMetadata(state: ClientState): Promise<KeyDiscoveryMetadata> {
-  if (state.keyDiscoveryMetadata) return state.keyDiscoveryMetadata;
+  if (state.keyDiscoveryMetadata && isKeyDiscoveryFresh(state)) {
+    return state.keyDiscoveryMetadata;
+  }
   return fetchKeyDiscoveryMetadata(state);
 }
 
@@ -73,21 +76,36 @@ export async function refreshKeyDiscoveryMetadata(state: ClientState): Promise<K
   return fetchKeyDiscoveryMetadata(state);
 }
 
+/**
+ * Returns true when the cached key discovery metadata is still within its TTL.
+ *
+ * The TTL is `ClientConfig.keyCacheTtlMs` when configured, otherwise derived
+ * from the metadata's `epoch_duration_sec` so the cache expires as the current
+ * epoch advances.
+ */
+function isKeyDiscoveryFresh(state: ClientState): boolean {
+  if (!state.keyDiscoveryMetadata || state.keyDiscoveryMetadataFetchedAt === null) return false;
+  const ttlMs = state.config.keyCacheTtlMs ??
+    state.keyDiscoveryMetadata.epoch_duration_sec * 1000;
+  return Date.now() - state.keyDiscoveryMetadataFetchedAt < ttlMs;
+}
+
 async function fetchKeyDiscoveryMetadata(state: ClientState): Promise<KeyDiscoveryMetadata> {
   const url = `${state.config.issuerUrl}/.well-known/keys`;
   const res = await fetch(url);
   if (!res.ok) {
-    throw new Error(`Failed to fetch issuer key metadata: ${res.status} ${res.statusText}`);
+    throw new DiscoveryError('Failed to fetch issuer key metadata');
   }
   const metadata = (await res.json()) as KeyDiscoveryMetadata;
   if (metadata.exchange !== undefined) {
     await validateExchangeDiscovery(metadata.issuer_id, metadata.exchange);
   }
   if (metadata.graph_issuance !== undefined) {
-    if (!metadata.exchange) throw new Error('Invalid graph issuance discovery metadata');
+    if (!metadata.exchange) throw new DiscoveryError('Invalid graph issuance discovery metadata');
     validateGraphIssuanceDiscovery(metadata.graph_issuance, metadata.exchange);
   }
   state.keyDiscoveryMetadata = metadata;
+  state.keyDiscoveryMetadataFetchedAt = Date.now();
   return state.keyDiscoveryMetadata;
 }
 
@@ -97,11 +115,11 @@ export async function selectExchangeTransition(
   transitionId: string,
 ): Promise<ExchangeTransitionSelection> {
   const metadata = await getMetadata();
-  if (!metadata.exchange) throw new Error('Issuer does not publish V2 exchange discovery');
+  if (!metadata.exchange) throw new DiscoveryError('Issuer does not publish V2 exchange discovery');
   const graph = [metadata.exchange.active_graph, ...metadata.exchange.retained_graphs]
     .find((candidate) => candidate.graph_id === graphId);
   const transition = graph?.transitions.find((candidate) => candidate.transition_id === transitionId);
-  if (!graph || !transition) throw new Error('Unknown exchange graph or transition');
+  if (!graph || !transition) throw new DiscoveryError('Unknown exchange graph or transition');
   return { graph, transition };
 }
 
@@ -109,7 +127,7 @@ function validateGraphIssuanceDiscovery(
   issuance: NonNullable<KeyDiscoveryMetadata['graph_issuance']>,
   exchange: ExchangeDiscoveryMetadata,
 ): void {
-  const invalid = (): never => { throw new Error('Invalid graph issuance discovery metadata'); };
+  const invalid = (): never => { throw new DiscoveryError('Invalid graph issuance discovery metadata'); };
   if (!hasExactKeys(issuance, ['version', 'policies', 'replay_authority']) ||
     issuance.version !== 2 || !Array.isArray(issuance.policies) || issuance.policies.length > 64 ||
     !hasExactKeys(issuance.replay_authority, ['authority_id', 'v4_scope_digest_tombstones']) ||
@@ -166,7 +184,7 @@ async function validateExchangeDiscovery(
   issuerId: string,
   discovery: ExchangeDiscoveryMetadata,
 ): Promise<void> {
-  const invalid = (): never => { throw new Error('Invalid V2 exchange discovery metadata'); };
+  const invalid = (): never => { throw new DiscoveryError('Invalid V2 exchange discovery metadata'); };
   if (!hasExactKeys(discovery, [
     'active_graph', 'retained_graphs', 'active_receipt_key', 'retained_receipt_keys',
   ]) || !Array.isArray(discovery.retained_graphs) ||
@@ -313,7 +331,7 @@ async function validateExchangeDiscovery(
 
 function validateDiscoverySlots(value: unknown, members: Set<string>): void {
   if (!Array.isArray(value) || value.length === 0 || value.length > 64) {
-    throw new Error('Invalid V2 exchange discovery metadata');
+    throw new DiscoveryError('Invalid V2 exchange discovery metadata');
   }
   const slotIds = new Set<string>();
   const descriptorIds = new Set<string>();
@@ -325,7 +343,7 @@ function validateDiscoverySlots(value: unknown, members: Set<string>): void {
       !isSafePositive(slot.quantity) || slot.quantity > 64 ||
       !members.has(slot.descriptor_id) || slotIds.has(slot.slot_id) ||
       descriptorIds.has(slot.descriptor_id)) {
-      throw new Error('Invalid V2 exchange discovery metadata');
+      throw new DiscoveryError('Invalid V2 exchange discovery metadata');
     }
     slotIds.add(slot.slot_id);
     descriptorIds.add(slot.descriptor_id);
@@ -342,11 +360,11 @@ function validateReceiptDiscoveryKey(
   ]) || !isLowerHexId(key.key_id) || key.algorithm !== 'Ed25519' || key.purpose !== purpose ||
     !isSafePositive(key.valid_from) || !isSafePositive(key.valid_until) ||
     key.valid_from >= key.valid_until || ids.has(key.key_id)) {
-    throw new Error('Invalid V2 exchange discovery metadata');
+    throw new DiscoveryError('Invalid V2 exchange discovery metadata');
   }
   const publicKey = decodeCanonical(key.public_key_b64, 32);
   if (!ed25519.utils.isValidPublicKey(publicKey, false) || hex(sha256(publicKey)) !== key.key_id) {
-    throw new Error('Invalid V2 exchange discovery metadata');
+    throw new DiscoveryError('Invalid V2 exchange discovery metadata');
   }
   ids.add(key.key_id);
 }

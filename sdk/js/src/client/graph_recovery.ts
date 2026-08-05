@@ -6,6 +6,7 @@ import type {
   GraphIssuanceRequest,
 } from '../types.js';
 import type { ClientState } from './state.js';
+import { GraphIssuanceError } from '../errors.js';
 import {
   hasExactKeys,
   isCanonicalBase64Url,
@@ -27,9 +28,9 @@ export async function createGraphIssuanceRecoveryContext(
 ): Promise<GraphIssuanceRecoveryContext> {
   validateGraphIssuanceRequest(request);
   validateGraphStatusCapability(statusCapability);
-  if (!isLowerHexId(expectedTokenKeyId)) throw new Error('Invalid graph issuance token key ID');
+  if (!isLowerHexId(expectedTokenKeyId)) throw new GraphIssuanceError('Invalid graph issuance token key ID');
   if (blindingState === undefined || blindingState === null) {
-    throw new Error('Graph issuance blinding state is required for recovery');
+    throw new GraphIssuanceError('Graph issuance blinding state is required for recovery');
   }
   return {
     request,
@@ -84,6 +85,71 @@ function validateGraphIssuanceRequest(request: GraphIssuanceRequest): void {
   graphIssuanceRequestBytes(request, true);
 }
 
+/**
+ * The serialization version for {@link serializeGraphIssuanceRecoveryContext}.
+ * Bump on any breaking change to the envelope or context shape.
+ */
+const RECOVERY_CONTEXT_SERIALIZATION_VERSION = 1;
+const RECOVERY_CONTEXT_TYPE = 'graph_issuance_recovery_context';
+
+/**
+ * Serializes a {@link GraphIssuanceRecoveryContext} to a documented JSON
+ * envelope:
+ *
+ * ```json
+ * {
+ *   "version": 1,
+ *   "type": "graph_issuance_recovery_context",
+ *   "context": { ...GraphIssuanceRecoveryContext }
+ * }
+ * ```
+ *
+ * SECURITY: `blindingState` is opaque and caller-owned. It is included in the
+ * round-trip so the context can be reconstructed in memory, but it may contain
+ * secret RFC 9474 blinding material (`RsaBlindState.inv`). Do NOT persist this
+ * serialization to a durable store; keep it in memory only. The token store
+ * never stores recovery contexts.
+ */
+export function serializeGraphIssuanceRecoveryContext(
+  context: GraphIssuanceRecoveryContext,
+): string {
+  return JSON.stringify({
+    version: RECOVERY_CONTEXT_SERIALIZATION_VERSION,
+    type: RECOVERY_CONTEXT_TYPE,
+    context,
+  });
+}
+
+/**
+ * Deserializes a {@link GraphIssuanceRecoveryContext} produced by
+ * {@link serializeGraphIssuanceRecoveryContext}. Validates the envelope and
+ * the context shape. Throws {@link GraphIssuanceError} on malformed input.
+ */
+export function deserializeGraphIssuanceRecoveryContext(
+  serialized: string,
+): GraphIssuanceRecoveryContext {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(serialized);
+  } catch {
+    throw new GraphIssuanceError('Invalid graph issuance recovery context serialization');
+  }
+  if (typeof parsed !== 'object' || parsed === null ||
+    !hasExactKeys(parsed, ['version', 'type', 'context']) ||
+    (parsed as { version: unknown }).version !== RECOVERY_CONTEXT_SERIALIZATION_VERSION ||
+    (parsed as { type: unknown }).type !== RECOVERY_CONTEXT_TYPE) {
+    throw new GraphIssuanceError('Invalid graph issuance recovery context serialization');
+  }
+  const context = (parsed as { context: unknown }).context;
+  if (typeof context !== 'object' || context === null || !hasExactKeys(context, [
+    'request', 'requestDigest', 'publicOperationId', 'issuancePolicyId', 'graphId',
+    'keysetId', 'descriptorId', 'statusCapability', 'expectedTokenKeyId', 'blindingState',
+  ])) {
+    throw new GraphIssuanceError('Invalid graph issuance recovery context serialization');
+  }
+  return context as unknown as GraphIssuanceRecoveryContext;
+}
+
 function graphIssuanceRecovery(
   context: GraphIssuanceRecoveryContext,
   digest: GraphDigest,
@@ -92,11 +158,11 @@ function graphIssuanceRecovery(
     'request', 'requestDigest', 'publicOperationId', 'issuancePolicyId', 'graphId',
     'keysetId', 'descriptorId', 'statusCapability', 'expectedTokenKeyId', 'blindingState',
   ])) {
-    throw new Error('Invalid graph issuance recovery context');
+    throw new GraphIssuanceError('Invalid graph issuance recovery context');
   }
   if (context.blindingState === undefined || context.blindingState === null ||
     !isLowerHexId(context.expectedTokenKeyId)) {
-    throw new Error('Invalid graph issuance recovery context');
+    throw new GraphIssuanceError('Invalid graph issuance recovery context');
   }
   validateGraphIssuanceRequest(context.request);
   if (!isCanonicalBase64Url(context.requestDigest, 32) ||
@@ -107,7 +173,7 @@ function graphIssuanceRecovery(
     context.graphId !== context.request.graph_id ||
     context.keysetId !== context.request.keyset_id ||
     context.descriptorId !== context.request.descriptor_id) {
-    throw new Error('Invalid graph issuance recovery context');
+    throw new GraphIssuanceError('Invalid graph issuance recovery context');
   }
   validateGraphStatusCapability(context.statusCapability);
   return context;

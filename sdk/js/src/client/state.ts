@@ -11,6 +11,8 @@ export interface ClientState {
   config: ClientConfig;
   metadata: IssuerMetadata | null;
   keyDiscoveryMetadata: KeyDiscoveryMetadata | null;
+  /** Epoch ms at which `keyDiscoveryMetadata` was last fetched (null if never). */
+  keyDiscoveryMetadataFetchedAt: number | null;
   verifierMetadata: VerifierMetadata | null;
   context: Uint8Array;
 }
@@ -20,6 +22,7 @@ export function createClientState(config: ClientConfig): ClientState {
     config,
     metadata: null,
     keyDiscoveryMetadata: null,
+    keyDiscoveryMetadataFetchedAt: null,
     verifierMetadata: null,
     context: new TextEncoder().encode('freebird:v4'),
   };

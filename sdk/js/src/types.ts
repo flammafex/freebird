@@ -10,6 +10,33 @@ export interface ClientConfig {
   verifierId?: string;
   /** Optional audience override when verifierUrl is unavailable. */
   audience?: string;
+  /**
+   * Optional TTL (ms) for the cached `/.well-known/keys` discovery metadata.
+   *
+   * When unset, the TTL is derived from the metadata's `epoch_duration_sec`
+   * (i.e. the cache expires when the current epoch advances). Set this to
+   * override the epoch-derived TTL, e.g. to poll for key rotation more
+   * aggressively than once per epoch.
+   */
+  keyCacheTtlMs?: number;
+  /**
+   * Optional persistent store for issued tokens.
+   *
+   * When provided, consumers can persist and reload tokens across sessions
+   * without hand-rolling storage. See {@link TokenStore} and the
+   * `MemoryTokenStore`/`StorageTokenStore` implementations.
+   */
+  tokenStore?: TokenStore;
+  /**
+   * Optional Proof-of-Work difficulty (leading zero bits) to mine when the
+   * issuer requires PoW Sybil resistance.
+   *
+   * When unset, PoW is disabled unless the issuer publishes a PoW requirement
+   * in `/.well-known/issuer` (the `sybil` field), which takes precedence over
+   * this config. The issuance methods mine a request-bound `proof_of_work`
+   * proof automatically when PoW is required.
+   */
+  powDifficulty?: number;
 }
 
 /**
@@ -29,6 +56,73 @@ export interface IssuerMetadata {
     modulus_bits: number;
     spend_policy: string;
   };
+  /**
+   * Issuer-published Sybil resistance requirements. Absent on issuers that do
+   * not publish them. Mirrors `SybilConfigSummary` in
+   * `issuer/src/routes/admin/types.rs`.
+   */
+  sybil?: SybilConfigSummary;
+}
+
+/**
+ * Issuer-published Sybil resistance requirements (sanitized — no secrets).
+ * Mirrors `SybilConfigSummary` in `issuer/src/routes/admin/types.rs`.
+ */
+export interface SybilConfigSummary {
+  /** Current Sybil resistance mode (e.g. `"pow"`, `"proof_of_work"`, `"none"`). */
+  mode: string;
+  /** Human-readable description of the mode. */
+  mode_description: string;
+  /** Mode-specific settings (untagged; shape depends on `mode`). */
+  settings: SybilModeSettings;
+  /** Combined-mode mechanisms (only when `mode` is `"combined"`). */
+  combined_mechanisms?: string[] | null;
+  /** Combined-mode type (only when `mode` is `"combined"`). */
+  combined_mode_type?: string | null;
+  /** Combined threshold (only for `"combined"` + `"threshold"`). */
+  combined_threshold?: number | null;
+}
+
+/**
+ * Mode-specific Sybil settings. The wire shape is untagged and depends on
+ * `SybilConfigSummary.mode`; the SDK only reads `difficulty` for PoW.
+ */
+export type SybilModeSettings =
+  | { difficulty: number }
+  | { interval: string; interval_secs: number }
+  | {
+      invites_per_user: number;
+      cooldown: string;
+      cooldown_secs: number;
+      expires: string;
+      expires_secs: number;
+      new_user_wait: string;
+      new_user_wait_secs: number;
+      persistence_path: string;
+      bootstrap_users_configured: boolean;
+    }
+  | { levels: TrustLevelSummary[]; persistence_path: string }
+  | { min_score: number; persistence_path: string }
+  | {
+      required_vouchers: number;
+      cooldown: string;
+      cooldown_secs: number;
+      expires: string;
+      expires_secs: number;
+      new_user_wait: string;
+      new_user_wait_secs: number;
+      persistence_path: string;
+    }
+  | { max_proof_age?: string | null; max_proof_age_secs?: number | null }
+  | Record<string, never>;
+
+/** Summary of a progressive-trust level. Mirrors `TrustLevelSummary`. */
+export interface TrustLevelSummary {
+  min_age: string;
+  min_age_secs: number;
+  max_tokens: number;
+  cooldown: string;
+  cooldown_secs: number;
 }
 
 export interface PublicKeyInfo {
@@ -501,6 +595,136 @@ export interface PublicIssueResponse {
 }
 
 /**
+ * Exact JSON body accepted by POST /v1/oprf/issue/batch.
+ * Mirrors `BatchIssueReq` in `common/src/api/issuance.rs`.
+ */
+export interface BatchIssueReq {
+  /** Base64url-encoded blinded VOPRF elements. */
+  blinded_elements: string[];
+  /** Optional context string (unused in v1). */
+  ctx_b64?: string;
+  /** Sybil resistance proof if required. */
+  sybil_proof?: SybilProof;
+}
+
+/**
+ * Per-token outcome of a V4 batch issuance. Mirrors the `TokenResult` enum in
+ * `common/src/api/issuance.rs`, tagged on `status` with lowercase variant names.
+ */
+export type TokenResult =
+  | { status: 'success'; token: string; kid: string; issuer_id: string }
+  | { status: 'error'; message: string; code: string };
+
+/**
+ * Exact JSON body returned by POST /v1/oprf/issue/batch.
+ * Mirrors `BatchIssueResp` in `common/src/api/issuance.rs`.
+ */
+export interface BatchIssueResp {
+  results: TokenResult[];
+  successful: number;
+  failed: number;
+  processing_time_ms: number;
+  throughput: number;
+  sybil_info?: {
+    required: boolean;
+    passed: boolean;
+    cost: number;
+  };
+}
+
+/**
+ * Exact JSON body accepted by POST /v1/public/issue/batch.
+ * Mirrors `PublicBatchIssueReq` in `common/src/api/issuance.rs`.
+ */
+export interface PublicBatchIssueReq {
+  /** Base64url-encoded RFC 9474 blinded messages. */
+  blinded_msgs: string[];
+  /** Strict lowercase hex token key ID. */
+  token_key_id?: string;
+  /** Sybil resistance proof if required. */
+  sybil_proof?: SybilProof;
+}
+
+/**
+ * Exact JSON body returned by POST /v1/public/issue/batch.
+ * Mirrors `PublicBatchIssueResp` in `common/src/api/issuance.rs`.
+ */
+export interface PublicBatchIssueResp {
+  /** Base64url-encoded RFC 9474 blind signatures, one per blinded message. */
+  blind_signatures: string[];
+  token_key_id: string;
+  issuer_id: string;
+  successful: number;
+  failed: number;
+  processing_time_ms: number;
+  throughput: number;
+  sybil_info?: {
+    required: boolean;
+    passed: boolean;
+    cost: number;
+  };
+}
+
+/**
+ * Options for {@link FreebirdClient.issueTokens}.
+ */
+export interface IssueTokensOptions {
+  /** Sybil resistance proof if required. */
+  sybilProof?: SybilProof;
+  /** Optional context string (unused in v1). */
+  ctxB64?: string;
+}
+
+/**
+ * Options for {@link FreebirdClient.issuePublicTokens}.
+ */
+export interface IssuePublicTokensOptions {
+  /** Strict lowercase hex token key ID of the signing key. */
+  tokenKeyId?: string;
+  /** Sybil resistance proof if required. */
+  sybilProof?: SybilProof;
+  /** Issuer identifier embedded in each pass. */
+  issuerId: string;
+  /** Per-token 32-byte nonces, one per message, embedded in each pass. */
+  nonces: Uint8Array[];
+}
+
+/**
+ * A V5 public bearer pass: the wire format produced by
+ * `voprf.buildPublicBearerPass` (and parsed by `voprf.parsePublicBearerPass`).
+ */
+export type PublicBearerPass = Uint8Array;
+
+/**
+ * Opaque RFC 9474 blinding state held between blinding and unblinding.
+ *
+ * `inv` is the secret blinding inverse factor. It must never be persisted to
+ * any store; `@cloudflare/blindrsa-ts` handles zeroization of key material.
+ */
+export interface RsaBlindState {
+  /** Secret blinding inverse factor. Never persist. */
+  inv: Uint8Array;
+  /** The RFC 9474 prepared message that was blinded. */
+  prepared: Uint8Array;
+  /** SPKI DER bytes of the RSA public key used for blinding. */
+  publicKey: Uint8Array;
+}
+
+/**
+ * Options for {@link FreebirdClient.issuePublicToken}.
+ */
+export interface IssuePublicTokenOptions {
+  /** 32-byte public bearer nonce embedded in the pass. */
+  nonce: Uint8Array;
+  /** Strict lowercase hex token key ID of the signing key. */
+  tokenKeyId: string;
+  /** Issuer identifier embedded in the pass. */
+  issuerId: string;
+  /** Sybil resistance proof if required. */
+  sybilProof?: SybilProof;
+}
+
+/**
  * Internal state maintained between blinding and unblinding.
  * This must be kept secure on the client.
  */
@@ -525,4 +749,86 @@ export interface FreebirdToken {
   kid?: string;
   /** V5 public bearer token key ID */
   tokenKeyId?: string;
+  /**
+   * Unix timestamp (seconds) at which the token expires, taken from
+   * `PublicKeyInfo.valid_until`. Token stores use this to evict expired
+   * tokens on `load`/`list`. Absent for tokens without a known expiry.
+   */
+  valid_until?: number;
+}
+
+/**
+ * A persistent store for issued tokens.
+ *
+ * Implementations must evict expired tokens (those whose `valid_until` has
+ * passed) on `load` and `list`. Tokens are keyed by their `tokenValue`.
+ */
+export interface TokenStore {
+  /** Persists a token, replacing any existing token with the same id. */
+  save(token: FreebirdToken): Promise<void>;
+  /**
+   * Loads a token by id (its `tokenValue`). When `id` is omitted, returns the
+   * most recently saved token, or `null` if the store is empty.
+   */
+  load(id?: string): Promise<FreebirdToken | null>;
+  /** Lists all non-expired tokens. */
+  list(): Promise<FreebirdToken[]>;
+  /** Removes all tokens from the store. */
+  clear(): Promise<void>;
+}
+
+/**
+ * Exact JSON body accepted by POST /v1/verify and POST /v1/check.
+ * Mirrors `VerifyReq` in `common/src/api/verification.rs`.
+ */
+export interface VerifyReq {
+  /** Base64url-encoded redemption token. */
+  token_b64: string;
+}
+
+/**
+ * Exact JSON body returned by POST /v1/verify and POST /v1/check.
+ * Mirrors `VerifyResp` in `common/src/api/verification.rs`.
+ */
+export interface VerifyResp {
+  ok: boolean;
+  /** Present only on error responses. */
+  error?: string | null;
+  /** Unix timestamp (seconds) at which the token was verified. */
+  verified_at: number;
+}
+
+/** One token in a batch verification request. Mirrors `TokenToVerify`. */
+export interface TokenToVerify {
+  token_b64: string;
+}
+
+/**
+ * Exact JSON body accepted by POST /v1/verify/batch.
+ * Mirrors `BatchVerifyReq` in `common/src/api/verification.rs`.
+ */
+export interface BatchVerifyReq {
+  tokens: TokenToVerify[];
+}
+
+/**
+ * Per-token outcome of a batch verification. Mirrors the `VerifyResult` enum
+ * in `common/src/api/verification.rs`, which is tagged on `status` with
+ * lowercase variant names. `code` is one of `verification_failed`,
+ * `replay_detected`, or `store_error`.
+ */
+export type VerifyResult =
+  | { status: 'success'; verified_at: number }
+  | { status: 'error'; message: string; code: string };
+
+/**
+ * Exact JSON body returned by POST /v1/verify/batch.
+ * Mirrors `BatchVerifyResp` in `common/src/api/verification.rs`.
+ */
+export interface BatchVerifyResp {
+  results: VerifyResult[];
+  successful: number;
+  failed: number;
+  processing_time_ms: number;
+  throughput: number;
 }
