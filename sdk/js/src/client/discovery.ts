@@ -36,7 +36,7 @@ export async function init(state: ClientState): Promise<void> {
 
   if (!state.metadata) {
     const url = `${state.config.issuerUrl}/.well-known/issuer`;
-    const res = await fetch(url);
+    const res = await (state.config.fetch ?? fetch)(url);
     if (!res.ok) {
       throw new DiscoveryError('Failed to fetch issuer metadata');
     }
@@ -46,7 +46,7 @@ export async function init(state: ClientState): Promise<void> {
   if (!state.verifierMetadata) {
     if (state.config.verifierUrl) {
       const url = `${state.config.verifierUrl}/.well-known/verifier`;
-      const res = await fetch(url);
+      const res = await (state.config.fetch ?? fetch)(url);
       if (!res.ok) {
         throw new DiscoveryError('Failed to fetch verifier metadata');
       }
@@ -92,7 +92,7 @@ function isKeyDiscoveryFresh(state: ClientState): boolean {
 
 async function fetchKeyDiscoveryMetadata(state: ClientState): Promise<KeyDiscoveryMetadata> {
   const url = `${state.config.issuerUrl}/.well-known/keys`;
-  const res = await fetch(url);
+  const res = await (state.config.fetch ?? fetch)(url);
   if (!res.ok) {
     throw new DiscoveryError('Failed to fetch issuer key metadata');
   }

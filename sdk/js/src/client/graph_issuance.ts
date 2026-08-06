@@ -49,7 +49,7 @@ export async function issueGraphBlindSignature(
     state, request, selectPolicy,
   );
   digest(request);
-  const response = await fetch(`${state.config.issuerUrl}/v1/public/graph/issue`, {
+  const response = await (state.config.fetch ?? fetch)(`${state.config.issuerUrl}/v1/public/graph/issue`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

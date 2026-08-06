@@ -52,7 +52,7 @@ export async function retryGraphBlindSignature(
   digest: GraphDigest,
 ): Promise<GraphIssuanceOutcome> {
   const recovery = graphIssuanceRecovery(context, digest);
-  const response = await fetch(`${state.config.issuerUrl}/v1/public/graph/issue`, {
+  const response = await (state.config.fetch ?? fetch)(`${state.config.issuerUrl}/v1/public/graph/issue`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -72,7 +72,7 @@ export async function getGraphIssuanceStatus(
 ): Promise<GraphIssuanceOutcome> {
   const recovery = graphIssuanceRecovery(context, digest);
   const url = `${state.config.issuerUrl}/v1/public/graph/issue/status?public_operation_id=${encodeURIComponent(recovery.request.public_operation_id)}`;
-  const response = await fetch(url, {
+  const response = await (state.config.fetch ?? fetch)(url, {
     method: 'GET',
     headers: { 'graph-issuance-status-capability': recovery.statusCapability },
   });

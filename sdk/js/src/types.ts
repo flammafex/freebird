@@ -37,6 +37,16 @@ export interface ClientConfig {
    * proof automatically when PoW is required.
    */
   powDifficulty?: number;
+  /**
+   * Optional custom `fetch` implementation used for all outbound HTTP.
+   *
+   * When provided, every request the client makes (discovery, issuance,
+   * verification, exchange, graph-issuance) is routed through this function
+   * instead of the global `fetch`. This lets consumers route traffic through a
+   * proxy (e.g. Tor/SOCKS5) for network-level privacy. Defaults to the global
+   * `fetch` when unset.
+   */
+  fetch?: typeof fetch;
 }
 
 /**

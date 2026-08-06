@@ -161,7 +161,7 @@ export async function exchange(
   validateStatusCapability(statusCapability);
   const selection = await validateExchangeRequestSelection(request, selectTransition);
   digest(request);
-  const response = await fetch(`${state.config.issuerUrl}/v2/public/exchange`, {
+  const response = await (state.config.fetch ?? fetch)(`${state.config.issuerUrl}/v2/public/exchange`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -195,7 +195,7 @@ export async function getExchangeStatus(
   const selection = await validateExchangeRequestSelection(submittedRequest, selectTransition);
   digest(submittedRequest);
   const url = `${state.config.issuerUrl}/v2/public/exchange/status?public_operation_id=${encodeURIComponent(publicOperationId)}`;
-  const response = await fetch(url, {
+  const response = await (state.config.fetch ?? fetch)(url, {
     method: 'GET',
     headers: { 'exchange-status-capability': statusCapability },
   });

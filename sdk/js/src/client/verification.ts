@@ -68,7 +68,7 @@ export async function verifyToken(
   token: FreebirdToken,
 ): Promise<VerifyResp> {
   const verifierUrl = requireVerifierUrl(state);
-  const res = await fetch(`${verifierUrl}/v1/verify`, {
+  const res = await (state.config.fetch ?? fetch)(`${verifierUrl}/v1/verify`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token_b64: token.tokenValue }),
@@ -88,7 +88,7 @@ export async function checkToken(
   token: FreebirdToken,
 ): Promise<VerifyResp> {
   const verifierUrl = requireVerifierUrl(state);
-  const res = await fetch(`${verifierUrl}/v1/check`, {
+  const res = await (state.config.fetch ?? fetch)(`${verifierUrl}/v1/check`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token_b64: token.tokenValue }),
@@ -110,7 +110,7 @@ export async function verifyBatch(
   const body: { tokens: TokenToVerify[] } = {
     tokens: tokens.map((token) => ({ token_b64: token.tokenValue })),
   };
-  const res = await fetch(`${verifierUrl}/v1/verify/batch`, {
+  const res = await (state.config.fetch ?? fetch)(`${verifierUrl}/v1/verify/batch`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

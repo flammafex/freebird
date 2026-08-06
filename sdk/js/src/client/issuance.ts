@@ -88,7 +88,7 @@ export async function issueToken(
       blinded_element_b64,
       sybil_proof: effectiveProof,
     };
-    const res = await fetch(`${state.config.issuerUrl}/v1/oprf/issue`, {
+    const res = await (state.config.fetch ?? fetch)(`${state.config.issuerUrl}/v1/oprf/issue`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(reqBody),
@@ -169,7 +169,7 @@ export async function issuePublicBlindSignature(
       );
     }
 
-    const res = await fetch(`${state.config.issuerUrl}/v1/public/issue`, {
+    const res = await (state.config.fetch ?? fetch)(`${state.config.issuerUrl}/v1/public/issue`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ blinded_msg_b64, token_key_id: requestedKeyId, sybil_proof: effectiveProof }),
@@ -251,7 +251,7 @@ export async function issueTokens(
       };
       if (opts.ctxB64 !== undefined) reqBody.ctx_b64 = opts.ctxB64;
 
-      const res = await fetch(`${state.config.issuerUrl}/v1/oprf/issue/batch`, {
+      const res = await (state.config.fetch ?? fetch)(`${state.config.issuerUrl}/v1/oprf/issue/batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(reqBody),
@@ -378,7 +378,7 @@ export async function issuePublicTokens(
         token_key_id: requestedKeyId,
         sybil_proof: effectiveProof,
       };
-      const res = await fetch(`${state.config.issuerUrl}/v1/public/issue/batch`, {
+      const res = await (state.config.fetch ?? fetch)(`${state.config.issuerUrl}/v1/public/issue/batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(reqBody),
