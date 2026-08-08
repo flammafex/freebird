@@ -35,12 +35,7 @@ export async function init(state: ClientState): Promise<void> {
   if (state.metadata && state.verifierMetadata) return;
 
   if (!state.metadata) {
-    const url = `${state.config.issuerUrl}/.well-known/issuer`;
-    const res = await (state.config.fetch ?? fetch)(url);
-    if (!res.ok) {
-      throw new DiscoveryError('Failed to fetch issuer metadata');
-    }
-    state.metadata = (await res.json()) as IssuerMetadata;
+    await getIssuerMetadata(state);
   }
 
   if (!state.verifierMetadata) {
@@ -63,6 +58,53 @@ export async function init(state: ClientState): Promise<void> {
       throw new VerifierNotConfiguredError('Verifier scope required: configure verifierUrl or verifierId+audience');
     }
   }
+}
+
+/**
+ * Loads the issuer discovery document used for issuer identity and Sybil
+ * requirements.  A few older test/development issuers served key discovery
+ * from this URL; accepting that shape as a compatibility fallback keeps the
+ * V5 client usable against those issuers while still preferring the issuer
+ * document whenever it is available.
+ */
+export async function getIssuerMetadata(state: ClientState): Promise<IssuerMetadata> {
+  if (state.metadata) return state.metadata;
+
+  const url = `${state.config.issuerUrl}/.well-known/issuer`;
+  const res = await (state.config.fetch ?? fetch)(url);
+  if (!res.ok) {
+    throw new DiscoveryError('Failed to fetch issuer metadata');
+  }
+  // Read a clone: compatibility callers may return an issuance response from
+  // a fetch double when the legacy issuer-discovery endpoint is absent.
+  const body = (await (typeof res.clone === 'function' ? res.clone() : res).json()) as Record<string, unknown>;
+
+  // Compatibility with pre-issuer-discovery deployments which returned the
+  // key document at this URL.  Cache it so the subsequent key lookup does not
+  // accidentally consume the first issuance response in a caller-provided
+  // fetch implementation.
+  if ('current_epoch' in body && Array.isArray(body.public) && body.voprf) {
+    if (typeof body.issuer_id !== 'string') throw new DiscoveryError('Invalid issuer metadata');
+    state.keyDiscoveryMetadata = body as unknown as KeyDiscoveryMetadata;
+    state.keyDiscoveryMetadataFetchedAt = Date.now();
+    state.metadata = {
+      issuer_id: body.issuer_id,
+      voprf: body.voprf as IssuerMetadata['voprf'],
+    };
+    return state.metadata;
+  }
+
+  if (typeof body.issuer_id !== 'string' || typeof body.voprf !== 'object' || body.voprf === null) {
+    throw new DiscoveryError('Invalid issuer metadata');
+  }
+  state.metadata = body as unknown as IssuerMetadata;
+  return state.metadata;
+}
+
+/** Forces a fresh fetch of issuer requirements and identity metadata. */
+export async function refreshIssuerMetadata(state: ClientState): Promise<IssuerMetadata> {
+  state.metadata = null;
+  return getIssuerMetadata(state);
 }
 
 export async function getKeyDiscoveryMetadata(state: ClientState): Promise<KeyDiscoveryMetadata> {

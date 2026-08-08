@@ -17,12 +17,13 @@ vi.mock('../src/crypto/voprf.js', () => ({
   parsePublicBearerPass: vi.fn(),
 }));
 
-import { FreebirdClient } from '../src/index.js';
+import { buildIssueBinding, FreebirdClient } from '../src/index.js';
 import {
   DiscoveryError,
   VerifierNotConfiguredError,
 } from '../src/index.js';
 import * as voprf from '../src/crypto/voprf.js';
+import type { SybilProofFactory } from '../src/index.js';
 
 const issuerMetadata = {
   issuer_id: 'issuer:test',
@@ -319,6 +320,57 @@ describe('V4 private issuance and verifier HTTP characterization', () => {
     expect(fetchMock.mock.calls[1][0]).toBe('https://verifier.example/.well-known/verifier');
   });
 
+  it('exposes a typed V4 proof factory across a stale-key retry', async () => {
+    const rotatedMetadata = {
+      ...keyDiscoveryMetadata,
+      voprf: { ...keyDiscoveryMetadata.voprf, kid: 'kid-2' },
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json(issuerMetadata))
+      .mockResolvedValueOnce(json(verifierMetadata))
+      .mockResolvedValueOnce(json({ token: 'evaluation', kid: 'kid-2', issuer_id: 'issuer:test' }))
+      .mockResolvedValueOnce(json(rotatedMetadata))
+      .mockResolvedValueOnce(json({ token: 'evaluation', kid: 'kid-2', issuer_id: 'issuer:test' }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.mocked(voprf.blind)
+      .mockImplementationOnce(() => ({
+        blinded: new Uint8Array([4, 5]), state: { r: 1n, p: {} },
+      }))
+      .mockImplementationOnce(() => ({
+        blinded: new Uint8Array([6, 7]), state: { r: 2n, p: {} },
+      }));
+    const bindings: string[] = [];
+    const proofs: Array<{ type: 'proof_of_work'; input: string; nonce: number; timestamp: number }> = [];
+    const proofFactory: SybilProofFactory = ({ binding }) => {
+      bindings.push(binding);
+      const proof = {
+        type: 'proof_of_work' as const,
+        input: binding,
+        nonce: bindings.length,
+        timestamp: 1_000 + bindings.length,
+      };
+      proofs.push(proof);
+      return proof;
+    };
+
+    await client().issueTokenWithProofFactory(proofFactory);
+
+    const posts = fetchMock.mock.calls.filter(([url]) => url.endsWith('/v1/oprf/issue'));
+    expect(posts).toHaveLength(2);
+    expect(bindings).toEqual(posts.map(([, init]) => {
+      const body = JSON.parse(init.body as string);
+      return buildIssueBinding('issuer:test', body.blinded_element_b64);
+    }));
+    expect(bindings[0]).not.toBe(bindings[1]);
+    expect(proofs).toEqual([
+      expect.objectContaining({ input: bindings[0] }),
+      expect.objectContaining({ input: bindings[1] }),
+    ]);
+    expect(proofs[0]).not.toEqual(proofs[1]);
+    expect(JSON.parse(posts[0][1].body as string).sybil_proof).toEqual(proofs[0]);
+    expect(JSON.parse(posts[1][1].body as string).sybil_proof).toEqual(proofs[1]);
+  });
+
   it('reports a missing verifier scope before blind or issue POST', async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(json(issuerMetadata));
     vi.stubGlobal('fetch', fetchMock);
@@ -397,7 +449,7 @@ describe('V4 private issuance and verifier HTTP characterization', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json({ ok: true, verified_at: 1 }))
       .mockResolvedValueOnce(new Response('invalid', { status: 400 }))
-      .mockResolvedValueOnce(new Response('replay', { status: 401 }));
+      .mockResolvedValueOnce(json({ ok: false, error: 'replay_detected', verified_at: 0 }, 401));
     vi.stubGlobal('fetch', fetchMock);
     const sdk = client();
     const v5Token = {
@@ -418,6 +470,15 @@ describe('V4 private issuance and verifier HTTP characterization', () => {
 
     const noVerifier = client({ issuerUrl: 'https://issuer.example' });
     await expect(noVerifier.verifyToken(v5Token)).rejects.toBeInstanceOf(VerifierNotConfiguredError);
+  });
+
+  it('classifies partial replay-shaped responses as invalid tokens', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      json({ ok: false, error: 'replay_detected' }, 401),
+    ));
+    await expect(client().verifyToken({
+      tokenValue: 'v5-wire-token', issuerId: 'issuer:test', version: 5,
+    })).rejects.toMatchObject({ code: 'invalid_token' });
   });
 });
 
@@ -496,7 +557,7 @@ describe('V5 public bearer issuance HTTP characterization', () => {
     vi.stubGlobal('fetch', directFetch);
     await expect(client().issuePublicBlindSignature('message', undefined, 'b'.repeat(64)))
       .resolves.toMatchObject({ token_key_id: 'b'.repeat(64) });
-    expect(directFetch).toHaveBeenCalledTimes(1);
+    expect(directFetch).toHaveBeenCalledTimes(2);
 
     const missingFetch = vi.fn().mockResolvedValue(json(keyDiscoveryMetadata));
     vi.stubGlobal('fetch', missingFetch);

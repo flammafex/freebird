@@ -5,6 +5,23 @@ All notable changes to `@freebird/sdk` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-08-08
+
+### Added
+
+- `FreebirdClient.issueTokenWithProofFactory(proofFactory)` exposes typed V4
+  request-bound proof factories for safe key-rotation retries.
+- Current-key V5 issuance with discovery refresh, request rebinding, and typed
+  proof factories for chunked batches.
+- `prepareExchangePasses` and `finalizeExchangePasses` on `FreebirdClient` and
+  at the package root.
+
+### Changed
+
+- Local V5 verification now requires matching issuer, token key ID, and the
+  SPKI-derived key identifier.
+- Replay errors require the complete verifier replay response contract.
+
 ## [0.2.0] - 2026-08-05
 
 Expands the SDK surface with the methods and types added across Phases 1-8 of

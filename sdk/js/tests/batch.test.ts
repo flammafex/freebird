@@ -26,7 +26,14 @@ vi.mock('../src/crypto/rsa.js', () => ({
   rsaVerify: vi.fn(),
 }));
 
-import { FreebirdClient, BatchIssuanceError } from '../src/index.js';
+import {
+  FreebirdClient,
+  BatchIssuanceError,
+  BatchIssuanceInterruptedError,
+  buildBatchBinding,
+  DiscoveryError,
+  FreebirdError,
+} from '../src/index.js';
 import type { FreebirdToken } from '../src/index.js';
 
 const issuerMetadata = {
@@ -78,6 +85,32 @@ afterEach(() => {
 });
 
 describe('issueTokens (V4 batch)', () => {
+  it('rejects a fixed proof before discovery when the batch needs multiple chunks', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const sdk = client();
+
+    await expect(sdk.issueTokens(
+      Array.from({ length: 10_001 }, () => new Uint8Array(32)),
+      { sybilProof: { type: 'none' } },
+    )).rejects.toBeInstanceOf(FreebirdError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects sybilProof and proofFactory together at runtime', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const sdk = client();
+    const invalidOptions = {
+      sybilProof: { type: 'none' as const },
+      proofFactory: vi.fn(() => ({ type: 'none' as const })),
+    };
+
+    // @ts-expect-error proof and factory are mutually exclusive
+    await expect(sdk.issueTokens([], invalidOptions)).rejects.toMatchObject({ code: 'issuance' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('blinds each message, posts the exact batch body, and finalizes each success', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json(issuerMetadata))
@@ -183,9 +216,79 @@ describe('issueTokens (V4 batch)', () => {
 
     await expect(sdk.issueTokens([new Uint8Array(32)])).rejects.toThrow('Batch token issuance failed');
   });
+
+  it('does not retry a V4 stale-key response with a fixed proof', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json(issuerMetadata))
+      .mockResolvedValueOnce(json(verifierMetadata))
+      .mockResolvedValueOnce(json({
+        results: [{ status: 'success', token: 'eval', kid: 'kid-2', issuer_id: 'issuer:test' }],
+        successful: 1, failed: 0, processing_time_ms: 1, throughput: 1,
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(client().issueTokens(
+      [new Uint8Array(32)],
+      { sybilProof: { type: 'none' } },
+    )).rejects.toMatchObject({ code: 'discovery' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/v1/oprf/issue/batch'))).toHaveLength(1);
+  });
+
+  it('retains completed chunks and calls a proof factory per chunk binding', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json(issuerMetadata))
+      .mockResolvedValueOnce(json(verifierMetadata));
+    fetchMock.mockResolvedValueOnce(json({
+      results: Array.from({ length: 10_000 }, () => ({
+        status: 'success', token: 'eval', kid: 'kid-1', issuer_id: 'issuer:test',
+      })),
+      successful: 10_000, failed: 0, processing_time_ms: 1, throughput: 10_000,
+    }));
+    fetchMock.mockResolvedValueOnce(new Response('down', { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const bindings: string[] = [];
+    const proofFactory = vi.fn(({ binding }: { binding: string }) => {
+      bindings.push(binding);
+      return { type: 'none' as const };
+    });
+    const sdk = client();
+
+    const error = await sdk.issueTokens(
+      Array.from({ length: 10_005 }, () => new Uint8Array(32)),
+      { proofFactory },
+    ).catch((cause) => cause);
+
+    expect(error).toBeInstanceOf(BatchIssuanceInterruptedError);
+    expect((error as BatchIssuanceInterruptedError<FreebirdToken>).completed).toHaveLength(10_000);
+    expect(proofFactory).toHaveBeenCalledTimes(2);
+    const posts = fetchMock.mock.calls.filter(([url]) => url.endsWith('/v1/oprf/issue/batch'));
+    expect(posts).toHaveLength(2);
+    const firstBody = JSON.parse(posts[0][1].body as string);
+    const secondBody = JSON.parse(posts[1][1].body as string);
+    expect(bindings).toEqual([
+      buildBatchBinding('issue-batch', 'issuer:test', firstBody.blinded_elements),
+      buildBatchBinding('issue-batch', 'issuer:test', secondBody.blinded_elements),
+    ]);
+  });
 });
 
 describe('issuePublicTokens (V5 batch)', () => {
+  it('rejects a fixed proof before issuer discovery when V5 needs multiple chunks', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(client({ issuerUrl: 'https://issuer.example' }).issuePublicTokens(
+      Array.from({ length: 10_001 }, () => new Uint8Array(48)),
+      {
+        tokenKeyId: 'a'.repeat(64), issuerId: 'issuer:test',
+        nonces: Array.from({ length: 10_001 }, () => new Uint8Array(32)),
+        sybilProof: { type: 'none' },
+      },
+    )).rejects.toBeInstanceOf(FreebirdError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('blinds each message, posts the exact batch body, and unblinds each signature', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json(keyDiscoveryMetadata))
@@ -256,5 +359,61 @@ describe('issuePublicTokens (V5 batch)', () => {
       [new Uint8Array(48)],
       { tokenKeyId: 'a'.repeat(64), issuerId: 'issuer:test', nonces: [] },
     )).rejects.toThrow('Nonces must be provided for each message');
+  });
+
+  it('rejects a V5 batch issuer mismatch before unblinding', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json(keyDiscoveryMetadata))
+      .mockResolvedValueOnce(json({
+        blind_signatures: ['AQID'], token_key_id: 'a'.repeat(64), issuer_id: 'issuer:other',
+        successful: 1, failed: 0, processing_time_ms: 1, throughput: 1,
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const sdk = client({ issuerUrl: 'https://issuer.example' });
+
+    await expect(sdk.issuePublicTokens(
+      [new Uint8Array(48)],
+      {
+        tokenKeyId: 'a'.repeat(64), issuerId: 'issuer:test', nonces: [new Uint8Array(32)],
+      },
+    )).rejects.toBeInstanceOf(DiscoveryError);
+  });
+
+  it('rejects fixed-proof current-key batches before any refresh or POST', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(client({ issuerUrl: 'https://issuer.example' }).issuePublicTokensForCurrentKey(
+      Array.from({ length: 10_001 }, () => new Uint8Array(32)),
+      { sybilProof: { type: 'none' } },
+    )).rejects.toBeInstanceOf(FreebirdError);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('calls the current-key V5 proof factory once for the exact batch binding', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json(issuerMetadata))
+      .mockResolvedValueOnce(json(keyDiscoveryMetadata))
+      .mockResolvedValueOnce(json({
+        blind_signatures: ['AQID'], token_key_id: 'a'.repeat(64), issuer_id: 'issuer:test',
+        successful: 1, failed: 0, processing_time_ms: 1, throughput: 1,
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const bindings: string[] = [];
+    const proofFactory = vi.fn(({ binding }: { binding: string }) => {
+      bindings.push(binding);
+      return { type: 'none' as const };
+    });
+
+    await client({ issuerUrl: 'https://issuer.example' }).issuePublicTokensForCurrentKey(
+      [new Uint8Array(32)],
+      { proofFactory },
+    );
+    const post = fetchMock.mock.calls[2];
+    const body = JSON.parse(post[1].body as string);
+    expect(proofFactory).toHaveBeenCalledTimes(1);
+    expect(bindings).toEqual([
+      buildBatchBinding('public-issue-batch', 'issuer:test', body.blinded_msgs),
+    ]);
   });
 });

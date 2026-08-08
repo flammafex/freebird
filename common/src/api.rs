@@ -18,8 +18,8 @@ pub use graph_discovery::{
     EXCHANGE_LUA_MAX_EXACT_INTEGER, EXCHANGE_MAX_BUDGET_LIMIT, EXCHANGE_MAX_VALID_UNTIL,
 };
 pub use issuance::{
-    BatchIssueReq, BatchIssueResp, IssueReq, IssueResp, PublicBatchIssueReq, PublicBatchIssueResp,
-    PublicIssueReq, PublicIssueResp, SybilInfo, TokenResult,
+    BatchIssueReq, BatchIssueResp, ErrorResp, IssueReq, IssueResp, PublicBatchIssueReq,
+    PublicBatchIssueResp, PublicIssueReq, PublicIssueResp, SybilInfo, TokenResult,
 };
 pub use key_discovery::{KeyDiscoveryResp, PublicKeyInfo, VoprfKeyInfo};
 pub use sybil::{SybilProof, VouchProof};

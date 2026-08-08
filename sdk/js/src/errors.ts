@@ -45,6 +45,14 @@ export class DiscoveryError extends FreebirdError {
   }
 }
 
+/** The cached public signing key no longer matches the issuer's active key. */
+export class StalePublicKeyError extends DiscoveryError {
+  constructor(message = 'Issuer public key is stale') {
+    super(message);
+    this.name = 'StalePublicKeyError';
+  }
+}
+
 /** A token could not be verified. */
 export class VerificationError extends FreebirdError {
   constructor(message = 'Token verification failed', code: FreebirdErrorCode = 'verification') {
@@ -161,5 +169,23 @@ export class BatchIssuanceError extends FreebirdError {
     this.results = results;
     this.tokens = tokens;
     this.failed = results.filter((result) => result.status === 'error').length;
+  }
+}
+
+/**
+ * A batch issuance operation stopped after completing some results.
+ *
+ * `completed` preserves results produced before interruption, while `cause`
+ * retains the original failure (including cancellation or transport errors).
+ */
+export class BatchIssuanceInterruptedError<T> extends FreebirdError {
+  readonly completed: T[];
+  readonly cause: unknown;
+
+  constructor(completed: T[], cause: unknown) {
+    super('issuance', 'Batch issuance was interrupted');
+    this.name = 'BatchIssuanceInterruptedError';
+    this.completed = completed;
+    this.cause = cause;
   }
 }

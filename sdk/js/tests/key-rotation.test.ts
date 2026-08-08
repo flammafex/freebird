@@ -13,11 +13,30 @@ vi.mock('../src/crypto/voprf.js', () => ({
   tokenKeyIdToHex: vi.fn(),
   tokenKeyIdFromHex: vi.fn(),
   buildPublicBearerMessage: vi.fn(),
-  buildPublicBearerPass: vi.fn(),
+  buildPublicBearerPass: vi.fn(() => new Uint8Array([9, 8, 7])),
   parsePublicBearerPass: vi.fn(),
 }));
 
-import { FreebirdClient, DiscoveryError } from '../src/index.js';
+vi.mock('../src/crypto/rsa.js', () => ({
+  rsaBlind: vi.fn(async () => ({
+    blinded: new Uint8Array([1, 2]),
+    state: { inv: new Uint8Array(), prepared: new Uint8Array(), publicKey: new Uint8Array() },
+  })),
+  rsaUnblind: vi.fn(async () => new Uint8Array([3, 4, 5])),
+  rsaVerify: vi.fn(async () => true),
+}));
+
+import {
+  buildIssueBinding,
+  buildPublicIssueBinding,
+  FreebirdClient,
+  DiscoveryError,
+  StalePublicKeyError,
+} from '../src/index.js';
+import * as rsa from '../src/crypto/rsa.js';
+import type { SybilProofFactory } from '../src/index.js';
+import { createClientState } from '../src/client/state.js';
+import { issueToken } from '../src/client/issuance.js';
 
 const issuerMetadata = {
   issuer_id: 'issuer:test',
@@ -117,6 +136,62 @@ describe('key discovery cache TTL', () => {
 });
 
 describe('auto-refresh-and-retry on key rotation', () => {
+  function privateIssuanceState() {
+    const state = createClientState({ issuerUrl: 'https://issuer.example' });
+    state.metadata = { ...issuerMetadata, voprf: { ...issuerMetadata.voprf } };
+    state.verifierMetadata = { ...verifierMetadata };
+    return state;
+  }
+
+  it('does not retry V4 single issuance with a fixed proof after stale-key response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(json({
+      token: 'evaluation', kid: 'kid-2', issuer_id: 'issuer:test',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const state = privateIssuanceState();
+    const rotatedMetadata = {
+      ...keyDiscoveryMetadata,
+      voprf: { ...keyDiscoveryMetadata.voprf, kid: 'kid-2' },
+    };
+
+    await expect(issueToken(
+      state,
+      { type: 'none' },
+      async () => undefined,
+      async () => rotatedMetadata,
+    )).rejects.toBeInstanceOf(StalePublicKeyError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refreshes V4 single issuance with a factory-bound proof on retry', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({
+        token: 'evaluation', kid: 'kid-2', issuer_id: 'issuer:test',
+      }))
+      .mockResolvedValueOnce(json({
+        token: 'evaluation', kid: 'kid-2', issuer_id: 'issuer:test',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const state = privateIssuanceState();
+    const rotatedMetadata = {
+      ...keyDiscoveryMetadata,
+      voprf: { ...keyDiscoveryMetadata.voprf, kid: 'kid-2' },
+    };
+    const bindings: string[] = [];
+    const factory: SybilProofFactory = ({ binding }) => {
+      bindings.push(binding);
+      return { type: 'none' };
+    };
+
+    await issueToken(state, factory, async () => undefined, async () => rotatedMetadata);
+
+    const posts = fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body as string));
+    expect(bindings).toEqual(posts.map((body) =>
+      buildIssueBinding('issuer:test', body.blinded_element_b64)));
+    expect(bindings).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('refreshes discovery and retries successfully when the issuer rotates keys', async () => {
     const rotatedMetadata = {
       ...keyDiscoveryMetadata,
@@ -165,7 +240,7 @@ describe('auto-refresh-and-retry on key rotation', () => {
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
-  it('auto-refreshes and retries V5 public blind signature on token_key_id mismatch', async () => {
+  it('rejects low-level V5 key mismatch without replaying the blinded value', async () => {
     const keyA = 'a'.repeat(64);
     const keyB = 'b'.repeat(64);
     const metadataWith = (tokenKeyId: string) => ({
@@ -182,8 +257,7 @@ describe('auto-refresh-and-retry on key rotation', () => {
         spend_policy: 'single_use',
       }],
     });
-    // Cached discovery says key A; issuer has rotated to key B and returns it;
-    // refresh returns key B; retry succeeds.
+    // Cached discovery says key A; issuer has rotated to key B and returns it.
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(json(metadataWith(keyA)))
       .mockResolvedValueOnce(json({
@@ -197,11 +271,11 @@ describe('auto-refresh-and-retry on key rotation', () => {
     const sdk = client({ issuerUrl: 'https://issuer.example', verifierId: 'v', audience: 'a' });
 
     await expect(sdk.issuePublicBlindSignature('message'))
-      .resolves.toMatchObject({ token_key_id: keyB });
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+      .rejects.toBeInstanceOf(StalePublicKeyError);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('throws DiscoveryError on persistent V5 token_key_id mismatch', async () => {
+  it('throws StalePublicKeyError on a persistent low-level V5 mismatch', async () => {
     const keyA = 'a'.repeat(64);
     const keyB = 'b'.repeat(64);
     const keyC = 'c'.repeat(64);
@@ -233,7 +307,99 @@ describe('auto-refresh-and-retry on key rotation', () => {
     vi.stubGlobal('fetch', fetchMock);
     const sdk = client({ issuerUrl: 'https://issuer.example', verifierId: 'v', audience: 'a' });
 
-    await expect(sdk.issuePublicBlindSignature('message')).rejects.toBeInstanceOf(DiscoveryError);
-    expect(fetchMock).toHaveBeenCalledTimes(4);
+    await expect(sdk.issuePublicBlindSignature('message')).rejects.toBeInstanceOf(StalePublicKeyError);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not replay a caller blinded value after token_key_not_active', async () => {
+    const fetchMock = vi.fn().mockImplementation(() =>
+      Promise.resolve(json({ error: 'token_key_not_active' }, 400)));
+    vi.stubGlobal('fetch', fetchMock);
+    const sdk = client({ issuerUrl: 'https://issuer.example' });
+
+    await expect(sdk.issuePublicBlindSignature('old-blinded', undefined, 'a'.repeat(64)))
+      .rejects.toBeInstanceOf(StalePublicKeyError);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('reblinds once for the type-safe current-key V5 API', async () => {
+    const keyA = 'a'.repeat(64);
+    const keyB = 'b'.repeat(64);
+    const metadataWith = (tokenKeyId: string) => ({
+      issuer_id: 'issuer:test', current_epoch: 1, valid_epochs: [1],
+      epoch_duration_sec: 3600,
+      voprf: { suite: 'P256-SHA256', kid: 'kid', pubkey: 'pubkey' },
+      public: [{
+        token_key_id: tokenKeyId,
+        token_type: 'public_bearer_pass',
+        rfc9474_variant: 'RSABSSA-SHA384-PSS-Deterministic',
+        modulus_bits: 2048,
+        pubkey_spki_b64: 'spki',
+        issuer_id: 'issuer:test', valid_from: 1, valid_until: 2,
+        spend_policy: 'single_use',
+      }],
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({
+        issuer_id: 'issuer:test',
+        voprf: { suite: 'P256-SHA256', kid: 'kid', pubkey: 'pubkey' },
+      }))
+      .mockResolvedValueOnce(json(metadataWith(keyA)))
+      .mockResolvedValueOnce(json({ error: 'token_key_not_active' }, 400))
+      .mockResolvedValueOnce(json({
+        issuer_id: 'issuer:test',
+        voprf: { suite: 'P256-SHA256', kid: 'kid', pubkey: 'pubkey' },
+      }))
+      .mockResolvedValueOnce(json(metadataWith(keyB)))
+      .mockResolvedValueOnce(json({
+        blind_signature_b64: 'sig', token_key_id: keyB, issuer_id: 'issuer:test',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const sdk = client({ issuerUrl: 'https://issuer.example' });
+    const bindings: string[] = [];
+    const proofFactory: SybilProofFactory = ({ binding }) => {
+      bindings.push(binding);
+      return { type: 'none' };
+    };
+
+    await expect(sdk.issuePublicTokenForCurrentKey({
+      nonce: new Uint8Array(32), proofFactory,
+    }))
+      .resolves.toBeInstanceOf(Uint8Array);
+    const posts = fetchMock.mock.calls.filter(([url]) => url.endsWith('/v1/public/issue'));
+    expect(posts).toHaveLength(2);
+    expect(rsa.rsaBlind).toHaveBeenCalledTimes(2);
+    expect(bindings).toEqual(posts.map(([, init]) => {
+      const body = JSON.parse(init.body as string);
+      return buildPublicIssueBinding('issuer:test', body.blinded_msg_b64);
+    }));
+  });
+
+  it('does not retry current-key V5 with a fixed proof after stale-key rejection', async () => {
+    const keyA = 'a'.repeat(64);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({
+        issuer_id: 'issuer:test',
+        voprf: { suite: 'P256-SHA256', kid: 'kid', pubkey: 'pubkey' },
+      }))
+      .mockResolvedValueOnce(json({
+        ...keyDiscoveryMetadata,
+        public: [{
+          token_key_id: keyA,
+          token_type: 'public_bearer_pass',
+          rfc9474_variant: 'RSABSSA-SHA384-PSS-Deterministic',
+          modulus_bits: 2048,
+          pubkey_spki_b64: 'spki', issuer_id: 'issuer:test',
+          valid_from: 1, valid_until: 2, spend_policy: 'single_use',
+        }],
+      }))
+      .mockResolvedValueOnce(json({ error: 'token_key_not_active' }, 400));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(client({ issuerUrl: 'https://issuer.example' }).issuePublicTokenForCurrentKey({
+      nonce: new Uint8Array(32), sybilProof: { type: 'none' },
+    })).rejects.toBeInstanceOf(StalePublicKeyError);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.filter(([url]) => url.endsWith('/v1/public/issue'))).toHaveLength(1);
   });
 });

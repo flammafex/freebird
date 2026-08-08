@@ -14,12 +14,17 @@ import type {
   GraphIssuanceRequest,
   IssuePublicTokenOptions,
   IssuePublicTokensOptions,
+  IssuePublicTokenForCurrentKeyOptions,
+  IssuePublicTokensForCurrentKeyOptions,
   IssueTokensOptions,
   KeyDiscoveryMetadata,
   PublicBearerPass,
   PublicIssueResponse,
   PublicKeyInfo,
+  FinalizedExchangeOutput,
+  PreparedExchange,
   SybilProof,
+  SybilProofFactory,
   VerifyResp,
 } from './types.js';
 import * as discovery from './client/discovery.js';
@@ -35,10 +40,9 @@ import type { ExchangePassesOptions } from './client/protocol.js';
 import { createClientState, type ClientState } from './client/state.js';
 import type { TokenStore } from './types.js';
 import * as verification from './client/verification.js';
-import { base64UrlToBytes } from './client/wire.js';
+import { base64UrlToBytes, bytesEqual } from './client/wire.js';
 import * as rsa from './crypto/rsa.js';
 import * as voprf from './crypto/voprf.js';
-import { DiscoveryError } from './errors.js';
 
 export class FreebirdClient {
   private state: ClientState;
@@ -65,6 +69,16 @@ export class FreebirdClient {
     return issuance.issueToken(
       this.state,
       sybilProof,
+      () => this.init(),
+      () => this.refreshKeyDiscoveryMetadata(),
+    );
+  }
+
+  /** Issues V4 with a fresh request-bound Sybil proof on every retry. */
+  async issueTokenWithProofFactory(proofFactory: SybilProofFactory): Promise<FreebirdToken> {
+    return issuance.issueToken(
+      this.state,
+      proofFactory,
       () => this.init(),
       () => this.refreshKeyDiscoveryMetadata(),
     );
@@ -136,27 +150,13 @@ export class FreebirdClient {
     msg: Uint8Array,
     opts: IssuePublicTokenOptions,
   ): Promise<PublicBearerPass> {
-    const { nonce, tokenKeyId, issuerId, sybilProof } = opts;
-    const metadata = await this.getKeyDiscoveryMetadata();
-    const key = metadata.public.find((candidate) => candidate.token_key_id === tokenKeyId);
-    if (!key) throw new DiscoveryError('No V5 public bearer key is available');
-    const { blinded, state } = await rsa.rsaBlind(base64UrlToBytes(key.pubkey_spki_b64), msg);
-    const resp = await issuance.issuePublicBlindSignature(
+    return issuance.issuePublicToken(
       this.state,
-      blinded,
-      sybilProof,
-      tokenKeyId,
+      msg,
+      opts,
       () => this.getKeyDiscoveryMetadata(),
       () => this.refreshKeyDiscoveryMetadata(),
     );
-    if (resp.token_key_id !== tokenKeyId || resp.issuer_id !== issuerId) {
-      throw new DiscoveryError('Issuer metadata changed during public issuance');
-    }
-    const signature = await rsa.rsaUnblind(
-      state,
-      base64UrlToBytes(resp.blind_signature_b64),
-    );
-    return voprf.buildPublicBearerPass(nonce, voprf.tokenKeyIdFromHex(tokenKeyId), issuerId, signature);
   }
 
   /**
@@ -180,6 +180,30 @@ export class FreebirdClient {
     );
   }
 
+  /** Issues a V5 pass using the issuer's freshly refreshed current key. */
+  async issuePublicTokenForCurrentKey(
+    opts: IssuePublicTokenForCurrentKeyOptions = {},
+  ): Promise<PublicBearerPass> {
+    return issuance.issueCurrentPublicToken(
+      this.state,
+      opts,
+      () => this.refreshKeyDiscoveryMetadata(),
+    );
+  }
+
+  /** Issues V5 passes using the issuer's current key, one per nonce. */
+  async issuePublicTokensForCurrentKey(
+    nonces: Uint8Array[],
+    opts: IssuePublicTokensForCurrentKeyOptions = {},
+  ): Promise<PublicBearerPass[]> {
+    return issuance.issueCurrentPublicTokens(
+      this.state,
+      nonces,
+      opts,
+      () => this.refreshKeyDiscoveryMetadata(),
+    );
+  }
+
   /**
    * Locally verifies the RSA-PSS signature of a V5 public bearer pass against
    * the given public key.
@@ -192,9 +216,20 @@ export class FreebirdClient {
     pass: PublicBearerPass,
     keyInfo: PublicKeyInfo,
   ): Promise<boolean> {
-    const { nonce, tokenKeyId, issuerId, signature } = voprf.parsePublicBearerPass(pass);
-    const msg = voprf.buildPublicBearerMessage(nonce, tokenKeyId, issuerId);
-    return rsa.rsaVerify(base64UrlToBytes(keyInfo.pubkey_spki_b64), msg, signature);
+    try {
+      const { nonce, tokenKeyId, issuerId, signature } = voprf.parsePublicBearerPass(pass);
+      if (issuerId !== keyInfo.issuer_id) return false;
+      const publicKey = base64UrlToBytes(keyInfo.pubkey_spki_b64);
+      const derivedKeyId = voprf.tokenKeyIdFromSpki(publicKey);
+      const advertisedKeyId = voprf.tokenKeyIdFromHex(keyInfo.token_key_id);
+      if (!bytesEqual(tokenKeyId, advertisedKeyId) || !bytesEqual(derivedKeyId, advertisedKeyId)) {
+        return false;
+      }
+      const msg = voprf.buildPublicBearerMessage(nonce, tokenKeyId, issuerId);
+      return rsa.rsaVerify(publicKey, msg, signature);
+    } catch {
+      return false;
+    }
   }
 
   /** Resolves an explicit immutable graph and transition selection. */
@@ -272,6 +307,28 @@ export class FreebirdClient {
       opts,
       (graphId, transitionId) => this.selectExchangeTransition(graphId, transitionId),
     );
+  }
+
+  /** Prepares a V2 exchange and retains the state needed to finalize passes. */
+  async prepareExchangePasses(
+    sources: ExchangeRequestSource[],
+    transition: { graphId: string; transitionId: string },
+    opts: ExchangePassesOptions = {},
+  ): Promise<PreparedExchange> {
+    return protocol.prepareExchangePasses(
+      sources,
+      transition,
+      opts,
+      (graphId, transitionId) => this.selectExchangeTransition(graphId, transitionId),
+    );
+  }
+
+  /** Finalizes the committed blind signatures from a prepared V2 exchange. */
+  async finalizeExchangePasses(
+    prepared: PreparedExchange,
+    outcome: ExchangeOutcome,
+  ): Promise<FinalizedExchangeOutput[]> {
+    return protocol.finalizeExchangePasses(prepared, outcome);
   }
 
   /** Resolves one current graph issuance policy. */

@@ -39,16 +39,33 @@ function parseRetryAfter(res: Response): number {
  * bodies are never echoed to end users — the message stays generic and the
  * detail lives in the stable `code`.
  */
-function throwForStatus(res: Response): never {
+async function throwForStatus(res: Response, endpoint: string): Promise<never> {
   switch (res.status) {
     case 400:
       // Malformed or failed verification (see public.rs: verify returns 400
       // for decode/verify failures).
       throw new InvalidTokenError();
     case 401:
-      // On /v1/verify a 401 means the token was already used (replay), per
-      // public.rs:149-152.
-      throw new ReplayedTokenError();
+      // Only the consuming verify endpoint's explicit replay response denotes
+      // a replay. Other 401 responses are token validation failures.
+      if (endpoint === '/v1/verify') {
+        try {
+          const body: unknown = await res.json();
+          if (
+            typeof body === 'object' &&
+            body !== null &&
+            Object.keys(body).length === 3 &&
+            'ok' in body && body.ok === false &&
+            'error' in body && body.error === 'replay_detected' &&
+            'verified_at' in body && body.verified_at === 0
+          ) {
+            throw new ReplayedTokenError();
+          }
+        } catch (error) {
+          if (error instanceof ReplayedTokenError) throw error;
+        }
+      }
+      throw new InvalidTokenError();
     case 429:
       throw new RateLimitedError(parseRetryAfter(res));
     case 503:
@@ -73,7 +90,7 @@ export async function verifyToken(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token_b64: token.tokenValue }),
   });
-  if (!res.ok) return throwForStatus(res);
+  if (!res.ok) await throwForStatus(res, '/v1/verify');
   return (await res.json()) as VerifyResp;
 }
 
@@ -93,7 +110,7 @@ export async function checkToken(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ token_b64: token.tokenValue }),
   });
-  if (!res.ok) return throwForStatus(res);
+  if (!res.ok) await throwForStatus(res, '/v1/check');
   return (await res.json()) as VerifyResp;
 }
 
@@ -115,7 +132,7 @@ export async function verifyBatch(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!res.ok) return throwForStatus(res);
+  if (!res.ok) await throwForStatus(res, '/v1/verify/batch');
   return (await res.json()) as BatchVerifyResp;
 }
 

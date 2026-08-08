@@ -57,6 +57,8 @@ import type {
   GraphIssuanceRequest,
   IssuePublicTokenOptions,
   IssuePublicTokensOptions,
+  IssuePublicTokenForCurrentKeyOptions,
+  IssuePublicTokensForCurrentKeyOptions,
   IssueTokensOptions,
   KeyDiscoveryMetadata,
   PollOptions,
@@ -65,8 +67,11 @@ import type {
   PublicBearerPass,
   PublicIssueResponse,
   PublicKeyInfo,
+  PreparedExchange,
+  FinalizedExchangeOutput,
   RsaBlindState,
   SybilProof,
+  SybilProofFactory,
   SybilConfigSummary,
   SybilModeSettings,
   TokenResult,
@@ -87,12 +92,15 @@ type Assert<Value extends true> = Value;
 type PublicClientKeys =
   | 'init'
   | 'issueToken'
+  | 'issueTokenWithProofFactory'
   | 'issueTokens'
   | 'getKeyDiscoveryMetadata'
   | 'refreshKeyDiscoveryMetadata'
   | 'issuePublicBlindSignature'
   | 'issuePublicToken'
   | 'issuePublicTokens'
+  | 'issuePublicTokenForCurrentKey'
+  | 'issuePublicTokensForCurrentKey'
   | 'verifyPublicBearerPassLocally'
   | 'selectExchangeTransition'
   | 'exchange'
@@ -101,6 +109,8 @@ type PublicClientKeys =
   | 'generateOperationId'
   | 'generateStatusCapability'
   | 'exchangePasses'
+  | 'prepareExchangePasses'
+  | 'finalizeExchangePasses'
   | 'selectGraphIssuancePolicy'
   | 'issueGraphBlindSignature'
   | 'retryGraphBlindSignature'
@@ -132,6 +142,7 @@ type ExpectedExchangeStatus = {
 interface ExpectedFreebirdClient {
   init: () => Promise<void>;
   issueToken: (sybilProof?: SybilProof) => Promise<FreebirdToken>;
+  issueTokenWithProofFactory: (proofFactory: SybilProofFactory) => Promise<FreebirdToken>;
   issueTokens: (msgs: Uint8Array[], opts?: IssueTokensOptions) => Promise<FreebirdToken[]>;
   getKeyDiscoveryMetadata: () => Promise<KeyDiscoveryMetadata>;
   refreshKeyDiscoveryMetadata: () => Promise<KeyDiscoveryMetadata>;
@@ -147,6 +158,13 @@ interface ExpectedFreebirdClient {
   issuePublicTokens: (
     msgs: Uint8Array[],
     opts: IssuePublicTokensOptions,
+  ) => Promise<PublicBearerPass[]>;
+  issuePublicTokenForCurrentKey: (
+    opts?: IssuePublicTokenForCurrentKeyOptions,
+  ) => Promise<PublicBearerPass>;
+  issuePublicTokensForCurrentKey: (
+    nonces: Uint8Array[],
+    opts?: IssuePublicTokensForCurrentKeyOptions,
   ) => Promise<PublicBearerPass[]>;
   verifyPublicBearerPassLocally: (
     pass: PublicBearerPass,
@@ -166,6 +184,15 @@ interface ExpectedFreebirdClient {
     transition: { graphId: string; transitionId: string },
     opts?: ExchangePassesOptions,
   ) => Promise<ExchangeRequest>;
+  prepareExchangePasses: (
+    sources: ExchangeRequestSource[],
+    transition: { graphId: string; transitionId: string },
+    opts?: ExchangePassesOptions,
+  ) => Promise<PreparedExchange>;
+  finalizeExchangePasses: (
+    prepared: PreparedExchange,
+    outcome: ExchangeOutcome,
+  ) => Promise<FinalizedExchangeOutput[]>;
   selectGraphIssuancePolicy: (policyId: string) => Promise<GraphIssuancePolicyInfo>;
   issueGraphBlindSignature: (
     request: GraphIssuanceRequest,
@@ -246,6 +273,9 @@ declare const blindingState: unknown;
 const initialized: Promise<void> = client.init();
 const v4: Promise<FreebirdToken> = client.issueToken();
 const v4WithProof: Promise<FreebirdToken> = client.issueToken({ type: 'none' });
+const v4WithProofFactory: Promise<FreebirdToken> = client.issueTokenWithProofFactory(
+  ({ binding }) => ({ type: 'proof_of_work', input: binding, nonce: 0, timestamp: 0 }),
+);
 const v4Batch: Promise<FreebirdToken[]> = client.issueTokens([new Uint8Array(32), new Uint8Array(32)]);
 const v4BatchWithOpts: Promise<FreebirdToken[]> = client.issueTokens(
   [new Uint8Array(32)],
@@ -267,6 +297,12 @@ const publicTokensBatch: Promise<PublicBearerPass[]> = client.issuePublicTokens(
     nonces: [new Uint8Array(32), new Uint8Array(32)],
   },
 );
+const currentPublicToken: Promise<PublicBearerPass> = client.issuePublicTokenForCurrentKey({
+  nonce: new Uint8Array(32),
+});
+const currentPublicTokens: Promise<PublicBearerPass[]> = client.issuePublicTokensForCurrentKey(
+  [new Uint8Array(32), new Uint8Array(32)],
+);
 const locallyVerified: Promise<boolean> = client.verifyPublicBearerPassLocally(
   new Uint8Array(),
   {
@@ -283,6 +319,16 @@ const locallyVerified: Promise<boolean> = client.verifyPublicBearerPassLocally(
 );
 const transitionSelection = client.selectExchangeTransition('a'.repeat(64), 'b'.repeat(64));
 const exchange: Promise<ExchangeOutcome> = client.exchange(exchangeRequest, capability);
+const preparedExchange: Promise<PreparedExchange> = client.prepareExchangePasses(
+  exchangeSources,
+  { graphId: 'a'.repeat(64), transitionId: 'b'.repeat(64) },
+);
+declare const committedExchange: ExchangeOutcome;
+declare const preparedForFinalization: PreparedExchange;
+const finalizedExchange: Promise<FinalizedExchangeOutput[]> = client.finalizeExchangePasses(
+  preparedForFinalization,
+  committedExchange,
+);
 const exchangeStatusRequest: Promise<ExchangeOutcome> = client.getExchangeStatus(
   exchangeRequest,
   capability,

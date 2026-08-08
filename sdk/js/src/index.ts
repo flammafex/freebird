@@ -13,6 +13,8 @@ export {
   generateOperationId,
   generateStatusCapability,
   exchangePasses,
+  prepareExchangePasses,
+  finalizeExchangePasses,
 } from './client/protocol.js';
 export type { ExchangePassesOptions } from './client/protocol.js';
 
@@ -20,6 +22,7 @@ export type { ExchangePassesOptions } from './client/protocol.js';
 export {
   FreebirdError,
   DiscoveryError,
+  StalePublicKeyError,
   VerificationError,
   VerifierNotConfiguredError,
   ExchangeError,
@@ -32,6 +35,7 @@ export {
   PollTimeoutError,
   PollAbortedError,
   BatchIssuanceError,
+  BatchIssuanceInterruptedError,
 } from './errors.js';
 export type { FreebirdErrorCode } from './errors.js';
 
@@ -75,6 +79,7 @@ export type {
   IssueResponse,
   PublicIssueRequest,
   PublicIssueResponse,
+  PublicIssueErrorResponse,
   BatchIssueReq,
   BatchIssueResp,
   TokenResult,
@@ -82,6 +87,8 @@ export type {
   PublicBatchIssueResp,
   IssueTokensOptions,
   IssuePublicTokensOptions,
+  IssuePublicTokenForCurrentKeyOptions,
+  IssuePublicTokensForCurrentKeyOptions,
   ExchangeSlot,
   ExchangeRequestSource,
   ExchangeRequestOutput,
@@ -111,6 +118,8 @@ export type {
   FreebirdToken,
   TokenStore,
   SybilProof,
+  SybilProofRequestContext,
+  SybilProofFactory,
   VerifyReq,
   VerifyResp,
   TokenToVerify,
@@ -119,6 +128,9 @@ export type {
   BatchVerifyResp,
   PublicBearerPass,
   RsaBlindState,
+  PreparedExchange,
+  PreparedExchangeOutput,
+  FinalizedExchangeOutput,
   IssuePublicTokenOptions,
   SybilConfigSummary,
   SybilModeSettings,

@@ -27,6 +27,15 @@ vi.mock('../src/crypto/voprf.js', () => ({
   parsePublicBearerPass: vi.fn(),
 }));
 
+vi.mock('../src/crypto/rsa.js', () => ({
+  rsaBlind: vi.fn(async () => ({
+    blinded: new Uint8Array([1, 2]),
+    state: { inv: new Uint8Array(), prepared: new Uint8Array(), publicKey: new Uint8Array() },
+  })),
+  rsaUnblind: vi.fn(async () => new Uint8Array([3, 4, 5])),
+  rsaVerify: vi.fn(),
+}));
+
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -270,5 +279,94 @@ describe('PoW integration in issuance', () => {
     const issueCall = fetchMock.mock.calls[2];
     const body = JSON.parse(issueCall[1].body);
     expect(body.sybil_proof).toEqual(provided);
+  });
+
+  it('loads issuer PoW requirements before resolving a V5 proof', async () => {
+    const keyId = 'a'.repeat(64);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({
+        issuer_id: 'issuer:test',
+        voprf: { suite: 'P256-SHA256', kid: 'kid-1', pubkey: 'public-key' },
+        sybil: { mode: 'pow', mode_description: 'pow', settings: { difficulty: 8 } },
+      }))
+      .mockResolvedValueOnce(json({
+        issuer_id: 'issuer:test', current_epoch: 1, valid_epochs: [1],
+        epoch_duration_sec: 3600,
+        voprf: { suite: 'P256-SHA256', kid: 'kid-1', pubkey: 'public-key' },
+        public: [{
+          token_key_id: keyId,
+          token_type: 'public_bearer_pass',
+          rfc9474_variant: 'RSABSSA-SHA384-PSS-Deterministic',
+          modulus_bits: 2048,
+          pubkey_spki_b64: 'AQID', issuer_id: 'issuer:test', valid_from: 1,
+          valid_until: 2, spend_policy: 'single_use',
+        }],
+      }))
+      .mockResolvedValueOnce(json({
+        blind_signature_b64: 'sig', token_key_id: keyId, issuer_id: 'issuer:test',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const client = new FreebirdClient({ issuerUrl: 'https://issuer.example' });
+    await client.issuePublicBlindSignature('message');
+
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      'https://issuer.example/.well-known/issuer',
+      'https://issuer.example/.well-known/keys',
+      'https://issuer.example/v1/public/issue',
+    ]);
+    const body = JSON.parse(fetchMock.mock.calls[2][1].body as string);
+    expect(body.sybil_proof.input).toBe(
+      `freebird:public-issue:v1:issuer:test:${body.blinded_msg_b64}`,
+    );
+    expect(verifyPow(body.sybil_proof.input, body.sybil_proof.nonce, body.sybil_proof.timestamp, 8))
+      .toBe(true);
+  });
+
+  it('passes the exact strict-V5 batch binding to the proof factory', async () => {
+    const keyId = 'a'.repeat(64);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json({
+        issuer_id: 'issuer:test',
+        voprf: { suite: 'P256-SHA256', kid: 'kid-1', pubkey: 'public-key' },
+      }))
+      .mockResolvedValueOnce(json({
+        issuer_id: 'issuer:test', current_epoch: 1, valid_epochs: [1],
+        epoch_duration_sec: 3600,
+        voprf: { suite: 'P256-SHA256', kid: 'kid-1', pubkey: 'public-key' },
+        public: [{
+          token_key_id: keyId,
+          token_type: 'public_bearer_pass',
+          rfc9474_variant: 'RSABSSA-SHA384-PSS-Deterministic',
+          modulus_bits: 2048, pubkey_spki_b64: 'AQID', issuer_id: 'issuer:test',
+          valid_from: 1, valid_until: 2, spend_policy: 'single_use',
+        }],
+      }))
+      .mockResolvedValueOnce(json({
+        blind_signatures: ['AQID'], token_key_id: keyId, issuer_id: 'issuer:test',
+        successful: 1, failed: 0, processing_time_ms: 1, throughput: 1,
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    const bindings: string[] = [];
+    const proofFactory = vi.fn(({ binding }: { binding: string }) => {
+      bindings.push(binding);
+      return { type: 'none' as const };
+    });
+
+    await new FreebirdClient({ issuerUrl: 'https://issuer.example' }).issuePublicTokens(
+      [new Uint8Array(48)],
+      {
+        tokenKeyId: keyId,
+        issuerId: 'issuer:test',
+        nonces: [new Uint8Array(32)],
+        proofFactory,
+      },
+    );
+
+    const body = JSON.parse(fetchMock.mock.calls[2][1].body as string);
+    expect(proofFactory).toHaveBeenCalledTimes(1);
+    expect(bindings).toEqual([
+      buildBatchBinding('public-issue-batch', 'issuer:test', body.blinded_msgs),
+    ]);
   });
 });

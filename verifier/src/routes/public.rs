@@ -6,6 +6,7 @@
 use axum::{
     extract::{rejection::JsonRejection, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -77,7 +78,7 @@ async fn verifier_metadata(State(st): State<Arc<AppState>>) -> Json<VerifierMeta
 async fn verify_with_logging(
     state: State<Arc<AppState>>,
     result: Result<Json<VerifyReq>, JsonRejection>,
-) -> Result<Json<VerifyResp>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     info!("/v1/verify request received");
 
     match result {
@@ -97,7 +98,7 @@ async fn verify_with_logging(
 async fn verify(
     State(st): State<Arc<AppState>>,
     Json(req): Json<VerifyReq>,
-) -> Result<Json<VerifyResp>, (StatusCode, String)> {
+) -> Result<Response, (StatusCode, String)> {
     let version = decode_token_version(&req.token_b64)?;
     ensure_token_family_enabled(version, &st.accepted_token_families)?;
     if version == freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 {
@@ -148,7 +149,15 @@ async fn verify(
 
     if !spent {
         warn!("replay detected (token already used)");
-        return Err((StatusCode::UNAUTHORIZED, "verification failed".into()));
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(VerifyResp {
+                ok: false,
+                error: Some("replay_detected".to_string()),
+                verified_at: 0,
+            }),
+        )
+            .into_response());
     }
 
     info!("Token verified successfully");
@@ -157,7 +166,8 @@ async fn verify(
         ok: true,
         error: None,
         verified_at: now,
-    }))
+    })
+    .into_response())
 }
 
 // ---------- Check handler (verify without consuming) ----------
@@ -441,14 +451,31 @@ async fn readiness_handler(State(st): State<Arc<AppState>>) -> impl axum::respon
 
 #[cfg(test)]
 mod tests {
-    use super::router;
+    use super::{check, router, verify};
     use crate::readiness::{MetadataStatus, StoreHealth, TokenFamily};
     use crate::replay_authority::{ReplayAuthorityConfig, ReplayAuthorityHealth};
+    use crate::routes::admin::IssuerInfo;
     use crate::state::AppState;
     use crate::store::{InMemoryStore, SpendStore};
-    use axum::{body::Body, http::Request};
-    use std::{collections::HashMap, sync::Arc, time::Duration};
+    use axum::{body::to_bytes, body::Body, http::Request, http::StatusCode, Json};
+    use base64ct::{Base64UrlUnpadded, Encoding};
+    use freebird_common::api::VerifyReq;
+    use freebird_crypto::{
+        build_private_token_input, build_redemption_token, build_scope_digest, Client,
+        RedemptionToken, Server, VOPRF_CONTEXT_V4,
+    };
+    use serde_json::{json, Value};
+    use std::{
+        collections::HashMap,
+        sync::Arc,
+        time::{Duration, Instant},
+    };
     use tokio::sync::RwLock;
+
+    const ISSUER_ID: &str = "issuer:test:verify-contract";
+    const ISSUER_KID: &str = "kid:test:verify-contract";
+    const VERIFIER_ID: &str = "verifier:test:verify-contract";
+    const AUDIENCE: &str = "verify-contract";
     use tower::ServiceExt;
 
     fn cold_start_state() -> Arc<AppState> {
@@ -478,6 +505,83 @@ mod tests {
                 )
                 .unwrap(),
             ),
+            store_is_memory: true,
+        })
+    }
+
+    fn issue_v4_token(sk: [u8; 32], nonce: [u8; 32]) -> RedemptionToken {
+        let server = Server::from_secret_key(sk, VOPRF_CONTEXT_V4).unwrap();
+        let scope_digest = build_scope_digest(VERIFIER_ID, AUDIENCE).unwrap();
+        let input =
+            build_private_token_input(ISSUER_ID, ISSUER_KID, &nonce, &scope_digest).unwrap();
+        let mut client = Client::new(VOPRF_CONTEXT_V4);
+        let (blinded, blind_state) = client.blind(&input).unwrap();
+        let evaluation = server.evaluate_with_proof(&blinded).unwrap();
+        let authenticator = client
+            .finalize(
+                blind_state,
+                &evaluation,
+                &Base64UrlUnpadded::encode_string(&server.public_key_sec1_compressed()),
+            )
+            .unwrap();
+        RedemptionToken {
+            nonce,
+            scope_digest,
+            kid: ISSUER_KID.to_string(),
+            issuer_id: ISSUER_ID.to_string(),
+            authenticator: Base64UrlUnpadded::decode_vec(&authenticator)
+                .unwrap()
+                .try_into()
+                .unwrap(),
+        }
+    }
+
+    fn token_b64(token: &RedemptionToken) -> String {
+        Base64UrlUnpadded::encode_string(&build_redemption_token(token).unwrap())
+    }
+
+    fn verification_state(sk: [u8; 32]) -> Arc<AppState> {
+        let store: Arc<dyn SpendStore> = Arc::new(InMemoryStore::default());
+        let authority = Arc::new(
+            ReplayAuthorityHealth::new(
+                store.clone(),
+                ReplayAuthorityConfig {
+                    graph_issuer_urls: vec![],
+                    probe_interval: Duration::from_secs(30),
+                    max_staleness: Duration::from_secs(60),
+                },
+                [0; 32],
+            )
+            .unwrap(),
+        );
+        let server = Server::from_secret_key(sk, VOPRF_CONTEXT_V4).unwrap();
+        let scope_digest = build_scope_digest(VERIFIER_ID, AUDIENCE).unwrap();
+        let issuer = IssuerInfo {
+            pubkey_bytes: server.public_key_sec1_compressed().to_vec(),
+            kid: ISSUER_KID.to_string(),
+            ctx: VOPRF_CONTEXT_V4.to_vec(),
+            verification_key: Some(sk),
+            deprecated_verification_keys: HashMap::new(),
+            public_keys: HashMap::new(),
+            last_refreshed: Some(Instant::now()),
+        };
+        Arc::new(AppState {
+            issuers: Arc::new(RwLock::new(HashMap::from([(
+                ISSUER_ID.to_string(),
+                issuer,
+            )]))),
+            store: store.clone(),
+            verifier_id: VERIFIER_ID.to_string(),
+            audience: AUDIENCE.to_string(),
+            scope_digest,
+            epoch_duration_sec: 86_400,
+            epoch_retention: 2,
+            issuer_urls: vec![],
+            metadata: Arc::new(RwLock::new(HashMap::new())),
+            accepted_token_families: vec![TokenFamily::V4],
+            refresh_interval: Duration::from_secs(600),
+            store_health: StoreHealth::new(store.clone()),
+            replay_authority: authority,
             store_is_memory: true,
         })
     }
@@ -532,5 +636,61 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("*")
         );
+    }
+
+    #[tokio::test]
+    async fn replay_response_is_structured_and_check_never_reports_replay() {
+        let sk = [0x41u8; 32];
+        let state = verification_state(sk);
+        let token = token_b64(&issue_v4_token(sk, [0x01u8; 32]));
+        let request = || {
+            Json(VerifyReq {
+                token_b64: token.clone(),
+            })
+        };
+
+        verify(axum::extract::State(state.clone()), request())
+            .await
+            .unwrap();
+        let replay = verify(axum::extract::State(state.clone()), request())
+            .await
+            .unwrap();
+        assert_eq!(replay.status(), StatusCode::UNAUTHORIZED);
+        let replay_body = to_bytes(replay.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&replay_body).unwrap(),
+            json!({
+                "ok": false,
+                "error": "replay_detected",
+                "verified_at": 0
+            })
+        );
+
+        let checked = check(axum::extract::State(state), request()).await.unwrap();
+        assert!(checked.0.error.is_none());
+        assert!(checked.0.ok);
+        assert_ne!(checked.0.error.as_deref(), Some("replay_detected"));
+    }
+
+    #[tokio::test]
+    async fn invalid_authentication_remains_generic_and_is_not_replay() {
+        let sk = [0x42u8; 32];
+        let state = verification_state(sk);
+        let mut token = issue_v4_token(sk, [0x02u8; 32]);
+        token.authenticator[0] ^= 1;
+        let result = verify(
+            axum::extract::State(state),
+            Json(VerifyReq {
+                token_b64: token_b64(&token),
+            }),
+        )
+        .await;
+
+        let Err((status, message)) = result else {
+            panic!("invalid authentication unexpectedly succeeded");
+        };
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(message, "verification failed");
+        assert_ne!(message, "replay_detected");
     }
 }

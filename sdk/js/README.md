@@ -125,6 +125,10 @@ const outcome = await client.issueGraphBlindSignature(request, statusCapability)
 `getGraphIssuanceStatus` support resuming an operation from a persisted
 `GraphIssuanceRecoveryContext`.
 
+Batch issuance options accept a typed `proofFactory({ binding })`. It is called
+once for each exact request payload, including a newly bound retry; a fixed
+request-bound proof is not reused across chunks.
+
 ## API surface
 
 ### Issuance
@@ -133,10 +137,13 @@ const outcome = await client.issueGraphBlindSignature(request, statusCapability)
 | ------ | ----------- |
 | `init()` | Fetches the issuer's public key metadata. |
 | `issueToken(sybilProof?)` | Issues a single V4 anonymous token. |
+| `issueTokenWithProofFactory(proofFactory)` | Issues V4 with a fresh request-bound proof for each stale-key retry. |
 | `issueTokens(msgs, opts?)` | Issues a batch of V4 tokens (chunked above 10_000 inputs). Throws `BatchIssuanceError` on partial failure. |
 | `issuePublicBlindSignature(blindedMsg, sybilProof?, tokenKeyId?)` | Requests a V5 public bearer blind signature. |
 | `issuePublicToken(msg, opts)` | Issues a complete V5 public bearer pass in one call (blinds, signs, unblinds). |
 | `issuePublicTokens(msgs, opts)` | Issues a batch of V5 public bearer passes. |
+| `issuePublicTokenForCurrentKey(opts?)` | Refreshes discovery, derives a V5 message for the current key, and safely retries one stale-key response. |
+| `issuePublicTokensForCurrentKey(nonces, opts?)` | Current-key V5 batch issuance with per-chunk rebinding and recovery. |
 | `getKeyDiscoveryMetadata()` | Fetches the issuer's `/.well-known/keys` discovery metadata. |
 | `refreshKeyDiscoveryMetadata()` | Forces a fresh discovery fetch, bypassing the TTL cache. |
 
@@ -161,6 +168,8 @@ const outcome = await client.issueGraphBlindSignature(request, statusCapability)
 | `generateOperationId()` | Generates a canonical 16-byte base64url exchange operation id. |
 | `generateStatusCapability()` | Generates a canonical 32-byte base64url exchange status capability. |
 | `exchangePasses(sources, transition, opts?)` | Assembles a valid V2 `ExchangeRequest`, blinding the output slots. |
+| `prepareExchangePasses(sources, transition, opts?)` | Prepares an exchange and retains in-memory blinding state for finalization. |
+| `finalizeExchangePasses(prepared, outcome)` | Verifies committed exchange signatures and returns finalized V5 passes. |
 | `pollExchangeStatus(request, statusCapability, options?)` | Polls an exchange operation until committed or terminally failed. |
 
 ### Graph issuance
@@ -208,6 +217,7 @@ non-leaky message. Branch on the `code` rather than message text.
 | `ExchangeError` | `exchange` | A V2 public bearer exchange operation failed. |
 | `GraphIssuanceError` | `graph_issuance` | A graph issuance operation failed. |
 | `BatchIssuanceError` | `issuance` | One or more tokens in a batch issuance failed; carries `results`, `tokens`, and `failed`. |
+| `BatchIssuanceInterruptedError` | `issuance` | A chunked issuance stopped after completed chunks; carries `completed` and `cause`. |
 | `PollError` | `poll` | Base class for poll-specific errors. |
 | `PollTimeoutError` | `poll` | A polling operation exceeded its `timeoutMs` cap. |
 | `PollAbortedError` | `poll` | A polling operation was cancelled via its `AbortSignal`. |

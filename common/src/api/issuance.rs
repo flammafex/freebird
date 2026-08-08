@@ -40,6 +40,12 @@ pub struct SybilInfo {
     pub cost: u64,
 }
 
+/// Stable JSON error body used by public issuance endpoints.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ErrorResp {
+    pub error: String,
+}
+
 // ============================================================================
 // Batch Issuance Types
 // ============================================================================

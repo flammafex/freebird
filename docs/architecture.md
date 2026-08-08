@@ -54,12 +54,19 @@ V5 uses blind RSA signatures for public bearer passes.
 
 1. The client blinds a public-token message.
 2. The client sends the blinded message to `POST /v1/public/issue`.
-3. The issuer verifies any configured Sybil proof.
+3. The issuer validates any requested V5 key is active before processing a
+   configured Sybil proof.
 4. The issuer returns a blind signature.
 5. The client finalizes the public bearer pass.
 6. The verifier validates the token against issuer metadata and consumes it.
 
 Batch V5 issuance uses `POST /v1/public/issue/batch`.
+
+Both public issuance routes return HTTP 400 with
+`{"error":"token_key_not_active"}` when a requested V5 key is stale. The
+`/v1/verify` route returns HTTP 401 with
+`{"ok":false,"error":"replay_detected","verified_at":0}` for replay; other
+verification failures remain generic.
 
 ## Durable Public Operations
 

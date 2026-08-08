@@ -3,7 +3,7 @@
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{
     validate_graph_issuance_discovery_v2_update, BatchIssueReq, BatchIssueResp, BatchVerifyReq,
-    BatchVerifyResp, ExchangeAdmissionStateV2, ExchangeDescriptorDiscoveryV2,
+    BatchVerifyResp, ErrorResp, ExchangeAdmissionStateV2, ExchangeDescriptorDiscoveryV2,
     ExchangeDescriptorInfoV2, ExchangeDiscoveryV2, ExchangeGraphDiscoveryV2, ExchangeGraphInfoV2,
     ExchangeKeysetDiscoveryV2, ExchangeKeysetInfoV2, ExchangeReceiptKeyInfo,
     ExchangeTransitionDiscoveryV2, ExchangeTransitionInfoV2, ExchangeTransitionSlotDiscoveryV2,
@@ -153,6 +153,22 @@ fn api_json_aliases_tags_defaults_and_skips_are_frozen() {
     assert!(batch.sybil_proof.is_none());
     let verify: VerifyResp = serde_json::from_value(json!({"ok":true})).unwrap();
     assert_eq!(verify.verified_at, 0);
+    assert_eq!(
+        serde_json::to_string(&VerifyResp {
+            ok: false,
+            error: Some("replay_detected".into()),
+            verified_at: 0,
+        })
+        .unwrap(),
+        r#"{"ok":false,"error":"replay_detected","verified_at":0}"#
+    );
+    assert_eq!(
+        serde_json::to_value(ErrorResp {
+            error: "token_key_not_active".into(),
+        })
+        .unwrap(),
+        json!({"error":"token_key_not_active"})
+    );
     let public: PublicIssueReq =
         serde_json::from_value(json!({"blinded_msg_b64":"blind"})).unwrap();
     assert_eq!(public.token_key_id, None);
@@ -302,6 +318,7 @@ fn api_json_aliases_tags_defaults_and_skips_are_frozen() {
 #[test]
 fn api_json_unknown_field_policy_is_frozen() {
     assert_unknown::<IssueReq>(json!({"blinded_element_b64":"x","extra":true}), true);
+    assert_unknown::<ErrorResp>(json!({"error":"x","extra":true}), true);
     assert_unknown::<IssueResp>(
         json!({"token":"x","kid":"k","issuer_id":"i","extra":true}),
         true,

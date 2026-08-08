@@ -293,6 +293,12 @@ Verifier public endpoints:
 | `POST` | `/v1/verify` | Validate and consume a token. Reuse is rejected. |
 | `POST` | `/v1/verify/batch` | Batch verify and consume tokens. |
 
+Stable public error responses include `POST /v1/verify` replay rejection:
+HTTP 401 with `{"ok":false,"error":"replay_detected","verified_at":0}`.
+Other verification failures remain generic. A requested V5 public key that is
+not active is rejected before Sybil processing by both public issuance routes
+with HTTP 400 and `{"error":"token_key_not_active"}`.
+
 Admin endpoints live under `/admin` and require `X-Admin-Key:
 <ADMIN_API_KEY>` or a login session cookie. The verifier always mounts its admin
 router. The issuer mounts its admin router for all Sybil modes and includes

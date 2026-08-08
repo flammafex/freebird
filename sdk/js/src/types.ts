@@ -551,6 +551,21 @@ export type SybilProof =
   | { type: 'none' };
 
 /**
+ * Exact binding for one issuance request passed to a Sybil proof factory.
+ *
+ * A factory is called separately for each request binding; proofs must not be
+ * reused across different bindings.
+ */
+export interface SybilProofRequestContext {
+  binding: string;
+}
+
+/** Creates one request-bound Sybil proof for an issuance request. */
+export type SybilProofFactory = (
+  context: SybilProofRequestContext,
+) => SybilProof | Promise<SybilProof>;
+
+/**
  * Request to issue a token (Client -> Issuer)
  */
 export interface IssueRequest {
@@ -602,6 +617,11 @@ export interface PublicIssueResponse {
     passed: boolean;
     cost: number;
   };
+}
+
+/** Stable JSON error body returned by the public issuance endpoints. */
+export interface PublicIssueErrorResponse {
+  error: string;
 }
 
 /**
@@ -675,29 +695,35 @@ export interface PublicBatchIssueResp {
   };
 }
 
-/**
- * Options for {@link FreebirdClient.issueTokens}.
- */
-export interface IssueTokensOptions {
-  /** Sybil resistance proof if required. */
-  sybilProof?: SybilProof;
+type SybilProofSelection =
+  | { sybilProof?: never; proofFactory?: never }
+  | { sybilProof: SybilProof; proofFactory?: never }
+  | { sybilProof?: never; proofFactory: SybilProofFactory };
+
+/** Options for {@link FreebirdClient.issueTokens}. */
+export type IssueTokensOptions = SybilProofSelection & {
   /** Optional context string (unused in v1). */
   ctxB64?: string;
-}
+};
 
-/**
- * Options for {@link FreebirdClient.issuePublicTokens}.
- */
-export interface IssuePublicTokensOptions {
+/** Options for {@link FreebirdClient.issuePublicTokens}. */
+export type IssuePublicTokensOptions = SybilProofSelection & {
   /** Strict lowercase hex token key ID of the signing key. */
   tokenKeyId?: string;
-  /** Sybil resistance proof if required. */
-  sybilProof?: SybilProof;
   /** Issuer identifier embedded in each pass. */
   issuerId: string;
   /** Per-token 32-byte nonces, one per message, embedded in each pass. */
   nonces: Uint8Array[];
-}
+};
+
+/** Options for issuance using the issuer's freshly discovered V5 key. */
+export type IssuePublicTokenForCurrentKeyOptions = SybilProofSelection & {
+  /** Optional nonce; a fresh nonce is generated when omitted. */
+  nonce?: Uint8Array;
+};
+
+/** Options for current-key V5 batch issuance. */
+export type IssuePublicTokensForCurrentKeyOptions = SybilProofSelection;
 
 /**
  * A V5 public bearer pass: the wire format produced by
@@ -718,6 +744,37 @@ export interface RsaBlindState {
   prepared: Uint8Array;
   /** SPKI DER bytes of the RSA public key used for blinding. */
   publicKey: Uint8Array;
+}
+
+/**
+ * One prepared V2 exchange output retained for in-memory finalization.
+ *
+ * The message, nonce, and blinding state are intentionally not a persistence
+ * format. In particular, `blindingState` must remain in memory until the
+ * corresponding blind signature has been finalized.
+ */
+export interface PreparedExchangeOutput {
+  slot: ExchangeSlot;
+  message: Uint8Array;
+  nonce: Uint8Array;
+  blindedValue: string;
+  blindingState: RsaBlindState;
+}
+
+/**
+ * An exchange request together with the in-memory state needed to finalize its
+ * generated outputs after the issuer returns blind signatures.
+ */
+export interface PreparedExchange {
+  request: ExchangeRequest;
+  outputs: PreparedExchangeOutput[];
+}
+
+/** One finalized public bearer pass produced by an exchange output. */
+export interface FinalizedExchangeOutput {
+  slot: ExchangeSlot;
+  nonce: Uint8Array;
+  pass: PublicBearerPass;
 }
 
 /**

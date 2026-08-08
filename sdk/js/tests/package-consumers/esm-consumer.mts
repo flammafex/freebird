@@ -4,8 +4,10 @@ import {
   StorageTokenStore,
   crypto,
   exchangePasses,
+  finalizeExchangePasses,
   generateOperationId,
   generateStatusCapability,
+  prepareExchangePasses,
   pollExchangeStatus,
   pollGraphIssuanceStatus,
 } from '@freebird/sdk';
@@ -38,6 +40,9 @@ const token: FreebirdToken = {
 
 // The complete high-level surface must resolve types for a consumer.
 const v4: Promise<FreebirdToken> = client.issueToken();
+const v4Factory: Promise<FreebirdToken> = client.issueTokenWithProofFactory(
+  ({ binding }) => ({ type: 'proof_of_work', input: binding, nonce: 0, timestamp: 0 }),
+);
 const v4Batch: Promise<FreebirdToken[]> = client.issueTokens([new Uint8Array(32)]);
 const v5: Promise<PublicBearerPass> = client.issuePublicToken(new Uint8Array(48), {
   nonce: new Uint8Array(32),
@@ -48,6 +53,10 @@ const v5Batch: Promise<PublicBearerPass[]> = client.issuePublicTokens(
   [new Uint8Array(48)],
   { issuerId: 'issuer:test', nonces: [new Uint8Array(32)] },
 );
+const currentV5: Promise<PublicBearerPass> = client.issuePublicTokenForCurrentKey();
+const currentV5Batch: Promise<PublicBearerPass[]> = client.issuePublicTokensForCurrentKey([
+  new Uint8Array(32),
+]);
 const verified: Promise<VerifyResp> = client.verifyToken(token);
 const verifiedValid: Promise<boolean> = client.verifyTokenValid(token);
 const checked: Promise<VerifyResp> = client.checkToken(token);
@@ -92,9 +101,14 @@ const code: FreebirdErrorCode = 'invalid_token';
 void client;
 void token;
 void v4;
+void v4Factory;
 void v4Batch;
 void v5;
 void v5Batch;
+void currentV5;
+void currentV5Batch;
+void prepareExchangePasses;
+void finalizeExchangePasses;
 void verified;
 void verifiedValid;
 void checked;

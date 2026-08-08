@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RSABSSA } from '@cloudflare/blindrsa-ts';
-import { FreebirdClient, crypto as sdkCrypto } from '../src/index.js';
+import { FreebirdClient, DiscoveryError, crypto as sdkCrypto } from '../src/index.js';
 import { rsaBlind, rsaUnblind, rsaVerify } from '../src/crypto/rsa.js';
 import * as voprf from '../src/crypto/voprf.js';
 import type { PublicKeyInfo } from '../src/index.js';
@@ -192,6 +192,51 @@ describe('FreebirdClient.issuePublicToken', () => {
     // And it verifies locally against the published key.
     expect(await client.verifyPublicBearerPassLocally(pass, keyInfo)).toBe(true);
   });
+
+  it('rejects a message/nonce/key mismatch before POST', async () => {
+    const { publicKey } = await suite.generateKey({
+      publicExponent: Uint8Array.from([1, 0, 1]),
+      modulusLength: 2048,
+    });
+    const standardSpki = new Uint8Array(await crypto.subtle.exportKey('spki', publicKey));
+    const pssSpki = toPssSpki(standardSpki);
+    const tokenKeyId = sdkCrypto.tokenKeyIdToHex(sdkCrypto.tokenKeyIdFromSpki(pssSpki));
+    const keyInfo: PublicKeyInfo = {
+      token_key_id: tokenKeyId,
+      token_type: 'public_bearer_pass',
+      rfc9474_variant: 'RSABSSA-SHA384-PSS-Deterministic',
+      modulus_bits: 2048,
+      pubkey_spki_b64: b64(pssSpki),
+      issuer_id: 'issuer:test',
+      valid_from: 0,
+      valid_until: 9999999999,
+      spend_policy: 'single_use',
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.endsWith('/.well-known/keys')) {
+        return json({
+          issuer_id: 'issuer:test', current_epoch: 1, valid_epochs: [1],
+          epoch_duration_sec: 3600,
+          voprf: { suite: 'P256-SHA256', kid: 'kid', pubkey: 'pubkey' },
+          public: [keyInfo],
+        });
+      }
+      throw new Error(`unexpected POST or discovery: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const nonce = new Uint8Array(32).fill(0x42);
+    const msg = voprf.buildPublicBearerMessage(
+      nonce,
+      sdkCrypto.tokenKeyIdFromHex(tokenKeyId),
+      'issuer:test',
+    );
+    msg[0] ^= 1;
+
+    await expect(new FreebirdClient({ issuerUrl: 'https://issuer.example' }).issuePublicToken(msg, {
+      nonce, tokenKeyId, issuerId: 'issuer:test',
+    })).rejects.toBeInstanceOf(DiscoveryError);
+    expect(fetchMock.mock.calls.every(([url]) => !url.endsWith('/v1/public/issue'))).toBe(true);
+  });
 });
 
 describe('FreebirdClient.verifyPublicBearerPassLocally', () => {
@@ -229,5 +274,19 @@ describe('FreebirdClient.verifyPublicBearerPassLocally', () => {
     const tampered = pass.slice();
     tampered[tampered.length - 1] ^= 0x01;
     expect(await client.verifyPublicBearerPassLocally(tampered, keyInfo)).toBe(false);
+    expect(await client.verifyPublicBearerPassLocally(pass, {
+      ...keyInfo,
+      issuer_id: 'issuer:other',
+    })).toBe(false);
+    expect(await client.verifyPublicBearerPassLocally(pass, {
+      ...keyInfo,
+      token_key_id: '0'.repeat(64),
+    })).toBe(false);
+    const tamperedSpki = pssSpki.slice();
+    tamperedSpki[tamperedSpki.length - 1] ^= 0x01;
+    expect(await client.verifyPublicBearerPassLocally(pass, {
+      ...keyInfo,
+      pubkey_spki_b64: b64(tamperedSpki),
+    })).toBe(false);
   });
 });

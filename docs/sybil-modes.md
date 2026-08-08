@@ -35,6 +35,10 @@ The issuer now binds PoW proofs to issuance request context when the proof is
 submitted to public issuance routes. For custom clients, the PoW `input` must
 match the route-specific request binding.
 
+Public issuance validates a requested V5 token key before processing any Sybil
+proof. A stale key therefore returns HTTP 400 with
+`{"error":"token_key_not_active"}` without consuming the proof.
+
 Single V4 issuance:
 
 ```text

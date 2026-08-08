@@ -52,9 +52,21 @@ describe('verifyToken', () => {
     await expect(client().verifyToken(token)).rejects.toBeInstanceOf(InvalidTokenError);
   });
 
-  it('throws ReplayedTokenError on 401 (replay on /v1/verify)', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ error: 'verification_failed' }, 401)));
+  it('throws ReplayedTokenError only for the exact replay response on /v1/verify', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      json({ ok: false, error: 'replay_detected', verified_at: 0 }, 401),
+    ));
     await expect(client().verifyToken(token)).rejects.toBeInstanceOf(ReplayedTokenError);
+  });
+
+  it('throws InvalidTokenError for an invalid-signature-like 401', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ error: 'verification_failed' }, 401)));
+    await expect(client().verifyToken(token)).rejects.toBeInstanceOf(InvalidTokenError);
+  });
+
+  it('throws InvalidTokenError for an untrusted or unknown issuer 401', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ error: 'unknown_issuer' }, 401)));
+    await expect(client().verifyToken(token)).rejects.toBeInstanceOf(InvalidTokenError);
   });
 
   it('throws RateLimitedError on 429 and parses Retry-After', async () => {
@@ -144,6 +156,11 @@ describe('checkToken', () => {
     vi.stubGlobal('fetch', fetchMock);
     await expect(client().checkToken(token)).rejects.toBeInstanceOf(InvalidTokenError);
     await expect(client().checkToken(token)).rejects.toBeInstanceOf(VerifierUnavailableError);
+  });
+
+  it('throws InvalidTokenError for a /v1/check 401', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json({ error: 'replay_detected' }, 401)));
+    await expect(client().checkToken(token)).rejects.toBeInstanceOf(InvalidTokenError);
   });
 
   it('throws VerifierNotConfiguredError when verifierUrl is unset', async () => {

@@ -45,26 +45,30 @@ async function main(): Promise<void> {
     artifact: 'BASE64URL_OF_A_V5_PUBLIC_BEARER_PASS',
   }));
 
-  // 3. Assemble a valid ExchangeRequest. `exchangePasses` fills the operation
-  //    id, graph/transition ids, keyset ids, sources, and blinded outputs.
-  const request = await client.exchangePasses(sources, {
+  // 3. Prepare the exchange. The SDK fills the request and retains the
+  // in-memory blinding state needed to finalize the returned signatures.
+  const prepared = await client.prepareExchangePasses(sources, {
     graphId: graph.graph_id,
     transitionId: transition.transition_id,
   });
-  console.log('assembled exchange request for graph', request.graph_id);
+  console.log('assembled exchange request for graph', prepared.request.graph_id);
 
   // 4. Generate a status capability and submit the exchange.
   const statusCapability = client.generateStatusCapability();
-  const outcome = await client.exchange(request, statusCapability);
+  const outcome = await client.exchange(prepared.request, statusCapability);
   console.log('exchange outcome:', outcome.kind);
 
   // 5. Poll until the operation reaches a terminal outcome. `pollExchangeStatus`
   //    retries with backoff, honoring the server's retryAfter as the floor.
-  const finalOutcome = await client.pollExchangeStatus(request, statusCapability, {
+  const finalOutcome = await client.pollExchangeStatus(prepared.request, statusCapability, {
     intervalMs: 500,
     timeoutMs: 30_000,
   });
   console.log('final exchange outcome:', finalOutcome.kind);
+  if (finalOutcome.kind === 'committed') {
+    const finalized = await client.finalizeExchangePasses(prepared, finalOutcome);
+    console.log('finalized V5 passes:', finalized.length);
+  }
 }
 
 main().catch((err) => {

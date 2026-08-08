@@ -3,7 +3,8 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { sha256 } from '@noble/hashes/sha256';
 import { ed25519 } from '@noble/curves/ed25519';
-import { FreebirdClient, generateOperationId, generateStatusCapability } from '../src/index.js';
+import { FreebirdClient, generateOperationId, generateStatusCapability, crypto as sdkCrypto } from '../src/index.js';
+import { prepareExchange } from '../src/client/protocol.js';
 import { isCanonicalBase64Url } from '../src/client/wire.js';
 import type {
   ExchangeRequestSource,
@@ -12,6 +13,11 @@ import type {
 
 const b64 = (bytes: Uint8Array): string =>
   btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const fromB64 = (value: string): Uint8Array => {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')),
+    (character) => character.charCodeAt(0));
+};
 const ascii = (value: string): Uint8Array => new TextEncoder().encode(value);
 const concat = (...values: Uint8Array[]): Uint8Array => {
   const output = new Uint8Array(values.reduce((sum, value) => sum + value.length, 0));
@@ -239,6 +245,33 @@ describe('protocol utilities', () => {
     const outcome = await sdk.exchange(request, generateStatusCapability());
     expect(outcome).toMatchObject({ kind: 'error', httpStatus: 503 });
     expect(fetchMock.mock.calls[0][0]).toBe('https://issuer.example/v2/public/exchange');
+  });
+
+  it('prepares omitted messages with retained nonce/message and blinding state', async () => {
+    const graph = fixture.metadata.exchange!.active_graph;
+    const transition = graph.transitions[0];
+    const prepared = await prepareExchange(
+      [sourceArtifact()],
+      { graphId: fixture.graphId, transitionId: fixture.transitionId },
+      {},
+      async () => ({ graph, transition }),
+    );
+
+    expect(prepared.request.sources[0]).toEqual(sourceArtifact());
+    expect(prepared.outputs).toHaveLength(1);
+    const output = prepared.outputs[0];
+    expect(output.nonce).toHaveLength(32);
+    expect(output.message).toEqual(sdkCrypto.buildPublicBearerMessage(
+      output.nonce,
+      sdkCrypto.tokenKeyIdFromHex(graph.descriptors.find(
+        (descriptor) => descriptor.descriptor_id === output.slot.descriptor_id,
+      )!.token_key_id),
+      graph.descriptors.find((descriptor) => descriptor.descriptor_id === output.slot.descriptor_id)!.issuer_id,
+    ));
+    expect(output.blindedValue).toBe(prepared.request.outputs[0].blinded_value);
+    expect(output.blindingState.inv.length).toBeGreaterThan(0);
+    expect(output.blindingState.prepared.length).toBeGreaterThan(0);
+    expect(output.blindingState.publicKey).toHaveLength(fromB64(graph.descriptors[1].pubkey_spki_b64).length);
   });
 
   it('rejects sources whose keyset does not match the transition source keyset', async () => {

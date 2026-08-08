@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const runtimeExports = [
   'BatchIssuanceError',
+  'BatchIssuanceInterruptedError',
   'DiscoveryError',
   'ExchangeError',
   'FreebirdClient',
@@ -21,6 +22,7 @@ const runtimeExports = [
   'RateLimitedError',
   'ReplayedTokenError',
   'StorageTokenStore',
+  'StalePublicKeyError',
   'VerificationError',
   'VerifierNotConfiguredError',
   'VerifierUnavailableError',
@@ -33,6 +35,7 @@ const runtimeExports = [
   'crypto',
   'deserializeGraphIssuanceRecoveryContext',
   'exchangePasses',
+  'finalizeExchangePasses',
   'generateOperationId',
   'generateProofOfWork',
   'generateStatusCapability',
@@ -45,6 +48,7 @@ const runtimeExports = [
   'pollExchangeStatus',
   'pollGraphIssuanceStatus',
   'pollUntilTerminal',
+  'prepareExchangePasses',
   'serializeGraphIssuanceRecoveryContext',
   'tokenId',
   'verifyGraphIssuanceHmacAuthorizationV2',
@@ -89,6 +93,10 @@ function assertRuntimeSurface(source: Record<string, unknown>): void {
   }
   if (source.FreebirdClient === undefined || typeof crypto.blind !== 'function') {
     throw new Error('required SDK runtime export is missing');
+  }
+  if (typeof (source.FreebirdClient as typeof import('../src/client.js').FreebirdClient)
+    .prototype.issueTokenWithProofFactory !== 'function') {
+    throw new Error('current V4 proof-factory API is missing');
   }
 }
 

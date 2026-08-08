@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 import { sha256 } from '@noble/hashes/sha256';
-import type { SybilProof } from '../types.js';
+import type { SybilProof, SybilProofFactory } from '../types.js';
 import type { ClientState } from './state.js';
 import { bytesToBase64Url, concatBytes } from './wire.js';
+import { FreebirdError } from '../errors.js';
 
 /**
  * Proof-of-Work Sybil resistance helpers.
@@ -198,9 +199,33 @@ export async function resolveSybilProof(
   state: ClientState,
   provided: SybilProof | undefined,
   binding: string,
+  factory?: SybilProofFactory,
+  enforceProvidedBinding = false,
 ): Promise<SybilProof | undefined> {
-  if (provided !== undefined) return provided;
+  if (factory !== undefined) {
+    const proof = await factory({ binding });
+    assertProofBinding(proof, binding);
+    return proof;
+  }
+  if (provided !== undefined) {
+    if (enforceProvidedBinding) assertProofBinding(provided, binding);
+    return provided;
+  }
   const difficulty = resolvePowDifficulty(state);
   if (difficulty === undefined) return undefined;
   return generateProofOfWork(binding, difficulty);
+}
+
+/**
+ * A PoW proof is the only proof variant whose request binding is visible to
+ * the SDK.  Never silently reuse it for another chunk or retry: doing so
+ * would make the proof attest to a different payload than the one posted.
+ */
+function assertProofBinding(proof: SybilProof, binding: string): void {
+  if (proof.type === 'proof_of_work' && proof.input !== binding) {
+    throw new FreebirdError('issuance', 'Sybil proof is bound to a different request');
+  }
+  if (proof.type === 'multi') {
+    for (const nested of proof.proofs) assertProofBinding(nested, binding);
+  }
 }
