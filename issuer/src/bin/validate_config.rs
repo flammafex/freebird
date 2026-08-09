@@ -635,9 +635,13 @@ fn validate_sybil_config(config: &Config) -> ValidationSection {
             validate_social_graph_config(sybil, &mut section);
         }
         "webauthn" => {
-            if env::var("WEBAUTHN_RP_ID").is_err() || env::var("WEBAUTHN_RP_ORIGIN").is_err() {
+            if config.webauthn_config.is_none() {
                 section.add(CheckResult::Error(
                     "WEBAUTHN_RP_ID and WEBAUTHN_RP_ORIGIN are required when SYBIL_RESISTANCE=webauthn".to_string(),
+                ));
+            } else if env::var("WEBAUTHN_PROOF_SECRET").is_err() {
+                section.add(CheckResult::Error(
+                    "WEBAUTHN_PROOF_SECRET is required when SYBIL_RESISTANCE=webauthn".to_string(),
                 ));
             } else {
                 section.add(CheckResult::Ok(
@@ -654,8 +658,45 @@ fn validate_sybil_config(config: &Config) -> ValidationSection {
             )));
             section.add(CheckResult::Ok(format!("SYBIL_COMBINED_MODE = {}", mode)));
 
+            if !matches!(
+                mode.to_ascii_lowercase().as_str(),
+                "or" | "and" | "threshold"
+            ) {
+                section.add(CheckResult::Error(
+                    "SYBIL_COMBINED_MODE must be one of or, and, or threshold".to_string(),
+                ));
+            }
+
             // Validate salts for any combined mechanisms that use them
-            let mechanisms: Vec<&str> = mechanisms.split(',').map(str::trim).collect();
+            let mechanisms: Vec<&str> = sybil
+                .combined_mechanisms
+                .iter()
+                .map(|mechanism| mechanism.trim())
+                .collect();
+            if mechanisms.is_empty() || mechanisms.iter().all(|mechanism| mechanism.is_empty()) {
+                section.add(CheckResult::Error(
+                    "SYBIL_COMBINED_MECHANISMS must contain at least one mechanism".to_string(),
+                ));
+            }
+            for mechanism in &mechanisms {
+                if !matches!(
+                    *mechanism,
+                    "pow"
+                        | "proof_of_work"
+                        | "rate_limit"
+                        | "invitation"
+                        | "webauthn"
+                        | "progressive_trust"
+                        | "social_graph"
+                        | "proof_of_diversity"
+                        | "multi_party_vouching"
+                ) {
+                    section.add(CheckResult::Error(format!(
+                        "Unknown SYBIL_COMBINED_MECHANISMS mechanism: {}",
+                        mechanism
+                    )));
+                }
+            }
             if mechanisms.contains(&"progressive_trust") {
                 section.add(CheckResult::Warning(
                     "Progressive Trust is experimental and has not been reviewed as a production Sybil boundary".to_string(),
@@ -674,15 +715,18 @@ fn validate_sybil_config(config: &Config) -> ValidationSection {
                 ));
                 validate_social_graph_config(sybil, &mut section);
             }
-            if sybil
-                .combined_mechanisms
-                .iter()
-                .any(|mechanism| mechanism == "webauthn")
-                && (env::var("WEBAUTHN_RP_ID").is_err() || env::var("WEBAUTHN_RP_ORIGIN").is_err())
-            {
-                section.add(CheckResult::Error(
-                    "WEBAUTHN_RP_ID and WEBAUTHN_RP_ORIGIN are required when combined includes webauthn".to_string(),
-                ));
+            if mechanisms.contains(&"webauthn") {
+                if config.webauthn_config.is_none() {
+                    section.add(CheckResult::Error(
+                        "WEBAUTHN_RP_ID and WEBAUTHN_RP_ORIGIN are required when combined includes webauthn"
+                            .to_string(),
+                    ));
+                } else if env::var("WEBAUTHN_PROOF_SECRET").is_err() {
+                    section.add(CheckResult::Error(
+                        "WEBAUTHN_PROOF_SECRET is required when combined includes webauthn"
+                            .to_string(),
+                    ));
+                }
             }
         }
         other => {
@@ -896,6 +940,13 @@ fn validate_webauthn_config(config: &Config) -> Option<ValidationSection> {
             webauthn.rp_name
         )));
 
+        if env::var("WEBAUTHN_PROOF_SECRET").is_err() {
+            section.add(CheckResult::Error(
+                "WEBAUTHN_PROOF_SECRET is required whenever the WebAuthn subsystem is enabled"
+                    .to_string(),
+            ));
+        }
+
         if let Some(redis_url) = &webauthn.redis_url {
             section.add(CheckResult::Ok(format!(
                 "WEBAUTHN_REDIS_URL = {}",
@@ -971,6 +1022,7 @@ mod tests {
                     (*name, value)
                 })
                 .collect();
+            std::env::set_var("SYBIL_RESISTANCE", "none");
             Self(values)
         }
     }
@@ -993,7 +1045,7 @@ mod tests {
     }
 
     fn clean_validator_env() -> EnvGuard {
-        EnvGuard::clear(&[
+        let guard = EnvGuard::clear(&[
             "FREEBIRD_ENV",
             "FREEBIRD_UNSAFE_DEVELOPMENT_MODE",
             "ALLOW_UNSAFE_V4_ROTATION",
@@ -1042,6 +1094,9 @@ mod tests {
             "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64",
             "PUBLIC_BEARER_GRAPH_ISSUANCE_ALLOW_DEVELOPMENT_MOCK",
             "SYBIL_RESISTANCE",
+            "SYBIL_COMBINED_MECHANISMS",
+            "SYBIL_COMBINED_MODE",
+            "SYBIL_COMBINED_THRESHOLD",
             "SYBIL_PROGRESSIVE_TRUST_SALT",
             "SYBIL_PROOF_OF_DIVERSITY_SALT",
             "SYBIL_MULTI_PARTY_VOUCHING_SALT",
@@ -1055,10 +1110,13 @@ mod tests {
             "WEBAUTHN_RP_ID",
             "WEBAUTHN_RP_NAME",
             "WEBAUTHN_RP_ORIGIN",
+            "WEBAUTHN_PROOF_SECRET",
             "WEBAUTHN_REDIS_URL",
             "WEBAUTHN_CRED_TTL",
             "WEBAUTHN_MAX_PROOF_AGE",
-        ])
+        ]);
+        std::env::set_var("SYBIL_RESISTANCE", "none");
+        guard
     }
 
     fn rendered_output(section: &ValidationSection) -> String {
@@ -1350,7 +1408,7 @@ mod tests {
             assert!(rendered_output(&sentinel_salt).contains(message));
         }
 
-        std::env::remove_var("SYBIL_RESISTANCE");
+        std::env::set_var("SYBIL_RESISTANCE", "none");
         std::env::set_var("WEBAUTHN_RP_ID", "example.test");
         let partial_id =
             validate_webauthn_config(&current_config()).expect("partial WebAuthn needs a section");
@@ -1458,6 +1516,7 @@ mod tests {
     #[test]
     #[serial]
     fn rejects_unknown_sybil_mode() {
+        let _env = clean_validator_env();
         set_mode("not-a-runtime-mode");
         let section = validate_sybil_config(&current_config());
         assert!(section.checks.iter().any(|check| matches!(
@@ -1465,6 +1524,116 @@ mod tests {
             CheckResult::Error(message) if message.contains("Unknown SYBIL_RESISTANCE mode")
         )));
         std::env::remove_var("SYBIL_RESISTANCE");
+    }
+
+    #[test]
+    #[serial]
+    fn validator_rejects_missing_sybil_selection() {
+        let _env = clean_validator_env();
+        std::env::remove_var("SYBIL_RESISTANCE");
+
+        let error = match run_authoritative_validation() {
+            Ok(_) => panic!("missing SYBIL_RESISTANCE must stop validator parsing"),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("SYBIL_RESISTANCE must be explicitly set"));
+    }
+
+    #[test]
+    #[serial]
+    fn validator_requires_webauthn_secret_for_selected_and_nonselected_modes() {
+        let _env = clean_validator_env();
+        std::env::set_var("WEBAUTHN_RP_ID", "example.test");
+        std::env::set_var("WEBAUTHN_RP_ORIGIN", "https://example.test");
+        std::env::remove_var("WEBAUTHN_PROOF_SECRET");
+
+        set_mode("webauthn");
+        let selected = validation_sections(&current_config());
+        assert!(selected.iter().any(|section| {
+            rendered_output(section).contains("WEBAUTHN_PROOF_SECRET is required")
+        }));
+
+        set_mode("progressive_trust");
+        std::env::set_var("SYBIL_PROGRESSIVE_TRUST_SALT", "validator-safe-salt");
+        let nonselected = validation_sections(&current_config());
+        assert!(nonselected.iter().any(|section| {
+            rendered_output(section).contains("WEBAUTHN_PROOF_SECRET is required")
+        }));
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_invalid_combined_sybil_configuration() {
+        let _env = clean_validator_env();
+        set_mode("combined");
+
+        std::env::set_var("SYBIL_COMBINED_MECHANISMS", "pow,not-a-mechanism");
+        let unknown_mechanism = validate_sybil_config(&current_config());
+        assert!(unknown_mechanism.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("Unknown SYBIL_COMBINED_MECHANISMS mechanism")
+        )));
+
+        std::env::set_var("SYBIL_COMBINED_MECHANISMS", "pow");
+        std::env::set_var("SYBIL_COMBINED_MODE", "not-a-combiner");
+        let unknown_mode = validate_sybil_config(&current_config());
+        assert!(unknown_mode.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("SYBIL_COMBINED_MODE must be one of")
+        )));
+
+        std::env::remove_var("SYBIL_COMBINED_MODE");
+        let mut empty_config = current_config();
+        empty_config.sybil_config.combined_mechanisms = vec![];
+        let empty_set = validate_sybil_config(&empty_config);
+        assert!(empty_set.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("SYBIL_COMBINED_MECHANISMS must contain at least one")
+        )));
+    }
+
+    #[test]
+    #[serial]
+    fn rejects_unavailable_selected_and_combined_webauthn() {
+        let _env = clean_validator_env();
+
+        set_mode("webauthn");
+        let selected = validate_sybil_config(&current_config());
+        assert!(selected.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("WEBAUTHN_RP_ID and WEBAUTHN_RP_ORIGIN are required")
+        )));
+
+        set_mode("combined");
+        std::env::set_var("SYBIL_COMBINED_MECHANISMS", "pow, webauthn");
+        let combined = validate_sybil_config(&current_config());
+        assert!(combined.checks.iter().any(|check| matches!(
+            check,
+            CheckResult::Error(message)
+                if message.contains("WEBAUTHN_RP_ID and WEBAUTHN_RP_ORIGIN are required when combined")
+        )));
+    }
+
+    #[test]
+    #[serial]
+    fn preserves_valid_combined_mechanisms_and_modes() {
+        let _env = clean_validator_env();
+        set_mode("combined");
+        std::env::set_var("SYBIL_COMBINED_MECHANISMS", "pow, rate_limit");
+
+        for mode in ["or", "and", "threshold", "OR", "And", "THRESHOLD"] {
+            std::env::set_var("SYBIL_COMBINED_MODE", mode);
+            assert!(
+                !validate_sybil_config(&current_config()).has_errors(),
+                "combined mode {mode} should remain valid"
+            );
+        }
     }
 
     const TEST_ISSUER_ID: &str = "issuer:freebird:v4";

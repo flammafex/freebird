@@ -214,7 +214,7 @@ impl Config {
             key_config: KeyConfig::from_env()?,
             public_key_config: PublicKeyConfig::from_env(),
             exchange_config: ExchangeConfig::from_env()?,
-            sybil_config: SybilConfig::from_env(),
+            sybil_config: SybilConfig::from_env()?,
             webauthn_config: WebAuthnConfig::from_env(),
             admin_api_key,
             epoch_duration_sec,
@@ -728,7 +728,13 @@ impl HsmConfig {
 }
 
 impl SybilConfig {
-    fn from_env() -> Self {
+    fn from_env() -> Result<Self> {
+        let mode = env::var("SYBIL_RESISTANCE").map_err(|_| {
+            anyhow::anyhow!(
+                "SYBIL_RESISTANCE must be explicitly set; use SYBIL_RESISTANCE=none only for a deliberate no-checker opt-out"
+            )
+        })?;
+
         // Parse progressive trust levels from env
         // Format supports human-readable durations: "0:1:1d,30d:10:1h,90d:100:1m"
         let progressive_trust_levels = env::var("SYBIL_PROGRESSIVE_TRUST_LEVELS")
@@ -737,8 +743,8 @@ impl SybilConfig {
             .map(|s| s.to_string())
             .collect();
 
-        Self {
-            mode: env::var("SYBIL_RESISTANCE").unwrap_or_else(|_| "none".to_string()),
+        Ok(Self {
+            mode,
             pow_difficulty: env_u32("SYBIL_POW_DIFFICULTY", 20),
             // Duration fields now support human-readable formats: "1h", "30m", "1d", etc.
             rate_limit_secs: env_duration("SYBIL_RATE_LIMIT", 3600), // Default: 1h
@@ -883,7 +889,7 @@ impl SybilConfig {
                 .unwrap_or_else(|| vec!["pow".to_string(), "rate_limit".to_string()]),
             combined_mode: env::var("SYBIL_COMBINED_MODE").unwrap_or_else(|_| "or".to_string()),
             combined_threshold: env_u32("SYBIL_COMBINED_THRESHOLD", 2),
-        }
+        })
     }
 }
 
@@ -1017,16 +1023,19 @@ mod tests {
                 "WEBAUTHN_RP_ID",
                 "WEBAUTHN_RP_NAME",
                 "WEBAUTHN_RP_ORIGIN",
+                "WEBAUTHN_PROOF_SECRET",
                 "WEBAUTHN_REDIS_URL",
                 "WEBAUTHN_CRED_TTL",
                 "WEBAUTHN_MAX_PROOF_AGE",
             ];
-            Self {
+            let guard = Self {
                 values: keys
                     .into_iter()
                     .map(|key| (key, env::var(key).ok()))
                     .collect(),
-            }
+            };
+            env::set_var("SYBIL_RESISTANCE", "none");
+            guard
         }
     }
 
@@ -1104,6 +1113,7 @@ mod tests {
             "WEBAUTHN_RP_ID",
             "WEBAUTHN_RP_NAME",
             "WEBAUTHN_RP_ORIGIN",
+            "WEBAUTHN_PROOF_SECRET",
             "WEBAUTHN_REDIS_URL",
             "WEBAUTHN_CRED_TTL",
             "WEBAUTHN_MAX_PROOF_AGE",
@@ -1114,6 +1124,7 @@ mod tests {
         env::set_var("REQUIRE_TLS", "false");
         env::set_var("BEHIND_PROXY", "false");
         env::set_var("HSM_ENABLE", "false");
+        env::set_var("SYBIL_RESISTANCE", "none");
         guard
     }
 
@@ -1292,7 +1303,16 @@ mod tests {
     fn config_from_env_preserves_raw_admin_salt_and_webauthn_boundaries() {
         let _env = clean_config_env();
 
-        let missing = Config::from_env().expect("missing raw values should parse");
+        env::remove_var("SYBIL_RESISTANCE");
+        let missing_selection =
+            Config::from_env().expect_err("missing SYBIL_RESISTANCE should be rejected");
+        assert!(missing_selection
+            .to_string()
+            .contains("SYBIL_RESISTANCE must be explicitly set"));
+
+        env::set_var("SYBIL_RESISTANCE", "none");
+        let missing =
+            Config::from_env().expect("missing raw values should parse with explicit none");
         assert!(missing.admin_api_key.is_none());
         assert_eq!(missing.sybil_config.progressive_trust_salt.len(), 64);
         assert_eq!(

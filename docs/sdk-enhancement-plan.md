@@ -1,6 +1,6 @@
-# Implementation Plan: Freebird TypeScript SDK Enhancement (`@freebird/sdk`)
+# Implementation Plan: Freebird TypeScript SDK Enhancement (`@flammafex/freebird`)
 
-**Scope:** Make `@freebird/sdk` (at `sdk/js/`) a complete, installable client so consumers
+**Scope:** Make `@flammafex/freebird` (at `sdk/js/`) a complete, installable client so consumers
 (Scarcity, Clout, Rendezvous, Prestige) stop composing bespoke protocol code. This plan
 incorporates all 10 oracle recommendations and corrects the false premises in
 `dev/sdk-enhancement-specs.md` §1.1–1.7.
@@ -378,7 +378,7 @@ publish sybil requirements in `/.well-known/issuer`.
   `generateStatusCapability`, `exchangePasses`, `pollExchangeStatus`,
   `pollGraphIssuanceStatus`, plus the new error classes and `crypto.rsa*` exports.
 - Update `package-surface.test.ts` and `package-consumers/` to confirm
-  `npm install @freebird/sdk` + `import { FreebirdClient }` resolves types.
+  `npm install @flammafex/freebird` + `import { FreebirdClient }` resolves types.
 - **Acceptance (§1.7):** a consumer can complete V4 issue→verify, V5 issue→verify, and V2
   exchange→status with **zero bespoke protocol code** — demonstrated by a new example under
   `sdk/js/examples/` (or a consumer test) exercising `issueToken` → `verifyToken`,

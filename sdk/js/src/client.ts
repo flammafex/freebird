@@ -88,8 +88,8 @@ export class FreebirdClient {
    * Issues a batch of anonymous V4 tokens.
    *
    * `msgs` determines how many tokens to issue (one per element; the element
-   * content is not part of the V4 input). Inputs larger than 10_000 are
-   * chunked into multiple requests. If any token fails, a
+   * content is not part of the V4 input). Requests are greedily chunked by
+   * exact UTF-8 JSON body size, subject to the 10,000-item ceiling. If any token fails, a
    * {@link BatchIssuanceError} is thrown carrying the per-token outcomes and
    * the successfully finalized tokens.
    */
@@ -165,7 +165,8 @@ export class FreebirdClient {
    * Each `msgs[i]` is the message to be blindly signed (typically the output of
    * `crypto.buildPublicBearerMessage(nonces[i], tokenKeyId, issuerId)`).
    * `opts.nonces[i]` and `opts.issuerId` are embedded in the returned pass.
-   * Inputs larger than 10_000 are chunked into multiple requests.
+   * Requests are greedily chunked by exact UTF-8 JSON body size, subject to
+   * the 10,000-item ceiling.
    */
   async issuePublicTokens(
     msgs: Uint8Array[],

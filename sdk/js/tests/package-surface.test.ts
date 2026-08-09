@@ -135,7 +135,7 @@ describe('SDK index and package surface', () => {
 
     const expected = JSON.stringify(runtimeExports);
     const cjsScript = `
-      const sdk = require('@freebird/sdk');
+      const sdk = require('@flammafex/freebird');
       const expected = ${JSON.stringify(expected)};
       if (JSON.stringify(Object.keys(sdk).sort()) !== expected) process.exit(1);
       if (typeof sdk.FreebirdClient !== 'function' || typeof sdk.crypto.blind !== 'function') process.exit(2);
@@ -143,7 +143,7 @@ describe('SDK index and package surface', () => {
     execFileSync(process.execPath, ['--eval', cjsScript], { cwd: packageRoot, stdio: 'pipe' });
 
     const esmScript = `
-      const sdk = await import('@freebird/sdk');
+      const sdk = await import('@flammafex/freebird');
       const expected = ${JSON.stringify(expected)};
       if (JSON.stringify(Object.keys(sdk).sort()) !== expected) process.exit(1);
       if (typeof sdk.FreebirdClient !== 'function' || typeof sdk.crypto.blind !== 'function') process.exit(2);

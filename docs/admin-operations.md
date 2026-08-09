@@ -59,6 +59,10 @@ WebAuthn operator routes are available in every build. When WebAuthn is not
 configured (no `WEBAUTHN_RP_ID` is set), the routes are still present but return
 a "WebAuthn not configured" error rather than disabled or empty state.
 
+WebAuthn credential management is admin-only. The public `/webauthn` router
+serves registration and authentication ceremonies but does not expose credential
+listing or deletion; use the authenticated `/admin/webauthn` routes below.
+
 | Action | Endpoint |
 | --- | --- |
 | Show attestation and AAGUID policy | `GET /admin/webauthn/policy` |

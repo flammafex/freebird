@@ -1,4 +1,4 @@
-import sdk = require('@freebird/sdk');
+import sdk = require('@flammafex/freebird');
 import type {
   BatchVerifyResp,
   ClientConfig,
@@ -9,7 +9,7 @@ import type {
   RsaBlindState,
   TokenStore,
   VerifyResp,
-} from '@freebird/sdk';
+} from '@flammafex/freebird';
 
 const config: ClientConfig = {
   issuerUrl: 'https://issuer.example',

@@ -21,6 +21,9 @@ use freebird_issuer::{
         invitation::{InvitationConfig, InvitationSystem},
         multi_party_vouching::{MultiPartyVouchingConfig, MultiPartyVouchingSystem},
     },
+    webauthn::{
+        router as webauthn_router, CredentialStore, InMemoryCredStore, WebAuthnCtx, WebAuthnState,
+    },
 };
 use p256::ecdsa::{signature::Signer, Signature, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
@@ -55,6 +58,23 @@ async fn build_admin_router_with_options(
     allow_unsafe_v4_rotation: bool,
     behind_proxy: bool,
     require_tls: bool,
+) -> Result<AdminHarness> {
+    build_admin_router_with_store(
+        vouching,
+        allow_unsafe_v4_rotation,
+        behind_proxy,
+        require_tls,
+        None,
+    )
+    .await
+}
+
+async fn build_admin_router_with_store(
+    vouching: Option<Arc<MultiPartyVouchingSystem>>,
+    allow_unsafe_v4_rotation: bool,
+    behind_proxy: bool,
+    require_tls: bool,
+    webauthn_store: Option<CredentialStore>,
 ) -> Result<AdminHarness> {
     let tmp = tempfile::tempdir()?;
 
@@ -126,7 +146,7 @@ async fn build_admin_router_with_options(
         behind_proxy,
         require_tls,
         allow_unsafe_v4_rotation,
-        None, // webauthn_store: WebAuthn not configured in this harness
+        webauthn_store,
         config_summary,
     );
 
@@ -678,6 +698,72 @@ async fn admin_representative_error_bodies_are_stable() -> Result<()> {
         assert_eq!(status, expected_status, "unexpected status for {path}");
         assert_eq!(body, expected_body, "unexpected body for {path}");
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn webauthn_credential_management_is_contained_to_authenticated_admin_routes() -> Result<()> {
+    let store = CredentialStore::InMemory(InMemoryCredStore::new());
+    let admin =
+        build_admin_router_with_store(None, true, false, false, Some(store.clone())).await?;
+    let webauthn_context = WebAuthnCtx::new(
+        "localhost".to_string(),
+        "Freebird integration test".to_string(),
+        "http://localhost:8081".to_string(),
+    )?;
+    let public = webauthn_router(WebAuthnState::new(webauthn_context, store, false));
+
+    for (method, path) in [
+        (Method::GET, "/credentials/alice"),
+        (Method::DELETE, "/credentials/AQ"),
+        (Method::GET, "/admin/credentials"),
+    ] {
+        let (status, _, _) =
+            dispatch_admin_request(&public, method.clone(), path, json!({}), None, None, None)
+                .await?;
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "public WebAuthn router exposed {method} {path}"
+        );
+    }
+
+    for (method, path) in [
+        (Method::GET, "/webauthn/credentials"),
+        (Method::DELETE, "/webauthn/credentials/AQ"),
+    ] {
+        let (status, _, _) = dispatch_admin_request(
+            &admin.router,
+            method.clone(),
+            path,
+            json!({}),
+            None,
+            None,
+            None,
+        )
+        .await?;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "unauthenticated WebAuthn admin route was accepted: {method} {path}"
+        );
+    }
+
+    let (status, body) =
+        admin_request(&admin.router, Method::GET, "/webauthn/credentials", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["total"], 0);
+    assert_eq!(body["credentials"], json!([]));
+
+    let (status, _) = admin_request(
+        &admin.router,
+        Method::DELETE,
+        "/webauthn/credentials/AQ",
+        None,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     Ok(())
 }

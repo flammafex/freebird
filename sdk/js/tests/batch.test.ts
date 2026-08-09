@@ -7,10 +7,10 @@ vi.mock('../src/crypto/voprf.js', () => ({
   finalize: vi.fn(() => new Uint8Array([6, 7])),
   buildScopeDigest: vi.fn(() => new Uint8Array([1, 2, 3])),
   buildPrivateTokenInput: vi.fn(() => new Uint8Array([8])),
-  buildRedemptionToken: vi.fn(() => new Uint8Array([9, 8, 7])),
+  buildRedemptionToken: vi.fn((nonce: Uint8Array) => nonce.slice()),
   parseRedemptionToken: vi.fn(),
   tokenKeyIdFromHex: vi.fn(() => new Uint8Array(32)),
-  buildPublicBearerPass: vi.fn(() => new Uint8Array([1, 2, 3])),
+  buildPublicBearerPass: vi.fn((nonce: Uint8Array) => nonce.slice()),
   parsePublicBearerPass: vi.fn(),
   tokenKeyIdFromSpki: vi.fn(),
   tokenKeyIdToHex: vi.fn(),
@@ -69,6 +69,21 @@ function json(body: unknown, status = 200): Response {
     status,
     headers: { 'Content-Type': 'application/json' },
   });
+}
+
+const BATCH_BODY_LIMIT = 60 * 1024;
+
+function jsonBytes(body: unknown): number {
+  return new TextEncoder().encode(JSON.stringify(body)).byteLength;
+}
+
+function requestBodies(fetchMock: ReturnType<typeof vi.fn>, path: string): { raw: string; body: any }[] {
+  return fetchMock.mock.calls
+    .filter(([url]) => url === `https://issuer.example${path}`)
+    .map(([, init]) => {
+      const raw = String((init as RequestInit).body);
+      return { raw, body: JSON.parse(raw) };
+    });
 }
 
 function client(config: ConstructorParameters<typeof FreebirdClient>[0] = {
@@ -415,5 +430,200 @@ describe('issuePublicTokens (V5 batch)', () => {
     expect(bindings).toEqual([
       buildBatchBinding('public-issue-batch', 'issuer:test', body.blinded_msgs),
     ]);
+  });
+
+  it('applies the byte budget to current-key V5 batches without losing nonce order', async () => {
+    const nonces = Array.from({ length: 10_005 }, (_, index) => {
+      const nonce = new Uint8Array(32);
+      nonce.fill(index);
+      return nonce;
+    });
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === 'https://issuer.example/.well-known/issuer') return json(issuerMetadata);
+      if (url === 'https://issuer.example/.well-known/keys') return json(keyDiscoveryMetadata);
+      if (url === 'https://issuer.example/v1/public/issue/batch') {
+        const body = JSON.parse(String(init?.body)) as { blinded_msgs: string[] };
+        return json({
+          blind_signatures: body.blinded_msgs.map(() => 'AQID'),
+          token_key_id: 'a'.repeat(64), issuer_id: 'issuer:test',
+          successful: body.blinded_msgs.length, failed: 0,
+          processing_time_ms: 1, throughput: body.blinded_msgs.length,
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const passes = await client({ issuerUrl: 'https://issuer.example' })
+      .issuePublicTokensForCurrentKey(nonces, { proofFactory: () => ({ type: 'none' }) });
+    const bodies = requestBodies(fetchMock, '/v1/public/issue/batch');
+
+    expect(bodies.length).toBeGreaterThan(1);
+    expect(bodies.reduce((sum, request) => sum + request.body.blinded_msgs.length, 0)).toBe(10_005);
+    expect(bodies.every(({ raw }) => new TextEncoder().encode(raw).byteLength <= BATCH_BODY_LIMIT)).toBe(true);
+    expect(passes.slice(0, 20)).toEqual(nonces.slice(0, 20));
+  });
+
+  it('rejects a current-key fixed proof with the wrong binding before POST', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json(issuerMetadata))
+      .mockResolvedValueOnce(json(keyDiscoveryMetadata));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(client({ issuerUrl: 'https://issuer.example' }).issuePublicTokensForCurrentKey(
+      [new Uint8Array(32)],
+      {
+        sybilProof: {
+          type: 'proof_of_work', nonce: 0, input: 'wrong-binding', timestamp: 1,
+        },
+      },
+    )).rejects.toMatchObject({ code: 'issuance' });
+    expect(fetchMock.mock.calls.filter(([url]) => url === 'https://issuer.example/v1/public/issue/batch'))
+      .toHaveLength(0);
+  });
+});
+
+describe('exact UTF-8 batch body budgets', () => {
+  it('greedily budgets V4 bodies including context and a multibyte Sybil proof', async () => {
+    let nonceValue = 0;
+    vi.stubGlobal('crypto', {
+      getRandomValues: (bytes: Uint8Array) => {
+        bytes.fill(nonceValue++);
+        return bytes;
+      },
+    });
+    const proof = { type: 'registered_user' as const, user_id: '参加者'.repeat(2_000) };
+    const ctxB64 = 'é'.repeat(1_000);
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === 'https://issuer.example/.well-known/issuer') return json(issuerMetadata);
+      if (url === 'https://verifier.example/.well-known/verifier') return json(verifierMetadata);
+      if (url === 'https://issuer.example/v1/oprf/issue/batch') {
+        const body = JSON.parse(String(init?.body)) as { blinded_elements: string[] };
+        return json({
+          results: body.blinded_elements.map((_, index) => ({
+            status: 'success', token: `eval-${index}`, kid: 'kid-1', issuer_id: 'issuer:test',
+          })),
+          successful: body.blinded_elements.length,
+          failed: 0,
+          processing_time_ms: 1,
+          throughput: body.blinded_elements.length,
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const tokens = await client().issueTokens(
+      Array.from({ length: 9_000 }, () => new Uint8Array(32)),
+      { proofFactory: () => proof, ctxB64 },
+    );
+    const bodies = requestBodies(fetchMock, '/v1/oprf/issue/batch');
+
+    expect(bodies.length).toBeGreaterThan(1);
+    expect(tokens).toHaveLength(9_000);
+    expect(bodies.reduce((sum, request) => sum + request.body.blinded_elements.length, 0)).toBe(9_000);
+    expect(bodies.every(({ raw }) => new TextEncoder().encode(raw).byteLength <= BATCH_BODY_LIMIT)).toBe(true);
+    for (let index = 0; index < bodies.length; index++) {
+      const request = bodies[index];
+      expect(request.body.ctx_b64).toBe(ctxB64);
+      expect(request.body.sybil_proof).toEqual(proof);
+      if (index < bodies.length - 1) {
+        const larger = {
+          ...request.body,
+          blinded_elements: [...request.body.blinded_elements, 'BAU'],
+        };
+        expect(jsonBytes(larger)).toBeGreaterThan(BATCH_BODY_LIMIT);
+      }
+    }
+    // The finalized V4 output is the nonce in this test double, proving that
+    // greedy chunking does not reorder results across requests.
+    expect(tokens.map((token) => token.tokenValue).slice(0, 4)).toEqual([
+      'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      'AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE',
+      'AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI',
+      'AwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwM',
+    ]);
+  });
+
+  it('greedily budgets V5 bodies including token key and multibyte Sybil proof while aligning nonces', async () => {
+    const proof = { type: 'registered_user' as const, user_id: '利用者'.repeat(2_000) };
+    const nonces = Array.from({ length: 9_000 }, (_, index) => {
+      const nonce = new Uint8Array(32);
+      nonce.fill(index);
+      return nonce;
+    });
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === 'https://issuer.example/.well-known/keys') return json(keyDiscoveryMetadata);
+      if (url === 'https://issuer.example/v1/public/issue/batch') {
+        const body = JSON.parse(String(init?.body)) as { blinded_msgs: string[] };
+        return json({
+          blind_signatures: body.blinded_msgs.map(() => 'AQID'),
+          token_key_id: 'a'.repeat(64),
+          issuer_id: 'issuer:test',
+          successful: body.blinded_msgs.length,
+          failed: 0,
+          processing_time_ms: 1,
+          throughput: body.blinded_msgs.length,
+        });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const passes = await client({ issuerUrl: 'https://issuer.example' }).issuePublicTokens(
+      Array.from({ length: 9_000 }, () => new Uint8Array(48)),
+      {
+        tokenKeyId: 'a'.repeat(64), issuerId: 'issuer:test', nonces,
+        proofFactory: () => proof,
+      },
+    );
+    const bodies = requestBodies(fetchMock, '/v1/public/issue/batch');
+
+    expect(bodies.length).toBeGreaterThan(1);
+    expect(passes).toHaveLength(9_000);
+    expect(bodies.reduce((sum, request) => sum + request.body.blinded_msgs.length, 0)).toBe(9_000);
+    expect(bodies.every(({ raw }) => new TextEncoder().encode(raw).byteLength <= BATCH_BODY_LIMIT)).toBe(true);
+    for (let index = 0; index < bodies.length; index++) {
+      const request = bodies[index];
+      expect(request.body.token_key_id).toBe('a'.repeat(64));
+      expect(request.body.sybil_proof).toEqual(proof);
+      if (index < bodies.length - 1) {
+        const larger = {
+          ...request.body,
+          blinded_msgs: [...request.body.blinded_msgs, 'AQI'],
+        };
+        expect(jsonBytes(larger)).toBeGreaterThan(BATCH_BODY_LIMIT);
+      }
+    }
+    expect(passes.slice(0, 4).map((pass) => Array.from(pass))).toEqual(
+      nonces.slice(0, 4).map((nonce) => Array.from(nonce)),
+    );
+  });
+
+  it('rejects an oversized single fixed request without posting it', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(json(issuerMetadata))
+      .mockResolvedValueOnce(json(verifierMetadata));
+    vi.stubGlobal('fetch', fetchMock);
+    const oversizedProof = { type: 'registered_user' as const, user_id: 'x'.repeat(BATCH_BODY_LIMIT) };
+
+    await expect(client().issueTokens([new Uint8Array(32)], { sybilProof: oversizedProof }))
+      .rejects.toThrow('single batch item exceeds');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls.filter(([url]) => url === 'https://issuer.example/v1/oprf/issue/batch')).toHaveLength(0);
+
+    const v5Fetch = vi.fn().mockResolvedValueOnce(json(keyDiscoveryMetadata));
+    vi.stubGlobal('fetch', v5Fetch);
+    await expect(client({ issuerUrl: 'https://issuer.example' }).issuePublicTokens(
+      [new Uint8Array(48)],
+      {
+        tokenKeyId: 'a'.repeat(64),
+        issuerId: 'issuer:test',
+        nonces: [new Uint8Array(32)],
+        sybilProof: oversizedProof,
+      },
+    )).rejects.toThrow('single batch item exceeds');
+    expect(v5Fetch).not.toHaveBeenCalled();
+    expect(v5Fetch.mock.calls.filter(([url]) => url === 'https://issuer.example/v1/public/issue/batch')).toHaveLength(0);
   });
 });

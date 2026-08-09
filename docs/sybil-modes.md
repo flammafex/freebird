@@ -4,7 +4,8 @@ Freebird's Sybil layer is an issuer admission system. It decides whether a
 client may receive a blinded issuance response. It is not a universal bot
 detection system and does not prove that a client is a unique human.
 
-Configure the mode with `SYBIL_RESISTANCE`.
+Configure the mode with `SYBIL_RESISTANCE`; it must be set explicitly at
+startup. Use `SYBIL_RESISTANCE=none` only for a deliberate no-checker opt-out.
 
 ## Summary
 
@@ -91,6 +92,8 @@ public issuance bypass.
 
 `webauthn` requires users to register and authenticate with WebAuthn before
 issuance. `WEBAUTHN_PROOF_SECRET` is required when WebAuthn is enabled.
+That requirement applies even when the WebAuthn subsystem is enabled for its
+routes but WebAuthn is not selected as the Sybil mechanism.
 
 Hardware/device attestation is available but policy-gated:
 

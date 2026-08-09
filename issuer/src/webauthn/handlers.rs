@@ -168,7 +168,7 @@ impl SessionData {
 // --- Router Factory ---
 
 pub fn router(state: Arc<WebAuthnState>) -> Router {
-    use super::discoverable::{admin_router, discoverable_router};
+    use super::discoverable::discoverable_router;
 
     let use_attestation = std::env::var("WEBAUTHN_REQUIRE_ATTESTATION")
         .unwrap_or_else(|_| "false".to_string())
@@ -205,9 +205,7 @@ pub fn router(state: Arc<WebAuthnState>) -> Router {
     };
 
     // Merge discoverable credential routes
-    base_router
-        .merge(discoverable_router(state.clone()))
-        .merge(admin_router(state))
+    base_router.merge(discoverable_router(state))
 }
 
 // --- Handlers ---
@@ -458,6 +456,100 @@ pub async fn finish_registration(
         subject_hash,
         registered_at: chrono::Utc::now().timestamp(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{router, WebAuthnState};
+    use crate::webauthn::ctx::WebAuthnCtx;
+    use crate::webauthn::store::{CredentialStore, InMemoryCredStore};
+    use axum::Router;
+    use reqwest::{Client, Method, StatusCode};
+    use tokio::task::JoinHandle;
+
+    fn test_router() -> Router {
+        let state = WebAuthnState::new(
+            WebAuthnCtx::test_context(),
+            CredentialStore::InMemory(InMemoryCredStore::new()),
+            false,
+        );
+        router(state)
+    }
+
+    async fn test_server() -> (String, JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("test server address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, test_router())
+                .await
+                .expect("test server should run");
+        });
+        (format!("http://{address}"), server)
+    }
+
+    async fn status(client: &Client, base_url: &str, method: Method, uri: &str) -> StatusCode {
+        client
+            .request(method, format!("{base_url}{uri}"))
+            .send()
+            .await
+            .expect("test request should succeed")
+            .status()
+    }
+
+    #[tokio::test]
+    async fn public_router_does_not_expose_credential_management() {
+        let client = Client::new();
+        let (base_url, server) = test_server().await;
+
+        for (method, uri) in [
+            (Method::GET, "/credentials/alice"),
+            (Method::DELETE, "/credentials/credential-id"),
+            (Method::GET, "/admin/credentials"),
+        ] {
+            assert_eq!(
+                status(&client, &base_url, method.clone(), uri).await,
+                StatusCode::NOT_FOUND,
+                "public WebAuthn router unexpectedly exposes {method} {uri}"
+            );
+        }
+
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn public_router_retains_ceremony_routes() {
+        let client = Client::new();
+        let (base_url, server) = test_server().await;
+
+        for uri in ["/", "/app", "/register", "/authenticate", "/info"] {
+            assert_eq!(
+                status(&client, &base_url, Method::GET, uri).await,
+                StatusCode::OK,
+                "public WebAuthn route is unavailable: GET {uri}"
+            );
+        }
+
+        for uri in [
+            "/register/start",
+            "/register/finish",
+            "/authenticate/start",
+            "/authenticate/finish",
+            "/register/resident/start",
+            "/register/resident/finish",
+            "/authenticate/discoverable/start",
+            "/authenticate/discoverable/finish",
+        ] {
+            assert_eq!(
+                status(&client, &base_url, Method::GET, uri).await,
+                StatusCode::METHOD_NOT_ALLOWED,
+                "public WebAuthn ceremony route is unavailable: POST {uri}"
+            );
+        }
+
+        server.abort();
+    }
 }
 // ============================================================================
 // Authentication Flow

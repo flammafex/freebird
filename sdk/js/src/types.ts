@@ -47,6 +47,14 @@ export interface ClientConfig {
    * `fetch` when unset.
    */
   fetch?: typeof fetch;
+  /**
+   * Maximum UTF-8 JSON body size for V4/V5 batch issuance requests.
+   *
+   * The default is 60 KiB. The value may be lowered but not raised above the
+   * SDK ceiling. Requests are greedily split before the existing 10,000-item
+   * protocol ceiling is reached when necessary.
+   */
+  batchBodyLimitBytes?: number;
 }
 
 /**

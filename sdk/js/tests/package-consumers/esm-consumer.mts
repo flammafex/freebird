@@ -10,7 +10,7 @@ import {
   prepareExchangePasses,
   pollExchangeStatus,
   pollGraphIssuanceStatus,
-} from '@freebird/sdk';
+} from '@flammafex/freebird';
 import type {
   BatchVerifyResp,
   ClientConfig,
@@ -24,7 +24,7 @@ import type {
   RsaBlindState,
   TokenStore,
   VerifyResp,
-} from '@freebird/sdk';
+} from '@flammafex/freebird';
 
 const config: ClientConfig = {
   issuerUrl: 'https://issuer.example',
@@ -75,7 +75,7 @@ const locallyVerified: Promise<boolean> = client.verifyPublicBearerPassLocally(
     spend_policy: 'single_use',
   },
 );
-const refreshed: Promise<import('@freebird/sdk').KeyDiscoveryMetadata> =
+const refreshed: Promise<import('@flammafex/freebird').KeyDiscoveryMetadata> =
   client.refreshKeyDiscoveryMetadata();
 const opId: string = client.generateOperationId();
 const capability: string = client.generateStatusCapability();

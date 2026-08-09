@@ -1,9 +1,33 @@
 # Changelog
 
-All notable changes to `@freebird/sdk` are documented in this file.
+All notable changes to `@flammafex/freebird` are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.9.0] - 2026-08-08
+
+First public SDK release. This version is aligned with the Freebird Rust
+workspace's `0.9.0` release for its initial publication.
+
+### Added
+
+- V4 and V5 batch issuance now uses exact UTF-8 JSON byte-budget greedy
+  chunking, with a default 60 KiB body limit and the existing 10,000-item
+  ceiling.
+- `ClientConfig.batchBodyLimitBytes` allows deployments with a smaller
+  transport body limit to override the 60 KiB default; the SDK ceiling remains
+  60 KiB.
+- Live service coverage can be enabled with explicit
+  `FREEBIRD_SDK_ISSUER_URL` and `FREEBIRD_SDK_VERIFIER_URL` environment URLs.
+
+### Compatibility
+
+- Batch ordering, retry behavior, request-bound proof factories, V5 nonce
+  alignment, and response handling remain unchanged.
+- This alignment is only for the first public release. The JS SDK retains its
+  independent semver policy and future SDK versions are not required to match
+  Rust workspace versions.
 
 ## [0.4.0] - 2026-08-08
 
@@ -92,7 +116,7 @@ assembly, durable polling, token persistence, and the typed error hierarchy.
 
 ## [0.1.0] - 2026-08-05
 
-Initial publishable release of the Freebird TypeScript SDK.
+Initial development release of the Freebird TypeScript SDK.
 
 ### Added
 
@@ -131,3 +155,4 @@ Initial publishable release of the Freebird TypeScript SDK.
 
 [0.2.0]: https://git.carpocratian.org/sibyl/freebird
 [0.1.0]: https://git.carpocratian.org/sibyl/freebird
+[0.9.0]: https://git.carpocratian.org/sibyl/freebird

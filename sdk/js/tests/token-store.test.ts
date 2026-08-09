@@ -66,7 +66,7 @@ describe('MemoryTokenStore', () => {
 });
 
 describe('StorageTokenStore (Node filesystem)', () => {
-  const dir = '/tmp/freebird-sdk-token-store-test';
+  const dir = '/tmp/flammafex-freebird-token-store-test';
   const path = `${dir}/tokens.json`;
 
   afterEach(async () => {

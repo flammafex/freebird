@@ -23,7 +23,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tracing::{info, warn};
+use tracing::info;
 
 pub(super) struct SybilAuditRuntime {
     pub(super) audit_log: Arc<AuditLog>,
@@ -149,12 +149,83 @@ pub(super) fn parse_progressive_trust_levels(
     Ok(parsed)
 }
 
+fn validate_runtime_sybil_selection(
+    mode: &str,
+    combined_mechanisms: &[String],
+    combined_mode: &str,
+    webauthn_available: bool,
+) -> Result<()> {
+    match mode {
+        "none"
+        | "pow"
+        | "proof_of_work"
+        | "rate_limit"
+        | "invitation"
+        | "progressive_trust"
+        | "social_graph"
+        | "proof_of_diversity"
+        | "multi_party_vouching" => Ok(()),
+        "webauthn" => {
+            if webauthn_available {
+                Ok(())
+            } else {
+                bail!("invalid Sybil resistance configuration (sensitive values redacted): SYBIL_RESISTANCE=webauthn requires an available WebAuthn subsystem")
+            }
+        }
+        "combined" => {
+            if !matches!(combined_mode.to_ascii_lowercase().as_str(), "or" | "and" | "threshold")
+            {
+                bail!("invalid Sybil resistance configuration (sensitive values redacted): SYBIL_COMBINED_MODE must be one of or, and, or threshold");
+            }
+
+            if combined_mechanisms.is_empty()
+                || combined_mechanisms
+                    .iter()
+                    .all(|mechanism| mechanism.trim().is_empty())
+            {
+                bail!("invalid Sybil resistance configuration (sensitive values redacted): SYBIL_COMBINED_MECHANISMS must contain at least one mechanism");
+            }
+
+            for mechanism_name in combined_mechanisms {
+                match mechanism_name.trim() {
+                    "pow"
+                    | "proof_of_work"
+                    | "rate_limit"
+                    | "invitation"
+                    | "progressive_trust"
+                    | "social_graph"
+                    | "proof_of_diversity"
+                    | "multi_party_vouching" => {}
+                    "webauthn" if webauthn_available => {}
+                    "webauthn" => {
+                        bail!("invalid Sybil resistance configuration (sensitive values redacted): SYBIL_COMBINED_MECHANISMS includes WebAuthn, but the WebAuthn subsystem is unavailable")
+                    }
+                    _ => {
+                        bail!("invalid Sybil resistance configuration (sensitive values redacted): unknown mechanism in SYBIL_COMBINED_MECHANISMS")
+                    }
+                }
+            }
+            Ok(())
+        }
+        _ => bail!(
+            "invalid Sybil resistance configuration (sensitive values redacted): unknown SYBIL_RESISTANCE mode"
+        ),
+    }
+}
+
 impl SybilAuditRuntime {
     pub(super) async fn build(
         config: &Config,
         voprf: Arc<crate::multi_key_voprf::MultiKeyVoprfCore>,
         webauthn_state: &Option<Arc<crate::webauthn::WebAuthnState>>,
     ) -> Result<Self> {
+        validate_runtime_sybil_selection(
+            &config.sybil_config.mode,
+            &config.sybil_config.combined_mechanisms,
+            &config.sybil_config.combined_mode,
+            webauthn_state.is_some(),
+        )?;
+
         // 3. Audit Log Setup
         let audit_config = AuditConfig {
             persistence_path: config.audit_log_path.clone(),
@@ -188,6 +259,7 @@ impl SybilAuditRuntime {
             .mode
             .as_str()
         {
+            "none" => None,
             "pow" | "proof_of_work" => Some(Arc::new(ProofOfWork::with_replay_store(
                 config.sybil_config.pow_difficulty,
                 sybil_replay_store.clone(),
@@ -235,8 +307,7 @@ impl SybilAuditRuntime {
                         sybil_replay_store.clone(),
                     )))
                 } else {
-                    warn!("⚠️  WebAuthn Sybil resistance selected but not configured");
-                    None
+                    bail!("invalid Sybil resistance configuration (sensitive values redacted): SYBIL_RESISTANCE=webauthn requires an available WebAuthn subsystem")
                 }
             }
             "progressive_trust" => {
@@ -435,7 +506,7 @@ impl SybilAuditRuntime {
                                     ),
                                 ));
                             } else {
-                                warn!("⚠️  WebAuthn requested in combined mode but not configured, skipping");
+                                bail!("invalid Sybil resistance configuration (sensitive values redacted): SYBIL_COMBINED_MECHANISMS includes WebAuthn, but the WebAuthn subsystem is unavailable")
                             }
                         }
                         "progressive_trust" => {
@@ -595,57 +666,54 @@ impl SybilAuditRuntime {
                             multi_party_vouching_system = Some(sys.clone());
                             mechanisms.push(sys);
                         }
-                        unknown => {
-                            warn!(
-                                "⚠️  Unknown mechanism '{}' in SYBIL_COMBINED_MECHANISMS, skipping",
-                                unknown
-                            );
+                        _ => {
+                            bail!("invalid Sybil resistance configuration (sensitive values redacted): unknown mechanism in SYBIL_COMBINED_MECHANISMS");
                         }
                     }
                 }
 
-                if mechanisms.is_empty() {
-                    warn!("⚠️  No valid mechanisms configured for combined mode");
-                    None
-                } else {
-                    // Create the appropriate combiner based on mode
-                    let combiner: Arc<dyn SybilResistance> =
-                        match config.sybil_config.combined_mode.to_lowercase().as_str() {
-                            "or" => {
-                                info!(
-                                    "✅ Sybil resistance: Combined OR mode with {} mechanisms",
-                                    mechanisms.len()
-                                );
-                                Arc::new(CombinedOr::new(mechanisms))
-                            }
-                            "and" => {
-                                info!(
-                                    "✅ Sybil resistance: Combined AND mode with {} mechanisms",
-                                    mechanisms.len()
-                                );
-                                Arc::new(CombinedAnd::new(mechanisms))
-                            }
-                            "threshold" => {
-                                let threshold = config.sybil_config.combined_threshold as usize;
-                                info!(
-                                "✅ Sybil resistance: Combined Threshold mode ({}/{} mechanisms)",
-                                threshold,
-                                mechanisms.len()
-                            );
-                                Arc::new(
-                                    CombinedThreshold::new(mechanisms, threshold)
-                                        .context("Failed to create threshold combiner")?,
-                                )
-                            }
-                            unknown => {
-                                warn!("⚠️  Unknown combined mode '{}', defaulting to OR", unknown);
-                                Arc::new(CombinedOr::new(mechanisms))
-                            }
-                        };
-                    Some(combiner)
-                }
+                // Create the appropriate combiner based on the validated mode.
+                let combiner: Arc<dyn SybilResistance> = match config
+                    .sybil_config
+                    .combined_mode
+                    .to_ascii_lowercase()
+                    .as_str()
+                {
+                    "or" => {
+                        info!(
+                            "✅ Sybil resistance: Combined OR mode with {} mechanisms",
+                            mechanisms.len()
+                        );
+                        Arc::new(CombinedOr::new(mechanisms))
+                    }
+                    "and" => {
+                        info!(
+                            "✅ Sybil resistance: Combined AND mode with {} mechanisms",
+                            mechanisms.len()
+                        );
+                        Arc::new(CombinedAnd::new(mechanisms))
+                    }
+                    "threshold" => {
+                        let threshold = config.sybil_config.combined_threshold as usize;
+                        info!(
+                            "✅ Sybil resistance: Combined Threshold mode ({}/{} mechanisms)",
+                            threshold,
+                            mechanisms.len()
+                        );
+                        Arc::new(
+                            CombinedThreshold::new(mechanisms, threshold)
+                                .context("Failed to create threshold combiner")?,
+                        )
+                    }
+                    _ => bail!(
+                        "invalid Sybil resistance configuration (sensitive values redacted): SYBIL_COMBINED_MODE must be one of or, and, or threshold"
+                    ),
+                };
+                Some(combiner)
             }
-            _ => None,
+            _ => bail!(
+                "invalid Sybil resistance configuration (sensitive values redacted): unknown SYBIL_RESISTANCE mode"
+            ),
         };
 
         if invitation_system.is_none() {
@@ -767,5 +835,84 @@ impl SybilAuditRuntime {
             storage_paths,
             shutdown,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_runtime_sybil_selection;
+
+    fn error_text(
+        mode: &str,
+        mechanisms: &[&str],
+        combined_mode: &str,
+        webauthn_available: bool,
+    ) -> String {
+        let mechanisms = mechanisms
+            .iter()
+            .map(|mechanism| (*mechanism).to_string())
+            .collect::<Vec<_>>();
+        validate_runtime_sybil_selection(mode, &mechanisms, combined_mode, webauthn_available)
+            .expect_err("invalid Sybil configuration should fail")
+            .to_string()
+    }
+
+    #[test]
+    fn explicit_none_is_the_only_permissive_selection() {
+        validate_runtime_sybil_selection("none", &[], "or", false)
+            .expect("explicit none should permit no checker");
+    }
+
+    #[test]
+    fn rejects_unknown_top_level_mode_with_redacted_context() {
+        let error = error_text("unknown-secret-like-mode", &[], "or", false);
+        assert!(error.contains("unknown SYBIL_RESISTANCE mode"));
+        assert!(error.contains("sensitive values redacted"));
+        assert!(!error.contains("unknown-secret-like-mode"));
+    }
+
+    #[test]
+    fn rejects_selected_webauthn_when_unavailable() {
+        let error = error_text("webauthn", &[], "or", false);
+        assert!(error.contains("SYBIL_RESISTANCE=webauthn"));
+        assert!(error.contains("available WebAuthn subsystem"));
+    }
+
+    #[test]
+    fn rejects_unknown_combined_mechanism() {
+        let error = error_text("combined", &["pow", "not-a-mechanism"], "or", false);
+        assert!(error.contains("unknown mechanism in SYBIL_COMBINED_MECHANISMS"));
+    }
+
+    #[test]
+    fn rejects_unavailable_combined_webauthn() {
+        let error = error_text("combined", &["webauthn"], "and", false);
+        assert!(error.contains("SYBIL_COMBINED_MECHANISMS includes WebAuthn"));
+        assert!(error.contains("subsystem is unavailable"));
+    }
+
+    #[test]
+    fn rejects_empty_effective_combined_set() {
+        let error = error_text("combined", &[], "or", false);
+        assert!(error.contains("SYBIL_COMBINED_MECHANISMS must contain at least one mechanism"));
+    }
+
+    #[test]
+    fn rejects_unknown_combined_mode() {
+        let error = error_text("combined", &["pow"], "not-a-combiner", false);
+        assert!(error.contains("SYBIL_COMBINED_MODE must be one of or, and, or threshold"));
+    }
+
+    #[test]
+    fn accepts_existing_combined_modes_and_mechanisms() {
+        for mode in ["or", "and", "threshold", "OR", "And", "THRESHOLD"] {
+            validate_runtime_sybil_selection(
+                "combined",
+                &["pow".into(), "rate_limit".into()],
+                mode,
+                false,
+            )
+            .expect("existing combined configuration should remain valid");
+        }
     }
 }

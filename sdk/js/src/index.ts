@@ -2,7 +2,7 @@
  * Freebird SDK
  * Anonymous authentication using VOPRF (Verifiable Oblivious Pseudorandom Function).
  *
- * @module @freebird/sdk
+ * @module @flammafex/freebird
  */
 
 // Export the main client class

@@ -1,4 +1,4 @@
-# @freebird/sdk
+# @flammafex/freebird
 
 Anonymous authentication using VOPRF (Verifiable Oblivious Pseudorandom Function).
 This is the TypeScript client SDK for [Freebird](https://git.carpocratian.org/sibyl/freebird),
@@ -12,7 +12,7 @@ exchange), and policy-authorized graph-issuance flows.
 ## Install
 
 ```bash
-npm install @freebird/sdk
+npm install @flammafex/freebird
 ```
 
 The package ships dual ESM/CJS builds with TypeScript declarations. It has no
@@ -22,7 +22,7 @@ modern browsers and Node.js (>= 18) alike.
 ## Quick start
 
 ```ts
-import { FreebirdClient } from '@freebird/sdk';
+import { FreebirdClient } from '@flammafex/freebird';
 
 const client = new FreebirdClient({
   issuerUrl: 'https://issuer.example.com',
@@ -51,6 +51,8 @@ const valid = await client.verifyToken(token);
 | `tokenStore`    | no       | Optional persistent store for issued tokens (see `TokenStore` below).       |
 | `powDifficulty` | no       | Optional Proof-of-Work difficulty (leading zero bits) to mine when the      |
 |                 |          | issuer requires PoW Sybil resistance.                                       |
+| `batchBodyLimitBytes` | no  | Maximum UTF-8 JSON body size for V4/V5 batch issuance. Defaults to 60 KiB; |
+|                 |          | may be lowered, but never raised above the SDK's 60 KiB ceiling.             |
 
 ## Flows
 
@@ -127,7 +129,10 @@ const outcome = await client.issueGraphBlindSignature(request, statusCapability)
 
 Batch issuance options accept a typed `proofFactory({ binding })`. It is called
 once for each exact request payload, including a newly bound retry; a fixed
-request-bound proof is not reused across chunks.
+request-bound proof is not reused across chunks. V4 and V5 batch methods greedily
+chunk on the exact UTF-8 byte length of the emitted JSON body, including context,
+token-key, and Sybil-proof fields. A single item that cannot fit is rejected
+locally and is never posted.
 
 ## API surface
 
@@ -138,12 +143,12 @@ request-bound proof is not reused across chunks.
 | `init()` | Fetches the issuer's public key metadata. |
 | `issueToken(sybilProof?)` | Issues a single V4 anonymous token. |
 | `issueTokenWithProofFactory(proofFactory)` | Issues V4 with a fresh request-bound proof for each stale-key retry. |
-| `issueTokens(msgs, opts?)` | Issues a batch of V4 tokens (chunked above 10_000 inputs). Throws `BatchIssuanceError` on partial failure. |
+| `issueTokens(msgs, opts?)` | Issues a batch of V4 tokens (greedily chunked by exact UTF-8 JSON size, capped at 10,000 items). Throws `BatchIssuanceError` on partial failure. |
 | `issuePublicBlindSignature(blindedMsg, sybilProof?, tokenKeyId?)` | Requests a V5 public bearer blind signature. |
 | `issuePublicToken(msg, opts)` | Issues a complete V5 public bearer pass in one call (blinds, signs, unblinds). |
-| `issuePublicTokens(msgs, opts)` | Issues a batch of V5 public bearer passes. |
+| `issuePublicTokens(msgs, opts)` | Issues a batch of V5 public bearer passes (exact UTF-8 JSON byte-budget chunking, capped at 10,000 items). |
 | `issuePublicTokenForCurrentKey(opts?)` | Refreshes discovery, derives a V5 message for the current key, and safely retries one stale-key response. |
-| `issuePublicTokensForCurrentKey(nonces, opts?)` | Current-key V5 batch issuance with per-chunk rebinding and recovery. |
+| `issuePublicTokensForCurrentKey(nonces, opts?)` | Current-key V5 batch issuance with exact body-budget chunking, per-chunk rebinding, and recovery. |
 | `getKeyDiscoveryMetadata()` | Fetches the issuer's `/.well-known/keys` discovery metadata. |
 | `refreshKeyDiscoveryMetadata()` | Forces a fresh discovery fetch, bypassing the TTL cache. |
 
@@ -222,6 +227,19 @@ non-leaky message. Branch on the `code` rather than message text.
 | `PollTimeoutError` | `poll` | A polling operation exceeded its `timeoutMs` cap. |
 | `PollAbortedError` | `poll` | A polling operation was cancelled via its `AbortSignal`. |
 
+## Tests against live services
+
+The normal test suite uses protocol mocks. To run the direct service acceptance
+test, set both explicit service URLs:
+
+```bash
+FREEBIRD_SDK_ISSUER_URL=https://issuer.example \
+FREEBIRD_SDK_VERIFIER_URL=https://verifier.example \
+npm test -- --run tests/live-service.test.ts
+```
+
+When either variable is absent, the live test is skipped locally.
+
 ## Low-level `crypto` escape hatch
 
 For advanced use cases, the SDK exports a `crypto` namespace with the raw
@@ -229,7 +247,7 @@ protocol primitives, so you can blind/unblind and build/parse token wire
 formats without the client wrapper:
 
 ```ts
-import { crypto } from '@freebird/sdk';
+import { crypto } from '@flammafex/freebird';
 
 const { blinded, state } = crypto.blind(input);
 const token = crypto.buildRedemptionToken(/* ... */);
@@ -272,8 +290,10 @@ the core client:
 
 ## Versioning and compatibility
 
-The Rust workspace is versioned in lockstep (currently `0.9.0`). The JS SDK
-**follows its own semver** and is not forced to match the Rust release number.
+The first public JS SDK release is `0.9.0`, aligned with the Rust workspace
+release for initial publication. After that aligned first release, the JS SDK
+**follows its own independent semver** and is not forced to match Rust release
+numbers.
 
 Instead, each SDK release records the wire-format and API compatibility it was
 built against. See the [CHANGELOG](./CHANGELOG.md) for the compatibility notes

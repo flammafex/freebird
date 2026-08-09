@@ -83,6 +83,9 @@ jobs:
           sed -i 's/^SYBIL_RESISTANCE=.*/SYBIL_RESISTANCE=none/' .env
           docker compose up -d --build --wait
       - name: Run SDK tests
+        env:
+          FREEBIRD_SDK_ISSUER_URL: http://127.0.0.1:8081
+          FREEBIRD_SDK_VERIFIER_URL: http://127.0.0.1:8082
         run: npm test -- --run
       - name: Tear down SDK integration services
         if: always()

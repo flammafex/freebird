@@ -338,7 +338,7 @@ Issuer variables:
 | `KID` | derived | Optional key ID override; mismatched values are corrected with the derived prefix. |
 | `EPOCH_DURATION` | `1d` | Human-readable duration accepted. |
 | `EPOCH_RETENTION` | `2` | Number of previous epochs accepted. |
-| `SYBIL_RESISTANCE` | `none` | `none`, `invitation`, `pow`, `rate_limit`, `progressive_trust`, `proof_of_diversity`, `multi_party_vouching`, `social_graph`, `webauthn`, or `combined`. |
+| `SYBIL_RESISTANCE` | required | Set explicitly to `none` only for a deliberate no-checker opt-out; otherwise use `invitation`, `pow`, `rate_limit`, `progressive_trust`, `proof_of_diversity`, `multi_party_vouching`, `social_graph`, `webauthn`, or `combined`. |
 | `SYBIL_REPLAY_STORE` | `memory` | Replay store for accepted PoW, WebAuthn, vouching, and social-graph proofs. Use `redis` for public multi-instance or restart-safe issuers. |
 | `SYBIL_REPLAY_REDIS_URL` | none | Redis URL for `SYBIL_REPLAY_STORE=redis`; falls back to `REDIS_URL`. |
 | `SYBIL_REPLAY_KEY_PREFIX` | `freebird:sybil:replay` | Redis key prefix for Sybil replay records. |

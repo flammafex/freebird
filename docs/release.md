@@ -20,6 +20,121 @@ Pushing a `v*` tag starts two workflows:
   not log in to GHCR or build/push tag images until that gate succeeds. Main
   branch builds skip the tag-only gate and remain functional.
 
+Pushing a dedicated `sdk-v*` tag starts the `Publish @flammafex/freebird` workflow.
+It validates, packs, consumer-tests, and publishes the `@flammafex/freebird` npm
+package. It uses the protected `npm-publish` GitHub Environment and a granular
+npm automation token; it does not use OIDC or npm provenance.
+
+## npm SDK publishing
+
+The npm package is published from the exact release tag. The workflow runs
+credential-free `--ignore-scripts` install, lint, tests, build, and pack steps,
+checks `package.json`/`package-lock.json` name and version parity, and inspects
+the exact packed manifest and file list. It rejects the extracted packed version
+if it is already present in the npm registry. That same tarball is installed
+into a fresh temporary project and type-checked and executed through both its
+ESM and CommonJS entry points before it can be published. The publish step is
+the only step that receives `NPM_TOKEN`, and publishes only the inspected
+tarball with `--ignore-scripts`.
+
+### Maintainer setup
+
+1. **Create the npm scope and package ownership.** An npm maintainer must create
+   or control the `flammafex` npm organization/account at <https://www.npmjs.com/org>
+   and ensure the maintainer account is an owner (or has publish access) for the
+   `@flammafex` scope. The first publication is public and uses the package name
+   `@flammafex/freebird`; do not rename the scope or package after publishing.
+2. **Create a granular automation token.** In npm, open the maintainer account's
+   **Access Tokens** page and create a **Granular Access Token** with the
+   **Automation** token type. Grant publish access only to the `@flammafex` scope
+   (or, after the first package exists, only to `@flammafex/freebird`), choose an
+   explicit expiration, and use the npm organization's required 2FA/automation
+   policy. Copy the token when npm shows it; it cannot be recovered later.
+   Do not use an npm classic token, a developer token, or a GitHub OIDC token.
+3. **Protect the GitHub secret.** In the repository, open **Settings →
+   Environments → New environment**, name it exactly `npm-publish`, add required
+   reviewers. If using selected branch/tag rules, allow `main` for the documented
+   first-release dispatch and `sdk-v*.*.*` for future tag-triggered releases. Add
+   an environment secret named exactly `NPM_TOKEN` and paste the granular
+   automation token into it. Do not put this value in the repository's ordinary
+   secrets, source files, `.npmrc`, or workflow text. The workflow requests only
+   `contents: read`; it intentionally has no `id-token` permission and sets npm
+   provenance to `false`.
+
+### Required GitHub protections
+
+Before creating an SDK release tag, configure all of the following:
+
+- Protect `main`: require pull requests, prevent direct and force pushes, and
+  require the exact CI checks `build`, `test`, `feature-tests`, `lint`,
+  `security`, `javascript-sdk`, `repository-hygiene`, and `compose-smoke`.
+- Create a GitHub repository ruleset targeting `sdk-v*.*.*`. Restrict tag
+  creation to release maintainers, block tag updates and deletions, and block
+  force pushes. Once `sdk-v0.9.0` is created, do not retarget or recreate it.
+- Require the `npm-publish` Environment for the publishing job, with required
+  reviewers and the `NPM_TOKEN` environment secret. Allow `main` only because
+  manual dispatch is constrained to protected `main`; tag pushes use
+  `sdk-v*.*.*`. Do not grant `id-token` permissions or enable npm provenance.
+
+The workflow resolves the tag to one commit SHA, verifies that it is ancestral
+to `origin/main`, runs `scripts/release-gate.py` for the exact SHA, and checks
+out that SHA for packaging. Neither a moving branch nor a manually supplied
+SHA can bypass the gate.
+
+### First publication (`@flammafex/freebird@0.9.0`)
+
+SDK npm releases use dedicated immutable `sdk-vMAJOR.MINOR.PATCH` tags rather
+than the Rust/container `v*` tags. After the npm organization, token, and
+Environment are configured:
+
+1. In the reviewed release commit, update `sdk/js/package.json` and the root
+   `sdk/js/package-lock.json` entry to `0.9.0`. Confirm that their names and
+   versions match exactly, merge that commit to protected `main`, and wait for
+   all required CI checks to pass.
+2. Create and push the dedicated tag only after that review and gate:
+
+   ```bash
+   git tag -a sdk-v0.9.0 <reviewed-commit> -m "Publish @flammafex/freebird 0.9.0"
+   git push origin sdk-v0.9.0
+   ```
+
+3. The tag push starts the workflow. Alternatively, start it manually from
+   protected `main` with the exact existing tag; manual dispatch still resolves
+   and gates that tag commit and cannot select a branch or SHA:
+
+   ```bash
+   gh workflow run npm-publish.yml --ref main -f tag=sdk-v0.9.0
+   ```
+
+4. Approve the `npm-publish` Environment deployment and wait for the workflow's
+   pack, clean ESM/CJS consumer checks, and publish step to complete. The
+   workflow rejects any package or lockfile metadata mismatch and any npm
+   version that already exists; npm versions are immutable.
+
+For every later release, update `sdk/js/package.json` and the root package entry
+in `sdk/js/package-lock.json` to the release version in the release commit,
+create and push the matching `sdk-vMAJOR.MINOR.PATCH` tag, and let the tag
+trigger the workflow. Future tag-triggered runs do not rewrite package metadata.
+
+### Verify a published SDK
+
+The workflow run is the first verification. A maintainer should also confirm
+the public registry record and both consumer forms after publication:
+
+```bash
+npm view @flammafex/freebird@0.9.0 version dist.tarball --registry=https://registry.npmjs.org
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+cd "$tmp"
+npm init --yes >/dev/null
+npm install --ignore-scripts --no-audit --no-fund @flammafex/freebird@0.9.0 typescript@^5
+node --input-type=module --eval "import('@flammafex/freebird').then(({FreebirdClient, crypto}) => { if (typeof FreebirdClient !== 'function' || typeof crypto.blind !== 'function') process.exit(1); })"
+node --eval "const {FreebirdClient, crypto} = require('@flammafex/freebird'); if (typeof FreebirdClient !== 'function' || typeof crypto.blind !== 'function') process.exit(1)"
+```
+
+Record the npm package URL and workflow run in the release notes. Never paste
+the token into an issue, log, or verification command.
+
 ## Release gate and immutable deployment inputs
 
 The release workflow resolves the dereferenced tag to its commit SHA, verifies

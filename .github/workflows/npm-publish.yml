@@ -1,0 +1,289 @@
+name: Publish @flammafex/freebird
+
+on:
+  push:
+    tags:
+      - "sdk-v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing SDK release tag to publish (for the first release, sdk-v0.9.0)"
+        required: true
+        default: sdk-v0.9.0
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Gate SDK tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 65
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      sha: ${{ steps.resolve.outputs.sha }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Check out workflow source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve immutable SDK tag
+        id: resolve
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^sdk-v[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "release tag must have the form sdk-vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          }
+          case "$EVENT_NAME" in
+            push)
+              [[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]] || {
+                echo "tag push event does not match the release tag" >&2
+                exit 1
+              }
+              ;;
+            workflow_dispatch)
+              [[ "$GITHUB_REF" == refs/heads/main ]] || {
+                echo "manual publishing must run from protected main" >&2
+                exit 1
+              }
+              ;;
+            *)
+              echo "unsupported workflow event" >&2
+              exit 1
+              ;;
+          esac
+
+          git fetch --force --no-tags origin \
+            "refs/heads/main:refs/remotes/origin/main" \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG" || {
+            echo "requested SDK tag does not exist" >&2
+            exit 1
+          }
+          tag_sha="$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")"
+          if [[ "$EVENT_NAME" == push && "$tag_sha" != "$GITHUB_SHA" ]]; then
+            echo "tag push SHA does not match the resolved SDK tag commit" >&2
+            exit 1
+          fi
+          git merge-base --is-ancestor "$tag_sha" refs/remotes/origin/main || {
+            echo "SDK tag must point to a commit already reachable from origin/main" >&2
+            exit 1
+          }
+          printf 'tag=%s\nsha=%s\nversion=%s\n' \
+            "$RELEASE_TAG" "$tag_sha" "${RELEASE_TAG#sdk-v}" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for exact-SHA CI gate
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 scripts/release-gate.py \
+            "${{ steps.resolve.outputs.sha }}" \
+            "build,test,feature-tests,lint,security,javascript-sdk,repository-hygiene,compose-smoke"
+
+  publish:
+    name: Publish @flammafex/freebird
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: npm-publish
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: sdk/js
+    steps:
+      - name: Check out the gated tag commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          cache: npm
+          cache-dependency-path: sdk/js/package-lock.json
+
+      - name: Check package and lock versions
+        env:
+          EXPECTED_VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          set -euo pipefail
+          EXPECTED_VERSION="$EXPECTED_VERSION" node <<'NODE'
+          const fs = require('node:fs');
+          const packageJson = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const packageLock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'));
+          const root = packageLock.packages && packageLock.packages[''];
+          const expected = process.env.EXPECTED_VERSION;
+          const metadataMatches = root &&
+            packageJson.name === packageLock.name &&
+            packageJson.version === packageLock.version &&
+            packageJson.name === root.name &&
+            packageJson.version === root.version;
+          if (!metadataMatches || packageJson.name !== '@flammafex/freebird' || packageJson.version !== expected) {
+            console.error(`package metadata must exactly match @flammafex/freebird@${expected}`);
+            process.exit(1);
+          }
+          console.log(`package metadata parity: ${packageJson.name}@${packageJson.version}`);
+          NODE
+
+      - name: Install SDK dependencies without lifecycle scripts
+        run: npm ci --ignore-scripts
+
+      - name: Lint SDK without lifecycle scripts
+        run: npm run lint --ignore-scripts
+
+      - name: Test SDK without lifecycle scripts
+        run: npm test --ignore-scripts -- --run
+
+      - name: Build SDK without lifecycle scripts
+        run: npm run build --ignore-scripts
+
+      - name: Pack and inspect the exact SDK tarball
+        id: pack
+        env:
+          EXPECTED_VERSION: ${{ needs.gate.outputs.version }}
+        run: |
+          set -euo pipefail
+          pack_dir="$RUNNER_TEMP/freebird-sdk-pack"
+          mkdir -p "$pack_dir"
+          npm pack --ignore-scripts --json --pack-destination "$pack_dir" > "$RUNNER_TEMP/freebird-sdk-pack.json"
+          tarball="$(node -e 'const fs = require("node:fs"); const entries = JSON.parse(fs.readFileSync(process.argv[1], "utf8")); if (entries.length !== 1) process.exit(1); process.stdout.write(entries[0].filename);' "$RUNNER_TEMP/freebird-sdk-pack.json")"
+          tarball_path="$pack_dir/$tarball"
+          [[ -f "$tarball_path" ]] || { echo "npm pack did not produce the expected tarball" >&2; exit 1; }
+
+          manifest="$pack_dir/package.json"
+          file_list="$pack_dir/files.txt"
+          tar -xOf "$tarball_path" package/package.json > "$manifest"
+          tar -tzf "$tarball_path" > "$file_list"
+          EXPECTED_VERSION="$EXPECTED_VERSION" python3 - "$manifest" "$file_list" <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import PurePosixPath
+
+          manifest_path, file_list_path = sys.argv[1:]
+          expected = os.environ["EXPECTED_VERSION"]
+          manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+          names = [line.strip() for line in open(file_list_path, encoding="utf-8") if line.strip()]
+          required = {
+              "package/package.json",
+              "package/dist/index.js",
+              "package/dist/index.cjs",
+              "package/dist/index.d.ts",
+              "package/dist/index.d.cts",
+          }
+          if manifest.get("name") != "@flammafex/freebird" or manifest.get("version") != expected:
+              raise SystemExit(f"packed manifest must be @flammafex/freebird@{expected}")
+          if len(names) != len(set(names)):
+              raise SystemExit("packed tarball contains duplicate file names")
+          if any(
+              not name.startswith("package/")
+              or any(part in {"", ".", ".."} for part in PurePosixPath(name).parts)
+              for name in names
+          ):
+              raise SystemExit("packed tarball contains an unsafe or unexpected path")
+          missing = sorted(required - set(names))
+          if missing:
+              raise SystemExit(f"packed tarball is missing required files: {', '.join(missing)}")
+          print(f"packed manifest: {manifest['name']}@{manifest['version']}")
+          print("packed tarball file list:")
+          print("\n".join(f"  {name}" for name in names))
+          PY
+
+          packed_version="$(node -p "require('$manifest').version")"
+          tarball_sha256="$(sha256sum "$tarball_path" | cut -d' ' -f1)"
+          printf 'tarball=%s\npacked_version=%s\ntarball_sha256=%s\n' \
+            "$tarball_path" "$packed_version" "$tarball_sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Reject an already published packed version
+        env:
+          PACKED_VERSION: ${{ steps.pack.outputs.packed_version }}
+        run: |
+          set -euo pipefail
+          set +e
+          registry_result="$(npm view "@flammafex/freebird@$PACKED_VERSION" version --json --registry=https://registry.npmjs.org 2>&1)"
+          registry_status=$?
+          set -e
+          if [[ "$registry_status" -eq 0 ]]; then
+            echo "@flammafex/freebird@$PACKED_VERSION is already published" >&2
+            exit 1
+          fi
+          case "$registry_result" in
+            *E404*|*404\ Not\ Found*)
+              echo "@flammafex/freebird@$PACKED_VERSION is not published; continuing"
+              ;;
+            *)
+              echo "could not determine whether @flammafex/freebird@$PACKED_VERSION is published:" >&2
+              printf '%s\n' "$registry_result" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Verify packed tarball as clean ESM and CJS consumers
+        env:
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+        run: |
+          set -euo pipefail
+          consumer_dir="$(mktemp -d "$RUNNER_TEMP/freebird-sdk-consumer.XXXXXX")"
+          trap 'rm -rf "$consumer_dir"' EXIT
+          cd "$consumer_dir"
+          npm init --yes --ignore-scripts
+          npm install --ignore-scripts --no-audit --no-fund "$TARBALL" typescript@^5
+
+          cp "$GITHUB_WORKSPACE/sdk/js/tests/package-consumers/esm-consumer.mts" .
+          cp "$GITHUB_WORKSPACE/sdk/js/tests/package-consumers/cjs-consumer.cts" .
+          cp "$GITHUB_WORKSPACE/sdk/js/tests/package-consumers/tsconfig.esm.json" .
+          cp "$GITHUB_WORKSPACE/sdk/js/tests/package-consumers/tsconfig.cjs.json" .
+          ./node_modules/.bin/tsc --project tsconfig.esm.json
+          ./node_modules/.bin/tsc --project tsconfig.cjs.json
+
+          cat > esm-runtime.mjs <<'EOF'
+          import * as sdk from '@flammafex/freebird';
+          if (typeof sdk.FreebirdClient !== 'function' || typeof sdk.crypto?.blind !== 'function') {
+            throw new Error('ESM package entry point is incomplete');
+          }
+          EOF
+          cat > cjs-runtime.cjs <<'EOF'
+          const sdk = require('@flammafex/freebird');
+          if (typeof sdk.FreebirdClient !== 'function' || typeof sdk.crypto?.blind !== 'function') {
+            throw new Error('CJS package entry point is incomplete');
+          }
+          EOF
+          node esm-runtime.mjs
+          node cjs-runtime.cjs
+
+      - name: Publish inspected tarball
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          TARBALL_SHA256: ${{ steps.pack.outputs.tarball_sha256 }}
+          NPM_CONFIG_PROVENANCE: 'false'
+        run: |
+          set -euo pipefail
+          actual_sha256="$(sha256sum "$TARBALL" | cut -d' ' -f1)"
+          [[ "$actual_sha256" == "$TARBALL_SHA256" ]] || {
+            echo "inspected tarball changed before publish" >&2
+            exit 1
+          }
+          npm publish "$TARBALL" --ignore-scripts --access public --provenance=false --registry=https://registry.npmjs.org

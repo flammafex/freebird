@@ -1248,6 +1248,22 @@ async fn missing_webauthn_secret_precedes_audit_replay_and_sybil() -> Result<()>
 
 #[tokio::test]
 #[serial]
+async fn invalid_sybil_selection_fails_during_application_construction() -> Result<()> {
+    let _env = EnvGuard::new();
+    prepare_env();
+
+    let directory = tempfile::tempdir()?;
+    let mut config = minimal_config(directory.path());
+    config.sybil_config.mode = "not-a-runtime-mode".into();
+
+    let error = build_error(config).await;
+    assert!(error.contains("unknown SYBIL_RESISTANCE mode"), "{error}");
+    assert!(error.contains("sensitive values redacted"), "{error}");
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
 async fn webauthn_startup_branch_initializes_before_routes_and_shutdown() -> Result<()> {
     let _env = EnvGuard::new();
     prepare_env();
