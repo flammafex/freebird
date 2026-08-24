@@ -43,7 +43,7 @@ Key files to know:
   refresh, replay-authority task, and router assembly
 - `verifier/src/settings.rs` — staged verifier configuration and replay-store selection
 - `verifier/src/routes/public.rs` — public verification, check, and batch handlers
-- `crypto/src/lib.rs` — V4/V5 token wire formats, constants, nullifier derivation
+- `crypto/src/lib.rs` — V4 token wire formats, constants, nullifier derivation
 - `common/src/api.rs` — shared request/response types, `SybilProof` enum
 - `.env.example` — canonical config reference
 
@@ -200,11 +200,10 @@ changing:
 - **Crypto primitives** in `crypto/src/voprf/` and `crypto/src/lib.rs` —
   VOPRF, blind RSA, token wire formats, nullifier derivation. A bug here
   breaks the core privacy or double-spend property.
-- **Nullifier derivation** (`nullifier_key_v4`, `nullifier_key_v5`,
-  `nullifier_key`) — changing the digest construction invalidates every
+- **Nullifier derivation** (`nullifier_key_v4`, `nullifier_key`) — changing the
+  digest construction invalidates every
   outstanding token and every stored nullifier.
-- **Token wire formats** (`build_redemption_token`, `parse_redemption_token`,
-  `build_public_bearer_pass`, `parse_public_bearer_pass`) — wire
+- **Token wire formats** (`build_redemption_token`, `parse_redemption_token`) — wire
   compatibility. Bump `REDEMPTION_TOKEN_VERSION_*` for breaking changes.
 - **Sybil-resistance trait semantics** (`SybilResistance`, `CombinedOr/And/
   Threshold`) — `CombinedOr` is "only as strong as the easiest mechanism"

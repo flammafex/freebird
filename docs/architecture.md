@@ -48,30 +48,37 @@ Privacy Pass VOPRF deployments. It is the flow exercised by
 Batch V4 issuance uses `POST /v1/oprf/issue/batch` and applies one Sybil proof
 to the batch request.
 
-## V5 Public Bearer Flow
+## V7 Native Bearer Flow
 
-V5 uses blind RSA signatures for public bearer passes.
+V7 uses randomized RSA blind signatures for native bearer tokens. V5 public
+bearer passes are retired and are not accepted; V6 is reserved.
 
-1. The client blinds a public-token message.
-2. The client sends the blinded message to `POST /v1/public/issue`.
-3. The issuer validates any requested V5 key is active before processing a
-   configured Sybil proof.
+1. The client constructs the fixed V7 bearer body, including its body nullifier,
+   and blinds the message with the V7 randomized RSA suite.
+2. The client sends the blinded message to `POST /v7/native-bearer/issue`.
+3. The issuer validates the active V7 descriptor and any configured Sybil proof.
 4. The issuer returns a blind signature.
-5. The client finalizes the public bearer pass.
-6. The verifier validates the token against issuer metadata and consumes it.
+5. The client finalizes the V7 native bearer token.
+6. The verifier validates the token against immutable V7 key discovery and
+   consumes the replay identity derived from the issuer ID and body nullifier.
 
-Batch V5 issuance uses `POST /v1/public/issue/batch`.
+Batch V7 issuance uses `POST /v7/native-bearer/issue/batch`.
 
-Both public issuance routes return HTTP 400 with
-`{"error":"token_key_not_active"}` when a requested V5 key is stale. The
+For V7 consuming verification, the replay identity is the issuer namespace
+plus the lowercase hexadecimal body nullifier. Signature bytes, the complete
+artifact, descriptor, graph, keyset, verifier, and audience are intentionally
+excluded, so a second signature over the same body nullifier is still a replay.
+
+Both V7 native bearer issuance routes return HTTP 400 with
+`{"error":"token_key_not_active"}` when a requested V7 key is stale. The
 `/v1/verify` route returns HTTP 401 with
 `{"ok":false,"error":"replay_detected","verified_at":0}` for replay; other
 verification failures remain generic.
 
 ## Durable Public Operations
 
-The optional V2 public-bearer exchange and V2 graph-issuance routes are
-durable Redis-backed operations. Each request carries two independent values:
+The optional V7 native-bearer exchange and V7 graph-issuance routes are durable
+Redis-backed operations. Each request carries two independent values:
 
 - `public_operation_id` is a canonical 16-byte, base64url-encoded,
   non-secret correlation ID. It identifies the operation but does not
@@ -89,13 +96,21 @@ and [Public Graph Blind Issuance](public-graph-blind-issuance.md).
 
 ## Metadata
 
-The issuer exposes discovery endpoints:
+The issuer exposes separate discovery/authority endpoints:
 
 - `/.well-known/issuer`
-- `/.well-known/keys`
+- `/.well-known/keys` — strict V7 native-bearer key and graph discovery.
+- `/.well-known/replay-authority` — V4 authority-only metadata for verifier
+  health refresh.
+- `POST /v1/public/graph/replay-authority/probe` — separate V4 authority probe.
 
 The verifier periodically refreshes issuer metadata from `ISSUER_URL` or
-`ISSUER_URLS`. With `REQUIRE_TLS=true`, issuer metadata URLs must use HTTPS.
+`ISSUER_URLS`; those inputs are normalized to strict V7 `GET /.well-known/keys`
+for V7 trust. Graph participants additionally configure
+`VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS`, which is used only for V4
+`GET /.well-known/replay-authority` metadata and the separate POST probe. The
+graph-authority URL must never replace `ISSUER_URL(S)` for V7 key discovery.
+With `REQUIRE_TLS=true`, all configured issuer URLs must use HTTPS.
 
 ## Storage
 
@@ -103,10 +118,10 @@ Issuer storage includes:
 
 - V4 issuer secret key path
 - V4 key rotation state
-- optional V5 RSA private key and metadata
+  - mandatory V7 native bearer RSA private key, metadata, and append-only registry
 - optional Sybil-state files for invitation, progressive trust,
   proof-of-diversity, and multi-party vouching
-- optional Redis-backed V2 exchange/graph-issuance operation records, spend
+  - optional Redis-backed V7 exchange/graph-issuance operation records, spend
   markers, budgets, and replay-authority state
 - audit log JSON
 - optional WebAuthn credential storage in Redis
@@ -117,7 +132,8 @@ Verifier storage includes:
 - process-local in-memory replay only when `IN_MEMORY_REPLAY_STORE=true` and
   `VERIFIER_ENV=development`; it is not restart-safe and is never suitable for
   production, exchange, or graph issuance
-- optional V4 private verification key or keyring
+  - optional V4 private verification key or keyring; V7 verification uses
+    issuer-published discovery
 
 For public deployments, verifier nullifier/replay storage must be Redis-backed.
 

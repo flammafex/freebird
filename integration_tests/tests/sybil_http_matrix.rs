@@ -9,14 +9,11 @@ use axum::{
     Router,
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
-use blind_rsa_signatures::{DefaultRng, PublicKeySha384PSSDeterministic};
 use freebird_common::api::SybilProof;
-use freebird_crypto::{build_public_bearer_message_from_parts, Client, Server, VOPRF_CONTEXT_V4};
+use freebird_crypto::{Client, Server, VOPRF_CONTEXT_V4};
 use freebird_issuer::{
-    config::PublicKeyConfig,
     multi_key_voprf::MultiKeyVoprfCore,
-    public_tokens::PublicTokenIssuer,
-    routes::{batch_issue, issue, public_issue},
+    routes::{batch_issue, issue},
     sybil_resistance::{
         invitation::{InvitationConfig, InvitationSystem},
         multi_party_vouching::{MultiPartyVouchingConfig, MultiPartyVouchingSystem},
@@ -39,7 +36,6 @@ const USER_AGENT: &str = "freebird-sybil-http-test";
 
 struct TestApp {
     router: Router,
-    public_issuer: Arc<PublicTokenIssuer>,
     _tmp: TempDir,
 }
 
@@ -63,17 +59,21 @@ async fn build_app(sybil_checker: Option<Arc<dyn SybilResistance>>) -> Result<Te
     )?);
 
     let tmp = tempfile::tempdir()?;
-    let public_config = PublicKeyConfig {
-        enabled: true,
-        sk_path: tmp.path().join("public.der"),
-        metadata_path: tmp.path().join("public-metadata.json"),
-        validity_secs: 3600,
-        audience: None,
-        modulus_bits: 2048,
-    };
-    let public_issuer = Arc::new(
-        PublicTokenIssuer::load_or_generate(&public_config, ISSUER_ID)?
-            .context("public issuer disabled")?,
+    let native_bearer_v7 = Arc::new(
+        freebird_issuer::native_bearer_v7::NativeBearerV7Issuer::load_or_generate(
+            &freebird_issuer::config::NativeBearerV7Config {
+                sk_path: tmp.path().join("v7.der"),
+                metadata_path: tmp.path().join("v7.json"),
+                registry_path: tmp.path().join("registry.json"),
+                profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
+                descriptor_id: "75".repeat(32),
+                token_key_id: "76".repeat(32),
+                asset_id: "USD".into(),
+                amount_minor: 1,
+                validity_secs: 3600,
+            },
+            ISSUER_ID,
+        )?,
     );
 
     let state = Arc::new(AppStateWithSybil {
@@ -84,12 +84,14 @@ async fn build_app(sybil_checker: Option<Arc<dyn SybilResistance>>) -> Result<Te
         behind_proxy: false,
         sybil_checker,
         invitation_system: None,
+        native_bearer_v7,
+        native_bearer_v7_retained: vec![],
         admin_api_key: None,
-        public_issuer: Some(public_issuer.clone()),
-        exchange_engine: None,
-        exchange_metadata: None,
-        graph_issuance_engine: None,
-        graph_issuance_metadata: None,
+        native_exchange_v7: None,
+        native_exchange_v7_discovery: None,
+        native_graph_issuance_v7: None,
+        native_graph_issuance_v7_discovery: None,
+        replay_authority: None,
         epoch_duration_sec: 86400,
         epoch_retention: 2,
         sybil_summary: None,
@@ -98,15 +100,9 @@ async fn build_app(sybil_checker: Option<Arc<dyn SybilResistance>>) -> Result<Te
     let router = Router::new()
         .route("/v1/oprf/issue", post(issue::handle))
         .route("/v1/oprf/issue/batch", post(batch_issue::handle_batch))
-        .route("/v1/public/issue", post(public_issue::handle))
-        .route("/v1/public/issue/batch", post(public_issue::handle_batch))
         .with_state((state, voprf));
 
-    Ok(TestApp {
-        router,
-        public_issuer,
-        _tmp: tmp,
-    })
+    Ok(TestApp { router, _tmp: tmp })
 }
 
 async fn post_json(router: &Router, path: &str, body: Value) -> Result<StatusCode> {
@@ -132,20 +128,6 @@ fn blinded_element_b64(byte: u8) -> String {
     client.blind(&[byte; 32]).expect("blind V4 input").0
 }
 
-fn public_blinded_msg_b64(public_issuer: &PublicTokenIssuer, byte: u8) -> Result<String> {
-    let spki = Base64UrlUnpadded::decode_vec(&public_issuer.metadata().pubkey_spki_b64)?;
-    let pk = PublicKeySha384PSSDeterministic::from_spki(&spki)
-        .map_err(|e| anyhow::anyhow!("parse public key SPKI: {e}"))?;
-    let nonce = [byte; freebird_crypto::PUBLIC_BEARER_NONCE_LEN];
-    let msg =
-        build_public_bearer_message_from_parts(&nonce, public_issuer.token_key_id(), ISSUER_ID)
-            .map_err(|e| anyhow::anyhow!("build V5 public bearer message: {:?}", e))?;
-    let blinded = pk
-        .blind(&mut DefaultRng, msg)
-        .map_err(|e| anyhow::anyhow!("blind V5 message: {e}"))?;
-    Ok(Base64UrlUnpadded::encode_string(&blinded.blind_message))
-}
-
 fn batch_request_binding(route_scope: &str, elements: &[String]) -> String {
     let mut hasher = Sha256::new();
     for element in elements {
@@ -162,11 +144,9 @@ fn batch_request_binding(route_scope: &str, elements: &[String]) -> String {
     )
 }
 
-fn endpoint_requests(public_issuer: &PublicTokenIssuer) -> Result<Vec<EndpointRequest>> {
+fn endpoint_requests() -> Result<Vec<EndpointRequest>> {
     let v4_single = blinded_element_b64(0x11);
     let v4_batch = vec![blinded_element_b64(0x12)];
-    let v5_single = public_blinded_msg_b64(public_issuer, 0x13)?;
-    let v5_batch = vec![public_blinded_msg_b64(public_issuer, 0x14)?];
 
     Ok(vec![
         EndpointRequest {
@@ -178,16 +158,6 @@ fn endpoint_requests(public_issuer: &PublicTokenIssuer) -> Result<Vec<EndpointRe
             path: "/v1/oprf/issue/batch",
             binding: batch_request_binding("issue-batch", &v4_batch),
             body: json!({"blinded_elements": v4_batch}),
-        },
-        EndpointRequest {
-            path: "/v1/public/issue",
-            binding: format!("freebird:public-issue:v1:{ISSUER_ID}:{v5_single}"),
-            body: json!({"blinded_msg_b64": v5_single}),
-        },
-        EndpointRequest {
-            path: "/v1/public/issue/batch",
-            binding: batch_request_binding("public-issue-batch", &v5_batch),
-            body: json!({"blinded_msgs": v5_batch}),
         },
     ])
 }
@@ -220,7 +190,7 @@ fn temp_path(prefix: &str, suffix: &str) -> PathBuf {
 #[tokio::test]
 async fn http_none_mode_accepts_all_issuance_routes() -> Result<()> {
     let app = build_app(None).await?;
-    for endpoint in endpoint_requests(&app.public_issuer)? {
+    for endpoint in endpoint_requests()? {
         assert_eq!(
             post_json(&app.router, endpoint.path, endpoint.body).await?,
             StatusCode::OK,
@@ -235,7 +205,7 @@ async fn http_none_mode_accepts_all_issuance_routes() -> Result<()> {
 async fn http_required_mode_rejects_missing_proofs_on_all_issuance_routes() -> Result<()> {
     let checker: Arc<dyn SybilResistance> = Arc::new(ProofOfWork::new(8));
     let app = build_app(Some(checker)).await?;
-    for endpoint in endpoint_requests(&app.public_issuer)? {
+    for endpoint in endpoint_requests()? {
         assert_eq!(
             post_json(&app.router, endpoint.path, endpoint.body).await?,
             StatusCode::BAD_REQUEST,
@@ -251,7 +221,7 @@ async fn http_pow_accepts_bound_proofs_and_rejects_replay_or_wrong_binding() -> 
     let checker: Arc<dyn SybilResistance> = Arc::new(ProofOfWork::new(8));
     let app = build_app(Some(checker)).await?;
 
-    for endpoint in endpoint_requests(&app.public_issuer)? {
+    for endpoint in endpoint_requests()? {
         let timestamp = current_timestamp_u64();
         let (nonce, _) = ProofOfWork::compute(8, &endpoint.binding, timestamp)?;
         let proof = SybilProof::ProofOfWork {
@@ -272,7 +242,7 @@ async fn http_pow_accepts_bound_proofs_and_rejects_replay_or_wrong_binding() -> 
         );
     }
 
-    let endpoint = endpoint_requests(&app.public_issuer)?.remove(0);
+    let endpoint = endpoint_requests()?.remove(0);
     let timestamp = current_timestamp_u64();
     let (nonce, _) = ProofOfWork::compute(8, "freebird:wrong-binding", timestamp)?;
     let wrong = SybilProof::ProofOfWork {
@@ -294,7 +264,7 @@ async fn http_batch_sybil_failure_does_not_leak_internal_detail() -> Result<()> 
         allow: false,
     });
     let app = build_app(Some(checker)).await?;
-    let endpoint = endpoint_requests(&app.public_issuer)?
+    let endpoint = endpoint_requests()?
         .into_iter()
         .find(|endpoint| endpoint.path == "/v1/oprf/issue/batch")
         .context("missing batch issuance endpoint")?;
@@ -319,7 +289,7 @@ async fn http_rate_limit_uses_server_observed_client_identity() -> Result<()> {
     let checker: Arc<dyn SybilResistance> = Arc::new(RateLimit::new(Duration::from_secs(0)));
     let app = build_app(Some(checker)).await?;
 
-    for endpoint in endpoint_requests(&app.public_issuer)? {
+    for endpoint in endpoint_requests()? {
         let proof = SybilProof::RateLimit {
             client_id: String::new(),
             timestamp: current_timestamp_u64(),
@@ -332,7 +302,7 @@ async fn http_rate_limit_uses_server_observed_client_identity() -> Result<()> {
         );
     }
 
-    let endpoint = endpoint_requests(&app.public_issuer)?.remove(0);
+    let endpoint = endpoint_requests()?.remove(0);
     let forged = SybilProof::RateLimit {
         client_id: "attacker-selected-client".to_string(),
         timestamp: current_timestamp_u64(),
@@ -366,7 +336,7 @@ async fn http_invitation_redeems_codes_and_rejects_registered_user_bypass() -> R
     let checker: Arc<dyn SybilResistance> = system.clone();
     let app = build_app(Some(checker)).await?;
 
-    for endpoint in endpoint_requests(&app.public_issuer)? {
+    for endpoint in endpoint_requests()? {
         let (code, signature, _) = system.generate_invite("admin").await?;
         let invitation = SybilProof::Invitation {
             code,
@@ -385,7 +355,7 @@ async fn http_invitation_redeems_codes_and_rejects_registered_user_bypass() -> R
         );
     }
 
-    let endpoint = endpoint_requests(&app.public_issuer)?.remove(0);
+    let endpoint = endpoint_requests()?.remove(0);
     let registered = SybilProof::RegisteredUser {
         user_id: "admin".to_string(),
     };
@@ -421,10 +391,7 @@ async fn http_progressive_trust_accepts_current_state_and_rejects_stale_proof() 
     let checker: Arc<dyn SybilResistance> = system.clone();
     let app = build_app(Some(checker)).await?;
 
-    for (idx, endpoint) in endpoint_requests(&app.public_issuer)?
-        .into_iter()
-        .enumerate()
-    {
+    for (idx, endpoint) in endpoint_requests()?.into_iter().enumerate() {
         let proof = system.generate_proof(&format!("user-{idx}")).await?;
         assert_eq!(
             post_json(&app.router, endpoint.path, with_proof(endpoint.body, proof)).await?,
@@ -434,7 +401,7 @@ async fn http_progressive_trust_accepts_current_state_and_rejects_stale_proof() 
         );
     }
 
-    let endpoint = endpoint_requests(&app.public_issuer)?.remove(0);
+    let endpoint = endpoint_requests()?.remove(0);
     let stale = system.generate_proof("stale-user").await?;
     assert_eq!(
         post_json(
@@ -468,10 +435,7 @@ async fn http_proof_of_diversity_accepts_server_state_and_rejects_tampering() ->
     let checker: Arc<dyn SybilResistance> = system.clone();
     let app = build_app(Some(checker)).await?;
 
-    for (idx, endpoint) in endpoint_requests(&app.public_issuer)?
-        .into_iter()
-        .enumerate()
-    {
+    for (idx, endpoint) in endpoint_requests()?.into_iter().enumerate() {
         let user = format!("diverse-user-{idx}");
         system.observe_access(&user, "net-a", "device-a").await?;
         let proof = system.generate_proof(&user).await?;
@@ -483,7 +447,7 @@ async fn http_proof_of_diversity_accepts_server_state_and_rejects_tampering() ->
         );
     }
 
-    let endpoint = endpoint_requests(&app.public_issuer)?.remove(0);
+    let endpoint = endpoint_requests()?.remove(0);
     system
         .observe_access("tampered-user", "net-a", "device-a")
         .await?;
@@ -524,10 +488,7 @@ async fn http_multi_party_vouching_accepts_valid_vouches_and_rejects_replay() ->
     let checker: Arc<dyn SybilResistance> = system.clone();
     let app = build_app(Some(checker)).await?;
 
-    for (idx, endpoint) in endpoint_requests(&app.public_issuer)?
-        .into_iter()
-        .enumerate()
-    {
+    for (idx, endpoint) in endpoint_requests()?.into_iter().enumerate() {
         let user = format!("vouched-user-{idx}");
         let proof = vouching_proof(&system, &voucher_sk, &user).await?;
         assert_eq!(
@@ -538,7 +499,7 @@ async fn http_multi_party_vouching_accepts_valid_vouches_and_rejects_replay() ->
         );
     }
 
-    let endpoint = endpoint_requests(&app.public_issuer)?.remove(0);
+    let endpoint = endpoint_requests()?.remove(0);
     let proof = vouching_proof(&system, &voucher_sk, "replay-user").await?;
     assert_eq!(
         post_json(
@@ -622,7 +583,7 @@ async fn http_webauthn_proof_shape_reaches_sybil_gate_on_all_issuance_routes() -
     });
     let app = build_app(Some(checker)).await?;
 
-    for endpoint in endpoint_requests(&app.public_issuer)? {
+    for endpoint in endpoint_requests()? {
         let proof = SybilProof::WebAuthn {
             subject_hash: "subject-hash".to_string(),
             auth_proof: Base64UrlUnpadded::encode_string(&[7u8; 32]),
@@ -636,7 +597,7 @@ async fn http_webauthn_proof_shape_reaches_sybil_gate_on_all_issuance_routes() -
         );
     }
 
-    let endpoint = endpoint_requests(&app.public_issuer)?.remove(0);
+    let endpoint = endpoint_requests()?.remove(0);
     assert_eq!(
         post_json(
             &app.router,
@@ -652,7 +613,7 @@ async fn http_webauthn_proof_shape_reaches_sybil_gate_on_all_issuance_routes() -
 
 #[tokio::test]
 async fn http_combined_modes_enforce_or_and_threshold_policies() -> Result<()> {
-    let single = endpoint_requests(&build_app(None).await?.public_issuer)?.remove(0);
+    let single = endpoint_requests()?.remove(0);
 
     let or_checker: Arc<dyn SybilResistance> = Arc::new(CombinedOr::new(vec![
         Arc::new(MockSybil {

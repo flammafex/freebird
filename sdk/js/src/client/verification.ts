@@ -7,6 +7,7 @@ import type {
   VerifyResp,
 } from '../types.js';
 import type { ClientState } from './state.js';
+import { base64UrlToBytes } from './wire.js';
 import {
   InvalidTokenError,
   RateLimitedError,
@@ -24,6 +25,20 @@ import {
 function requireVerifierUrl(state: ClientState): string {
   if (!state.config.verifierUrl) throw new VerifierNotConfiguredError();
   return state.config.verifierUrl;
+}
+
+/** Reject retired, reserved, and unknown token envelopes before any network call. */
+function assertSupportedToken(token: FreebirdToken): void {
+  let version: number;
+  try {
+    const bytes = base64UrlToBytes(token.tokenValue);
+    if (bytes.length === 0) throw new Error('empty token');
+    version = bytes[0];
+  } catch {
+    throw new InvalidTokenError();
+  }
+  if (token.version !== undefined && token.version !== version) throw new InvalidTokenError();
+  if (version !== 0x04 && version !== 0x07) throw new InvalidTokenError();
 }
 
 /** Parses the `Retry-After` header into whole seconds (0 when absent/invalid). */
@@ -84,6 +99,7 @@ export async function verifyToken(
   state: ClientState,
   token: FreebirdToken,
 ): Promise<VerifyResp> {
+  assertSupportedToken(token);
   const verifierUrl = requireVerifierUrl(state);
   const res = await (state.config.fetch ?? fetch)(`${verifierUrl}/v1/verify`, {
     method: 'POST',
@@ -104,6 +120,7 @@ export async function checkToken(
   state: ClientState,
   token: FreebirdToken,
 ): Promise<VerifyResp> {
+  assertSupportedToken(token);
   const verifierUrl = requireVerifierUrl(state);
   const res = await (state.config.fetch ?? fetch)(`${verifierUrl}/v1/check`, {
     method: 'POST',
@@ -123,6 +140,7 @@ export async function verifyBatch(
   state: ClientState,
   tokens: FreebirdToken[],
 ): Promise<BatchVerifyResp> {
+  for (const token of tokens) assertSupportedToken(token);
   const verifierUrl = requireVerifierUrl(state);
   const body: { tokens: TokenToVerify[] } = {
     tokens: tokens.map((token) => ({ token_b64: token.tokenValue })),

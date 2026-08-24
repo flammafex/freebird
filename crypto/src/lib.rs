@@ -47,13 +47,24 @@
 //! run the zeroization tests in the test suite.
 
 use base64ct::{Base64UrlUnpadded, Encoding};
-use blind_rsa_signatures::{PublicKeySha384PSSDeterministic, Signature as BlindRsaSignature};
-use sha2::{Digest, Sha256, Sha384};
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
 // Internal VOPRF implementation (was vendor/voprf_p256)
 pub mod voprf;
 use voprf as v;
+
+// Native amount-bearing V7 body.
+pub mod public_bearer_v7;
+pub use public_bearer_v7::{
+    blind_v7, build_native_bearer_v7_token, finalize_v7, parse_native_bearer_v7_token,
+    serialize_native_bearer_v7_token, v7_artifact_digest, validate_public_bearer_spki_v7,
+    verify_native_bearer_v7_token, verify_v7, NativeBearerV7Token, PublicBearerV7Body,
+    V7ApplicationMessage, V7BlindMessage, V7BlindSignature, V7BlindState, V7BodyPolicy,
+    V7KeyIdentity, V7MessageRandomizer, V7PublicKeyBinding, V7Signature, V7TokenKeyId,
+    V7_ARTIFACT_DOMAIN, V7_ENVELOPE_VERSION, V7_RESERVED_ENVELOPE_VERSION,
+    V7_RETIRED_ENVELOPE_VERSION, V7_RFC9474_VARIANT,
+};
 
 // Cryptographic provider abstraction for software and HSM backends
 pub mod provider;
@@ -168,17 +179,9 @@ impl Server {
 // V4 private-verification redemption token constants.
 pub const VOPRF_CONTEXT_V4: &[u8] = b"freebird:v4";
 pub const REDEMPTION_TOKEN_VERSION_V4: u8 = 0x04;
-pub const REDEMPTION_TOKEN_VERSION_V5: u8 = 0x05;
 pub const PRIVATE_TOKEN_NONCE_LEN: usize = 32;
 pub const PRIVATE_TOKEN_SCOPE_DIGEST_LEN: usize = 32;
 pub const PRIVATE_TOKEN_AUTHENTICATOR_LEN: usize = 32;
-pub const PUBLIC_BEARER_NONCE_LEN: usize = 32;
-pub const PUBLIC_BEARER_TOKEN_KEY_ID_LEN: usize = 32;
-pub const PUBLIC_BEARER_MESSAGE_DIGEST_LEN: usize = 48;
-pub const PUBLIC_BEARER_MAX_SIGNATURE_LEN: usize = 512;
-pub const PUBLIC_BEARER_TOKEN_TYPE: &str = "public_bearer_pass";
-pub const PUBLIC_BEARER_RFC9474_VARIANT: &str = "RSABSSA-SHA384-PSS-Deterministic";
-pub const PUBLIC_BEARER_SPEND_POLICY_SINGLE_USE: &str = "single_use";
 const REDEMPTION_TOKEN_MIN_LEN: usize = 1
     + PRIVATE_TOKEN_NONCE_LEN
     + PRIVATE_TOKEN_SCOPE_DIGEST_LEN
@@ -188,15 +191,6 @@ const REDEMPTION_TOKEN_MIN_LEN: usize = 1
     + 1
     + PRIVATE_TOKEN_AUTHENTICATOR_LEN;
 const REDEMPTION_TOKEN_MAX_LEN: usize = 512;
-const PUBLIC_BEARER_MIN_LEN: usize =
-    1 + PUBLIC_BEARER_NONCE_LEN + PUBLIC_BEARER_TOKEN_KEY_ID_LEN + 1 + 1 + 2 + 1;
-const PUBLIC_BEARER_MAX_LEN: usize = 1
-    + PUBLIC_BEARER_NONCE_LEN
-    + PUBLIC_BEARER_TOKEN_KEY_ID_LEN
-    + 1
-    + 255
-    + 2
-    + PUBLIC_BEARER_MAX_SIGNATURE_LEN;
 
 /// V4 redemption token: the wire format clients send to verifiers.
 ///
@@ -214,21 +208,6 @@ pub struct RedemptionToken {
     pub kid: String,
     pub issuer_id: String,
     pub authenticator: [u8; PRIVATE_TOKEN_AUTHENTICATOR_LEN],
-}
-
-/// V5 public bearer pass.
-///
-/// Wire format:
-/// `[VERSION=0x05][nonce(32)][token_key_id(32)][issuer_id_len(1)|issuer_id][sig_len(2,BE)|signature]`
-///
-/// The signature is a finalized RFC 9474 blind RSA signature over
-/// `build_public_bearer_message_from_parts(nonce, token_key_id, issuer_id)`.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PublicBearerPass {
-    pub nonce: [u8; PUBLIC_BEARER_NONCE_LEN],
-    pub token_key_id: [u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN],
-    pub issuer_id: String,
-    pub signature: Vec<u8>,
 }
 
 /// Build the verifier/audience scope digest that a V4 token is bound to.
@@ -419,200 +398,6 @@ pub fn nullifier_key_v4(
     h.update(token.nonce);
     h.update(token.scope_digest);
     h.update(token.authenticator);
-    Ok(Base64UrlUnpadded::encode_string(&h.finalize()))
-}
-
-/// Compute the V5 public token key identifier from the RFC 9474 SPKI bytes.
-pub fn token_key_id_from_spki(spki: &[u8]) -> [u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN] {
-    let digest = Sha256::digest(spki);
-    let mut out = [0u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN];
-    out.copy_from_slice(&digest);
-    out
-}
-
-/// Strict lowercase hex encoding for V5 token key identifiers.
-pub fn encode_token_key_id_hex(token_key_id: &[u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN]) -> String {
-    const LUT: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(PUBLIC_BEARER_TOKEN_KEY_ID_LEN * 2);
-    for byte in token_key_id {
-        out.push(LUT[(byte >> 4) as usize] as char);
-        out.push(LUT[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
-
-/// Decode a strict 64-character lowercase hex V5 token key identifier.
-pub fn decode_token_key_id_hex(value: &str) -> Result<[u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN], Error> {
-    if value.len() != PUBLIC_BEARER_TOKEN_KEY_ID_LEN * 2 {
-        return Err(Error::InvalidInput(
-            "token_key_id must be 64 lowercase hex characters".to_string(),
-        ));
-    }
-
-    let mut out = [0u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN];
-    let bytes = value.as_bytes();
-    for (idx, chunk) in bytes.chunks_exact(2).enumerate() {
-        let hi = strict_lower_hex_nibble(chunk[0])
-            .ok_or_else(|| Error::InvalidInput("token_key_id must be lowercase hex".to_string()))?;
-        let lo = strict_lower_hex_nibble(chunk[1])
-            .ok_or_else(|| Error::InvalidInput("token_key_id must be lowercase hex".to_string()))?;
-        out[idx] = (hi << 4) | lo;
-    }
-    Ok(out)
-}
-
-fn strict_lower_hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        _ => None,
-    }
-}
-
-/// Build the canonical 48-byte V5 message digest that clients blind-sign.
-///
-/// The blind-rsa-signatures crate hashes this digest again as its message
-/// input while applying RFC 9474 PSS. That matches Freebird's V5 design: this
-/// function is the protocol message, not hand-rolled padding.
-pub fn build_public_bearer_message_from_parts(
-    nonce: &[u8; PUBLIC_BEARER_NONCE_LEN],
-    token_key_id: &[u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN],
-    issuer_id: &str,
-) -> Result<[u8; PUBLIC_BEARER_MESSAGE_DIGEST_LEN], Error> {
-    validate_token_field("issuer_id", issuer_id)?;
-
-    let mut h = Sha384::new();
-    h.update(b"freebird:public-bearer-pass:v5");
-    h.update([0x00]);
-    h.update([REDEMPTION_TOKEN_VERSION_V5]);
-    h.update(nonce);
-    h.update(token_key_id);
-    h.update([issuer_id.len() as u8]);
-    h.update(issuer_id.as_bytes());
-    let digest = h.finalize();
-    let mut out = [0u8; PUBLIC_BEARER_MESSAGE_DIGEST_LEN];
-    out.copy_from_slice(&digest);
-    Ok(out)
-}
-
-pub fn build_public_bearer_message(
-    token: &PublicBearerPass,
-) -> Result<[u8; PUBLIC_BEARER_MESSAGE_DIGEST_LEN], Error> {
-    build_public_bearer_message_from_parts(&token.nonce, &token.token_key_id, &token.issuer_id)
-}
-
-/// Serialize a V5 public bearer pass into wire format bytes.
-pub fn build_public_bearer_pass(token: &PublicBearerPass) -> Result<Vec<u8>, Error> {
-    validate_token_field("issuer_id", &token.issuer_id)?;
-    if token.signature.is_empty() || token.signature.len() > PUBLIC_BEARER_MAX_SIGNATURE_LEN {
-        return Err(Error::InvalidInput("bad signature length".to_string()));
-    }
-
-    let sig_len = u16::try_from(token.signature.len())
-        .map_err(|_| Error::InvalidInput("signature too large".to_string()))?;
-    let total_len = 1
-        + PUBLIC_BEARER_NONCE_LEN
-        + PUBLIC_BEARER_TOKEN_KEY_ID_LEN
-        + 1
-        + token.issuer_id.len()
-        + 2
-        + token.signature.len();
-    let mut buf = Vec::with_capacity(total_len);
-    buf.push(REDEMPTION_TOKEN_VERSION_V5);
-    buf.extend_from_slice(&token.nonce);
-    buf.extend_from_slice(&token.token_key_id);
-    buf.push(token.issuer_id.len() as u8);
-    buf.extend_from_slice(token.issuer_id.as_bytes());
-    buf.extend_from_slice(&sig_len.to_be_bytes());
-    buf.extend_from_slice(&token.signature);
-    Ok(buf)
-}
-
-/// Parse V5 wire format bytes into a `PublicBearerPass`.
-pub fn parse_public_bearer_pass(bytes: &[u8]) -> Result<PublicBearerPass, Error> {
-    if bytes.len() < PUBLIC_BEARER_MIN_LEN {
-        return Err(Error::InvalidInput("token too short".to_string()));
-    }
-    if bytes.len() > PUBLIC_BEARER_MAX_LEN {
-        return Err(Error::InvalidInput("token too large".to_string()));
-    }
-    if bytes[0] != REDEMPTION_TOKEN_VERSION_V5 {
-        return Err(Error::InvalidInput("unsupported token version".to_string()));
-    }
-
-    let mut pos = 1;
-    let nonce: [u8; PUBLIC_BEARER_NONCE_LEN] = bytes[pos..pos + PUBLIC_BEARER_NONCE_LEN]
-        .try_into()
-        .map_err(|_| Error::InvalidInput("bad nonce".to_string()))?;
-    pos += PUBLIC_BEARER_NONCE_LEN;
-
-    let token_key_id: [u8; PUBLIC_BEARER_TOKEN_KEY_ID_LEN] = bytes
-        [pos..pos + PUBLIC_BEARER_TOKEN_KEY_ID_LEN]
-        .try_into()
-        .map_err(|_| Error::InvalidInput("bad token_key_id".to_string()))?;
-    pos += PUBLIC_BEARER_TOKEN_KEY_ID_LEN;
-
-    let issuer_id_len = bytes[pos] as usize;
-    pos += 1;
-    if issuer_id_len == 0 || pos + issuer_id_len > bytes.len() {
-        return Err(Error::InvalidInput("bad issuer_id_len".to_string()));
-    }
-    let issuer_id = String::from_utf8(bytes[pos..pos + issuer_id_len].to_vec())
-        .map_err(|_| Error::InvalidInput("issuer_id not utf8".to_string()))?;
-    pos += issuer_id_len;
-
-    if pos + 2 > bytes.len() {
-        return Err(Error::InvalidInput(
-            "truncated signature length".to_string(),
-        ));
-    }
-    let sig_len = u16::from_be_bytes([bytes[pos], bytes[pos + 1]]) as usize;
-    pos += 2;
-    if sig_len == 0 || sig_len > PUBLIC_BEARER_MAX_SIGNATURE_LEN || pos + sig_len != bytes.len() {
-        return Err(Error::InvalidInput("bad signature length".to_string()));
-    }
-
-    Ok(PublicBearerPass {
-        nonce,
-        token_key_id,
-        issuer_id,
-        signature: bytes[pos..pos + sig_len].to_vec(),
-    })
-}
-
-/// Verify a V5 public bearer pass signature with its RFC 9474 SPKI public key.
-pub fn verify_public_bearer_signature(
-    pubkey_spki: &[u8],
-    token: &PublicBearerPass,
-) -> Result<(), Error> {
-    if token_key_id_from_spki(pubkey_spki) != token.token_key_id {
-        return Err(Error::Verify);
-    }
-
-    let pk = PublicKeySha384PSSDeterministic::from_spki(pubkey_spki)
-        .map_err(|_| Error::InvalidInput("invalid public token key".to_string()))?;
-    let msg = build_public_bearer_message(token)?;
-    let sig = BlindRsaSignature(token.signature.clone());
-    pk.verify(&sig, None, msg).map_err(|_| Error::Verify)
-}
-
-pub fn validate_public_bearer_spki(pubkey_spki: &[u8]) -> Result<(), Error> {
-    PublicKeySha384PSSDeterministic::from_spki(pubkey_spki)
-        .map(|_| ())
-        .map_err(|_| Error::InvalidInput("invalid public token key".to_string()))
-}
-
-/// Deterministic replay key for V5 public bearer passes.
-pub fn nullifier_key_v5(token: &PublicBearerPass) -> Result<String, Error> {
-    validate_token_field("issuer_id", &token.issuer_id)?;
-
-    let mut h = Sha256::new();
-    h.update(b"freebird:nullifier:v5");
-    h.update(token.nonce);
-    h.update(token.token_key_id);
-    h.update([token.issuer_id.len() as u8]);
-    h.update(token.issuer_id.as_bytes());
-    h.update(&token.signature);
     Ok(Base64UrlUnpadded::encode_string(&h.finalize()))
 }
 
@@ -861,59 +646,6 @@ mod tests {
         let mut bytes = build_redemption_token(&token).unwrap();
         bytes[0] = 0x01; // wrong version
         assert!(parse_redemption_token(&bytes).is_err());
-    }
-
-    #[test]
-    fn v5_wire_signature_message_and_nullifier_fixture() {
-        // The fixed SPKI and final signature were generated outside Freebird;
-        // crypto/tests/fixture-provenance.md records the exact command and inputs.
-        const SPKI_B64: &str = "MIIBUjA9BgkqhkiG9w0BAQowMKANMAsGCWCGSAFlAwQCAqEaMBgGCSqGSIb3DQEBCDALBglghkgBZQMEAgKiAwIBMAOCAQ8AMIIBCgKCAQEAoxaXGOdxdxj6I3S_lbNJ4T1CQ76A3cVJJUJECn0SiyKwKAA_FFTZQdmKq8gz3JDhrxayLXrhaoFtgTsmeMMlhPsYfyIOOzfe4khh3W-1nKhBqO5Kdr6KbVxgHkgoDWvKLXPCgSOpCG_1BAG1hJveWjd0LUAubxz3e2v5t9J_Vxddhsb9iqKylY0ZWXIsgqyEwPesqShxEb8qoJrIZ_Yi6_27Y9GR3MS6IzK5Ot0rNlEn3PCFW8phxVwofcMlxPgq_ZbdCRH_WJClQl6lWXBmL3DuSN8sMVJH4-rk9psHwrjiDciOpMvIotAEmIg1ZaTO-2DaKGRvV8oPlvXwPBp_gwIDAQAB";
-        const SIGNATURE_B64: &str = "lR5zKsB-yqyRurEsESMmslQih5gjqVIGhl55yFHpuP40_PX2hG1wCljQcSL8xSYE3k5HeXcvKQsLy4DVz7GiUCHzhEQQqDU1usXI1IPVjZIGwPbWq1R-GyMfUrw0t01IPoAzACChZ267KWuEZ-o7JI9Jk9dS8B67YAl8VZqw2Y0nZU-l0Zbt1DNpYIGX8e9Z-ASJ76WjR2AV7ANNqWIYklRrCJtqySOmDMf3SjkXL6AaYUmIYb98ENizrngKA2voJBSTsHF2FVaXKPNn9GYueYyCZNhfRWsyLQT6gjmvNHnMJWwNQc_ApNwRNKkbNZbkwQfXU-vurMEK-OkuI-C_8Q";
-        const B64: &str = "BSAhIiMkJSYnKCkqKywtLi8wMTIzNDU2Nzg5Ojs8PT4_Qlf_qAoZ8HL_J7KNYHR-0DG0s2wD_ccSUrPfal_pgvkRaXNzdWVyOmZpeHR1cmU6djUBAJUecyrAfsqskbqxLBEjJrJUIoeYI6lSBoZeechR6bj-NPz19oRtcApY0HEi_MUmBN5OR3l3LykLC8uA1c-xolAh84REEKg1NbrFyNSD1Y2SBsD21qtUfhsjH1K8NLdNSD6AMwAgoWduuylrhGfqOySPSZPXUvAeu2AJfFWasNmNJ2VPpdGW7dQzaWCBl_HvWfgEie-lo0dgFewDTaliGJJUawibaskjpgzH90o5Fy-gGmFJiGG_fBDYs654CgNr6CQUk7BxdhVWlyjzZ_RmLnmMgmTYX0VrMi0E-oI5rzR5zCVsDUHPwKTcETSpGzWW5MEH11Pr7qzBCvjpLiPgv_E";
-        const MESSAGE: [u8; 48] = [
-            0x2d, 0x16, 0x59, 0x91, 0x2a, 0x7e, 0x91, 0x22, 0x89, 0x69, 0x58, 0x7e, 0xa7, 0x10,
-            0xdc, 0x06, 0x55, 0xf4, 0x90, 0x4e, 0xae, 0xf8, 0xc1, 0x42, 0xe9, 0x89, 0x02, 0x1e,
-            0x15, 0xe8, 0x8c, 0x93, 0xcf, 0x5b, 0x56, 0xeb, 0x0a, 0x25, 0x0d, 0xca, 0x91, 0x34,
-            0xfc, 0x0d, 0x00, 0x7c, 0x2d, 0xb5,
-        ];
-        const TOKEN_KEY_ID: [u8; 32] = [
-            0x42, 0x57, 0xff, 0xa8, 0x0a, 0x19, 0xf0, 0x72, 0xff, 0x27, 0xb2, 0x8d, 0x60, 0x74,
-            0x7e, 0xd0, 0x31, 0xb4, 0xb3, 0x6c, 0x03, 0xfd, 0xc7, 0x12, 0x52, 0xb3, 0xdf, 0x6a,
-            0x5f, 0xe9, 0x82, 0xf9,
-        ];
-        const NULLIFIER: &str = "Cv6jUH48F6Mxadrp2vmUHYnqTxSA72E5IDtDOziRTJY";
-
-        let spki = Base64UrlUnpadded::decode_vec(SPKI_B64).unwrap();
-        let raw = Base64UrlUnpadded::decode_vec(B64).unwrap();
-        let signature = Base64UrlUnpadded::decode_vec(SIGNATURE_B64).unwrap();
-        let parsed = parse_public_bearer_pass(&raw).unwrap();
-        assert_eq!(token_key_id_from_spki(&spki), TOKEN_KEY_ID);
-        assert_eq!(parsed.nonce, core::array::from_fn(|i| 0x20 + i as u8));
-        assert_eq!(parsed.token_key_id, TOKEN_KEY_ID);
-        assert_eq!(parsed.issuer_id, "issuer:fixture:v5");
-        assert_eq!(parsed.signature, signature);
-        assert_eq!(build_public_bearer_message(&parsed).unwrap(), MESSAGE);
-        assert_eq!(
-            Base64UrlUnpadded::encode_string(&build_public_bearer_pass(&parsed).unwrap()),
-            B64
-        );
-        verify_public_bearer_signature(&spki, &parsed).unwrap();
-        assert_eq!(nullifier_key_v5(&parsed).unwrap(), NULLIFIER);
-
-        let mut tampered = parsed;
-        tampered.signature[0] ^= 0x01;
-        assert!(verify_public_bearer_signature(&spki, &tampered).is_err());
-    }
-
-    #[test]
-    fn test_v5_token_key_id_hex_is_strict_lowercase() {
-        let token_key_id = [0xAB; PUBLIC_BEARER_TOKEN_KEY_ID_LEN];
-        let encoded = encode_token_key_id_hex(&token_key_id);
-        assert_eq!(encoded.len(), 64);
-        assert_eq!(encoded, "ab".repeat(PUBLIC_BEARER_TOKEN_KEY_ID_LEN));
-        assert_eq!(decode_token_key_id_hex(&encoded).unwrap(), token_key_id);
-        assert!(decode_token_key_id_hex(&encoded.to_uppercase()).is_err());
-        assert!(decode_token_key_id_hex("abc").is_err());
     }
 
     #[test]

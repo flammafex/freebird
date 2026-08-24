@@ -39,6 +39,7 @@ elliptic-curve = "0.13"
 sha2 = "0.10"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 blake3 = "1"
+blind-rsa-signatures = "0.17.1"
 hex = "0.4"  # For invitation signature serialization
 subtle = "2"  # For constant-time comparisons
 hmac = "0.12"  # For constant-time API key verification

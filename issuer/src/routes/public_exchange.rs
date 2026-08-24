@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::{
-    exchange::{ProcessDecision, StatusDecision},
+    exchange::v7::{V7ProcessDecision, V7StatusDecision},
     AppStateWithSybil,
 };
 use axum::{
@@ -11,13 +11,13 @@ use axum::{
     response::Response,
     Json,
 };
-use freebird_common::exchange_api::{parse_operation_id, ExchangeRequestV2};
+use freebird_common::api::NativeExchangeV3Request;
+use freebird_common::v7_wire::parse_operation_id;
 use serde::Deserialize;
 use std::sync::Arc;
 
 pub const STATUS_CAPABILITY: HeaderName = HeaderName::from_static("exchange-status-capability");
-/// Compatibility symbol for the startup lane's CORS allow-list. Its wire value
-/// is the V2 status capability and is not an operation identifier.
+/// Header used by exchange status lookups.
 pub const IDEMPOTENCY_KEY: HeaderName = HeaderName::from_static("exchange-status-capability");
 
 type SharedState = (
@@ -25,17 +25,15 @@ type SharedState = (
     Arc<crate::multi_key_voprf::MultiKeyVoprfCore>,
 );
 
-pub async fn post_exchange(
+/// Handle the native V7 exchange contract.
+pub async fn post_exchange_v7(
     State((state, _)): State<SharedState>,
     headers: HeaderMap,
-    request: Result<Json<ExchangeRequestV2>, JsonRejection>,
+    request: Result<Json<NativeExchangeV3Request>, JsonRejection>,
 ) -> Response {
     let status_capability = match status_capability(&headers) {
         Ok(capability) => capability,
         Err(()) => return error(StatusCode::BAD_REQUEST, "invalid_status_capability"),
-    };
-    let Some(engine) = state.exchange_engine.as_ref() else {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "exchange_unavailable");
     };
     let Json(request) = match request {
         Ok(request) => request,
@@ -44,19 +42,23 @@ pub async fn post_exchange(
         }
         Err(_) => return error(StatusCode::BAD_REQUEST, "invalid_exchange_request"),
     };
+    let Some(engine) = state.native_exchange_v7.as_ref() else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "exchange_unavailable");
+    };
     match engine
-        .process_or_recover_v2(&request, &status_capability)
+        .process_or_recover(&request, &status_capability)
         .await
     {
-        Ok(ProcessDecision::Committed(bytes)) => exact(StatusCode::OK, bytes),
-        Ok(ProcessDecision::Retryable) => retryable(),
-        Ok(ProcessDecision::Conflict) => error(StatusCode::CONFLICT, "operation_conflict"),
-        Ok(ProcessDecision::Rejected) => error(StatusCode::BAD_REQUEST, "invalid_exchange"),
+        Ok(V7ProcessDecision::Committed(bytes)) => exact(StatusCode::OK, bytes),
+        Ok(V7ProcessDecision::Retryable) => retryable(),
+        Ok(V7ProcessDecision::Conflict) => error(StatusCode::CONFLICT, "operation_conflict"),
+        Ok(V7ProcessDecision::Rejected) => error(StatusCode::BAD_REQUEST, "invalid_v7_exchange"),
         Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "exchange_unavailable"),
     }
 }
 
-pub async fn get_exchange_status(
+/// Return the durable status of a V7 exchange operation.
+pub async fn get_exchange_status_v7(
     State((state, _)): State<SharedState>,
     headers: HeaderMap,
     query: Result<Query<ExchangeStatusQuery>, QueryRejection>,
@@ -72,14 +74,14 @@ pub async fn get_exchange_status(
         Some(operation_id) => operation_id,
         None => return error(StatusCode::BAD_REQUEST, "invalid_public_operation_id"),
     };
-    let Some(engine) = state.exchange_engine.as_ref() else {
+    let Some(engine) = state.native_exchange_v7.as_ref() else {
         return error(StatusCode::SERVICE_UNAVAILABLE, "exchange_unavailable");
     };
-    match engine.status_v2(&operation_id, &status_capability).await {
-        Ok(StatusDecision::Committed(bytes)) => exact(StatusCode::OK, bytes),
-        Ok(StatusDecision::Pending) => retryable(),
-        Ok(StatusDecision::Unknown) => error(StatusCode::NOT_FOUND, "unknown_operation"),
-        Ok(StatusDecision::Unauthorized) => error(StatusCode::FORBIDDEN, "status_unauthorized"),
+    match engine.status(&operation_id, &status_capability).await {
+        Ok(V7StatusDecision::Committed(bytes)) => exact(StatusCode::OK, bytes),
+        Ok(V7StatusDecision::Pending) => retryable(),
+        Ok(V7StatusDecision::Unknown) => error(StatusCode::NOT_FOUND, "unknown_operation"),
+        Ok(V7StatusDecision::Unauthorized) => error(StatusCode::FORBIDDEN, "status_unauthorized"),
         Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "exchange_unavailable"),
     }
 }
@@ -97,7 +99,7 @@ fn status_capability(headers: &HeaderMap) -> Result<[u8; 32], ()> {
         return Err(());
     }
     let value = value.to_str().map_err(|_| ())?;
-    freebird_common::exchange_api::decode_base64url(value, 32)
+    freebird_common::v7_wire::decode_base64url(value, 32)
         .map_err(|_| ())?
         .try_into()
         .map_err(|_| ())

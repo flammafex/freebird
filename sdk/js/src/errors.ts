@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-import type { ExchangeOutcome, FreebirdToken, GraphIssuanceOutcome, TokenResult } from './types.js';
+import type { FreebirdToken, TokenResult } from './types.js';
 
 /**
  * Stable machine-readable failure codes carried by every {@link FreebirdError}.
@@ -13,14 +13,15 @@ export type FreebirdErrorCode =
   | 'discovery'
   | 'verification'
   | 'verifier_not_configured'
-  | 'exchange'
-  | 'graph_issuance'
   | 'issuance'
   | 'rate_limited'
   | 'verifier_unavailable'
   | 'invalid_token'
   | 'replayed_token'
-  | 'poll';
+;
+
+/** Public V4/V7 error codes. Retired operation errors are not part of this union. */
+export type PublicFreebirdErrorCode = FreebirdErrorCode;
 
 /**
  * Base class for every typed error thrown by the SDK.
@@ -69,28 +70,6 @@ export class VerifierNotConfiguredError extends FreebirdError {
   }
 }
 
-/** A V2 public bearer exchange operation failed. */
-export class ExchangeError extends FreebirdError {
-  readonly outcome?: ExchangeOutcome;
-
-  constructor(message = 'Exchange operation failed', outcome?: ExchangeOutcome) {
-    super('exchange', message);
-    this.name = 'ExchangeError';
-    this.outcome = outcome;
-  }
-}
-
-/** A graph issuance operation failed. */
-export class GraphIssuanceError extends FreebirdError {
-  readonly outcome?: GraphIssuanceOutcome;
-
-  constructor(message = 'Graph issuance failed', outcome?: GraphIssuanceOutcome) {
-    super('graph_issuance', message);
-    this.name = 'GraphIssuanceError';
-    this.outcome = outcome;
-  }
-}
-
 /** The server rate-limited the request; `retryAfter` is in whole seconds. */
 export class RateLimitedError extends FreebirdError {
   readonly retryAfter: number;
@@ -127,9 +106,10 @@ export class ReplayedTokenError extends VerificationError {
 }
 
 /** A polling operation failed (base class for poll-specific errors). */
-export class PollError extends FreebirdError {
+export class PollError extends Error {
+  readonly code = 'poll' as const;
   constructor(message = 'Polling operation failed') {
-    super('poll', message);
+    super(message);
     this.name = 'PollError';
   }
 }

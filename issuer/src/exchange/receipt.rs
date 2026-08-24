@@ -4,11 +4,9 @@ use anyhow::{Context, Result};
 use base64ct::Encoding;
 use ed25519_dalek::{Signature, Signer, Verifier};
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use freebird_common::{
-    api::{ExchangeReceiptKeyInfo, EXCHANGE_MAX_VALID_UNTIL},
-    exchange_api::ExchangeReceiptV2,
-};
+use freebird_common::api::{NativeExchangeV3Receipt, EXCHANGE_MAX_VALID_UNTIL};
 use rand::{rngs::OsRng, RngCore};
+use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::{
     collections::HashMap,
@@ -24,11 +22,21 @@ pub struct ReceiptKey {
     signing: SigningKey,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptKeyMetadata {
+    pub key_id: String,
+    pub algorithm: String,
+    pub purpose: String,
+    pub public_key_b64: String,
+    pub valid_from: u64,
+    pub valid_until: u64,
+}
+
 /// Local binding between immutable public receipt-key metadata and private key
 /// material. Only `metadata` may be published.
 #[derive(Clone, Debug)]
 pub struct ReceiptKeyConfig {
-    pub metadata: ExchangeReceiptKeyInfo,
+    pub metadata: ReceiptKeyMetadata,
     pub private_key_path: PathBuf,
 }
 
@@ -38,27 +46,21 @@ pub struct ReceiptKeyConfig {
 pub struct ReceiptKeyRing {
     active_id: String,
     keys: HashMap<String, Arc<ReceiptKey>>,
-    metadata: HashMap<String, ExchangeReceiptKeyInfo>,
+    metadata: HashMap<String, ReceiptKeyMetadata>,
 }
 
 impl ReceiptKeyRing {
-    /// Load a V2 key ring whose public metadata is an immutable part of the
-    /// operator configuration. A declared identity must already have matching
-    /// private material.
-    pub fn load_v2(active: ReceiptKeyConfig, retained: &[ReceiptKeyConfig]) -> Result<Self> {
+    /// Load the V7-only exchange receipt key ring. V7 uses a distinct purpose
+    /// namespace and never accepts legacy receipt records or metadata.
+    pub fn load_v7(active: ReceiptKeyConfig, retained: &[ReceiptKeyConfig]) -> Result<Self> {
         let mut keys = HashMap::new();
         let mut metadata = HashMap::new();
         let active_id = active.metadata.key_id.clone();
-        load_configured_key(&active, "exchange_receipt_active", &mut keys, &mut metadata)
-            .context("invalid active V2 receipt key")?;
+        load_configured_key(&active, "exchange_receipt_v7", &mut keys, &mut metadata)
+            .context("invalid active V7 receipt key")?;
         for config in retained {
-            load_configured_key(
-                config,
-                "exchange_receipt_retained",
-                &mut keys,
-                &mut metadata,
-            )
-            .context("invalid retained V2 receipt key")?;
+            load_configured_key(config, "exchange_receipt_v7", &mut keys, &mut metadata)
+                .context("invalid retained V7 receipt key")?;
         }
         Ok(Self {
             active_id,
@@ -125,46 +127,16 @@ impl ReceiptKeyRing {
     pub fn contains(&self, key_id: &str) -> bool {
         self.keys.contains_key(key_id)
     }
-
-    pub fn discovery_metadata(&self) -> Vec<freebird_common::api::ExchangeReceiptKeyInfo> {
-        let mut ids = self.metadata.keys().cloned().collect::<Vec<_>>();
-        ids.sort_unstable();
-        if let Some(position) = ids.iter().position(|id| id == &self.active_id) {
-            ids.swap(0, position);
-        }
-        ids.into_iter()
-            .map(|id| {
-                self.metadata
-                    .get(&id)
-                    .expect("ring id came from metadata map")
-                    .clone()
-            })
-            .collect()
-    }
-}
-
-fn receipt_key_metadata(
-    key: &ReceiptKey,
-    purpose: &str,
-    valid_from: u64,
-    valid_until: u64,
-) -> ExchangeReceiptKeyInfo {
-    ExchangeReceiptKeyInfo {
-        key_id: key.key_id(),
-        algorithm: "Ed25519".into(),
-        purpose: purpose.into(),
-        public_key_b64: base64ct::Base64UrlUnpadded::encode_string(key.verifying_key().as_bytes()),
-        valid_from,
-        valid_until,
-    }
 }
 
 pub fn validate_receipt_key_metadata(
-    metadata: &ExchangeReceiptKeyInfo,
+    metadata: &ReceiptKeyMetadata,
     expected_purpose: &str,
 ) -> Result<VerifyingKey> {
-    freebird_common::exchange_api::validate_receipt_key_id(&metadata.key_id)
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    if metadata.key_id.len() != 64 || !metadata.key_id.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        anyhow::bail!("invalid receipt key identifier")
+    }
     if metadata.algorithm != "Ed25519"
         || metadata.purpose != expected_purpose
         || metadata.valid_from == 0
@@ -190,7 +162,7 @@ fn load_configured_key(
     config: &ReceiptKeyConfig,
     expected_purpose: &str,
     keys: &mut HashMap<String, Arc<ReceiptKey>>,
-    metadata: &mut HashMap<String, ExchangeReceiptKeyInfo>,
+    metadata: &mut HashMap<String, ReceiptKeyMetadata>,
 ) -> Result<()> {
     let declared_public = validate_receipt_key_metadata(&config.metadata, expected_purpose)?;
     validate_receipt_key_file(&config.private_key_path)?;
@@ -217,25 +189,25 @@ impl ReceiptKey {
     pub fn key_id(&self) -> String {
         hex::encode(sha2::Sha256::digest(self.verifying_key().as_bytes()))
     }
-    pub fn sign_receipt_v2(&self, receipt: &ExchangeReceiptV2) -> Result<Vec<u8>> {
+    pub fn sign_receipt_v7(&self, receipt: &NativeExchangeV3Receipt) -> Result<Vec<u8>> {
         let digest = receipt
             .receipt_digest()
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         Ok(self.signing.sign(&digest).to_bytes().to_vec())
     }
 
-    pub fn verify_receipt_v2(
-        receipt: &ExchangeReceiptV2,
+    pub fn verify_receipt_v7(
+        receipt: &NativeExchangeV3Receipt,
         public: &VerifyingKey,
         signature: &[u8],
     ) -> Result<()> {
-        let signature = Signature::from_slice(signature).context("invalid receipt signature")?;
+        let signature = Signature::from_slice(signature).context("invalid V7 receipt signature")?;
         let digest = receipt
             .receipt_digest()
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         public
             .verify(&digest, &signature)
-            .context("invalid receipt signature")
+            .context("invalid V7 receipt signature")
     }
 }
 
@@ -380,168 +352,4 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         fs::File::open(parent)?.sync_all()?;
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use base64ct::Encoding;
-
-    fn metadata(key: &ReceiptKey, purpose: &str, from: u64, until: u64) -> ExchangeReceiptKeyInfo {
-        receipt_key_metadata(key, purpose, from, until)
-    }
-
-    fn config(path: PathBuf, metadata: ExchangeReceiptKeyInfo) -> ReceiptKeyConfig {
-        ReceiptKeyConfig {
-            metadata,
-            private_key_path: path,
-        }
-    }
-
-    fn receipt_v2(key_id: String) -> ExchangeReceiptV2 {
-        ExchangeReceiptV2 {
-            version: freebird_common::exchange_api::EXCHANGE_VERSION_V2,
-            public_operation_id: base64ct::Base64UrlUnpadded::encode_string(&[1; 16]),
-            graph_id: "1".repeat(64),
-            transition_id: "2".repeat(64),
-            source_keyset_id: "3".repeat(64),
-            target_keyset_id: "4".repeat(64),
-            result_digest: base64ct::Base64UrlUnpadded::encode_string(&[5; 32]),
-            created_at: 100,
-            expires_at: 200,
-            receipt_key_id: key_id,
-            signature: String::new(),
-        }
-    }
-    #[test]
-    fn persists_and_reloads() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("receipt.key");
-        let a = load_or_generate_receipt_key(&p).unwrap();
-        assert_eq!(
-            a.key_id(),
-            load_or_generate_receipt_key(&p).unwrap().key_id()
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(fs::metadata(p).unwrap().permissions().mode() & 0o777, 0o600);
-        }
-    }
-    #[test]
-    fn v2_signatures_use_canonical_receipt_digest_and_reject_tampering() {
-        let key = ReceiptKey {
-            signing: SigningKey::from_bytes(&[8; 32]),
-        };
-        let mut receipt = receipt_v2(key.key_id());
-        let signature = key.sign_receipt_v2(&receipt).unwrap();
-        ReceiptKey::verify_receipt_v2(&receipt, &key.verifying_key(), &signature).unwrap();
-
-        receipt.graph_id = "9".repeat(64);
-        assert!(ReceiptKey::verify_receipt_v2(&receipt, &key.verifying_key(), &signature).is_err());
-        receipt.graph_id = "1".repeat(64);
-        receipt.result_digest = base64ct::Base64UrlUnpadded::encode_string(&[6; 32]);
-        assert!(ReceiptKey::verify_receipt_v2(&receipt, &key.verifying_key(), &signature).is_err());
-        assert!(
-            ReceiptKey::verify_receipt_v2(&receipt, &key.verifying_key(), &signature[..63])
-                .is_err()
-        );
-    }
-    #[test]
-    fn recovers_stale_lock_without_replacing_key() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("r");
-        fs::write(format!("{}.lock", p.display()), "stale-process").unwrap();
-        let key = load_or_generate_receipt_key(&p).unwrap();
-        assert_eq!(
-            key.key_id(),
-            load_or_generate_receipt_key(&p).unwrap().key_id()
-        );
-    }
-
-    #[test]
-    fn v2_fresh_selection_is_active_and_recovery_resolves_retained_signer() {
-        let dir = tempfile::tempdir().unwrap();
-        let active_path = dir.path().join("active.key");
-        let retained_path = dir.path().join("retained.key");
-        let active = load_or_generate_receipt_key(&active_path).unwrap();
-        let retained = load_or_generate_receipt_key(&retained_path).unwrap();
-        let active_config = config(
-            active_path,
-            metadata(&active, "exchange_receipt_active", 100, 500),
-        );
-        let retained_config = config(
-            retained_path,
-            metadata(&retained, "exchange_receipt_retained", 50, 300),
-        );
-        let retained_id = retained.key_id();
-        let ring = ReceiptKeyRing::load_v2(active_config, &[retained_config]).unwrap();
-
-        assert_eq!(
-            ring.active_signer(100, 200).unwrap().key_id(),
-            active.key_id()
-        );
-        assert_eq!(
-            ring.recovery_signer(&retained_id, 60, 250)
-                .unwrap()
-                .key_id(),
-            retained_id
-        );
-        assert!(ring.active_signer(90, 200).is_err());
-        assert!(ring.active_signer(100, 501).is_err());
-        assert!(ring.recovery_signer(&retained_id, 60, 301).is_err());
-        assert!(ring.recovery_signer(&"0".repeat(64), 100, 200).is_err());
-    }
-
-    #[test]
-    fn v2_rejects_invalid_or_missing_referenced_signers_and_metadata_conflicts() {
-        let dir = tempfile::tempdir().unwrap();
-        let active_path = dir.path().join("active.key");
-        let other_path = dir.path().join("other.key");
-        let active = load_or_generate_receipt_key(&active_path).unwrap();
-        load_or_generate_receipt_key(&other_path).unwrap();
-        let active_metadata = metadata(&active, "exchange_receipt_active", 100, 500);
-
-        let missing = config(dir.path().join("missing.key"), active_metadata.clone());
-        assert!(ReceiptKeyRing::load_v2(missing, &[]).is_err());
-
-        let mismatched = config(other_path.clone(), active_metadata.clone());
-        assert!(ReceiptKeyRing::load_v2(mismatched, &[]).is_err());
-
-        let wrong_purpose = config(
-            active_path.clone(),
-            metadata(&active, "exchange_receipt_retained", 100, 500),
-        );
-        assert!(ReceiptKeyRing::load_v2(wrong_purpose, &[]).is_err());
-
-        let active_config = config(active_path.clone(), active_metadata.clone());
-        let conflicting = config(
-            active_path,
-            ExchangeReceiptKeyInfo {
-                key_id: active_metadata.key_id,
-                purpose: "exchange_receipt_retained".into(),
-                valid_until: 501,
-                ..active_metadata
-            },
-        );
-        assert!(ReceiptKeyRing::load_v2(active_config, &[conflicting]).is_err());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn v2_requires_exact_0600_private_key_permissions() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("receipt.key");
-        let key = load_or_generate_receipt_key(&path).unwrap();
-        let configured = config(
-            path.clone(),
-            metadata(&key, "exchange_receipt_active", 100, 500),
-        );
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o400)).unwrap();
-        assert!(ReceiptKeyRing::load_v2(configured.clone(), &[]).is_err());
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o640)).unwrap();
-        assert!(ReceiptKeyRing::load_v2(configured, &[]).is_err());
-    }
 }

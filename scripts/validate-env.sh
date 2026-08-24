@@ -30,43 +30,45 @@ esac
 [ "${IN_MEMORY_REPLAY_STORE:-false}" = false ] || error "IN_MEMORY_REPLAY_STORE must be false"
 [ "${SYBIL_REPLAY_STORE:-redis}" = redis ] || error "SYBIL_REPLAY_STORE must be redis"
 
-# V2 graph/exchange configuration is deliberately explicit. Runtime config
-# validation checks files and cryptographic material; this lightweight check
-# catches missing environment wiring before the service is started.
-if [ "${PUBLIC_BEARER_EXCHANGE_PROFILE_PATH+x}" = x ] ||
-   [ "${PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS+x}" = x ] ||
-   [ "${PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH+x}" = x ]; then
-  error "V1 fixed-profile exchange settings are removed; use V2 graph and receipt paths"
-fi
-if [ "${PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL+x}" = x ]; then
-  error "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL is obsolete; use the shared authority probe"
+# Retired V5/V1 settings are rejected, never positively interpreted. This
+# catches both inherited process variables and assignments loaded from .env.
+if env | grep -Eq '^PUBLIC_BEARER_[A-Za-z0-9_]*='; then
+  error "retired PUBLIC_BEARER_* configuration is not accepted; use native V7 settings"
 fi
 
-if [ "${PUBLIC_BEARER_EXCHANGE_ENABLE:-false}" = true ] ||
-   [ "${PUBLIC_BEARER_EXCHANGE_ENABLE:-false}" = 1 ]; then
-  [ -n "${PUBLIC_BEARER_EXCHANGE_REDIS_URL:-}" ] || error "PUBLIC_BEARER_EXCHANGE_REDIS_URL is required when exchange is enabled"
-  [ -n "${PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH:-}" ] || error "PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH is required when exchange is enabled"
-  [ -n "${PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH:-}" ] || error "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH is required when exchange is enabled"
-  [ -n "${PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH:-}" ] || error "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH is required when exchange is enabled"
+if [ "${SERVICE_ROLE:-}" = issuer ]; then
+  [ "${NATIVE_BEARER_V7_ENABLE:-}" = true ] || [ "${NATIVE_BEARER_V7_ENABLE:-}" = 1 ] || \
+    error "NATIVE_BEARER_V7_ENABLE=true is required; V7 native bearer issuance is mandatory"
+  [ -n "${NATIVE_BEARER_V7_SK_PATH:-}" ] || error "NATIVE_BEARER_V7_SK_PATH is required"
+  [ -n "${NATIVE_BEARER_V7_METADATA_PATH:-}" ] || error "NATIVE_BEARER_V7_METADATA_PATH is required"
+  [ -n "${NATIVE_BEARER_V7_REGISTRY_PATH:-}" ] || error "NATIVE_BEARER_V7_REGISTRY_PATH is required"
+  [ -n "${NATIVE_BEARER_V7_PROFILE_ID:-}" ] || error "NATIVE_BEARER_V7_PROFILE_ID is required"
+  [ -n "${NATIVE_BEARER_V7_DESCRIPTOR_ID:-}" ] || error "NATIVE_BEARER_V7_DESCRIPTOR_ID is required"
+  [ -n "${NATIVE_BEARER_V7_TOKEN_KEY_ID:-}" ] || error "NATIVE_BEARER_V7_TOKEN_KEY_ID is required"
+  [ -n "${NATIVE_BEARER_V7_ASSET_ID:-}" ] || error "NATIVE_BEARER_V7_ASSET_ID is required"
+  [ -n "${NATIVE_BEARER_V7_AMOUNT_MINOR:-}" ] || error "NATIVE_BEARER_V7_AMOUNT_MINOR is required"
+  printf '%s' "${NATIVE_BEARER_V7_DESCRIPTOR_ID:-}" | grep -Eq '^[0-9a-f]{64}$' || \
+    error "NATIVE_BEARER_V7_DESCRIPTOR_ID must be 64 lowercase hexadecimal characters"
+  printf '%s' "${NATIVE_BEARER_V7_TOKEN_KEY_ID:-}" | grep -Eq '^[0-9a-f]{64}$' || \
+    error "NATIVE_BEARER_V7_TOKEN_KEY_ID must be 64 lowercase hexadecimal characters"
 fi
 
-if [ "${PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE:-false}" = true ] ||
-   [ "${PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE:-false}" = 1 ]; then
-  [ "${PUBLIC_BEARER_EXCHANGE_ENABLE:-false}" = true ] || error "graph issuance requires PUBLIC_BEARER_EXCHANGE_ENABLE=true"
-  [ -n "${PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH:-}" ] || error "PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH is required when graph issuance is enabled"
-  case "${PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION:-}" in
-    hmac_sha256)
-      [ -n "${PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64:-}" ] || error "graph issuance HMAC secret is required"
-      ;;
-    v4_local)
-      [ -n "${PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64:-}" ] || error "graph issuance V4 keyring is required"
-      ;;
-    development_mock)
-      [ "${FREEBIRD_ENV:-}" = development ] || error "development graph issuance requires FREEBIRD_ENV=development"
-      [ "${FREEBIRD_UNSAFE_DEVELOPMENT_MODE:-false}" = true ] || error "development graph issuance requires FREEBIRD_UNSAFE_DEVELOPMENT_MODE=true"
-      ;;
-    *) error "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION must be hmac_sha256, v4_local, or development_mock" ;;
-  esac
+if [ "${NATIVE_EXCHANGE_V7_ENABLE:-false}" = true ] ||
+   [ "${NATIVE_EXCHANGE_V7_ENABLE:-false}" = 1 ]; then
+  [ -n "${NATIVE_EXCHANGE_V7_REDIS_URL:-}" ] || error "NATIVE_EXCHANGE_V7_REDIS_URL is required when V7 exchange is enabled"
+  [ -n "${NATIVE_EXCHANGE_V7_DISCOVERY_PATH:-}" ] || error "NATIVE_EXCHANGE_V7_DISCOVERY_PATH is required when V7 exchange is enabled"
+  [ -n "${NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_KEY_PATH:-}" ] || error "NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_KEY_PATH is required when V7 exchange is enabled"
+  [ -n "${NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_METADATA_PATH:-}" ] || error "NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_METADATA_PATH is required when V7 exchange is enabled"
+fi
+
+if [ "${NATIVE_GRAPH_ISSUANCE_V7_ENABLE:-false}" = true ] ||
+   [ "${NATIVE_GRAPH_ISSUANCE_V7_ENABLE:-false}" = 1 ]; then
+  [ "${NATIVE_EXCHANGE_V7_ENABLE:-false}" = true ] || [ "${NATIVE_EXCHANGE_V7_ENABLE:-false}" = 1 ] || \
+    error "V7 graph issuance requires NATIVE_EXCHANGE_V7_ENABLE=true"
+  [ -n "${NATIVE_GRAPH_ISSUANCE_V7_POLICY_PATH:-}" ] || error "NATIVE_GRAPH_ISSUANCE_V7_POLICY_PATH is required when V7 graph issuance is enabled"
+  [ "${NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION:-}" = v4_local ] || \
+    error "NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION must be v4_local for deployment"
+  [ -n "${NATIVE_GRAPH_ISSUANCE_V7_V4_KEYRING_B64:-}" ] || error "NATIVE_GRAPH_ISSUANCE_V7_V4_KEYRING_B64 is required for V7 graph issuance"
 fi
 
 if [ -n "${VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS:-}" ]; then
@@ -76,15 +78,22 @@ if [ -n "${VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS:-}" ]; then
   [ "${VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS:-60s}" = 60s ] || error "VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS must be 60s"
 fi
 if [ "${SERVICE_ROLE:-}" = verifier ] &&
-   { [ "${PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE:-false}" = true ] ||
-     [ "${PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE:-false}" = 1 ]; }; then
+   { [ "${NATIVE_GRAPH_ISSUANCE_V7_ENABLE:-false}" = true ] ||
+     [ "${NATIVE_GRAPH_ISSUANCE_V7_ENABLE:-false}" = 1 ]; }; then
   [ -n "${VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS:-}" ] || error "VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS is required for a graph-enabled verifier"
 fi
 if [ "${SERVICE_ROLE:-}" = verifier ] &&
    [ -n "${VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS:-}" ] &&
-   [ "${PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE:-false}" != true ] &&
-   [ "${PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE:-false}" != 1 ]; then
-  error "VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS requires PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE=true"
+   [ "${NATIVE_GRAPH_ISSUANCE_V7_ENABLE:-false}" != true ] &&
+   [ "${NATIVE_GRAPH_ISSUANCE_V7_ENABLE:-false}" != 1 ]; then
+  error "VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS requires NATIVE_GRAPH_ISSUANCE_V7_ENABLE=true"
+fi
+
+if [ "${SERVICE_ROLE:-}" = verifier ]; then
+  case ",${VERIFIER_ACCEPTED_TOKEN_VERSIONS:-}," in
+    *,v4,* ) ;; *) error "verifier must accept V4 tokens" ;; esac
+  case ",${VERIFIER_ACCEPTED_TOKEN_VERSIONS:-}," in
+    *,v7,* ) ;; *) error "verifier must accept V7 native bearer tokens" ;; esac
 fi
 
 if [ "$errors" -ne 0 ]; then

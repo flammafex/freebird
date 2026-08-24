@@ -33,11 +33,11 @@ SHA256(input || nonce || timestamp)
 has the configured number of leading zero bits.
 
 The issuer now binds PoW proofs to issuance request context when the proof is
-submitted to public issuance routes. For custom clients, the PoW `input` must
-match the route-specific request binding.
+submitted to V4 or V7 native bearer routes. For custom clients, the PoW `input`
+must match the route-specific request binding.
 
-Public issuance validates a requested V5 token key before processing any Sybil
-proof. A stale key therefore returns HTTP 400 with
+V7 native bearer issuance validates the requested token key before processing
+any Sybil proof. A stale key therefore returns HTTP 400 with
 `{"error":"token_key_not_active"}` without consuming the proof.
 
 Single V4 issuance:
@@ -46,20 +46,20 @@ Single V4 issuance:
 freebird:issue:v1:{issuer_id}:{blinded_element_b64}
 ```
 
-Single V5 public issuance:
+Single V7 native bearer issuance:
 
 ```text
-freebird:public-issue:v1:{issuer_id}:{blinded_msg_b64}
+freebird:native-bearer-v7:issue:v1:{issuer_id}:{token_key_id}:{blinded_msg_b64}
 ```
 
 Batch issuance:
 
 ```text
-freebird:{route_scope}:v1:{issuer_id}:{count}:{digest}
+freebird:native-bearer-v7:issue-batch:v1:{issuer_id}:{token_key_id}:{count}:{digest}
 ```
 
-where `route_scope` is `issue-batch` or `public-issue-batch`, and `digest` is
-base64url without padding of the first 16 bytes of:
+For V4, the corresponding route scope is `issue-batch`; for V7 the scope above
+is used. `digest` is base64url without padding of the first 16 bytes of:
 
 ```text
 SHA256(len_le_u64(element_0) || element_0 || ... || len_le_u64(element_n) || element_n)

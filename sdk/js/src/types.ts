@@ -15,7 +15,7 @@ export interface ClientConfig {
    *
    * When unset, the TTL is derived from the metadata's `epoch_duration_sec`
    * (i.e. the cache expires when the current epoch advances). Set this to
-   * override the epoch-derived TTL, e.g. to poll for key rotation more
+    * override the epoch-derived TTL, e.g. to observe key rotation more
    * aggressively than once per epoch.
    */
   keyCacheTtlMs?: number;
@@ -41,14 +41,14 @@ export interface ClientConfig {
    * Optional custom `fetch` implementation used for all outbound HTTP.
    *
    * When provided, every request the client makes (discovery, issuance,
-   * verification, exchange, graph-issuance) is routed through this function
+    * verification) is routed through this function
    * instead of the global `fetch`. This lets consumers route traffic through a
    * proxy (e.g. Tor/SOCKS5) for network-level privacy. Defaults to the global
    * `fetch` when unset.
    */
   fetch?: typeof fetch;
   /**
-   * Maximum UTF-8 JSON body size for V4/V5 batch issuance requests.
+   * Maximum UTF-8 JSON body size for V4 batch issuance requests.
    *
    * The default is 60 KiB. The value may be lowered but not raised above the
    * SDK ceiling. Requests are greedily split before the existing 10,000-item
@@ -66,13 +66,6 @@ export interface IssuerMetadata {
     suite: string;
     kid: string;
     pubkey: string; // Base64url encoded SEC1 compressed point
-  };
-  public?: {
-    token_type: string;
-    token_key_id: string;
-    rfc9474_variant: string;
-    modulus_bits: number;
-    spend_policy: string;
   };
   /**
    * Issuer-published Sybil resistance requirements. Absent on issuers that do
@@ -143,316 +136,6 @@ export interface TrustLevelSummary {
   cooldown_secs: number;
 }
 
-export interface PublicKeyInfo {
-  token_key_id: string;
-  token_type: string;
-  rfc9474_variant: string;
-  modulus_bits: number;
-  pubkey_spki_b64: string;
-  issuer_id: string;
-  valid_from: number;
-  valid_until: number;
-  audience?: string;
-  spend_policy: string;
-  max_uses?: number;
-}
-
-/** A source or output position in the immutable exchange rule. */
-export interface ExchangeSlot {
-  descriptor_id: string;
-  keyset_id: string;
-  slot_id: string;
-  quantity: number;
-}
-
-export interface ExchangeRequestSource {
-  slot: ExchangeSlot;
-  /** Base64url-encoded V5 public bearer source artifact. */
-  artifact: string;
-}
-
-export interface ExchangeRequestOutput {
-  slot: ExchangeSlot;
-  /** Base64url-encoded RFC 9474 blinded target message. */
-  blinded_value: string;
-}
-
-/** Exact JSON body accepted by POST /v2/public/exchange. */
-export interface ExchangeRequest {
-  version: 2;
-  /** Public, non-secret 16-byte operation identifier (canonical base64url). */
-  public_operation_id: string;
-  graph_id: string;
-  transition_id: string;
-  source_keyset_id: string;
-  target_keyset_id: string;
-  sources: ExchangeRequestSource[];
-  outputs: ExchangeRequestOutput[];
-}
-
-export interface ExchangeResultOutput {
-  slot: ExchangeSlot;
-  blinded_value: string;
-  /** Base64url-encoded RFC 9474 blind signature. */
-  blind_signature: string;
-}
-
-export interface ExchangeResult {
-  version: 2;
-  public_operation_id: string;
-  graph_id: string;
-  transition_id: string;
-  source_keyset_id: string;
-  target_keyset_id: string;
-  outputs: ExchangeResultOutput[];
-  result_digest: string;
-}
-
-export interface ExchangeReceipt {
-  version: 2;
-  public_operation_id: string;
-  graph_id: string;
-  transition_id: string;
-  source_keyset_id: string;
-  target_keyset_id: string;
-  result_digest: string;
-  created_at: number;
-  expires_at: number;
-  receipt_key_id: string;
-  signature: string;
-}
-
-/** Exact stored success JSON returned by POST and status lookup. */
-export interface ExchangeSuccessResponse {
-  result: ExchangeResult;
-  receipt: ExchangeReceipt;
-}
-
-export interface ExchangeReceiptKeyInfo {
-  key_id: string;
-  algorithm: 'Ed25519';
-  purpose: 'exchange_receipt_active' | 'exchange_receipt_retained';
-  public_key_b64: string;
-  valid_from: number;
-  valid_until: number;
-}
-
-export interface ExchangeTargetKeysetInfo {
-  keyset_id: string;
-  /** Canonical ordered descriptor membership. */
-  descriptor_ids: string[];
-}
-
-export interface ExchangeDescriptorInfo {
-  descriptor_id: string;
-  profile_id: string;
-  issuer_id: string;
-  token_key_id: string;
-  pubkey_spki_b64: string;
-  suite: string;
-  valid_from: number;
-  valid_until: number;
-  audience?: string;
-}
-
-export interface ExchangeTransitionSlotInfo {
-  descriptor_id: string;
-  slot_id: string;
-  class: string;
-  quantity: number;
-}
-
-export type ExchangeAdmissionState = 'accepting_new' | 'recovery_only' | 'disabled';
-
-export interface ExchangeTransitionInfo {
-  transition_id: string;
-  source_keyset_id: string;
-  target_keyset_id: string;
-  source_slots: ExchangeTransitionSlotInfo[];
-  output_slots: ExchangeTransitionSlotInfo[];
-  budget_id: string;
-  budget_limit: number;
-  admission_state: ExchangeAdmissionState;
-}
-
-export interface ExchangeGraphInfo {
-  profile_id: 'freebird/public-bearer-exchange/v2';
-  graph_id: string;
-  descriptors: ExchangeDescriptorInfo[];
-  keysets: ExchangeTargetKeysetInfo[];
-  transitions: ExchangeTransitionInfo[];
-}
-
-/** All-or-nothing V2 exchange trust container from /.well-known/keys. */
-export interface ExchangeDiscoveryMetadata {
-  active_graph: ExchangeGraphInfo;
-  retained_graphs: ExchangeGraphInfo[];
-  active_receipt_key: ExchangeReceiptKeyInfo;
-  retained_receipt_keys: ExchangeReceiptKeyInfo[];
-}
-
-export interface GraphIssuancePolicyInfo {
-  issuance_policy_id: string;
-  graph_id: string;
-  keyset_id: string;
-  descriptor_id: string;
-  budget_id: string;
-  budget_limit: number;
-  quantity: number;
-  admission_state: ExchangeAdmissionState;
-  authorization_scheme: string;
-  /** Published only for v4_local policies; binds the authorization namespace. */
-  authorization_scope_digest_b64?: string;
-}
-
-export interface GraphIssuanceDiscoveryMetadata {
-  version: 2;
-  policies: GraphIssuancePolicyInfo[];
-  replay_authority: GraphIssuanceReplayAuthorityDiscovery;
-}
-
-export interface GraphIssuanceReplayAuthorityDiscovery {
-  authority_id: string;
-  v4_scope_digest_tombstones: string[];
-}
-
-/** Exact V2 JSON body accepted by POST /v1/public/graph/issue. */
-export interface GraphIssuanceRequest {
-  version: 2;
-  public_operation_id: string;
-  issuance_policy_id: string;
-  graph_id: string;
-  keyset_id: string;
-  descriptor_id: string;
-  blinded_message: string;
-  authorization: string;
-}
-
-export interface GraphIssuanceResult {
-  version: 2;
-  public_operation_id: string;
-  issuance_policy_id: string;
-  graph_id: string;
-  keyset_id: string;
-  descriptor_id: string;
-  token_key_id: string;
-  quantity: number;
-  request_digest: string;
-  blind_signature: string;
-  result_digest: string;
-}
-
-/**
- * Exact persisted inputs needed to retry or observe an issuance operation.
- *
- * The nested request is retained verbatim, while the duplicated selectors and
- * digests make accidental recovery-context mutation detectable without
- * consulting issuer discovery. `blindingState` is intentionally opaque to the
- * SDK and is returned to the caller for finalization.
- */
-export interface GraphIssuanceRecoveryContext {
-  request: GraphIssuanceRequest;
-  requestDigest: string;
-  publicOperationId: string;
-  issuancePolicyId: string;
-  graphId: string;
-  keysetId: string;
-  descriptorId: string;
-  statusCapability: string;
-  /** The token key selected by the fresh issuance operation. */
-  expectedTokenKeyId: string;
-  /** Caller-owned RFC 9474 blinding state; the SDK never interprets it. */
-  blindingState: unknown;
-}
-
-export type GraphIssuanceOutcome =
-  | { kind: 'committed'; httpStatus: 200; response: GraphIssuanceResult; rawResponseBody: string; cacheControl: 'no-store' }
-  | { kind: 'error'; httpStatus: 400 | 404 | 409 | 413 | 503; response: { error: string }; rawResponseBody: string; cacheControl: 'no-store' };
-
-export interface ExchangeTransitionSelection {
-  graph: ExchangeGraphInfo;
-  transition: ExchangeTransitionInfo;
-}
-
-export type ExchangeErrorCode =
-  | 'invalid_status_capability'
-  | 'invalid_public_operation_id'
-  | 'exchange_request_too_large'
-  | 'exchange_unavailable'
-  | 'invalid_exchange_request'
-  | 'operation_conflict'
-  | 'invalid_exchange'
-  | 'unknown_operation'
-  | 'status_unauthorized';
-
-export interface ExchangePendingResponse {
-  error: 'exchange_retryable';
-}
-
-export interface ExchangeErrorResponse {
-  error: ExchangeErrorCode;
-}
-
-interface ExchangeHttpOutcome {
-  /** The exact response text returned by the durable exchange record. */
-  rawResponseBody: string;
-  cacheControl: 'no-store';
-}
-
-export interface ExchangeCommittedOutcome extends ExchangeHttpOutcome {
-  kind: 'committed';
-  httpStatus: 200;
-  response: ExchangeSuccessResponse;
-}
-
-export interface ExchangePendingOutcome extends ExchangeHttpOutcome {
-  kind: 'pending';
-  httpStatus: 202;
-  response: ExchangePendingResponse;
-  /** Retry-After delay in whole seconds. */
-  retryAfter: number;
-}
-
-export type ExchangeErrorOutcome = ExchangeHttpOutcome &
-  (
-    | {
-        kind: 'error';
-        httpStatus: 400;
-        response: {
-          error:
-            | 'invalid_status_capability'
-            | 'invalid_public_operation_id'
-            | 'invalid_exchange_request'
-            | 'invalid_exchange';
-        };
-      }
-    | {
-        kind: 'error';
-        httpStatus: 413;
-        response: { error: 'exchange_request_too_large' };
-      }
-    | {
-        kind: 'error';
-        httpStatus: 404;
-        response: { error: 'unknown_operation' };
-      }
-    | {
-        kind: 'error';
-        httpStatus: 409;
-        response: { error: 'operation_conflict' };
-      }
-    | {
-        kind: 'error';
-        httpStatus: 503;
-        response: { error: 'exchange_unavailable' };
-      }
-  );
-
-export type ExchangeOutcome =
-  | ExchangeCommittedOutcome
-  | ExchangePendingOutcome
-  | ExchangeErrorOutcome;
-
 export interface KeyDiscoveryMetadata {
   issuer_id: string;
   current_epoch: number;
@@ -463,11 +146,6 @@ export interface KeyDiscoveryMetadata {
     kid: string;
     pubkey: string;
   };
-  public: PublicKeyInfo[];
-  /** Absent on legacy issuers that do not publish exchange metadata. */
-  exchange?: ExchangeDiscoveryMetadata;
-  /** Absent unless policy-authorized graph initial issuance is configured. */
-  graph_issuance?: GraphIssuanceDiscoveryMetadata;
 }
 
 /**
@@ -603,35 +281,6 @@ export interface IssueResponse {
   };
 }
 
-export interface PublicIssueRequest {
-  /** Base64url encoded RFC 9474 blinded message */
-  blinded_msg_b64: string;
-  /** Strict lowercase hex token key ID */
-  token_key_id?: string;
-  /** Sybil resistance proof if required */
-  sybil_proof?: SybilProof;
-}
-
-export interface PublicIssueResponse {
-  /** Base64url encoded RFC 9474 blind signature */
-  blind_signature_b64: string;
-  /** Strict lowercase hex token key ID */
-  token_key_id: string;
-  /** Issuer identifier */
-  issuer_id: string;
-  /** Sybil verification details (optional) */
-  sybil_info?: {
-    required: boolean;
-    passed: boolean;
-    cost: number;
-  };
-}
-
-/** Stable JSON error body returned by the public issuance endpoints. */
-export interface PublicIssueErrorResponse {
-  error: string;
-}
-
 /**
  * Exact JSON body accepted by POST /v1/oprf/issue/batch.
  * Mirrors `BatchIssueReq` in `common/src/api/issuance.rs`.
@@ -670,39 +319,6 @@ export interface BatchIssueResp {
   };
 }
 
-/**
- * Exact JSON body accepted by POST /v1/public/issue/batch.
- * Mirrors `PublicBatchIssueReq` in `common/src/api/issuance.rs`.
- */
-export interface PublicBatchIssueReq {
-  /** Base64url-encoded RFC 9474 blinded messages. */
-  blinded_msgs: string[];
-  /** Strict lowercase hex token key ID. */
-  token_key_id?: string;
-  /** Sybil resistance proof if required. */
-  sybil_proof?: SybilProof;
-}
-
-/**
- * Exact JSON body returned by POST /v1/public/issue/batch.
- * Mirrors `PublicBatchIssueResp` in `common/src/api/issuance.rs`.
- */
-export interface PublicBatchIssueResp {
-  /** Base64url-encoded RFC 9474 blind signatures, one per blinded message. */
-  blind_signatures: string[];
-  token_key_id: string;
-  issuer_id: string;
-  successful: number;
-  failed: number;
-  processing_time_ms: number;
-  throughput: number;
-  sybil_info?: {
-    required: boolean;
-    passed: boolean;
-    cost: number;
-  };
-}
-
 type SybilProofSelection =
   | { sybilProof?: never; proofFactory?: never }
   | { sybilProof: SybilProof; proofFactory?: never }
@@ -713,91 +329,6 @@ export type IssueTokensOptions = SybilProofSelection & {
   /** Optional context string (unused in v1). */
   ctxB64?: string;
 };
-
-/** Options for {@link FreebirdClient.issuePublicTokens}. */
-export type IssuePublicTokensOptions = SybilProofSelection & {
-  /** Strict lowercase hex token key ID of the signing key. */
-  tokenKeyId?: string;
-  /** Issuer identifier embedded in each pass. */
-  issuerId: string;
-  /** Per-token 32-byte nonces, one per message, embedded in each pass. */
-  nonces: Uint8Array[];
-};
-
-/** Options for issuance using the issuer's freshly discovered V5 key. */
-export type IssuePublicTokenForCurrentKeyOptions = SybilProofSelection & {
-  /** Optional nonce; a fresh nonce is generated when omitted. */
-  nonce?: Uint8Array;
-};
-
-/** Options for current-key V5 batch issuance. */
-export type IssuePublicTokensForCurrentKeyOptions = SybilProofSelection;
-
-/**
- * A V5 public bearer pass: the wire format produced by
- * `voprf.buildPublicBearerPass` (and parsed by `voprf.parsePublicBearerPass`).
- */
-export type PublicBearerPass = Uint8Array;
-
-/**
- * Opaque RFC 9474 blinding state held between blinding and unblinding.
- *
- * `inv` is the secret blinding inverse factor. It must never be persisted to
- * any store; `@cloudflare/blindrsa-ts` handles zeroization of key material.
- */
-export interface RsaBlindState {
-  /** Secret blinding inverse factor. Never persist. */
-  inv: Uint8Array;
-  /** The RFC 9474 prepared message that was blinded. */
-  prepared: Uint8Array;
-  /** SPKI DER bytes of the RSA public key used for blinding. */
-  publicKey: Uint8Array;
-}
-
-/**
- * One prepared V2 exchange output retained for in-memory finalization.
- *
- * The message, nonce, and blinding state are intentionally not a persistence
- * format. In particular, `blindingState` must remain in memory until the
- * corresponding blind signature has been finalized.
- */
-export interface PreparedExchangeOutput {
-  slot: ExchangeSlot;
-  message: Uint8Array;
-  nonce: Uint8Array;
-  blindedValue: string;
-  blindingState: RsaBlindState;
-}
-
-/**
- * An exchange request together with the in-memory state needed to finalize its
- * generated outputs after the issuer returns blind signatures.
- */
-export interface PreparedExchange {
-  request: ExchangeRequest;
-  outputs: PreparedExchangeOutput[];
-}
-
-/** One finalized public bearer pass produced by an exchange output. */
-export interface FinalizedExchangeOutput {
-  slot: ExchangeSlot;
-  nonce: Uint8Array;
-  pass: PublicBearerPass;
-}
-
-/**
- * Options for {@link FreebirdClient.issuePublicToken}.
- */
-export interface IssuePublicTokenOptions {
-  /** 32-byte public bearer nonce embedded in the pass. */
-  nonce: Uint8Array;
-  /** Strict lowercase hex token key ID of the signing key. */
-  tokenKeyId: string;
-  /** Issuer identifier embedded in the pass. */
-  issuerId: string;
-  /** Sybil resistance proof if required. */
-  sybilProof?: SybilProof;
-}
 
 /**
  * Internal state maintained between blinding and unblinding.
@@ -819,14 +350,13 @@ export interface FreebirdToken {
   /** The Issuer ID this token belongs to (extracted for convenience) */
   issuerId: string;
   /** Token wire version */
-  version?: 4 | 5;
+  version?: 4 | 7;
   /** V4 key ID used for issuance */
   kid?: string;
-  /** V5 public bearer token key ID */
+  /** V7 native bearer token key ID */
   tokenKeyId?: string;
   /**
-   * Unix timestamp (seconds) at which the token expires, taken from
-   * `PublicKeyInfo.valid_until`. Token stores use this to evict expired
+   * Unix timestamp (seconds) at which the token expires. Token stores use this to evict expired
    * tokens on `load`/`list`. Absent for tokens without a known expiry.
    */
   valid_until?: number;
@@ -906,4 +436,266 @@ export interface BatchVerifyResp {
   failed: number;
   processing_time_ms: number;
   throughput: number;
+}
+
+/** A nominal, lowercase hexadecimal V7 identifier (the encoded form of 32 bytes). */
+export type V7CanonicalId = string & { readonly __freebirdV7CanonicalId: unique symbol };
+export type V7TokenKeyId = V7CanonicalId & { readonly __freebirdV7TokenKeyId: unique symbol };
+export type V7DescriptorId = V7CanonicalId & { readonly __freebirdV7DescriptorId: unique symbol };
+export type V7SpkiFingerprint = V7CanonicalId & { readonly __freebirdV7SpkiFingerprint: unique symbol };
+export type V7GraphId = V7CanonicalId & { readonly __freebirdV7GraphId: unique symbol };
+export type V7KeysetId = V7CanonicalId & { readonly __freebirdV7KeysetId: unique symbol };
+export type V7TransitionId = V7CanonicalId & { readonly __freebirdV7TransitionId: unique symbol };
+export type V7PolicyId = V7CanonicalId & { readonly __freebirdV7PolicyId: unique symbol };
+
+/** A nominal V7 fixed-width byte string. Values are always exactly 32 bytes. */
+export type V7Bytes32 = Uint8Array & { readonly __freebirdV7Bytes32: unique symbol };
+export type V7OwnerCommitment = V7Bytes32 & { readonly __freebirdV7OwnerCommitment: unique symbol };
+export type V7Nonce = V7Bytes32 & { readonly __freebirdV7Nonce: unique symbol };
+export type V7Nullifier = V7Bytes32 & { readonly __freebirdV7Nullifier: unique symbol };
+export type V7MessageRandomizer = V7Bytes32 & { readonly __freebirdV7MessageRandomizer: unique symbol };
+/** A V7 amount in minor units. It is deliberately bigint, never a JS Number. */
+export type V7Amount = bigint & { readonly __freebirdV7Amount: unique symbol };
+/** A raw V7 RSA-3072 blind message or signature. */
+export type V7Raw384 = Uint8Array & { readonly __freebirdV7Raw384: unique symbol };
+
+/** Nominal V7 issuer/key identity. */
+export interface V7KeyIdentity {
+  readonly issuer_id: string;
+  readonly token_key_id: V7TokenKeyId;
+  readonly __freebirdV7KeyIdentity: true;
+}
+
+/** Nominal immutable V7 public-key binding retained by a registry. */
+export interface V7KeyBinding {
+  readonly identity: V7KeyIdentity;
+  readonly token_key_id: V7TokenKeyId;
+  readonly descriptor_id: V7DescriptorId;
+  readonly spki_fingerprint: V7SpkiFingerprint;
+  readonly pubkey_spki_b64: string;
+  readonly __freebirdV7KeyBinding: true;
+}
+
+/** Canonical V7 body fields supplied to the native bearer protocol. */
+export interface V7Body {
+  readonly asset_id: string;
+  readonly amount_minor: V7Amount;
+  readonly identity: V7KeyIdentity;
+  readonly nonce: V7Nonce;
+  readonly nullifier: V7Nullifier;
+  /** Callers must supply this exact 32-byte commitment; it is never derived. */
+  readonly owner_commitment: V7OwnerCommitment;
+  readonly __freebirdV7Body: true;
+}
+
+/** A complete nominal V7 bearer artifact. */
+export interface V7Token {
+  readonly body: V7Body;
+  readonly message_randomizer: V7MessageRandomizer;
+  readonly signature: V7Raw384;
+  readonly __freebirdV7Token: true;
+}
+
+/** Opaque state retained between V7 blinding and finalization. */
+export interface V7BlindState {
+  readonly identity: V7KeyIdentity;
+  readonly spki_fingerprint: V7SpkiFingerprint;
+  readonly randomizer: V7MessageRandomizer;
+  readonly __freebirdV7BlindState: true;
+}
+
+/** Validated direct V7 key material and fixed-body policy used by crypto primitives. */
+export interface V7DirectBinding {
+  readonly identity: V7KeyIdentity;
+  readonly public_key_spki: Uint8Array;
+  readonly spki_fingerprint: V7SpkiFingerprint;
+  readonly asset_id: string;
+  readonly amount_minor: V7Amount;
+  readonly valid_from: bigint;
+  readonly valid_until: bigint;
+  readonly __freebirdV7DirectBinding: true;
+}
+
+export type V7RegistryRole = 'direct' | 'exchange' | 'graph_issuance';
+
+export interface V7RegistryReference {
+  readonly role: V7RegistryRole;
+  readonly descriptor_id: V7DescriptorId;
+  readonly policy_id?: V7PolicyId;
+  readonly graph_id?: V7GraphId;
+  readonly keyset_id?: V7KeysetId;
+}
+
+/** One immutable issuer-local V7 registry binding with merged role references. */
+export interface V7RegistryEntry extends V7KeyBinding {
+  readonly profile_id: string;
+  readonly issuer_id: string;
+  readonly asset_id: string;
+  readonly amount_minor: V7Amount;
+  readonly suite: string;
+  readonly modulus_bits: 3072;
+  readonly exponent: 65537;
+  readonly valid_from: bigint;
+  readonly valid_until: bigint;
+  readonly roles: readonly V7RegistryRole[];
+  readonly references: readonly V7RegistryReference[];
+}
+
+/** Atomically materialized direct, exchange, and graph V7 trust state. */
+export interface V7Registry {
+  readonly issuer_id: string;
+  readonly entries: readonly V7RegistryEntry[];
+  readonly by_token_key_id: ReadonlyMap<V7TokenKeyId, V7RegistryEntry>;
+  readonly __freebirdV7Registry: true;
+}
+
+/** Direct-only V7 registry entry exposed to SDK consumers. */
+export interface V7DirectRegistryEntry extends V7KeyBinding {
+  readonly profile_id: 'scarcity/native-bearer/v7';
+  readonly issuer_id: string;
+  readonly asset_id: string;
+  readonly amount_minor: V7Amount;
+  readonly suite: string;
+  readonly modulus_bits: 3072;
+  readonly exponent: 65537;
+  readonly valid_from: bigint;
+  readonly valid_until: bigint;
+}
+
+/** Direct-only V7 registry DTO; non-direct references remain private. */
+export interface V7DirectRegistry {
+  readonly issuer_id: string;
+  readonly entries: readonly V7DirectRegistryEntry[];
+  readonly by_token_key_id: ReadonlyMap<V7TokenKeyId, V7DirectRegistryEntry>;
+  readonly __freebirdV7DirectRegistry: true;
+}
+
+export interface V7VoprfKeyInfo {
+  readonly suite: string;
+  readonly kid: string;
+  readonly pubkey: string;
+}
+
+export interface V7NativeBearerKeyInfo {
+  readonly profile_id: string;
+  readonly issuer_id: string;
+  readonly descriptor_id: V7DescriptorId;
+  readonly token_key_id: V7TokenKeyId;
+  readonly asset_id: string;
+  readonly amount_minor: V7Amount;
+  readonly suite: string;
+  readonly modulus_bits: 3072;
+  readonly exponent: 65537;
+  readonly pubkey_spki_b64: string;
+  readonly spki_fingerprint: V7SpkiFingerprint;
+  readonly valid_from: bigint;
+  readonly valid_until: bigint;
+}
+
+export interface V7ExchangeProfile {
+  readonly version: 3;
+  readonly profile_id: 'freebird/native-exchange/v3';
+  readonly graph_id: V7GraphId;
+  readonly suite: 'RSABSSA-SHA384-PSS-Randomized-V7';
+  readonly modulus_bits: 3072;
+  readonly exponent: 65537;
+}
+
+export interface V7ExchangeDescriptor {
+  readonly descriptor_id: V7DescriptorId;
+  readonly profile_id: 'freebird/native-exchange/v3';
+  readonly issuer_id: string;
+  readonly token_key_id: V7TokenKeyId;
+  readonly asset_id: string;
+  readonly amount_minor: string;
+  readonly suite: 'RSABSSA-SHA384-PSS-Randomized-V7';
+  readonly modulus_bits: 3072;
+  readonly exponent: 65537;
+  readonly pubkey_spki_b64: string;
+  readonly spki_fingerprint: V7SpkiFingerprint;
+  readonly valid_from: bigint;
+  readonly valid_until: bigint;
+}
+
+export interface V7ExchangeKeyset {
+  readonly keyset_id: V7KeysetId;
+  readonly profile_id: 'freebird/native-exchange/v3';
+  readonly descriptor_ids: readonly V7DescriptorId[];
+}
+
+export interface V7ExchangeSlot {
+  readonly descriptor_id: V7DescriptorId;
+  readonly keyset_id: V7KeysetId;
+  readonly slot_id: string;
+  readonly quantity: 1;
+}
+
+export interface V7ExchangeTransition {
+  readonly transition_id: V7TransitionId;
+  readonly profile_id: 'freebird/native-exchange/v3';
+  readonly source_keyset_id: V7KeysetId;
+  readonly target_keyset_id: V7KeysetId;
+  readonly source_slots: readonly V7ExchangeSlot[];
+  readonly output_slots: readonly V7ExchangeSlot[];
+}
+
+export interface V7ExchangeDiscovery {
+  readonly version: 3;
+  readonly profile: V7ExchangeProfile;
+  readonly active_descriptors: readonly V7ExchangeDescriptor[];
+  readonly retained_descriptors: readonly V7ExchangeDescriptor[];
+  readonly active_keysets: readonly V7ExchangeKeyset[];
+  readonly retained_keysets: readonly V7ExchangeKeyset[];
+  readonly transitions: readonly V7ExchangeTransition[];
+}
+
+export interface V7GraphIssuancePolicy {
+  readonly policy_id: V7PolicyId;
+  readonly profile_id: 'freebird/native-graph-issuance/v7';
+  readonly graph_id: V7GraphId;
+  readonly keyset_id: V7KeysetId;
+  readonly descriptor_id: V7DescriptorId;
+  readonly token_key_id: V7TokenKeyId;
+  readonly issuer_id: string;
+  readonly asset_id: string;
+  readonly amount_minor: string;
+  readonly suite: 'RSABSSA-SHA384-PSS-Randomized-V7';
+  readonly modulus_bits: 3072;
+  readonly exponent: 65537;
+  readonly quantity: 1;
+  readonly pubkey_spki_b64: string;
+  readonly spki_fingerprint: V7SpkiFingerprint;
+  readonly valid_from: bigint;
+  readonly valid_until: bigint;
+}
+
+export interface V7GraphIssuanceDiscovery {
+  readonly version: 7;
+  readonly profile_id: 'freebird/native-graph-issuance/v7';
+  readonly active_policies: readonly V7GraphIssuancePolicy[];
+  readonly retained_policies: readonly V7GraphIssuancePolicy[];
+}
+
+/** Strict V7-only response returned by `GET /.well-known/keys`. */
+export interface V7KeyDiscoveryResp {
+  readonly issuer_id: string;
+  readonly current_epoch: number;
+  readonly valid_epochs: readonly number[];
+  readonly epoch_duration_sec: bigint;
+  readonly voprf: V7VoprfKeyInfo;
+  readonly native_bearer_v7: V7NativeBearerKeyInfo;
+  readonly native_bearer_v7_retained: readonly V7NativeBearerKeyInfo[];
+  readonly native_exchange_v7?: V7ExchangeDiscovery;
+  readonly native_graph_issuance_v7?: V7GraphIssuanceDiscovery;
+}
+
+/** Public direct-only projection of strict V7 key discovery. */
+export interface V7DirectKeyDiscovery {
+  readonly issuer_id: string;
+  readonly current_epoch: number;
+  readonly valid_epochs: readonly number[];
+  readonly epoch_duration_sec: bigint;
+  readonly voprf: V7VoprfKeyInfo;
+  readonly native_bearer_v7: V7NativeBearerKeyInfo;
+  readonly native_bearer_v7_retained: readonly V7NativeBearerKeyInfo[];
 }

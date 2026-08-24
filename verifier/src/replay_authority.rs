@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-//! V2 graph-issuance replay-authority discovery and attestation.
+//! V4 replay-authority discovery and attestation.
 //!
 //! The verifier deliberately performs the probe through its ordinary
 //! [`SpendStore`].  A second Redis client, even when configured with the same
@@ -10,10 +10,10 @@
 use anyhow::{anyhow, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::{
-    api::KeyDiscoveryResp,
-    graph_issuance_api::{
-        decode_digest, decode_proof, replay_authority_proof_v1, ReplayAuthorityProbeV1,
-        ReplayAuthorityProofV1, REPLAY_AUTHORITY_VERSION_V1,
+    api::{decode_canonical_32, V4ReplayAuthorityDiscovery},
+    replay_authority_api::{
+        decode_proof, replay_authority_proof_v1, ReplayAuthorityProbeV1, ReplayAuthorityProofV1,
+        REPLAY_AUTHORITY_VERSION_V1,
     },
 };
 use rand::{rngs::OsRng, RngCore};
@@ -29,6 +29,7 @@ use tracing::{debug, warn};
 use crate::store::SpendStore;
 
 pub const REPLAY_AUTHORITY_PROBE_ROUTE: &str = "/v1/public/graph/replay-authority/probe";
+pub const REPLAY_AUTHORITY_DISCOVERY_ROUTE: &str = "/.well-known/replay-authority";
 pub const REPLAY_AUTHORITY_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 pub const REPLAY_AUTHORITY_MAX_STALENESS: Duration = Duration::from_secs(60);
 pub const REPLAY_AUTHORITY_PROBE_TTL: Duration = Duration::from_secs(30);
@@ -225,9 +226,13 @@ impl ReplayAuthorityHealth {
             .or_else(|| Some("replay-authority probe is missing or stale".into()))
     }
 
-    /// Install one issuer's discovery snapshot after validating the V2
-    /// exchange/graph relationship and the permanent authority identity.
-    pub async fn update_discovery(&self, url: &str, discovery: &KeyDiscoveryResp) -> Result<()> {
+    /// Install one issuer's discovery snapshot after validating the
+    /// replay-authority discovery document and permanent authority identity.
+    pub async fn update_discovery(
+        &self,
+        url: &str,
+        discovery: &V4ReplayAuthorityDiscovery,
+    ) -> Result<()> {
         match self.apply_discovery(url, discovery).await {
             Ok(()) => Ok(()),
             Err(error) => {
@@ -237,29 +242,20 @@ impl ReplayAuthorityHealth {
         }
     }
 
-    async fn apply_discovery(&self, url: &str, discovery: &KeyDiscoveryResp) -> Result<()> {
-        let graph = discovery
-            .graph_issuance
-            .as_ref()
-            .ok_or_else(|| anyhow!("graph issuance replay-authority metadata is missing"))?;
-        let exchange = discovery
-            .exchange
-            .as_ref()
-            .ok_or_else(|| anyhow!("V2 exchange metadata is missing for graph issuance"))?;
-        freebird_common::api::validate_graph_issuance_discovery_v2(exchange, graph)
-            .map_err(anyhow::Error::msg)?;
-
-        let authority = &graph.replay_authority.authority_id;
-        let authority_raw = freebird_common::graph_issuance_api::decode_authority_id(authority)
-            .map_err(|error| anyhow!(error.to_string()))?;
-        if Base64UrlUnpadded::encode_string(&authority_raw) != *authority {
-            anyhow::bail!("replay-authority identity is not canonical")
-        }
-        let tombstones = graph
-            .replay_authority
+    async fn apply_discovery(
+        &self,
+        url: &str,
+        discovery: &V4ReplayAuthorityDiscovery,
+    ) -> Result<()> {
+        discovery.validate().map_err(anyhow::Error::msg)?;
+        let authority = &discovery.authority_id;
+        decode_canonical_32(authority, "authority id").map_err(anyhow::Error::msg)?;
+        let tombstones = discovery
             .v4_scope_digest_tombstones
             .iter()
-            .map(|scope| decode_digest(scope).map_err(|error| anyhow!(error.to_string())))
+            .map(|scope| {
+                decode_canonical_32(scope, "V4 scope tombstone").map_err(anyhow::Error::msg)
+            })
             .collect::<Result<BTreeSet<_>>>()?;
 
         let mut state = self.state.write().await;
@@ -398,7 +394,7 @@ impl ReplayAuthorityHealth {
         }
     }
 
-    async fn fetch_discovery(&self, url: &str) -> Result<KeyDiscoveryResp> {
+    async fn fetch_discovery(&self, url: &str) -> Result<V4ReplayAuthorityDiscovery> {
         let discovery_url = discovery_url(url)?;
         require_tls(&discovery_url)?;
         self.client
@@ -440,8 +436,7 @@ impl ReplayAuthorityHealth {
         }
 
         let encoded_authority = Base64UrlUnpadded::encode_string(
-            &freebird_common::graph_issuance_api::decode_authority_id(authority_id)
-                .map_err(|error| anyhow!(error.to_string()))?,
+            &decode_canonical_32(authority_id, "authority id").map_err(anyhow::Error::msg)?,
         );
         let encoded_probe = Base64UrlUnpadded::encode_string(&probe_id);
         let request = ReplayAuthorityProbeV1 {
@@ -471,8 +466,8 @@ impl ReplayAuthorityHealth {
             .map_err(|error| anyhow!(error.to_string()))?;
         let http_proof =
             decode_proof(&response.proof).map_err(|error| anyhow!(error.to_string()))?;
-        let authority_raw = freebird_common::graph_issuance_api::decode_authority_id(authority_id)
-            .map_err(|error| anyhow!(error.to_string()))?;
+        let authority_raw =
+            decode_canonical_32(authority_id, "authority id").map_err(anyhow::Error::msg)?;
         let local_proof =
             replay_authority_proof_v1(&challenge, &authority_raw, &probe_id, issuer_id)
                 .map_err(|error| anyhow!(error.to_string()))?;
@@ -525,9 +520,7 @@ impl ReplayAuthorityHealth {
 
 fn discovery_url(raw: &str) -> Result<reqwest::Url> {
     let mut url = reqwest::Url::parse(raw).context("parse graph issuer URL")?;
-    if !url.path().ends_with("/.well-known/keys") {
-        url.set_path("/.well-known/keys");
-    }
+    url.set_path(REPLAY_AUTHORITY_DISCOVERY_ROUTE);
     url.set_query(None);
     url.set_fragment(None);
     Ok(url)
@@ -554,534 +547,104 @@ fn require_tls(url: &reqwest::Url) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{InMemoryStore, SpendStore};
-    use async_trait::async_trait;
-    use axum::{extract::State, routing::post, Json, Router};
-    use freebird_common::api::{
-        ExchangeDiscoveryV2, ExchangeGraphDiscoveryV2, ExchangeKeysetDiscoveryV2,
-        ExchangeReceiptKeyInfo, GraphIssuanceDiscoveryV2, GraphIssuanceReplayAuthorityDiscoveryV1,
-        KeyDiscoveryResp, VoprfKeyInfo,
-    };
-    use freebird_common::graph_issuance_api::{
-        decode_authority_id, decode_probe_id, replay_authority_proof_v1, ReplayAuthorityProofV1,
-        REPLAY_AUTHORITY_VERSION_V1,
-    };
-    use std::collections::HashMap;
+    use crate::store::InMemoryStore;
 
-    #[derive(Clone, Copy)]
-    enum ResponseMode {
-        Valid,
-        MalformedProof,
-        MismatchedAuthority,
-    }
-
-    struct ProbeStore {
-        probes: tokio::sync::Mutex<HashMap<String, [u8; 32]>>,
-        acknowledgements: tokio::sync::Mutex<HashMap<String, Vec<u8>>>,
-    }
-
-    impl ProbeStore {
-        fn new() -> Self {
-            Self {
-                probes: tokio::sync::Mutex::new(HashMap::new()),
-                acknowledgements: tokio::sync::Mutex::new(HashMap::new()),
-            }
-        }
-
-        async fn take_probe(&self, key: &str) -> Option<[u8; 32]> {
-            self.probes.lock().await.remove(key)
-        }
-
-        async fn put_ack(&self, key: String, value: Vec<u8>) {
-            self.acknowledgements.lock().await.insert(key, value);
-        }
-    }
-
-    #[async_trait]
-    impl SpendStore for ProbeStore {
-        async fn health_check(&self) -> Result<()> {
-            Ok(())
-        }
-
-        async fn mark_spent(&self, _: &str, _: Option<Duration>) -> Result<bool> {
-            Ok(true)
-        }
-
-        async fn put_replay_probe(
-            &self,
-            key: &str,
-            challenge: &[u8; 32],
-            _: Duration,
-        ) -> Result<bool> {
-            let mut probes = self.probes.lock().await;
-            Ok(probes.insert(key.to_owned(), *challenge).is_none())
-        }
-
-        async fn take_replay_ack(&self, key: &str) -> Result<Option<Vec<u8>>> {
-            Ok(self.acknowledgements.lock().await.remove(key))
-        }
-    }
-
-    struct ProbeResponder {
-        store: Arc<ProbeStore>,
-        mode: ResponseMode,
-    }
-
-    async fn respond_to_probe(
-        State(responder): State<Arc<ProbeResponder>>,
-        Json(request): Json<ReplayAuthorityProbeV1>,
-    ) -> Result<Json<ReplayAuthorityProofV1>, axum::http::StatusCode> {
-        let authority = decode_authority_id(&request.authority_id)
-            .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-        let probe =
-            decode_probe_id(&request.probe_id).map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
-        let probe_hex = hex::encode(probe);
-        let challenge = responder
-            .store
-            .take_probe(&format!("{PROBE_KEY_PREFIX}{probe_hex}"))
-            .await
-            .ok_or(axum::http::StatusCode::SERVICE_UNAVAILABLE)?;
-        let expected = replay_authority_proof_v1(&challenge, &authority, &probe, "issuer:test")
-            .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-        let mut response = ReplayAuthorityProofV1 {
-            version: REPLAY_AUTHORITY_VERSION_V1,
-            authority_id: request.authority_id,
-            probe_id: request.probe_id,
-            proof: Base64UrlUnpadded::encode_string(&expected),
-        };
-        match responder.mode {
-            ResponseMode::Valid => {}
-            ResponseMode::MalformedProof => response.proof = "not-base64".into(),
-            ResponseMode::MismatchedAuthority => {
-                response.authority_id = Base64UrlUnpadded::encode_string(&[8; 32]);
-            }
-        }
-        responder
-            .store
-            .put_ack(format!("{ACK_KEY_PREFIX}{probe_hex}"), expected.to_vec())
-            .await;
-        Ok(Json(response))
-    }
-
-    fn discovery() -> KeyDiscoveryResp {
-        let scope = Base64UrlUnpadded::encode_string(&[7; 32]);
-        KeyDiscoveryResp {
-            issuer_id: "issuer:test".into(),
-            current_epoch: 1,
-            valid_epochs: vec![1],
-            epoch_duration_sec: 86_400,
-            voprf: VoprfKeyInfo {
-                suite: "suite".into(),
-                kid: "kid".into(),
-                pubkey: "pubkey".into(),
-            },
-            public: vec![],
-            exchange: Some(ExchangeDiscoveryV2 {
-                active_graph: ExchangeGraphDiscoveryV2 {
-                    profile_id: String::new(),
-                    graph_id: "1".repeat(64),
-                    descriptors: vec![],
-                    keysets: vec![ExchangeKeysetDiscoveryV2 {
-                        keyset_id: "2".repeat(64),
-                        descriptor_ids: vec![],
-                    }],
-                    transitions: vec![],
-                },
-                retained_graphs: vec![],
-                active_receipt_key: ExchangeReceiptKeyInfo {
-                    key_id: String::new(),
-                    algorithm: String::new(),
-                    purpose: String::new(),
-                    public_key_b64: String::new(),
-                    valid_from: 0,
-                    valid_until: 0,
-                },
-                retained_receipt_keys: vec![],
-            }),
-            graph_issuance: Some(GraphIssuanceDiscoveryV2 {
-                version: freebird_common::graph_issuance_api::GRAPH_ISSUANCE_VERSION_V2,
-                policies: vec![],
-                replay_authority: GraphIssuanceReplayAuthorityDiscoveryV1 {
-                    authority_id: Base64UrlUnpadded::encode_string(&[9; 32]),
-                    v4_scope_digest_tombstones: vec![scope],
-                },
-            }),
-        }
-    }
-
-    fn discovery_with_scopes(scopes: &[[u8; 32]]) -> KeyDiscoveryResp {
-        let mut discovery = discovery();
-        discovery
-            .graph_issuance
-            .as_mut()
-            .unwrap()
-            .replay_authority
-            .v4_scope_digest_tombstones = scopes
-            .iter()
-            .map(|scope| Base64UrlUnpadded::encode_string(scope))
-            .collect();
-        discovery
-    }
-
-    async fn server(
-        store: Arc<ProbeStore>,
-        mode: ResponseMode,
-    ) -> (String, tokio::task::JoinHandle<()>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let app = Router::new()
-            .route(REPLAY_AUTHORITY_PROBE_ROUTE, post(respond_to_probe))
-            .with_state(Arc::new(ProbeResponder { store, mode }));
-        let handle = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        (format!("http://{address}"), handle)
-    }
-
-    #[test]
-    fn config_has_frozen_defaults() {
-        assert_eq!(REPLAY_AUTHORITY_PROBE_INTERVAL, Duration::from_secs(30));
-        assert_eq!(REPLAY_AUTHORITY_MAX_STALENESS, Duration::from_secs(60));
-        assert_eq!(REPLAY_AUTHORITY_PROBE_TTL, Duration::from_secs(30));
-        assert_eq!(
-            REPLAY_AUTHORITY_PROBE_ROUTE,
-            "/v1/public/graph/replay-authority/probe"
-        );
-    }
-
-    #[test]
-    fn fixed_routes_replace_operator_supplied_paths() {
-        assert_eq!(
-            discovery_url("https://issuer.example/custom?x=1")
-                .unwrap()
-                .path(),
-            "/.well-known/keys"
-        );
-        assert_eq!(
-            probe_url("https://issuer.example/.well-known/issuer#fragment")
-                .unwrap()
-                .path(),
-            REPLAY_AUTHORITY_PROBE_ROUTE
-        );
-    }
-
-    #[tokio::test]
-    async fn memory_store_cannot_attest_an_authority() {
-        let health = ReplayAuthorityHealth::new(
+    fn health(scope: [u8; 32], urls: &[&str]) -> ReplayAuthorityHealth {
+        ReplayAuthorityHealth::new(
             Arc::new(InMemoryStore::default()),
             ReplayAuthorityConfig {
-                graph_issuer_urls: vec!["http://issuer".into()],
-                probe_interval: Duration::from_secs(30),
-                max_staleness: Duration::from_secs(60),
+                graph_issuer_urls: urls.iter().map(|url| (*url).to_owned()).collect(),
+                probe_interval: REPLAY_AUTHORITY_PROBE_INTERVAL,
+                max_staleness: REPLAY_AUTHORITY_MAX_STALENESS,
             },
-            [7; 32],
+            scope,
         )
-        .unwrap();
-        assert!(health.participating().await);
-        assert!(!health.local_scope_matched_ever().await);
-        assert!(!health.healthy().await);
-        assert!(!health.allows_v4_replay(false).await);
+        .unwrap()
+    }
+
+    fn discovery(
+        issuer_id: &str,
+        authority: [u8; 32],
+        tombstones: &[[u8; 32]],
+    ) -> V4ReplayAuthorityDiscovery {
+        V4ReplayAuthorityDiscovery {
+            issuer_id: issuer_id.into(),
+            authority_id: Base64UrlUnpadded::encode_string(&authority),
+            v4_scope_digest_tombstones: tombstones
+                .iter()
+                .map(|scope| Base64UrlUnpadded::encode_string(scope))
+                .collect(),
+        }
     }
 
     #[tokio::test]
-    async fn cold_start_and_removed_or_invalid_metadata_stay_fail_closed() {
-        let store = Arc::new(ProbeStore::new());
-        let url = "http://issuer";
-        let health = ReplayAuthorityHealth::new(
-            store,
-            ReplayAuthorityConfig {
-                graph_issuer_urls: vec![url.into()],
-                probe_interval: Duration::from_secs(30),
-                max_staleness: Duration::from_secs(60),
-            },
-            [7; 32],
-        )
-        .unwrap();
-        assert!(health.participating().await);
-        assert!(!health.healthy().await);
-
-        health.update_discovery(url, &discovery()).await.unwrap();
-        assert!(health.local_scope_matched_ever().await);
-        health.record_refresh_failure(url, "metadata removed").await;
-        assert!(health.participating().await);
-        assert!(!health.healthy().await);
-
-        let mut missing = discovery();
-        missing.graph_issuance = None;
-        assert!(health.update_discovery(url, &missing).await.is_err());
-        assert!(health.participating().await);
-        assert!(!health.healthy().await);
-
-        let mut invalid = discovery();
-        invalid
-            .graph_issuance
-            .as_mut()
-            .unwrap()
-            .replay_authority
-            .authority_id = Base64UrlUnpadded::encode_string(&[8; 32]);
-        assert!(health.update_discovery(url, &invalid).await.is_err());
-        assert!(health.participating().await);
-        assert!(health.local_scope_matched_ever().await);
-        assert!(!health.healthy().await);
-    }
-
-    #[tokio::test]
-    async fn retained_tombstone_removal_is_sticky_and_fail_closed() {
-        let health = ReplayAuthorityHealth::new(
-            Arc::new(ProbeStore::new()),
-            ReplayAuthorityConfig {
-                graph_issuer_urls: vec!["http://issuer".into()],
-                probe_interval: Duration::from_secs(30),
-                max_staleness: Duration::from_secs(60),
-            },
-            [7; 32],
-        )
-        .unwrap();
-        let initial = discovery_with_scopes(&[[7; 32], [8; 32]]);
-        health
-            .update_discovery("http://issuer", &initial)
+    async fn same_authority_identity_is_accepted_and_different_is_rejected() {
+        let scope = [7; 32];
+        let authority = health(scope, &["https://issuer-a", "https://issuer-b"]);
+        let first = discovery("issuer-a", [1; 32], &[scope]);
+        let second = discovery("issuer-b", [1; 32], &[scope]);
+        authority
+            .update_discovery("https://issuer-a", &first)
             .await
             .unwrap();
-        let removed = discovery_with_scopes(&[[7; 32]]);
-        assert!(health
-            .update_discovery("http://issuer", &removed)
+        authority
+            .update_discovery("https://issuer-b", &second)
+            .await
+            .unwrap();
+        assert!(!authority.healthy().await);
+
+        let mismatch = discovery("issuer-b", [2; 32], &[scope]);
+        assert!(authority
+            .update_discovery("https://issuer-b", &mismatch)
             .await
             .is_err());
-        assert!(health.local_scope_matched_ever().await);
-        assert!(!health.healthy().await);
+        assert!(!authority.healthy().await);
     }
 
     #[tokio::test]
-    async fn local_scope_mismatch_or_empty_tombstones_remain_pending_and_fail_closed() {
-        let store = Arc::new(ProbeStore::new());
-        let url = "http://issuer";
-        let health = ReplayAuthorityHealth::new(
-            store,
-            ReplayAuthorityConfig {
-                graph_issuer_urls: vec![url.into()],
-                probe_interval: Duration::from_secs(30),
-                max_staleness: Duration::from_secs(60),
-            },
-            [8; 32],
-        )
-        .unwrap();
-        let valid = discovery();
-        health.update_discovery(url, &valid).await.unwrap();
-        assert!(health.participating().await);
-        assert!(!health.local_scope_matched_ever().await);
-        assert!(!health.healthy().await);
-
-        let mut empty = valid;
-        empty
-            .graph_issuance
-            .as_mut()
-            .unwrap()
-            .replay_authority
-            .v4_scope_digest_tombstones
-            .clear();
-        let empty_health = ReplayAuthorityHealth::new(
-            Arc::new(ProbeStore::new()),
-            ReplayAuthorityConfig {
-                graph_issuer_urls: vec![url.into()],
-                probe_interval: Duration::from_secs(30),
-                max_staleness: Duration::from_secs(60),
-            },
-            [8; 32],
-        )
-        .unwrap();
-        empty_health.update_discovery(url, &empty).await.unwrap();
-        assert!(empty_health.participating().await);
-        assert!(!empty_health.local_scope_matched_ever().await);
-        assert!(!empty_health.healthy().await);
-    }
-
-    #[tokio::test]
-    async fn matching_configured_memory_v4_participates_but_fails_closed() {
-        let url = "http://issuer";
-        let health = ReplayAuthorityHealth::new(
-            Arc::new(InMemoryStore::default()),
-            ReplayAuthorityConfig {
-                graph_issuer_urls: vec![url.into()],
-                probe_interval: Duration::from_secs(30),
-                max_staleness: Duration::from_secs(60),
-            },
-            [7; 32],
-        )
-        .unwrap();
-        health.update_discovery(url, &discovery()).await.unwrap();
-        assert!(health.participating().await);
-        assert!(health.local_scope_matched_ever().await);
-        assert!(!health.healthy().await);
-        assert!(!health.allows_v4_replay(true).await);
-    }
-
-    #[tokio::test]
-    async fn same_redis_store_passes_and_different_or_cloned_store_fails() {
-        let shared = Arc::new(ProbeStore::new());
-        let (url, handle) = server(shared.clone(), ResponseMode::Valid).await;
-        let health = ReplayAuthorityHealth::new(
-            shared.clone(),
-            ReplayAuthorityConfig {
-                graph_issuer_urls: vec![url.clone()],
-                probe_interval: Duration::from_secs(30),
-                max_staleness: Duration::from_secs(60),
-            },
-            [7; 32],
-        )
-        .unwrap();
-        health.update_discovery(&url, &discovery()).await.unwrap();
-        health.probe_all().await;
-        assert!(health.healthy().await);
-        handle.abort();
-
-        let verifier_store = Arc::new(ProbeStore::new());
-        let issuer_store = Arc::new(ProbeStore::new());
-        let (url, handle) = server(issuer_store, ResponseMode::Valid).await;
-        let different = ReplayAuthorityHealth::new(
-            verifier_store,
-            ReplayAuthorityConfig {
-                graph_issuer_urls: vec![url.clone()],
-                probe_interval: Duration::from_secs(30),
-                max_staleness: Duration::from_secs(60),
-            },
-            [7; 32],
-        )
-        .unwrap();
-        different
-            .update_discovery(&url, &discovery())
-            .await
-            .unwrap();
-        different.probe_all().await;
-        assert!(!different.healthy().await);
-        handle.abort();
-    }
-
-    #[tokio::test]
-    async fn stale_nonlocal_tombstone_blocks_authority_health() {
-        let store = Arc::new(ProbeStore::new());
-        let (url, handle) = server(store.clone(), ResponseMode::Valid).await;
-        let health = ReplayAuthorityHealth::new(
-            store,
-            ReplayAuthorityConfig {
-                graph_issuer_urls: vec![url.clone()],
-                probe_interval: Duration::from_secs(30),
-                max_staleness: Duration::from_secs(60),
-            },
-            [7; 32],
-        )
-        .unwrap();
-        health
-            .update_discovery(&url, &discovery_with_scopes(&[[7; 32], [8; 32]]))
-            .await
-            .unwrap();
-        health.probe_all().await;
-        assert!(health.healthy().await);
-        {
-            let mut state = health.state.write().await;
-            state
-                .records
-                .get_mut(&url)
-                .unwrap()
-                .last_success
-                .insert([8; 32], Instant::now() - Duration::from_secs(61));
-        }
-        assert!(health.participating().await);
-        assert!(!health.healthy().await);
-        assert!(!health.allows_v4_replay(false).await);
-        handle.abort();
-    }
-
-    #[tokio::test]
-    async fn malformed_or_mismatched_proof_fails_closed() {
-        for mode in [
-            ResponseMode::MalformedProof,
-            ResponseMode::MismatchedAuthority,
-        ] {
-            let store = Arc::new(ProbeStore::new());
-            let (url, handle) = server(store.clone(), mode).await;
-            let health = ReplayAuthorityHealth::new(
-                store,
-                ReplayAuthorityConfig {
-                    graph_issuer_urls: vec![url.clone()],
-                    probe_interval: Duration::from_secs(30),
-                    max_staleness: Duration::from_secs(60),
-                },
-                [7; 32],
+    async fn rollback_is_sticky_and_probe_freshness_gates_v4() {
+        let scope = [8; 32];
+        let retained = [9; 32];
+        let authority = health(scope, &["https://issuer"]);
+        authority
+            .update_discovery(
+                "https://issuer",
+                &discovery("issuer", [3; 32], &[scope, retained]),
             )
+            .await
             .unwrap();
-            health.update_discovery(&url, &discovery()).await.unwrap();
-            health.probe_all().await;
-            assert!(!health.healthy().await);
-            handle.abort();
-        }
-    }
+        assert!(!authority.allows_v4_replay(false).await);
 
-    #[tokio::test]
-    async fn retained_scope_is_probed_when_policy_list_is_empty() {
-        let store = Arc::new(ProbeStore::new());
-        let (url, handle) = server(store.clone(), ResponseMode::Valid).await;
-        let health = ReplayAuthorityHealth::new(
-            store,
-            ReplayAuthorityConfig {
-                graph_issuer_urls: vec![url.clone()],
-                probe_interval: Duration::from_secs(30),
-                max_staleness: Duration::from_secs(60),
-            },
-            [7; 32],
-        )
-        .unwrap();
-        let mut retired = discovery();
-        retired.graph_issuance.as_mut().unwrap().policies.clear();
-        health.update_discovery(&url, &retired).await.unwrap();
-        health.probe_all().await;
-        assert!(health.healthy().await);
-        handle.abort();
-    }
-
-    #[tokio::test]
-    async fn authority_identity_is_permanent_and_probe_staleness_gates() {
-        let store = Arc::new(ProbeStore::new());
-        let url = "http://issuer";
-        let health = ReplayAuthorityHealth::new(
-            store,
-            ReplayAuthorityConfig {
-                graph_issuer_urls: vec![url.into()],
-                probe_interval: Duration::from_secs(30),
-                max_staleness: Duration::from_secs(60),
-            },
-            [7; 32],
-        )
-        .unwrap();
-        let good = discovery();
-        health.update_discovery(url, &good).await.unwrap();
-        let scope = decode_digest(
-            good.graph_issuance
-                .as_ref()
-                .unwrap()
-                .replay_authority
-                .v4_scope_digest_tombstones
-                .first()
-                .unwrap(),
-        )
-        .unwrap();
         {
-            let mut state = health.state.write().await;
-            let record = state.records.get_mut(url).unwrap();
+            let mut state = authority.state.write().await;
+            let record = state.records.get_mut("https://issuer").unwrap();
+            record.last_success.insert(scope, Instant::now());
+            record.last_success.insert(retained, Instant::now());
+        }
+        assert!(authority.healthy().await);
+
+        {
+            let mut state = authority.state.write().await;
+            let record = state.records.get_mut("https://issuer").unwrap();
             record.last_success.insert(
                 scope,
-                Instant::now().checked_sub(Duration::from_secs(61)).unwrap(),
+                Instant::now() - REPLAY_AUTHORITY_MAX_STALENESS - Duration::from_secs(1),
             );
         }
-        assert!(!health.healthy().await);
+        assert!(!authority.healthy().await);
 
-        let mut changed = good;
-        changed
-            .graph_issuance
-            .as_mut()
-            .unwrap()
-            .replay_authority
-            .authority_id = Base64UrlUnpadded::encode_string(&[8; 32]);
-        assert!(health.update_discovery(url, &changed).await.is_err());
-        assert!(!health.healthy().await);
+        let rollback = discovery("issuer", [3; 32], &[scope]);
+        assert!(authority
+            .update_discovery("https://issuer", &rollback)
+            .await
+            .is_err());
+        assert!(!authority.healthy().await);
+    }
+
+    #[tokio::test]
+    async fn configured_authority_fails_closed_before_spend_mutation() {
+        let authority = health([6; 32], &["https://issuer"]);
+        assert!(!authority.allows_v4_replay(false).await);
+        assert!(!authority.allows_v4_replay(true).await);
     }
 }

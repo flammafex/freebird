@@ -13,7 +13,7 @@ use tokio::sync::Mutex;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TokenFamily {
     V4,
-    V5,
+    V7,
 }
 
 #[derive(Clone, Debug)]
@@ -75,9 +75,11 @@ impl ReadinessReport {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn evaluate(
     store_health: &StoreHealth,
     issuers: &HashMap<String, IssuerInfo>,
+    v7_trust: &HashMap<String, crate::state::V7IssuerTrustSnapshot>,
     metadata: &HashMap<String, MetadataStatus>,
     issuer_urls: &[String],
     accepted: &[TokenFamily],
@@ -123,15 +125,19 @@ pub async fn evaluate(
                 TokenFamily::V4 if info.verification_key.is_none() => {
                     failures.push(format!("V4 private key unavailable for issuer {issuer_id}"))
                 }
-                TokenFamily::V5
-                    if !info.public_keys.values().any(|key| {
-                        key.valid_from <= time::OffsetDateTime::now_utc().unix_timestamp()
-                            && key.valid_until > time::OffsetDateTime::now_utc().unix_timestamp()
-                    }) =>
-                {
-                    failures.push(format!(
-                        "V5 public key unavailable or expired for issuer {issuer_id}"
-                    ))
+                TokenFamily::V7 => {
+                    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+                    let valid = v7_trust.get(issuer_id).is_some_and(|snapshot| {
+                        snapshot
+                            .by_token_key_id
+                            .values()
+                            .any(|entry| entry.valid_from <= now && now <= entry.valid_until)
+                    });
+                    if !valid {
+                        failures.push(format!(
+                            "V7 trust unavailable or expired for issuer {issuer_id}"
+                        ));
+                    }
                 }
                 _ => {}
             }
@@ -184,29 +190,13 @@ mod tests {
         assert!(health.healthy().await);
     }
 
-    fn issuer(v4: bool, v5: bool) -> IssuerInfo {
-        let mut public_keys = HashMap::new();
-        if v5 {
-            public_keys.insert(
-                [1; 32],
-                crate::routes::admin::PublicIssuerKey {
-                    token_key_id: [1; 32],
-                    token_key_id_hex: "01".into(),
-                    pubkey_spki: vec![],
-                    issuer_id: "issuer".into(),
-                    valid_from: 0,
-                    valid_until: i64::MAX,
-                    audience: None,
-                },
-            );
-        }
+    fn issuer(v4: bool, _v7: bool) -> IssuerInfo {
         IssuerInfo {
             pubkey_bytes: vec![],
             kid: "kid".into(),
             ctx: vec![],
             verification_key: v4.then_some([2; 32]),
             deprecated_verification_keys: HashMap::new(),
-            public_keys,
             last_refreshed: Some(Instant::now()),
         }
     }
@@ -238,9 +228,10 @@ mod tests {
         let report = evaluate(
             &health,
             &issuers,
+            &HashMap::new(),
             &metadata,
             &urls,
-            &[TokenFamily::V4, TokenFamily::V5],
+            &[TokenFamily::V4, TokenFamily::V7],
             Duration::from_secs(60),
             None,
         )
@@ -254,9 +245,10 @@ mod tests {
         let report = evaluate(
             &health,
             &issuers,
+            &HashMap::new(),
             &metadata,
             &urls,
-            &[TokenFamily::V4, TokenFamily::V5],
+            &[TokenFamily::V4, TokenFamily::V7],
             Duration::from_secs(60),
             None,
         )
@@ -265,7 +257,7 @@ mod tests {
         assert!(report
             .failures
             .iter()
-            .any(|f| f.contains("V5") && f.contains("two")));
+            .any(|f| f.contains("V7") && f.contains("two")));
     }
 
     #[tokio::test]
@@ -285,6 +277,7 @@ mod tests {
         let report = evaluate(
             &health,
             &issuers,
+            &HashMap::new(),
             &metadata,
             &["one".into()],
             &[TokenFamily::V4],

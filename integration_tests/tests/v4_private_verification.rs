@@ -50,7 +50,6 @@ fn issuer_info(active_sk: [u8; 32], old_keys: HashMap<String, [u8; 32]>) -> Issu
         ctx: VOPRF_CONTEXT_V4.to_vec(),
         verification_key: Some(active_sk),
         deprecated_verification_keys: old_keys,
-        public_keys: HashMap::new(),
         last_refreshed: Some(Instant::now()),
     }
 }
@@ -138,7 +137,6 @@ fn verifier_rejects_when_private_key_missing() {
             ctx: VOPRF_CONTEXT_V4.to_vec(),
             verification_key: None,
             deprecated_verification_keys: HashMap::new(),
-            public_keys: HashMap::new(),
             last_refreshed: Some(Instant::now()),
         },
     )]);

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 use super::sybil::SybilProof;
+use base64ct::{Base64UrlUnpadded, Encoding};
 use serde::{Deserialize, Serialize};
 
 // VOPRF Issuance Types
@@ -87,52 +88,89 @@ pub enum TokenResult {
 }
 
 // ============================================================================
-// V5 Public Bearer Pass Issuance Types
+// V7 Native Bearer Issuance Types
 // ============================================================================
 
+/// Direct V7 issuance request.
+///
+/// `blinded_msg_b64` is exactly one canonical, unpadded base64url encoding of
+/// the 384-byte raw RFC 9474 blinded message.  The key ID is mandatory and is
+/// never inferred from an untyped request.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PublicIssueReq {
-    /// RFC 9474 blinded message for a V5 public bearer pass.
+pub struct NativeBearerV7IssueReq {
+    #[serde(deserialize_with = "deserialize_v7_token_key_id")]
+    pub token_key_id: String,
+    #[serde(deserialize_with = "deserialize_v7_raw384_b64")]
     pub blinded_msg_b64: String,
-
-    /// Optional active token key requested by the client.
-    #[serde(default)]
-    pub token_key_id: Option<String>,
-
-    /// Optional Sybil resistance proof.
     #[serde(default)]
     pub sybil_proof: Option<SybilProof>,
 }
 
+impl NativeBearerV7IssueReq {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_v7_token_key_id(&self.token_key_id)?;
+        validate_v7_raw384_b64(&self.blinded_msg_b64, "blinded_msg_b64")
+    }
+}
+
+/// Direct V7 issuance response containing one raw384 blind signature.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PublicIssueResp {
-    /// Base64url-encoded RFC 9474 blind signature.
+#[serde(deny_unknown_fields)]
+pub struct NativeBearerV7IssueResp {
+    #[serde(deserialize_with = "deserialize_v7_raw384_b64")]
     pub blind_signature_b64: String,
-    /// Strict lowercase hex SHA-256 digest of the V5 SPKI public key.
+    #[serde(deserialize_with = "deserialize_v7_token_key_id")]
     pub token_key_id: String,
-    /// Issuer identifier embedded in the client-finalized V5 token.
     pub issuer_id: String,
-    /// Optional Sybil resistance verification info.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sybil_info: Option<SybilInfo>,
 }
 
+impl NativeBearerV7IssueResp {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_v7_token_key_id(&self.token_key_id)?;
+        validate_v7_raw384_b64(&self.blind_signature_b64, "blind_signature_b64")?;
+        if self.issuer_id.is_empty() {
+            return Err("issuer_id must be nonempty".into());
+        }
+        Ok(())
+    }
+}
+
+/// Batch V7 issuance request. Every element is a fixed-size raw384 blinded
+/// message and all elements explicitly select the same V7 key ID.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PublicBatchIssueReq {
-    pub blinded_msgs: Vec<String>,
-
-    #[serde(default)]
-    pub token_key_id: Option<String>,
-
+pub struct NativeBearerV7BatchIssueReq {
+    #[serde(deserialize_with = "deserialize_v7_token_key_id")]
+    pub token_key_id: String,
+    #[serde(deserialize_with = "deserialize_v7_raw384_vec")]
+    pub blinded_msgs_b64: Vec<String>,
     #[serde(default)]
     pub sybil_proof: Option<SybilProof>,
 }
 
+impl NativeBearerV7BatchIssueReq {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_v7_token_key_id(&self.token_key_id)?;
+        if self.blinded_msgs_b64.is_empty() {
+            return Err("blinded_msgs_b64 must be nonempty".into());
+        }
+        for message in &self.blinded_msgs_b64 {
+            validate_v7_raw384_b64(message, "blinded_msgs_b64")?;
+        }
+        Ok(())
+    }
+}
+
+/// Batch V7 issuance response containing one raw384 signature per request.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PublicBatchIssueResp {
-    pub blind_signatures: Vec<String>,
+#[serde(deny_unknown_fields)]
+pub struct NativeBearerV7BatchIssueResp {
+    #[serde(deserialize_with = "deserialize_v7_raw384_vec")]
+    pub blind_signatures_b64: Vec<String>,
+    #[serde(deserialize_with = "deserialize_v7_token_key_id")]
     pub token_key_id: String,
     pub issuer_id: String,
     pub successful: usize,
@@ -141,6 +179,78 @@ pub struct PublicBatchIssueResp {
     pub throughput: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sybil_info: Option<SybilInfo>,
+}
+
+impl NativeBearerV7BatchIssueResp {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_v7_token_key_id(&self.token_key_id)?;
+        if self.issuer_id.is_empty() {
+            return Err("issuer_id must be nonempty".into());
+        }
+        if self.successful != self.blind_signatures_b64.len() {
+            return Err("successful must equal blind_signatures_b64 length".into());
+        }
+        if self.successful + self.failed == 0 {
+            return Err("V7 batch response must contain a result".into());
+        }
+        for signature in &self.blind_signatures_b64 {
+            validate_v7_raw384_b64(signature, "blind_signatures_b64")?;
+        }
+        Ok(())
+    }
+}
+
+fn validate_v7_token_key_id(value: &str) -> Result<(), String> {
+    let bytes = hex::decode(value).map_err(|_| "token_key_id must be lowercase hex".to_string())?;
+    if value.len() != 64
+        || value.bytes().any(|byte| byte.is_ascii_uppercase())
+        || freebird_crypto::V7TokenKeyId::from_bytes(&bytes).is_err()
+    {
+        return Err("token_key_id must be exactly 64 lowercase hexadecimal characters".into());
+    }
+    Ok(())
+}
+
+fn validate_v7_raw384_b64(value: &str, field: &str) -> Result<(), String> {
+    let decoded = Base64UrlUnpadded::decode_vec(value)
+        .map_err(|_| format!("{field} must be unpadded base64url"))?;
+    if decoded.len() != freebird_crypto::public_bearer_v7::V7_SIGNATURE_LEN
+        || Base64UrlUnpadded::encode_string(&decoded) != value
+    {
+        return Err(format!(
+            "{field} must be canonical unpadded base64url for exactly 384 bytes"
+        ));
+    }
+    Ok(())
+}
+
+fn deserialize_v7_token_key_id<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    validate_v7_token_key_id(&value).map_err(serde::de::Error::custom)?;
+    Ok(value)
+}
+
+fn deserialize_v7_raw384_b64<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    validate_v7_raw384_b64(&value, "V7 raw384 message").map_err(serde::de::Error::custom)?;
+    Ok(value)
+}
+
+fn deserialize_v7_raw384_vec<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values = Vec::<String>::deserialize(deserializer)?;
+    for value in &values {
+        validate_v7_raw384_b64(value, "V7 raw384 message").map_err(serde::de::Error::custom)?;
+    }
+    Ok(values)
 }
 
 // ============================================================================

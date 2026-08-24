@@ -12,9 +12,13 @@ workspace's `0.9.0` release for its initial publication.
 
 ### Added
 
-- V4 and V5 batch issuance now uses exact UTF-8 JSON byte-budget greedy
+- V4 batch issuance now uses exact UTF-8 JSON byte-budget greedy
   chunking, with a default 60 KiB body limit and the existing 10,000-item
   ceiling.
+- Direct V7 native-bearer discovery, issuance, local verification, and
+  rotation-safe retry are part of the public SDK surface.
+- The SDK requires Node.js 24 or newer because the approved
+  `@cloudflare/blindrsa-ts@0.4.6` dependency requires it.
 - `ClientConfig.batchBodyLimitBytes` allows deployments with a smaller
   transport body limit to override the 60 KiB default; the SDK ceiling remains
   60 KiB.
@@ -23,15 +27,19 @@ workspace's `0.9.0` release for its initial publication.
 
 ### Compatibility
 
-- Batch ordering, retry behavior, request-bound proof factories, V5 nonce
-  alignment, and response handling remain unchanged.
+- Batch ordering, retry behavior, request-bound proof factories, and response
+  handling remain unchanged.
 - This alignment is only for the first public release. The JS SDK retains its
   independent semver policy and future SDK versions are not required to match
   Rust workspace versions.
 
-## [0.4.0] - 2026-08-08
+## [0.4.0] - 2026-08-08 (historical; superseded)
 
-### Added
+This pre-publication entry recorded an earlier V5/V2 planning surface. It is
+retained for release-history accuracy only; those APIs are not part of the
+current public SDK. Current consumers should use V4 and direct V7 methods.
+
+### Added (historical; superseded)
 
 - `FreebirdClient.issueTokenWithProofFactory(proofFactory)` exposes typed V4
   request-bound proof factories for safe key-rotation retries.
@@ -46,14 +54,13 @@ workspace's `0.9.0` release for its initial publication.
   SPKI-derived key identifier.
 - Replay errors require the complete verifier replay response contract.
 
-## [0.2.0] - 2026-08-05
+## [0.2.0] - 2026-08-05 (historical; superseded)
 
-Expands the SDK surface with the methods and types added across Phases 1-8 of
-the SDK enhancement plan: a richer verification surface, V5 public bearer
-issuance helpers, batch issuance, key-rotation refresh, V2 exchange request
-assembly, durable polling, token persistence, and the typed error hierarchy.
+This historical planning release described APIs from the earlier Phase 1-8
+enhancement plan. Its V5 public-bearer and V2 exchange/graph-issuance entries
+are superseded and are not current SDK guidance.
 
-### Added
+### Added (historical; superseded)
 
 - Verification surface:
   - `verifyToken(token)` — verifies a token against the configured verifier,
@@ -114,11 +121,11 @@ assembly, durable polling, token persistence, and the typed error hierarchy.
   was built for. The JS SDK follows its own semver and is **not** forced to
   match the Rust workspace version (currently `0.9.0`).
 
-## [0.1.0] - 2026-08-05
+## [0.1.0] - 2026-08-05 (historical; superseded)
 
 Initial development release of the Freebird TypeScript SDK.
 
-### Added
+### Added (historical; superseded)
 
 - `FreebirdClient` with the following public surface:
   - `init()` — fetches the issuer's public key metadata.

@@ -6,7 +6,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::{atomic::AtomicBool, atomic::Ordering};
 use std::time::Duration;
 
 #[derive(Clone, Debug, Default, serde::Serialize)]
@@ -19,6 +18,8 @@ pub struct ReadinessReport {
     pub exchange: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub graph_issuance: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay_authority: Option<bool>,
     pub stores: BTreeMap<String, bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub development_unsafe: Option<bool>,
@@ -30,111 +31,102 @@ pub struct ReadinessState {
 }
 
 #[derive(Clone)]
-pub(crate) struct ExchangeReadinessState {
-    engine: Arc<crate::exchange::ExchangeEngine>,
-    store: crate::exchange::store::ExchangeStore,
-    registry: Vec<crate::exchange::store::KeyRegistryEntry>,
-    issuer_id: String,
-    discovery: freebird_common::api::ExchangeDiscoveryV2,
-    disabled_publication_ack_paths: Vec<PathBuf>,
-    registry_failed_closed: Arc<AtomicBool>,
+pub(crate) struct V7ExchangeReadinessState {
+    engine: Arc<crate::exchange::v7::V7ExchangeEngine>,
+    inventory: Arc<crate::v7_signers::V7SignerInventory>,
+    discovery: freebird_common::api::NativeExchangeV3Discovery,
 }
 
 #[derive(Clone)]
-pub(crate) struct GraphIssuanceReadinessState {
-    engine: Arc<crate::graph_issuance::GraphIssuanceEngine>,
+pub(crate) struct V7GraphIssuanceReadinessState {
+    engine: Arc<crate::graph_issuance::V7GraphIssuanceEngine>,
+    inventory: Arc<crate::v7_signers::V7SignerInventory>,
+    discovery: freebird_common::api::NativeGraphIssuanceV7Discovery,
+    v4_local_authorization: bool,
 }
 
-impl GraphIssuanceReadinessState {
-    pub(crate) fn new(engine: Arc<crate::graph_issuance::GraphIssuanceEngine>) -> Self {
-        Self { engine }
-    }
-
-    async fn check(&self) -> bool {
-        self.engine.readiness_check().await
-    }
-}
-
-impl ExchangeReadinessState {
+impl V7ExchangeReadinessState {
     pub(crate) fn new(
-        engine: Arc<crate::exchange::ExchangeEngine>,
-        store: crate::exchange::store::ExchangeStore,
-        registry: Vec<crate::exchange::store::KeyRegistryEntry>,
-        issuer_id: String,
-        discovery: freebird_common::api::ExchangeDiscoveryV2,
-        disabled_publication_ack_paths: Vec<PathBuf>,
+        engine: Arc<crate::exchange::v7::V7ExchangeEngine>,
+        inventory: Arc<crate::v7_signers::V7SignerInventory>,
+        discovery: freebird_common::api::NativeExchangeV3Discovery,
     ) -> Self {
         Self {
             engine,
-            store,
-            registry,
-            issuer_id,
+            inventory,
             discovery,
-            disabled_publication_ack_paths,
-            registry_failed_closed: Arc::new(AtomicBool::new(false)),
         }
     }
 
     async fn check(&self) -> bool {
-        use crate::exchange::store::KeyRegistryOutcome;
-
-        let acknowledgements = match crate::config::load_disabled_publication_acknowledgements(
-            &self.disabled_publication_ack_paths,
-        ) {
-            Ok(acknowledgements) => acknowledgements,
-            Err(_) => return false,
-        };
-        if self.engine.readiness_check().await.is_err()
-            || freebird_common::api::validate_exchange_discovery_v2(
-                &self.issuer_id,
-                &self.discovery,
-            )
-            .is_err()
-            || !self.pending_references_are_recoverable().await
-            || crate::startup::validate_disabled_publication_acknowledgements_v2(
-                &self.issuer_id,
-                &self.discovery,
-                &acknowledgements,
-            )
-            .is_err()
+        if self.discovery.validate().is_err() {
+            return false;
+        }
+        if crate::startup::validate_v7_exchange_inventory(&self.discovery, &self.inventory).is_err()
         {
             return false;
         }
-        if self.registry_failed_closed.load(Ordering::Acquire) {
-            return false;
+        self.engine.readiness_check().await.is_ok()
+    }
+}
+
+impl V7GraphIssuanceReadinessState {
+    pub(crate) fn new(
+        engine: Arc<crate::graph_issuance::V7GraphIssuanceEngine>,
+        inventory: Arc<crate::v7_signers::V7SignerInventory>,
+        discovery: freebird_common::api::NativeGraphIssuanceV7Discovery,
+        v4_local_authorization: bool,
+    ) -> Self {
+        Self {
+            engine,
+            inventory,
+            discovery,
+            v4_local_authorization,
         }
-        let registry_equal = matches!(
-            self.store.initialize_key_registry_v2(&self.registry).await,
-            Ok(KeyRegistryOutcome::Equal)
-        );
-        if !registry_equal {
-            self.registry_failed_closed.store(true, Ordering::Release);
-        }
-        registry_equal
     }
 
-    async fn pending_references_are_recoverable(&self) -> bool {
-        let records = match self.store.pending_records_v2().await {
-            Ok(records) => records,
-            Err(_) => return false,
-        };
-        records.into_iter().all(|record| {
-            std::iter::once(&self.discovery.active_graph)
-                .chain(&self.discovery.retained_graphs)
-                .find(|graph| graph.graph_id == record.graph_id)
-                .and_then(|graph| {
-                    graph.transitions.iter().find(|transition| {
-                        transition.transition_id == record.transition_id
-                            && transition.source_keyset_id == record.source_keyset_id
-                            && transition.target_keyset_id == record.target_keyset_id
-                    })
-                })
-                .is_some_and(|transition| {
-                    transition.admission_state
-                        != freebird_common::api::ExchangeAdmissionStateV2::Disabled
-                })
-        })
+    async fn check(&self) -> bool {
+        if self.discovery.validate().is_err() {
+            return false;
+        }
+        if !self.engine.issuance_enabled()
+            || !self.v4_local_authorization
+            || validate_v7_graph_inventory(&self.discovery, &self.inventory).is_err()
+        {
+            return false;
+        }
+        self.engine.readiness_check().await.is_ok()
     }
+}
+
+fn validate_v7_graph_inventory(
+    discovery: &freebird_common::api::NativeGraphIssuanceV7Discovery,
+    inventory: &crate::v7_signers::V7SignerInventory,
+) -> anyhow::Result<()> {
+    for policy in discovery
+        .active_policies
+        .iter()
+        .chain(discovery.retained_policies.iter())
+    {
+        let token_key_id: [u8; 32] = hex::decode(&policy.token_key_id)?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid V7 graph token key ID"))?;
+        let identity = crate::v7_signers::V7SignerIdentity::new(
+            policy.issuer_id.clone(),
+            policy.profile_id.clone(),
+            policy.descriptor_id.clone(),
+            freebird_crypto::V7TokenKeyId::new(token_key_id),
+        )?;
+        let signer = inventory.lookup(&identity)?;
+        if signer.metadata().pubkey_spki_b64 != policy.pubkey_spki_b64
+            || signer.metadata().spki_fingerprint != policy.spki_fingerprint
+            || signer.metadata().asset_id != policy.asset_id
+            || signer.metadata().amount_minor.to_string() != policy.amount_minor
+        {
+            anyhow::bail!("V7 graph policy does not match shared signer inventory")
+        }
+    }
+    Ok(())
 }
 
 impl ReadinessState {
@@ -168,28 +160,35 @@ impl ReadinessState {
         replay_store: Arc<dyn ReplayStore>,
         storage_paths: Vec<(String, PathBuf)>,
         voprf: Arc<MultiKeyVoprfCore>,
-        exchange: Option<ExchangeReadinessState>,
-        graph_issuance: Option<GraphIssuanceReadinessState>,
+        v7_exchange: Option<V7ExchangeReadinessState>,
+        v7_graph_issuance: Option<V7GraphIssuanceReadinessState>,
+        replay_authority: Option<Arc<crate::replay_authority::ReplayAuthority>>,
     ) {
         let state = self.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(5));
             loop {
                 ticker.tick().await;
-                let mut report = check_once(&replay_store, &storage_paths, &voprf).await;
-                if let Some(exchange) = &exchange {
+                let mut report = check_once_with_replay_authority(
+                    &replay_store,
+                    &storage_paths,
+                    &voprf,
+                    replay_authority.as_ref(),
+                )
+                .await;
+                if let Some(exchange) = &v7_exchange {
                     let ready = tokio::time::timeout(Duration::from_secs(2), exchange.check())
                         .await
                         .is_ok_and(|ready| ready);
                     report.exchange = Some(ready);
                     report.ready &= ready;
                 }
-                if let Some(graph_issuance) = &graph_issuance {
+                if let Some(graph_issuance) = &v7_graph_issuance {
                     let ready =
                         tokio::time::timeout(Duration::from_secs(2), graph_issuance.check())
                             .await
                             .is_ok_and(|ready| ready);
-                    report.graph_issuance = Some(ready);
+                    report.graph_issuance = Some(report.graph_issuance.unwrap_or(true) && ready);
                     report.ready &= ready;
                 }
                 state.update(report);
@@ -202,6 +201,15 @@ pub async fn check_once(
     replay_store: &Arc<dyn ReplayStore>,
     storage_paths: &[(String, PathBuf)],
     voprf: &Arc<MultiKeyVoprfCore>,
+) -> ReadinessReport {
+    check_once_with_replay_authority(replay_store, storage_paths, voprf, None).await
+}
+
+pub(crate) async fn check_once_with_replay_authority(
+    replay_store: &Arc<dyn ReplayStore>,
+    storage_paths: &[(String, PathBuf)],
+    voprf: &Arc<MultiKeyVoprfCore>,
+    replay_authority: Option<&Arc<crate::replay_authority::ReplayAuthority>>,
 ) -> ReadinessReport {
     let store = Arc::clone(replay_store);
     let redis = tokio::time::timeout(
@@ -227,13 +235,23 @@ pub async fn check_once(
     let storage_ready = !storage.is_empty() && storage.values().all(|ready| *ready);
     let issuance_key =
         !voprf.active_kid().await.is_empty() && !voprf.active_pubkey_b64().await.is_empty();
+    let replay_authority_ready = match replay_authority {
+        Some(authority) => Some(
+            tokio::time::timeout(Duration::from_secs(2), authority.health_check())
+                .await
+                .is_ok_and(|result| result.is_ok()),
+        ),
+        None => None,
+    };
+    let authority_ready = replay_authority_ready.unwrap_or(true);
     ReadinessReport {
-        ready: redis && storage_ready && issuance_key,
+        ready: redis && storage_ready && issuance_key && authority_ready,
         redis,
         storage: storage_ready,
         issuance_key,
         exchange: None,
         graph_issuance: None,
+        replay_authority: replay_authority_ready,
         stores: storage,
         development_unsafe: None,
     }
@@ -301,6 +319,7 @@ pub async fn liveness() -> impl axum::response::IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::replay_authority::ReplayAuthority;
     use crate::sybil_resistance::memory_replay_store;
     use tempfile::tempdir;
 
@@ -326,6 +345,25 @@ mod tests {
         assert!(!report.redis);
         assert!(report.storage);
         assert!(report.issuance_key);
+    }
+
+    #[tokio::test]
+    async fn replay_authority_failure_is_not_ready() {
+        let dir = tempdir().unwrap();
+        let authority = Arc::new(ReplayAuthority::new("redis://127.0.0.1:1").unwrap());
+        let report = tokio::time::timeout(
+            Duration::from_secs(3),
+            check_once_with_replay_authority(
+                &memory_replay_store(),
+                &[("audit".into(), dir.path().join("audit.json"))],
+                &core().await,
+                Some(&authority),
+            ),
+        )
+        .await
+        .unwrap();
+        assert!(!report.ready);
+        assert_eq!(report.replay_authority, Some(false));
     }
 
     #[tokio::test]
