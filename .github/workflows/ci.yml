@@ -62,6 +62,7 @@ jobs:
       - run: cargo audit --ignore RUSTSEC-2023-0071
 
   javascript-sdk:
+    name: JavaScript SDK (Node 24)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -70,11 +71,36 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 22.14.0
+          node-version: 24.x
           cache: npm
           cache-dependency-path: sdk/js/package-lock.json
       - run: npm ci
       - run: npm run lint
+      - name: Build SDK and declarations
+        run: npm run build
+      - name: Run complete SDK test suite
+        run: npm test -- --run
+      - name: Dry-run SDK package
+        run: npm pack --dry-run --json
+      - name: Verify packed ESM, CJS, and declaration consumers
+        run: |
+          set -euo pipefail
+          consumer_dir="$(mktemp -d)"
+          pack_dir="$(mktemp -d)"
+          trap 'rm -rf "$consumer_dir" "$pack_dir"' EXIT
+          pack_json="$(npm pack --ignore-scripts --json --pack-destination "$pack_dir")"
+          tarball="$(PACK_JSON="$pack_json" node -e 'const entries = JSON.parse(process.env.PACK_JSON); if (entries.length !== 1) process.exit(1); process.stdout.write(entries[0].filename);')"
+          cd "$consumer_dir"
+          npm init --yes --ignore-scripts >/dev/null
+          npm install --ignore-scripts --no-audit --no-fund "$pack_dir/$tarball" typescript@^5 >/dev/null
+          cp "$GITHUB_WORKSPACE/sdk/js/tests/package-consumers/esm-consumer.mts" .
+          cp "$GITHUB_WORKSPACE/sdk/js/tests/package-consumers/cjs-consumer.cts" .
+          cp "$GITHUB_WORKSPACE/sdk/js/tests/package-consumers/tsconfig.esm.json" .
+          cp "$GITHUB_WORKSPACE/sdk/js/tests/package-consumers/tsconfig.cjs.json" .
+          ./node_modules/.bin/tsc --project tsconfig.esm.json
+          ./node_modules/.bin/tsc --project tsconfig.cjs.json
+          node --input-type=module --eval "import * as sdk from '@flammafex/freebird'; if (typeof sdk.FreebirdClient !== 'function') throw new Error('ESM entry point failed')"
+          node --eval "const sdk = require('@flammafex/freebird'); if (typeof sdk.FreebirdClient !== 'function') throw new Error('CJS entry point failed')"
       - name: Start SDK integration services
         working-directory: .
         run: |

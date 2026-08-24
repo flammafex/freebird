@@ -38,7 +38,7 @@ use tracing::{info, warn};
 
 // Issuer metadata types are owned by the metadata module but remain available
 // at their established public admin paths.
-pub use crate::metadata::{IssuerInfo, PublicIssuerKey};
+pub use crate::metadata::IssuerInfo;
 
 // ============================================================================
 // Admin State
@@ -479,14 +479,16 @@ pub async fn readiness_handler(
     verify_api_key(&headers, &state, client_ip).await?;
     let issuers = state.issuers.read().await.clone();
     let metadata = state.metadata.read().await.clone();
+    let v7_trust = crate::state::v7_trust_registry();
     let report = readiness::evaluate(
         &state.store_health,
         &issuers,
+        &v7_trust,
         &metadata,
         &state.config.issuer_urls,
         &state.accepted_token_families,
         std::time::Duration::from_secs(state.config.refresh_interval_min * 60),
-        Some(&state.replay_authority),
+        Some(state.replay_authority.as_ref()),
     )
     .await;
     Ok(Json(
@@ -572,10 +574,14 @@ pub async fn list_issuers_handler(
 
             let age_secs = info.last_refreshed.map(|t| t.elapsed().as_secs());
 
+            let v7_key_count = crate::state::v7_trust_snapshot(id)
+                .map(|snapshot| snapshot.by_token_key_id.len())
+                .unwrap_or(0);
+
             IssuerSummary {
                 issuer_id: id.clone(),
                 kid: info.kid.clone(),
-                public_key_count: info.public_keys.len(),
+                public_key_count: v7_key_count,
                 pubkey_preview,
                 age_secs,
             }
@@ -611,11 +617,15 @@ pub async fn get_issuer_handler(
 
     let pubkey_b64 = base64ct::Base64UrlUnpadded::encode_string(&info.pubkey_bytes);
     let context = String::from_utf8_lossy(&info.ctx).to_string();
-    let public_key_ids = info
-        .public_keys
-        .values()
-        .map(|key| key.token_key_id_hex.clone())
-        .collect();
+    let public_key_ids = crate::state::v7_trust_snapshot(&issuer_id)
+        .map(|snapshot| {
+            snapshot
+                .by_token_key_id
+                .keys()
+                .map(|key_id| hex::encode(key_id.as_bytes()))
+                .collect()
+        })
+        .unwrap_or_default();
     let age_secs = info.last_refreshed.map(|t| t.elapsed().as_secs());
 
     info!("Admin: retrieved issuer details for {}", issuer_id);

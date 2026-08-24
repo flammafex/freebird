@@ -27,8 +27,7 @@ pub(super) fn v2_graph_config_rejects_self_edges_and_conflicting_key_metadata() 
     Ok(())
 }
 
-pub(super) async fn disabled_v2_exchange_routes_are_generic_and_require_status_capability(
-) -> Result<()> {
+pub(super) async fn v7_exchange_route_and_legacy_absence_characterization() -> Result<()> {
     use freebird_crypto::VOPRF_CONTEXT_V4;
     use freebird_issuer::{
         multi_key_voprf::MultiKeyVoprfCore,
@@ -37,6 +36,7 @@ pub(super) async fn disabled_v2_exchange_routes_are_generic_and_require_status_c
     };
     use std::sync::Arc;
 
+    let native_root = tempfile::tempdir()?;
     let state = Arc::new(AppStateWithSybil {
         issuer_id: ISSUER_ID.into(),
         kid: "kid".into(),
@@ -45,11 +45,32 @@ pub(super) async fn disabled_v2_exchange_routes_are_generic_and_require_status_c
         behind_proxy: false,
         sybil_checker: None,
         invitation_system: None,
+        native_bearer_v7: Arc::new(
+            freebird_issuer::native_bearer_v7::NativeBearerV7Issuer::load_or_generate(
+                &freebird_issuer::config::NativeBearerV7Config {
+                    sk_path: native_root.path().join("v7.der"),
+                    metadata_path: native_root.path().join("v7.json"),
+                    registry_path: native_root.path().join("registry.json"),
+                    profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
+                    descriptor_id: "77".repeat(32),
+                    token_key_id: "78".repeat(32),
+                    asset_id: "USD".into(),
+                    amount_minor: 1,
+                    validity_secs: 3600,
+                },
+                ISSUER_ID,
+            )?,
+        ),
+        native_bearer_v7_retained: vec![],
         public_issuer: None,
         exchange_engine: None,
         exchange_metadata: None,
         graph_issuance_engine: None,
         graph_issuance_metadata: None,
+        native_exchange_v7: None,
+        native_exchange_v7_discovery: None,
+        native_graph_issuance_v7: None,
+        native_graph_issuance_v7_discovery: None,
         epoch_duration_sec: 86_400,
         epoch_retention: 2,
         admin_api_key: None,
@@ -82,23 +103,24 @@ pub(super) async fn disabled_v2_exchange_routes_are_generic_and_require_status_c
         .header("exchange-status-capability", &capability)
         .send()
         .await?;
-    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(response.headers()["cache-control"], "no-store");
-    assert_eq!(
-        response.json::<serde_json::Value>().await?["error"],
-        "exchange_unavailable"
-    );
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
 
     let response = client
         .post(format!("http://{address}/v2/public/exchange"))
         .json(&serde_json::json!({}))
         .send()
         .await?;
-    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
-    assert_eq!(
-        response.json::<serde_json::Value>().await?["error"],
-        "invalid_status_capability"
-    );
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
+
+    let response = client
+        .get(format!(
+            "http://{address}/v7/public/exchange/status?public_operation_id={}",
+            Base64UrlUnpadded::encode_string(&[1; 16])
+        ))
+        .header("exchange-status-capability", &capability)
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
     task.abort();
     Ok(())
 }
@@ -412,7 +434,6 @@ pub(super) async fn v2_graph_http_exchange_atomicity_binding_cycles_and_restart(
     }
     assert!(!discovery_text.contains("\"authorization\":"));
     let issuer: KeyDiscoveryResp = serde_json::from_slice(&discovery_bytes)?;
-    let trusted_keys = trusted_public_keys(ISSUER_ID, issuer.clone())?;
     let exchange = issuer
         .exchange
         .clone()
@@ -643,7 +664,7 @@ pub(super) async fn v2_graph_http_exchange_atomicity_binding_cycles_and_restart(
         .public
         .iter()
         .find(|key| key.token_key_id == freebird_crypto::encode_token_key_id_hex(&direct_key_id))
-        .context("direct V5 discovery key missing")?;
+        .context("direct discovery key missing")?;
     let alias_metadata = exchange
         .active_graph
         .descriptors
@@ -652,17 +673,14 @@ pub(super) async fn v2_graph_http_exchange_atomicity_binding_cycles_and_restart(
             descriptor.token_key_id == freebird_crypto::encode_token_key_id_hex(&direct_key_id)
         })
         .context("source-only graph alias missing")?;
-    let global_horizon = trusted_keys
-        .get(&direct_key_id)
-        .context("verifier did not trust direct V5 key")?
-        .valid_until;
+    let global_horizon = alias_metadata.valid_until;
     assert!(direct_metadata.valid_until < alias_metadata.valid_until);
     assert_eq!(global_horizon, alias_metadata.valid_until);
 
     let verifier_first_artifact = mint_artifact(&fixture.keys[3], [0x0d; 32])?;
     let verifier_first_token =
         parse_public_bearer_pass(&Base64UrlUnpadded::decode_vec(&verifier_first_artifact)?)
-            .map_err(|error| anyhow::anyhow!("parse verifier-first V5 token: {error:?}"))?;
+            .map_err(|error| anyhow::anyhow!("parse verifier-first token: {error:?}"))?;
     let verifier_spend_key = v5_spend_key(
         &nullifier_key_v5(&verifier_first_token)
             .map_err(|error| anyhow::anyhow!("derive verifier-first nullifier: {error:?}"))?,
@@ -687,7 +705,7 @@ pub(super) async fn v2_graph_http_exchange_atomicity_binding_cycles_and_restart(
             .await?
             .status(),
         reqwest::StatusCode::BAD_REQUEST,
-        "a verifier-first V5 replay marker must reject exchange of the same token"
+        "a verifier-first replay marker must reject exchange of the same token"
     );
 
     // One source is raced over two independently authorized outgoing graph edges.

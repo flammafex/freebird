@@ -5,6 +5,17 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+// V7 exchange types deliberately live in a separate nominal module, but are
+// also available from the exchange API surface for callers migrating from V2.
+pub use crate::api::{
+    native_exchange_v3_ordered_root, native_exchange_v3_output_leaf,
+    native_exchange_v3_source_leaf, NativeExchangeV3Descriptor, NativeExchangeV3Discovery,
+    NativeExchangeV3Error, NativeExchangeV3Keyset, NativeExchangeV3Output, NativeExchangeV3Profile,
+    NativeExchangeV3Receipt, NativeExchangeV3Request, NativeExchangeV3Result,
+    NativeExchangeV3ResultOutput, NativeExchangeV3Slot, NativeExchangeV3Source,
+    NativeExchangeV3Transition,
+};
+
 pub const EXCHANGE_PROFILE_V2: &str = "freebird/public-bearer-exchange/v2";
 pub const EXCHANGE_VERSION_V2: u8 = 2;
 pub const MAX_ITEMS: usize = 64;

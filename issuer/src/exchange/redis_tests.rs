@@ -26,6 +26,31 @@ use freebird_crypto::{
 use rand::RngCore;
 use sha2::{Digest, Sha384};
 use std::sync::Arc;
+use tempfile::TempDir;
+
+fn test_v7_issuer(
+    issuer_id: &str,
+) -> (TempDir, Arc<crate::native_bearer_v7::NativeBearerV7Issuer>) {
+    let directory = tempfile::tempdir().unwrap();
+    let config = crate::config::NativeBearerV7Config {
+        sk_path: directory.path().join("v7.der"),
+        metadata_path: directory.path().join("v7.json"),
+        registry_path: directory.path().join("v7-registry.json"),
+        profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
+        descriptor_id: "88".repeat(32),
+        token_key_id: "31".repeat(32),
+        asset_id: "USD".into(),
+        amount_minor: 1,
+        validity_secs: 3600,
+    };
+    (
+        directory,
+        Arc::new(
+            crate::native_bearer_v7::NativeBearerV7Issuer::load_or_generate(&config, issuer_id)
+                .unwrap(),
+        ),
+    )
+}
 
 fn harness() -> Option<RedisHarness> {
     if !RedisHarness::binary_available() {
@@ -1531,7 +1556,7 @@ async fn exchange_v2_recovery_rejects_tampered_persisted_result_binding() {
 }
 
 #[tokio::test]
-async fn exchange_v2_http_pending_retry_conflict_status_and_exact_replay() {
+async fn exchange_v2_http_routes_are_absent_after_v7_cutover() {
     let Some(h) = harness() else { return };
     let issuer_id = "issuer:v2:http";
     let fixture = v2_engine_fixture(issuer_id).await;
@@ -1549,6 +1574,7 @@ async fn exchange_v2_http_pending_retry_conflict_status_and_exact_replay() {
     let pending_capability = [0x61; 32];
     seed_v2_pending(&engine, &store, &fixture.request_ba, &pending_capability).await;
     let engine = Arc::new(engine);
+    let (_v7_directory, native_bearer_v7) = test_v7_issuer(issuer_id);
     let voprf = Arc::new(
         crate::multi_key_voprf::MultiKeyVoprfCore::new(
             [7; 32],
@@ -1566,11 +1592,17 @@ async fn exchange_v2_http_pending_retry_conflict_status_and_exact_replay() {
         behind_proxy: false,
         sybil_checker: None,
         invitation_system: None,
+        native_bearer_v7,
+        native_bearer_v7_retained: vec![],
         public_issuer: None,
         exchange_engine: Some(engine),
         exchange_metadata: None,
         graph_issuance_engine: None,
         graph_issuance_metadata: None,
+        native_exchange_v7: None,
+        native_exchange_v7_discovery: None,
+        native_graph_issuance_v7: None,
+        native_graph_issuance_v7_discovery: None,
         epoch_duration_sec: 86_400,
         epoch_retention: 2,
         admin_api_key: None,
@@ -1607,60 +1639,20 @@ async fn exchange_v2_http_pending_retry_conflict_status_and_exact_replay() {
         .send()
         .await
         .unwrap();
-    assert_eq!(pending.status(), reqwest::StatusCode::ACCEPTED);
-    assert_eq!(pending.headers()["retry-after"], "1");
+    assert_eq!(pending.status(), reqwest::StatusCode::NOT_FOUND);
 
-    let capability = [0x62; 32];
-    let encoded_capability = Base64UrlUnpadded::encode_string(&capability);
-    let request_body = serde_json::to_vec(&fixture.request_ab).unwrap();
-    let committed = client
-        .post(&exchange_url)
-        .header(header, &encoded_capability)
-        .header("content-type", "application/json")
-        .body(request_body.clone())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(committed.status(), reqwest::StatusCode::OK);
-    let exact = committed.bytes().await.unwrap();
-    let replay = client
-        .post(&exchange_url)
-        .header(header, &encoded_capability)
-        .header("content-type", "application/json")
-        .body(request_body)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(replay.status(), reqwest::StatusCode::OK);
-    assert_eq!(replay.bytes().await.unwrap(), exact);
     let status = client
         .get(&status_url)
-        .header(header, &encoded_capability)
+        .header(header, Base64UrlUnpadded::encode_string(&[0x62; 32]))
         .send()
         .await
         .unwrap();
-    assert_eq!(status.status(), reqwest::StatusCode::OK);
-    assert_eq!(status.bytes().await.unwrap(), exact);
-    let unauthorized = client
-        .get(&status_url)
-        .header(header, Base64UrlUnpadded::encode_string(&[0x63; 32]))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(unauthorized.status(), reqwest::StatusCode::FORBIDDEN);
-    let conflict = client
-        .post(&exchange_url)
-        .header(header, Base64UrlUnpadded::encode_string(&[0x63; 32]))
-        .json(&fixture.request_ab)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(conflict.status(), reqwest::StatusCode::CONFLICT);
+    assert_eq!(status.status(), reqwest::StatusCode::NOT_FOUND);
     server.abort();
 }
 
 #[tokio::test]
-async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
+async fn exchange_http_v2_and_v1_routes_are_absent_after_v7_cutover() {
     let Some(h) = harness() else { return };
     let fixture = v2_engine_fixture("issuer:http:e2e").await;
     let store = ExchangeStore::new(&h.url).unwrap();
@@ -1681,6 +1673,7 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
     let pending_capability = [0x56; 32];
     seed_v2_pending(&engine, &store, &fixture.request_ba, &pending_capability).await;
     let engine = Arc::new(engine);
+    let (_v7_directory, native_bearer_v7) = test_v7_issuer("issuer:http:e2e");
     let voprf = Arc::new(
         crate::multi_key_voprf::MultiKeyVoprfCore::new(
             [7; 32],
@@ -1698,11 +1691,17 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
         behind_proxy: false,
         sybil_checker: None,
         invitation_system: None,
+        native_bearer_v7,
+        native_bearer_v7_retained: vec![],
         public_issuer: None,
         exchange_engine: Some(engine),
         exchange_metadata: Some(exchange_metadata),
         graph_issuance_engine: None,
         graph_issuance_metadata: None,
+        native_exchange_v7: None,
+        native_exchange_v7_discovery: None,
+        native_graph_issuance_v7: None,
+        native_graph_issuance_v7_discovery: None,
         epoch_duration_sec: 86_400,
         epoch_retention: 2,
         admin_api_key: None,
@@ -1741,11 +1740,10 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
         fixture.request_ab.public_operation_id
     );
     let operation = Base64UrlUnpadded::encode_string(&[0x53; 32]);
-    let request_body = serde_json::to_vec(&fixture.request_ab).unwrap();
     let legacy_path = client
         .post(format!("http://{address}/v1/public/exchange"))
         .header("exchange-status-capability", &operation)
-        .body(request_body.clone())
+        .json(&fixture.request_ab)
         .send()
         .await
         .unwrap();
@@ -1760,81 +1758,15 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
         .send()
         .await
         .unwrap();
-    assert_eq!(pending.status(), reqwest::StatusCode::ACCEPTED);
-    assert_eq!(pending.headers()["retry-after"], "1");
+    assert_eq!(pending.status(), reqwest::StatusCode::NOT_FOUND);
     assert_eq!(pending.headers()["cache-control"], "no-store");
-    let response = client
-        .post(&exchange_url)
-        .header("content-type", "application/json")
-        .header("exchange-status-capability", &operation)
-        .body(request_body.clone())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-    assert_eq!(response.headers()["cache-control"], "no-store");
-    let committed = response.bytes().await.unwrap();
     let response = client
         .get(&status_url)
         .header("exchange-status-capability", &operation)
         .send()
         .await
         .unwrap();
-    assert_eq!(response.status(), reqwest::StatusCode::OK);
-    assert_eq!(response.headers()["cache-control"], "no-store");
-    assert_eq!(response.bytes().await.unwrap(), committed);
-    let retry_one = client
-        .post(&exchange_url)
-        .header("exchange-status-capability", &operation)
-        .json(&fixture.request_ab)
-        .send();
-    let retry_two = client
-        .post(&exchange_url)
-        .header("exchange-status-capability", &operation)
-        .json(&fixture.request_ab)
-        .send();
-    let (retry_one, retry_two) = tokio::join!(retry_one, retry_two);
-    for retry in [retry_one.unwrap(), retry_two.unwrap()] {
-        assert_eq!(retry.status(), reqwest::StatusCode::OK);
-        assert_eq!(retry.bytes().await.unwrap(), committed);
-    }
-    let mut changed = fixture.request_ab.clone();
-    changed.sources[0].artifact = fixture.request_ba.sources[0].artifact.clone();
-    let response = client
-        .post(&exchange_url)
-        .header("content-type", "application/json")
-        .header("exchange-status-capability", &operation)
-        .body(serde_json::to_vec(&changed).unwrap())
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), reqwest::StatusCode::CONFLICT);
-    let mut duplicate_headers = reqwest::header::HeaderMap::new();
-    duplicate_headers.append("exchange-status-capability", operation.parse().unwrap());
-    duplicate_headers.append("exchange-status-capability", operation.parse().unwrap());
-    let response = client
-        .post(&exchange_url)
-        .header("content-type", "application/json")
-        .headers(duplicate_headers)
-        .body(request_body)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
-    assert_eq!(response.headers()["cache-control"], "no-store");
-    let oversized = client
-        .post(&exchange_url)
-        .header(
-            "exchange-status-capability",
-            Base64UrlUnpadded::encode_string(&[0x57; 32]),
-        )
-        .header("content-type", "application/json")
-        .body(vec![b'x'; 3 * 1024 * 1024 + 1])
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(oversized.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
-    assert_eq!(oversized.headers()["cache-control"], "no-store");
+    assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND);
     let unknown = client
         .get(format!(
             "http://{address}/v2/public/exchange/status?public_operation_id={}",
@@ -1848,38 +1780,6 @@ async fn exchange_http_post_status_conflict_duplicate_and_no_store() {
         .await
         .unwrap();
     assert_eq!(unknown.status(), reqwest::StatusCode::NOT_FOUND);
-    assert_eq!(unknown.headers()["cache-control"], "no-store");
-    let discovery = client
-        .get(format!("http://{address}/.well-known/keys"))
-        .send()
-        .await
-        .unwrap()
-        .json::<serde_json::Value>()
-        .await
-        .unwrap();
-    assert_eq!(discovery["public"], serde_json::json!([]));
-    assert_eq!(
-        discovery["exchange"]["active_receipt_key"]["purpose"],
-        "exchange_receipt_active"
-    );
-    let public_key = discovery["exchange"]["active_receipt_key"]["public_key_b64"]
-        .as_str()
-        .unwrap();
-    assert_eq!(Base64UrlUnpadded::decode_vec(public_key).unwrap().len(), 32);
-    let panic_response = client
-        .get(format!("http://{address}/exchange-test-panic"))
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(
-        panic_response.status(),
-        reqwest::StatusCode::INTERNAL_SERVER_ERROR
-    );
-    assert_eq!(panic_response.headers()["cache-control"], "no-store");
-    assert_eq!(
-        panic_response.json::<serde_json::Value>().await.unwrap()["error"],
-        "internal_error"
-    );
     server.abort();
 }
 

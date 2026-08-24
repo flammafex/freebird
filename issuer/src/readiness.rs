@@ -45,6 +45,105 @@ pub(crate) struct GraphIssuanceReadinessState {
     engine: Arc<crate::graph_issuance::GraphIssuanceEngine>,
 }
 
+#[derive(Clone)]
+pub(crate) struct V7ExchangeReadinessState {
+    engine: Arc<crate::exchange::v7::V7ExchangeEngine>,
+    inventory: Arc<crate::v7_signers::V7SignerInventory>,
+    discovery: freebird_common::api::NativeExchangeV3Discovery,
+}
+
+#[derive(Clone)]
+pub(crate) struct V7GraphIssuanceReadinessState {
+    engine: Arc<crate::graph_issuance::V7GraphIssuanceEngine>,
+    inventory: Arc<crate::v7_signers::V7SignerInventory>,
+    discovery: freebird_common::api::NativeGraphIssuanceV7Discovery,
+    v4_local_authorization: bool,
+}
+
+impl V7ExchangeReadinessState {
+    pub(crate) fn new(
+        engine: Arc<crate::exchange::v7::V7ExchangeEngine>,
+        inventory: Arc<crate::v7_signers::V7SignerInventory>,
+        discovery: freebird_common::api::NativeExchangeV3Discovery,
+    ) -> Self {
+        Self {
+            engine,
+            inventory,
+            discovery,
+        }
+    }
+
+    async fn check(&self) -> bool {
+        if self.discovery.validate().is_err() {
+            return false;
+        }
+        if crate::startup::validate_v7_exchange_inventory(&self.discovery, &self.inventory).is_err()
+        {
+            return false;
+        }
+        self.engine.readiness_check().await.is_ok()
+    }
+}
+
+impl V7GraphIssuanceReadinessState {
+    pub(crate) fn new(
+        engine: Arc<crate::graph_issuance::V7GraphIssuanceEngine>,
+        inventory: Arc<crate::v7_signers::V7SignerInventory>,
+        discovery: freebird_common::api::NativeGraphIssuanceV7Discovery,
+        v4_local_authorization: bool,
+    ) -> Self {
+        Self {
+            engine,
+            inventory,
+            discovery,
+            v4_local_authorization,
+        }
+    }
+
+    async fn check(&self) -> bool {
+        if self.discovery.validate().is_err() {
+            return false;
+        }
+        if !self.engine.issuance_enabled()
+            || !self.v4_local_authorization
+            || validate_v7_graph_inventory(&self.discovery, &self.inventory).is_err()
+        {
+            return false;
+        }
+        self.engine.readiness_check().await.is_ok()
+    }
+}
+
+fn validate_v7_graph_inventory(
+    discovery: &freebird_common::api::NativeGraphIssuanceV7Discovery,
+    inventory: &crate::v7_signers::V7SignerInventory,
+) -> anyhow::Result<()> {
+    for policy in discovery
+        .active_policies
+        .iter()
+        .chain(discovery.retained_policies.iter())
+    {
+        let token_key_id: [u8; 32] = hex::decode(&policy.token_key_id)?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid V7 graph token key ID"))?;
+        let identity = crate::v7_signers::V7SignerIdentity::new(
+            policy.issuer_id.clone(),
+            policy.profile_id.clone(),
+            policy.descriptor_id.clone(),
+            freebird_crypto::V7TokenKeyId::new(token_key_id),
+        )?;
+        let signer = inventory.lookup(&identity)?;
+        if signer.metadata().pubkey_spki_b64 != policy.pubkey_spki_b64
+            || signer.metadata().spki_fingerprint != policy.spki_fingerprint
+            || signer.metadata().asset_id != policy.asset_id
+            || signer.metadata().amount_minor.to_string() != policy.amount_minor
+        {
+            anyhow::bail!("V7 graph policy does not match shared signer inventory")
+        }
+    }
+    Ok(())
+}
+
 impl GraphIssuanceReadinessState {
     pub(crate) fn new(engine: Arc<crate::graph_issuance::GraphIssuanceEngine>) -> Self {
         Self { engine }
@@ -170,6 +269,8 @@ impl ReadinessState {
         voprf: Arc<MultiKeyVoprfCore>,
         exchange: Option<ExchangeReadinessState>,
         graph_issuance: Option<GraphIssuanceReadinessState>,
+        v7_exchange: Option<V7ExchangeReadinessState>,
+        v7_graph_issuance: Option<V7GraphIssuanceReadinessState>,
     ) {
         let state = self.clone();
         tokio::spawn(async move {
@@ -189,7 +290,22 @@ impl ReadinessState {
                         tokio::time::timeout(Duration::from_secs(2), graph_issuance.check())
                             .await
                             .is_ok_and(|ready| ready);
-                    report.graph_issuance = Some(ready);
+                    report.graph_issuance = Some(report.graph_issuance.unwrap_or(true) && ready);
+                    report.ready &= ready;
+                }
+                if let Some(exchange) = &v7_exchange {
+                    let ready = tokio::time::timeout(Duration::from_secs(2), exchange.check())
+                        .await
+                        .is_ok_and(|ready| ready);
+                    report.exchange = Some(ready);
+                    report.ready &= ready;
+                }
+                if let Some(graph_issuance) = &v7_graph_issuance {
+                    let ready =
+                        tokio::time::timeout(Duration::from_secs(2), graph_issuance.check())
+                            .await
+                            .is_ok_and(|ready| ready);
+                    report.graph_issuance = Some(report.graph_issuance.unwrap_or(true) && ready);
                     report.ready &= ready;
                 }
                 state.update(report);

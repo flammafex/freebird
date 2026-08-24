@@ -13,7 +13,8 @@ use axum::{
 };
 use base64ct::Encoding;
 use freebird_common::graph_issuance_api::{
-    GraphIssuanceRequestV2, ReplayAuthorityProbeV1, ReplayAuthorityProofV1,
+    GraphIssuanceRequestV2, NativeGraphIssuanceV7Request, ReplayAuthorityProbeV1,
+    ReplayAuthorityProofV1,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -63,6 +64,68 @@ pub async fn post(
             StatusCode::SERVICE_UNAVAILABLE,
             "graph_issuance_unavailable",
         ),
+    }
+}
+
+/// Handle the native V7 graph-issuance contract.
+///
+/// This handler deliberately has a V7 engine state of its own and is not
+/// registered in the legacy router yet.  Keeping the state type explicit
+/// prevents the V7 lane from accidentally selecting a historical graph
+/// provider or Redis namespace.
+pub async fn post_v7(
+    State((state, _)): State<SharedState>,
+    request: Result<Json<NativeGraphIssuanceV7Request>, JsonRejection>,
+) -> Response {
+    let Json(request) = match request {
+        Ok(value) => value,
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return error(StatusCode::PAYLOAD_TOO_LARGE, "v7_graph_request_too_large")
+        }
+        Err(_) => return error(StatusCode::BAD_REQUEST, "invalid_v7_graph_request"),
+    };
+    let Some(engine) = state.native_graph_issuance_v7.as_ref() else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "v7_graph_unavailable");
+    };
+    match engine.process(&request).await {
+        Ok(crate::graph_issuance::V7ProcessDecision::Committed(bytes)) => {
+            exact(StatusCode::OK, bytes)
+        }
+        Ok(crate::graph_issuance::V7ProcessDecision::Conflict) => {
+            error(StatusCode::CONFLICT, "v7_graph_operation_conflict")
+        }
+        Ok(crate::graph_issuance::V7ProcessDecision::Rejected) => {
+            error(StatusCode::BAD_REQUEST, "invalid_v7_graph_request")
+        }
+        Ok(crate::graph_issuance::V7ProcessDecision::Unavailable) => {
+            error(StatusCode::SERVICE_UNAVAILABLE, "v7_graph_unavailable")
+        }
+        Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "v7_graph_unavailable"),
+    }
+}
+
+/// Return the durable status of a V7 graph issuance operation.
+pub async fn status_v7(
+    State((state, _)): State<SharedState>,
+    query: Result<Query<StatusQuery>, QueryRejection>,
+) -> Response {
+    let operation_id = match query.ok().and_then(|Query(query)| {
+        freebird_common::graph_issuance_api::parse_operation_id(&query.public_operation_id).ok()
+    }) {
+        Some(value) => value,
+        None => return error(StatusCode::BAD_REQUEST, "invalid_public_operation_id"),
+    };
+    let Some(engine) = state.native_graph_issuance_v7.as_ref() else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "v7_graph_unavailable");
+    };
+    match engine.status(&operation_id).await {
+        Ok(crate::graph_issuance::V7StatusDecision::Committed(bytes)) => {
+            exact(StatusCode::OK, bytes)
+        }
+        Ok(crate::graph_issuance::V7StatusDecision::Unknown) => {
+            error(StatusCode::NOT_FOUND, "unknown_operation")
+        }
+        Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "v7_graph_unavailable"),
     }
 }
 

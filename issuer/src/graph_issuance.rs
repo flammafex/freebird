@@ -5,6 +5,7 @@ mod authorizer;
 mod engine;
 mod policy;
 mod store;
+mod v7;
 
 pub use authorizer::{
     validate_configured_authorizer, AuthorizationClaim, DevelopmentMockAuthorizer,
@@ -19,6 +20,7 @@ pub use policy::{
     GraphIssuanceV4LocalPolicy, GraphIssuanceV4TrustedIssuer, POLICY_DOCUMENT_VERSION,
 };
 pub use store::{GraphIssuanceStore, REPLAY_AUTHORITY_ID_KEY};
+pub use v7::{V7GraphIssuanceEngine, V7ProcessDecision, V7StatusDecision};
 
 #[cfg(test)]
 pub(crate) mod test_support {

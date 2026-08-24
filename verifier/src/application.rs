@@ -145,7 +145,7 @@ impl Application {
                     .iter()
                     .map(|f| match f {
                         TokenFamily::V4 => "v4",
-                        TokenFamily::V5 => "v5",
+                        TokenFamily::V7 => "v7",
                     })
                     .map(str::to_string)
                     .collect(),

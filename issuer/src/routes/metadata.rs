@@ -2,7 +2,7 @@
 use crate::multi_key_voprf::MultiKeyVoprfCore;
 use crate::AppStateWithSybil;
 use axum::{extract::State, http::StatusCode, Json};
-use freebird_common::api::{KeyDiscoveryResp, PublicKeyInfo, VoprfKeyInfo};
+use freebird_common::api::{KeyDiscoveryResp, V7KeyDiscoveryResp, V7VoprfKeyInfo, VoprfKeyInfo};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -11,8 +11,8 @@ use std::sync::Arc;
 pub struct WellKnown {
     issuer_id: String,
     voprf: VoprfInfo,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    public: Option<PublicModeInfo>,
+    native_bearer_v7: freebird_common::api::NativeBearerV7KeyInfo,
+    native_bearer_v7_retained: Vec<freebird_common::api::NativeBearerV7KeyInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     sybil: Option<crate::routes::admin::SybilConfigSummary>,
 }
@@ -24,18 +24,12 @@ struct VoprfInfo {
     pubkey: String,
 }
 
-#[derive(Serialize)]
-struct PublicModeInfo {
-    token_type: String,
-    token_key_id: String,
-    rfc9474_variant: String,
-    modulus_bits: u16,
-    spend_policy: String,
-}
-
 // Define the type alias for the state we injected in startup.rs
 // It must match exactly: (Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>)
 type SharedState = (Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>);
+
+/// Stable authority-only metadata path consumed by V4 replay health checks.
+pub const REPLAY_AUTHORITY_DISCOVERY_ROUTE: &str = "/.well-known/replay-authority";
 
 // The handler function itself (moved from old main.rs)
 pub async fn well_known_handler(State((state, voprf)): State<SharedState>) -> Json<WellKnown> {
@@ -49,15 +43,13 @@ pub async fn well_known_handler(State((state, voprf)): State<SharedState>) -> Js
             kid: active_kid,
             pubkey: active_pubkey,
         },
-        public: state
-            .public_issuer
-            .as_ref()
-            .map(|issuer| public_mode_info(issuer.metadata())),
+        native_bearer_v7: state.native_bearer_v7.metadata().clone(),
+        native_bearer_v7_retained: state.native_bearer_v7_retained.clone(),
         sybil: state.sybil_summary.clone(),
     })
 }
 
-/// Key discovery endpoint for epoch-based key rotation
+/// Key discovery endpoint for epoch-based key rotation.
 ///
 /// Returns current epoch information and valid epoch range for clients
 /// to derive and validate MAC keys independently.
@@ -67,6 +59,16 @@ pub async fn well_known_handler(State((state, voprf)): State<SharedState>) -> Js
 /// - Detect if issuer tries to modify token metadata (kid, exp, issuer_id)
 /// - Validate epoch is within acceptable range during verification
 pub async fn keys_handler(
+    State((state, voprf)): State<SharedState>,
+) -> Result<Json<V7KeyDiscoveryResp>, StatusCode> {
+    Ok(Json(v7_discovery(&state, &voprf).await?))
+}
+
+/// Return the durable V4 replay-authority container separately from the strict
+/// V7 issuer-key discovery document.  The verifier's authority health client
+/// consumes this legacy-shaped contract; V7 trust refresh must never consume
+/// it or see its V2/V5 descriptors.
+pub async fn replay_authority_handler(
     State((state, voprf)): State<SharedState>,
 ) -> Result<Json<KeyDiscoveryResp>, StatusCode> {
     let active_kid = voprf.active_kid().await;
@@ -91,24 +93,31 @@ pub async fn keys_handler(
             kid: active_kid,
             pubkey: active_pubkey,
         },
-        public: state
-            .public_issuer
-            .as_ref()
-            .map(|issuer| vec![issuer.metadata().clone()])
-            .unwrap_or_default(),
+        public: Vec::new(),
         exchange: state.exchange_metadata.clone(),
         graph_issuance,
     }))
 }
 
-fn public_mode_info(metadata: &PublicKeyInfo) -> PublicModeInfo {
-    PublicModeInfo {
-        token_type: metadata.token_type.clone(),
-        token_key_id: metadata.token_key_id.clone(),
-        rfc9474_variant: metadata.rfc9474_variant.clone(),
-        modulus_bits: metadata.modulus_bits,
-        spend_policy: metadata.spend_policy.clone(),
-    }
+async fn v7_discovery(
+    state: &AppStateWithSybil,
+    voprf: &MultiKeyVoprfCore,
+) -> Result<V7KeyDiscoveryResp, StatusCode> {
+    Ok(V7KeyDiscoveryResp {
+        issuer_id: state.issuer_id.clone(),
+        current_epoch: state.current_epoch(),
+        valid_epochs: state.valid_epochs(),
+        epoch_duration_sec: state.epoch_duration_sec,
+        voprf: V7VoprfKeyInfo {
+            suite: "VOPRF-P256-SHA256".into(),
+            kid: voprf.active_kid().await,
+            pubkey: voprf.active_pubkey_b64().await,
+        },
+        native_bearer_v7: state.native_bearer_v7.metadata().clone(),
+        native_bearer_v7_retained: state.native_bearer_v7_retained.clone(),
+        native_exchange_v7: state.native_exchange_v7_discovery.clone(),
+        native_graph_issuance_v7: state.native_graph_issuance_v7_discovery.clone(),
+    })
 }
 
 #[cfg(test)]
@@ -119,7 +128,7 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn key_discovery_publishes_only_the_configured_v2_exchange_container() {
+    async fn key_discovery_is_strict_v7_and_authority_is_separate() {
         let exchange = ExchangeDiscoveryV2 {
             active_graph: ExchangeGraphDiscoveryV2 {
                 profile_id: freebird_common::exchange_api::EXCHANGE_PROFILE_V2.into(),
@@ -139,6 +148,7 @@ mod tests {
             },
             retained_receipt_keys: vec![],
         };
+        let root = tempfile::tempdir().unwrap();
         let state = Arc::new(crate::AppStateWithSybil {
             issuer_id: "issuer:test".into(),
             kid: "kid".into(),
@@ -147,11 +157,33 @@ mod tests {
             behind_proxy: false,
             sybil_checker: None,
             invitation_system: None,
+            native_bearer_v7: Arc::new(
+                crate::native_bearer_v7::NativeBearerV7Issuer::load_or_generate(
+                    &crate::config::NativeBearerV7Config {
+                        sk_path: root.path().join("v7.der"),
+                        metadata_path: root.path().join("v7.json"),
+                        registry_path: root.path().join("registry.json"),
+                        profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
+                        descriptor_id: "44".repeat(32),
+                        token_key_id: "07".repeat(32),
+                        asset_id: "USD".into(),
+                        amount_minor: 1,
+                        validity_secs: 3600,
+                    },
+                    "issuer:test",
+                )
+                .unwrap(),
+            ),
+            native_bearer_v7_retained: vec![],
             public_issuer: None,
             exchange_engine: None,
             exchange_metadata: Some(exchange.clone()),
             graph_issuance_engine: None,
             graph_issuance_metadata: None,
+            native_exchange_v7: None,
+            native_exchange_v7_discovery: None,
+            native_graph_issuance_v7: None,
+            native_graph_issuance_v7_discovery: None,
             epoch_duration_sec: 86_400,
             epoch_retention: 2,
             admin_api_key: None,
@@ -161,18 +193,31 @@ mod tests {
             MultiKeyVoprfCore::new([7; 32], "pubkey".into(), "kid".into(), b"test").unwrap(),
         );
 
-        let response = keys_handler(State((state, voprf))).await.unwrap().0;
-        assert_eq!(response.exchange, Some(exchange));
-        assert!(response
-            .exchange
-            .as_ref()
-            .is_some_and(|exchange| exchange.active_graph.profile_id.ends_with("/v2")));
+        let response = keys_handler(State((state.clone(), voprf.clone())))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(response.issuer_id, "issuer:test");
+        assert!(response.native_exchange_v7.is_none());
+        assert!(response.native_graph_issuance_v7.is_none());
+        let v7_json = serde_json::to_value(&response).unwrap();
+        assert!(v7_json.get("public").is_none());
+        assert!(v7_json.get("exchange").is_none());
+        assert!(v7_json.get("graph_issuance").is_none());
+
+        let authority = replay_authority_handler(State((state, voprf)))
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(authority.exchange, Some(exchange));
+        assert!(authority.public.is_empty());
     }
 
     #[tokio::test]
     async fn well_known_publishes_sybil_summary_when_configured() {
         use crate::config::SybilConfig;
         use std::path::PathBuf;
+        let root = tempfile::tempdir().unwrap();
 
         let sybil_config = SybilConfig {
             mode: "pow".into(),
@@ -236,11 +281,33 @@ mod tests {
             behind_proxy: false,
             sybil_checker: None,
             invitation_system: None,
+            native_bearer_v7: Arc::new(
+                crate::native_bearer_v7::NativeBearerV7Issuer::load_or_generate(
+                    &crate::config::NativeBearerV7Config {
+                        sk_path: root.path().join("v7b.der"),
+                        metadata_path: root.path().join("v7b.json"),
+                        registry_path: root.path().join("registry.json"),
+                        profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
+                        descriptor_id: "55".repeat(32),
+                        token_key_id: "08".repeat(32),
+                        asset_id: "USD".into(),
+                        amount_minor: 1,
+                        validity_secs: 3600,
+                    },
+                    "issuer:test",
+                )
+                .unwrap(),
+            ),
+            native_bearer_v7_retained: vec![],
             public_issuer: None,
             exchange_engine: None,
             exchange_metadata: None,
             graph_issuance_engine: None,
             graph_issuance_metadata: None,
+            native_exchange_v7: None,
+            native_exchange_v7_discovery: None,
+            native_graph_issuance_v7: None,
+            native_graph_issuance_v7_discovery: None,
             epoch_duration_sec: 86_400,
             epoch_retention: 2,
             admin_api_key: None,

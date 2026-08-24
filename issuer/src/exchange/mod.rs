@@ -11,6 +11,10 @@ mod redis_harness;
 mod redis_tests;
 pub(crate) mod source_v5;
 pub(crate) mod store;
+pub mod v7;
+pub(crate) mod v7_store;
+#[cfg(test)]
+mod v7_tests;
 
 use anyhow::{bail, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};

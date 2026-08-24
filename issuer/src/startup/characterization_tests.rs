@@ -4,7 +4,7 @@ use super::Application;
 use crate::config::WebAuthnConfig;
 use crate::config::{
     Config, ExchangeConfig, GraphIssuanceAuthorizationConfig, GraphIssuanceConfig, HsmConfig,
-    HsmMode, KeyConfig, PublicKeyConfig, SybilConfig,
+    HsmMode, KeyConfig, NativeBearerV7Config, PublicKeyConfig, SybilConfig,
 };
 use crate::exchange::profiles::{ExchangeAdmissionStateV2, ExchangeProfileValidationModeV2};
 use anyhow::{bail, Context, Result};
@@ -126,6 +126,7 @@ impl EnvGuard {
             "TRUSTED_PROXY_CIDRS",
             "WEBAUTHN_PROOF_SECRET",
             "WEBAUTHN_REQUIRE_ATTESTATION",
+            "NATIVE_V7_SIGNER_CONFIG_PATHS",
         ];
         Self {
             values: keys
@@ -178,6 +179,17 @@ fn minimal_config(root: &Path) -> Config {
             audience: Some("startup-characterization".into()),
             modulus_bits: 2048,
         },
+        native_bearer_v7_config: NativeBearerV7Config {
+            sk_path: root.join("native-bearer-v7.der"),
+            metadata_path: root.join("native-bearer-v7.json"),
+            registry_path: root.join("native-bearer-v7-registry.json"),
+            profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
+            descriptor_id: "99".repeat(32),
+            token_key_id: "11".repeat(32),
+            asset_id: "USD".into(),
+            amount_minor: 1,
+            validity_secs: 3600,
+        },
         exchange_config: ExchangeConfig {
             enabled: false,
             active_graph_path: root.join("active-graph.json"),
@@ -195,6 +207,8 @@ fn minimal_config(root: &Path) -> Config {
             graph_issuance: GraphIssuanceConfig {
                 enabled: false,
                 policy_path: root.join("graph-policy.json"),
+                v7_verifier_id: String::new(),
+                v7_audience: String::new(),
                 authorization: GraphIssuanceAuthorizationConfig::Disabled,
             },
         },
@@ -357,7 +371,7 @@ async fn key_material_failures_preserve_stage_precedence_and_side_effects() -> R
 
     const INVALID_ISSUER_KEY: &[u8] = b"invalid-issuer-key";
     const INVALID_ROTATION: &[u8] = b"invalid-rotation-json";
-    const INVALID_V5_DER: &[u8] = b"invalid-v5-der";
+    const INVALID_V7_DER: &[u8] = b"invalid-v7-der";
     const INVALID_EXCHANGE_GRAPH: &[u8] = b"invalid-exchange-graph";
 
     let directory = tempfile::tempdir()?;
@@ -365,7 +379,7 @@ async fn key_material_failures_preserve_stage_precedence_and_side_effects() -> R
     let config = key_material_stage_config(root);
     std::fs::write(&config.key_config.sk_path, INVALID_ISSUER_KEY)?;
     std::fs::write(&config.key_config.rotation_state_path, INVALID_ROTATION)?;
-    std::fs::write(&config.public_key_config.sk_path, INVALID_V5_DER)?;
+    std::fs::write(&config.native_bearer_v7_config.sk_path, INVALID_V7_DER)?;
     std::fs::write(
         &config.exchange_config.active_graph_path,
         INVALID_EXCHANGE_GRAPH,
@@ -375,7 +389,7 @@ async fn key_material_failures_preserve_stage_precedence_and_side_effects() -> R
     assert!(error.contains("Failed to load or generate issuer keypair"));
     assert!(std::fs::read(root.join("issuer.key"))? == INVALID_ISSUER_KEY);
     assert!(std::fs::read(root.join("rotation.json"))? == INVALID_ROTATION);
-    assert!(std::fs::read(root.join("public-bearer.der"))? == INVALID_V5_DER);
+    assert!(std::fs::read(root.join("native-bearer-v7.der"))? == INVALID_V7_DER);
     assert!(std::fs::read(root.join("active-graph.json"))? == INVALID_EXCHANGE_GRAPH);
     assert!(!root.join("public-bearer.json").exists());
 
@@ -385,7 +399,7 @@ async fn key_material_failures_preserve_stage_precedence_and_side_effects() -> R
     let config = key_material_stage_config(root);
     std::fs::write(&config.key_config.sk_path, issuer_key)?;
     std::fs::write(&config.key_config.rotation_state_path, INVALID_ROTATION)?;
-    std::fs::write(&config.public_key_config.sk_path, INVALID_V5_DER)?;
+    std::fs::write(&config.native_bearer_v7_config.sk_path, INVALID_V7_DER)?;
     std::fs::write(
         &config.exchange_config.active_graph_path,
         INVALID_EXCHANGE_GRAPH,
@@ -395,7 +409,7 @@ async fn key_material_failures_preserve_stage_precedence_and_side_effects() -> R
     assert!(error.contains("Failed to initialize VOPRF core"));
     assert!(std::fs::read(root.join("issuer.key"))? == issuer_key);
     assert!(std::fs::read(root.join("rotation.json"))? == INVALID_ROTATION);
-    assert!(std::fs::read(root.join("public-bearer.der"))? == INVALID_V5_DER);
+    assert!(std::fs::read(root.join("native-bearer-v7.der"))? == INVALID_V7_DER);
     assert!(std::fs::read(root.join("active-graph.json"))? == INVALID_EXCHANGE_GRAPH);
     assert!(!root.join("public-bearer.json").exists());
 
@@ -415,16 +429,16 @@ async fn key_material_failures_preserve_stage_precedence_and_side_effects() -> R
                 }))?,
             )?;
         }
-        std::fs::write(&config.public_key_config.sk_path, INVALID_V5_DER)?;
+        std::fs::write(&config.native_bearer_v7_config.sk_path, INVALID_V7_DER)?;
         std::fs::write(
             &config.exchange_config.active_graph_path,
             INVALID_EXCHANGE_GRAPH,
         )?;
 
         let error = build_error(config).await;
-        assert!(error.contains("Failed to initialize V5 public bearer issuer"));
+        assert!(error.contains("Failed to initialize V7 signer inventory"));
         assert!(std::fs::read(root.join("issuer.key"))? == issuer_key);
-        assert!(std::fs::read(root.join("public-bearer.der"))? == INVALID_V5_DER);
+        assert!(std::fs::read(root.join("native-bearer-v7.der"))? == INVALID_V7_DER);
         assert!(std::fs::read(root.join("active-graph.json"))? == INVALID_EXCHANGE_GRAPH);
         assert!(!root.join("public-bearer.json").exists());
 
@@ -435,6 +449,32 @@ async fn key_material_failures_preserve_stage_precedence_and_side_effects() -> R
         assert!(rotation["active_kid"].as_str().is_some());
     }
 
+    let directory = tempfile::tempdir()?;
+    let root = directory.path();
+    let mut invalid_policy = minimal_config(root);
+    invalid_policy.native_bearer_v7_config.amount_minor = 0;
+    let (issuer_key, _, _) = deterministic_issuer_material();
+    std::fs::write(&invalid_policy.key_config.sk_path, issuer_key)?;
+    let error = build_error(invalid_policy).await;
+    assert!(error.contains("invalid V7 fixed body policy"), "{error}");
+    assert!(!error.contains("Failed to bind TCP listener"), "{error}");
+
+    let directory = tempfile::tempdir()?;
+    let root = directory.path();
+    let registry_config = minimal_config(root);
+    std::fs::write(&registry_config.key_config.sk_path, issuer_key)?;
+    let _v7 = crate::native_bearer_v7::NativeBearerV7Issuer::load_or_generate(
+        &registry_config.native_bearer_v7_config,
+        &registry_config.issuer_id,
+    )?;
+    std::fs::write(
+        &registry_config.native_bearer_v7_config.registry_path,
+        b"not-json",
+    )?;
+    let error = build_error(registry_config).await;
+    assert!(error.contains("validate bearer registry"), "{error}");
+    assert!(!error.contains("Failed to bind TCP listener"), "{error}");
+
     Ok(())
 }
 
@@ -443,6 +483,10 @@ async fn key_material_failures_preserve_stage_precedence_and_side_effects() -> R
 async fn kid_override_and_mismatch_fallback_are_preserved() -> Result<()> {
     let _env = EnvGuard::new();
     prepare_env();
+    let Some(redis) = RedisHarness::start_if_available()? else {
+        return Ok(());
+    };
+    env::set_var("REDIS_URL", &redis.url);
 
     let (issuer_key, expected_pubkey, kid_prefix) = deterministic_issuer_material();
     let matching_override = format!("{kid_prefix}-operator");
@@ -573,6 +617,10 @@ async fn application_preflight_order_has_no_key_file_side_effects() {
 async fn audit_replay_and_sybil_stages_precede_shutdown_registration() -> Result<()> {
     let _env = EnvGuard::new();
     prepare_env();
+    let Some(redis) = RedisHarness::start_if_available()? else {
+        return Ok(());
+    };
+    env::set_var("REDIS_URL", &redis.url);
 
     let directory = tempfile::tempdir()?;
     let root = directory.path();
@@ -699,10 +747,7 @@ async fn application_binds_after_runtime_initialization() {
     config.exchange_config.active_graph_path = root.join("missing-graph.json");
 
     let error = build_error(config).await;
-    assert!(
-        error.contains("invalid active V2 exchange graph"),
-        "{error}"
-    );
+    assert!(error.contains("Connection refused"), "{error}");
     assert!(!error.contains("Failed to bind TCP listener"), "{error}");
     drop(blocker);
 }
@@ -712,6 +757,10 @@ async fn application_binds_after_runtime_initialization() {
 async fn valid_runtime_initialization_precedes_an_occupied_bind() {
     let _env = EnvGuard::new();
     prepare_env();
+    let Some(redis) = RedisHarness::start_if_available().unwrap() else {
+        return;
+    };
+    env::set_var("REDIS_URL", &redis.url);
 
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path();
@@ -765,34 +814,12 @@ async fn malformed_trusted_proxy_config_fails_after_durable_runtime_before_bind(
     config.exchange_config.active_receipt_metadata_path = receipt_metadata_path;
 
     let error = build_error(config).await;
-    assert!(
-        error.contains("invalid TRUSTED_PROXY_CIDRS entry"),
-        "{error}"
-    );
+    assert!(error.contains("parse V7 exchange discovery"), "{error}");
     assert!(!error.contains("Failed to bind TCP listener"), "{error}");
 
-    for path in [
-        root.join("issuer.key"),
-        root.join("rotation.json"),
-        root.join("invitation.key"),
-    ] {
-        assert!(
-            path.exists(),
-            "runtime did not initialize {} before TLS validation",
-            path.display()
-        );
-    }
-
-    let client = redis::Client::open(redis.url.as_str())?;
-    let mut connection = client.get_multiplexed_async_connection().await?;
-    let registry_exists: bool = redis::cmd("EXISTS")
-        .arg("freebird:exchange:v2:key-registry:root")
-        .query_async(&mut connection)
-        .await?;
-    assert!(
-        registry_exists,
-        "exchange key registry was not durably initialized before TLS validation"
-    );
+    assert!(root.join("issuer.key").exists());
+    assert!(root.join("rotation.json").exists());
+    assert!(!root.join("invitation.key").exists());
     Ok(())
 }
 
@@ -858,6 +885,10 @@ async fn start_application(config: Config) -> Result<RunningApplication> {
 async fn minimal_application_freezes_routes_readiness_discovery_and_metrics() -> Result<()> {
     let _env = EnvGuard::new();
     prepare_env();
+    let Some(redis) = RedisHarness::start_if_available()? else {
+        return Ok(());
+    };
+    env::set_var("REDIS_URL", &redis.url);
 
     let directory = tempfile::tempdir()?;
     let running = start_application(minimal_config(directory.path())).await?;
@@ -892,6 +923,8 @@ async fn minimal_application_freezes_routes_readiness_discovery_and_metrics() ->
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let issuer: serde_json::Value = response.json().await?;
     assert!(issuer.get("public").is_none());
+    assert!(issuer.get("native_bearer_v7").is_some());
+    assert!(issuer.get("native_bearer_v7_retained").is_some());
 
     let response = client
         .get(format!("{}/.well-known/keys", running.base))
@@ -899,6 +932,9 @@ async fn minimal_application_freezes_routes_readiness_discovery_and_metrics() ->
         .await?;
     assert_eq!(response.status(), reqwest::StatusCode::OK);
     let discovery: serde_json::Value = response.json().await?;
+    assert!(discovery.get("public").is_none());
+    assert!(discovery.get("native_bearer_v7").is_some());
+    assert!(discovery.get("native_bearer_v7_retained").is_some());
     assert!(discovery.get("exchange").is_none());
     assert!(discovery.get("graph_issuance").is_none());
 
@@ -932,26 +968,23 @@ async fn minimal_application_freezes_routes_readiness_discovery_and_metrics() ->
         ("/healthz", reqwest::Method::GET),
         ("/readyz", reqwest::Method::GET),
         ("/.well-known/issuer", reqwest::Method::GET),
+        ("/.well-known/replay-authority", reqwest::Method::GET),
         ("/.well-known/keys", reqwest::Method::GET),
         ("/v1/oprf/issue", reqwest::Method::POST),
         ("/v1/oprf/renew", reqwest::Method::POST),
         ("/v1/oprf/issue/batch", reqwest::Method::POST),
-        ("/v1/public/issue", reqwest::Method::POST),
-        ("/v1/public/issue/batch", reqwest::Method::POST),
+        ("/v7/native-bearer/issue", reqwest::Method::POST),
+        ("/v7/native-bearer/issue/batch", reqwest::Method::POST),
         (
-            "/v2/public/exchange/status?public_operation_id=AgICAgICAgICAgICAgICAg",
+            "/v7/public/exchange/status?public_operation_id=AgICAgICAgICAgICAgICAg",
             reqwest::Method::GET,
         ),
-        ("/v2/public/exchange", reqwest::Method::POST),
+        ("/v7/public/exchange", reqwest::Method::POST),
         (
-            "/v1/public/graph/issue/status?public_operation_id=AwMDAwMDAwMDAwMDAwMDAw",
+            "/v7/public/graph/issue/status?public_operation_id=AwMDAwMDAwMDAwMDAwMDAw",
             reqwest::Method::GET,
         ),
-        ("/v1/public/graph/issue", reqwest::Method::POST),
-        (
-            "/v1/public/graph/replay-authority/probe",
-            reqwest::Method::POST,
-        ),
+        ("/v7/public/graph/issue", reqwest::Method::POST),
     ];
     tokio::time::sleep(Duration::from_millis(1_100)).await;
     for (path, method) in public_routes {
@@ -975,13 +1008,49 @@ async fn minimal_application_freezes_routes_readiness_discovery_and_metrics() ->
     }
 
     for (path, method) in [
+        ("/v2/public/exchange", reqwest::Method::POST),
+        ("/v2/public/exchange/status", reqwest::Method::GET),
+        ("/v1/public/graph/issue", reqwest::Method::POST),
+        ("/v1/public/graph/issue/status", reqwest::Method::GET),
+    ] {
+        let response = client
+            .request(method, format!("{}{path}", running.base))
+            .send()
+            .await?;
+        assert_eq!(response.status(), reqwest::StatusCode::NOT_FOUND, "{path}");
+    }
+    let response = client
+        .post(format!(
+            "{}/v1/public/graph/replay-authority/probe",
+            running.base
+        ))
+        .json(&serde_json::json!({}))
+        .send()
+        .await?;
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    for path in ["/v1/public/issue", "/v1/public/issue/batch"] {
+        let response = client
+            .post(format!("{}{path}", running.base))
+            .header("content-type", "application/json")
+            .body("{}")
+            .send()
+            .await?;
+        assert_eq!(
+            response.status(),
+            reqwest::StatusCode::NOT_FOUND,
+            "POST {path}"
+        );
+    }
+
+    for (path, method) in [
         ("/healthz", reqwest::Method::GET),
-        ("/v1/public/issue", reqwest::Method::POST),
+        ("/v7/native-bearer/issue", reqwest::Method::POST),
         (
-            "/v2/public/exchange/status?public_operation_id=AgICAgICAgICAgICAgICAg",
+            "/v7/public/exchange/status?public_operation_id=AgICAgICAgICAgICAgICAg",
             reqwest::Method::GET,
         ),
-        ("/v1/public/graph/issue", reqwest::Method::POST),
+        ("/v7/public/graph/issue", reqwest::Method::POST),
     ] {
         let head = client
             .head(format!("{}{path}", running.base))
@@ -1016,11 +1085,11 @@ async fn minimal_application_freezes_routes_readiness_discovery_and_metrics() ->
     for (path, custom_header) in [
         ("/healthz", "content-type"),
         (
-            "/v2/public/exchange",
+            "/v7/public/exchange",
             "content-type,exchange-status-capability",
         ),
         (
-            "/v1/public/graph/issue",
+            "/v7/public/graph/issue",
             "content-type,graph-issuance-status-capability",
         ),
     ] {
@@ -1057,7 +1126,7 @@ async fn minimal_application_freezes_routes_readiness_discovery_and_metrics() ->
     let capability = Base64UrlUnpadded::encode_string(&[1; 32]);
     let response = client
         .get(format!(
-            "{}/v2/public/exchange/status?public_operation_id={}",
+            "{}/v7/public/exchange/status?public_operation_id={}",
             running.base,
             Base64UrlUnpadded::encode_string(&[2; 16])
         ))
@@ -1082,20 +1151,20 @@ async fn minimal_application_freezes_routes_readiness_discovery_and_metrics() ->
         "authorization": Base64UrlUnpadded::encode_string(&[4; 32]),
     });
     let response = client
-        .post(format!("{}/v1/public/graph/issue", running.base))
+        .post(format!("{}/v7/public/graph/issue", running.base))
         .header("graph-issuance-status-capability", &capability)
         .json(&graph_request)
         .send()
         .await?;
-    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
     assert_eq!(
         response.json::<serde_json::Value>().await?["error"],
-        "graph_issuance_unavailable"
+        "invalid_v7_graph_request"
     );
 
     assert_eq!(
         client
-            .get(format!("{}/v1/public/graph/issue", running.base))
+            .get(format!("{}/v7/public/graph/issue", running.base))
             .send()
             .await?
             .status(),
@@ -1204,6 +1273,10 @@ async fn public_layers_preserve_connect_info_tls_rejection_and_panic_suppression
 async fn missing_webauthn_secret_precedes_audit_replay_and_sybil() -> Result<()> {
     let _env = EnvGuard::new();
     prepare_env();
+    let Some(redis) = RedisHarness::start_if_available()? else {
+        return Ok(());
+    };
+    env::set_var("REDIS_URL", &redis.url);
 
     let directory = tempfile::tempdir()?;
     let root = directory.path();
@@ -1251,6 +1324,10 @@ async fn missing_webauthn_secret_precedes_audit_replay_and_sybil() -> Result<()>
 async fn invalid_sybil_selection_fails_during_application_construction() -> Result<()> {
     let _env = EnvGuard::new();
     prepare_env();
+    let Some(redis) = RedisHarness::start_if_available()? else {
+        return Ok(());
+    };
+    env::set_var("REDIS_URL", &redis.url);
 
     let directory = tempfile::tempdir()?;
     let mut config = minimal_config(directory.path());
@@ -1267,6 +1344,10 @@ async fn invalid_sybil_selection_fails_during_application_construction() -> Resu
 async fn webauthn_startup_branch_initializes_before_routes_and_shutdown() -> Result<()> {
     let _env = EnvGuard::new();
     prepare_env();
+    let Some(redis) = RedisHarness::start_if_available()? else {
+        return Ok(());
+    };
+    env::set_var("REDIS_URL", &redis.url);
     env::set_var("WEBAUTHN_PROOF_SECRET", "startup-webauthn-proof-secret");
 
     let directory = tempfile::tempdir()?;

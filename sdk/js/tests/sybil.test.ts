@@ -15,9 +15,6 @@ vi.mock('../src/crypto/voprf.js', () => ({
   tokenKeyIdFromSpki: vi.fn(),
   tokenKeyIdToHex: vi.fn(),
   tokenKeyIdFromHex: vi.fn(),
-  buildPublicBearerMessage: vi.fn(),
-  buildPublicBearerPass: vi.fn(),
-  parsePublicBearerPass: vi.fn(),
 }));
 
 const typedVariants = [

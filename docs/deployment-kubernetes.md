@@ -57,15 +57,14 @@ trusted ingress source, never a pod CIDR. The proxy-policy patch supplies the
 matching namespace and controller label. Probe and health egress use HTTPS
 port 443 in both overlays.
 
-The base manifests use the canonical V2 exchange names. Do not restore the old
-`PUBLIC_BEARER_EXCHANGE_PROFILE_PATH` or
-`PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS` settings. Exchange and graph
+The base manifests use the native V7 exchange names. Do not restore retired V5
+or legacy `PUBLIC_BEARER_EXCHANGE_*` profile settings. Exchange and graph
 issuance remain disabled in the base; enabling them requires setting
-`PUBLIC_BEARER_EXCHANGE_ENABLE` and
-`PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE` to `true` in the issuer ConfigMap,
-setting the same graph marker and a non-empty
+`NATIVE_EXCHANGE_V7_ENABLE` and
+`NATIVE_GRAPH_ISSUANCE_V7_ENABLE` to `true` in the issuer ConfigMap,
+setting the same V7 graph marker and a non-empty
 `VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS` in the verifier ConfigMap, mounting the
-V2 graph/history/acknowledgement/policy files and signer material at the paths
+V7 discovery/history/acknowledgement/policy files and signer material at the paths
 in the issuer ConfigMap, and creating the referenced
 `graph-issuance-credentials` secret with exactly one production authorizer
 secret. Run `freebird-validate-config` against the same Redis database used by
@@ -225,10 +224,12 @@ direct application-port bypass.
 probe status endpoints):
 
 - `/.well-known/issuer`
+- `/.well-known/replay-authority` (V4 authority-only metadata for verifier health refresh)
 - `/.well-known/keys`
 - `/v1/oprf`
-- `/v1/public`
-- `/v1/public/graph/replay-authority/probe` (V2 verifier authority probe)
+- `/v7/native-bearer`
+- `/v7/public`
+- `/v1/public/graph/replay-authority/probe` (V4 authority probe for V7 graph participants)
 - `/webauthn`
 - `/healthz`
 - `/readyz`
@@ -247,7 +248,7 @@ with an operator CIDR allowlist only if required.
 Redis is used for verifier nullifier storage and issuer Sybil replay storage.
 The examples enable a standalone writable master, append-only persistence with
 `appendfsync always`, `maxmemory-policy noeviction`, and password
-authentication. These settings are required for V2 exchange/graph issuance;
+authentication. These settings are required for V7 exchange/graph issuance;
 RDB-only or `everysec` durability is not a fallback.
 
 The issuer receives:
@@ -259,10 +260,10 @@ The issuer receives:
 The verifier receives:
 
 - `REDIS_URL`
-- `VERIFIER_ACCEPTED_TOKEN_VERSIONS` (for example `v4,v5`)
+- `VERIFIER_ACCEPTED_TOKEN_VERSIONS` (`v4,v7`; V5 is retired and V6 is reserved)
 - `VERIFIER_ENV=production`
 - `IN_MEMORY_REPLAY_STORE=false`
-- `VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS` when participating in V2 graph
+- `VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS` when participating in V7 graph
   issuance;
 - `VERIFIER_REPLAY_AUTHORITY_PROBE_INTERVAL=30s` and
   `VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS=60s` for the authority health
@@ -270,15 +271,17 @@ The verifier receives:
 
 Network policies allow Redis access only from issuer and verifier pods.
 
-When graph issuance is enabled, set the verifier graph URL to the issuer's
-public HTTPS host (for example, `https://issuer.example.com`) and expose both
-`/.well-known/keys` and the exact
+When V7 graph issuance is enabled, set the verifier graph URL to the issuer's
+public HTTPS host (for example, `https://issuer.example.com`) and expose the
+distinct V4 `GET /.well-known/replay-authority` metadata route, strict V7
+`GET /.well-known/keys` discovery route, and exact
 `POST /v1/public/graph/replay-authority/probe` path on the issuer ingress. The
-existing `/v1/public` prefix and explicit probe route in the overlays are
-intentional. The verifier readiness probe must use the HTTPS ingress boundary,
-not the issuer ClusterIP. The authority probe proves that the verifier's
-`REDIS_URL` and issuer exchange Redis reach the same logical database; URL
-string equality is not used as proof.
+verifier health refresh consumes the V4 metadata route; it must not use V7 keys
+or the POST probe as a metadata substitute. The fixed V4 probe is retained for
+V7 graph participants and proves that the verifier's `REDIS_URL` and issuer
+exchange Redis reach the same logical database; URL string equality is not used
+as proof. The verifier readiness probe must use the HTTPS ingress boundary, not
+the issuer ClusterIP.
 
 ## Issuer Scaling
 

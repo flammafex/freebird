@@ -35,6 +35,7 @@ pub struct Config {
     pub behind_proxy: bool,
     pub key_config: KeyConfig,
     pub public_key_config: PublicKeyConfig,
+    pub native_bearer_v7_config: NativeBearerV7Config,
     pub exchange_config: ExchangeConfig,
     pub sybil_config: SybilConfig,
     pub webauthn_config: Option<WebAuthnConfig>,
@@ -64,6 +65,21 @@ pub struct PublicKeyConfig {
     pub validity_secs: u64,
     pub audience: Option<String>,
     pub modulus_bits: usize,
+}
+
+/// Separate startup configuration for the native randomized V7 bearer issuer.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+pub struct NativeBearerV7Config {
+    pub sk_path: PathBuf,
+    pub metadata_path: PathBuf,
+    pub registry_path: PathBuf,
+    pub profile_id: String,
+    pub descriptor_id: String,
+    /// Explicit lowercase hexadecimal encoding of the raw 32-byte V7 key ID.
+    pub token_key_id: String,
+    pub asset_id: String,
+    pub amount_minor: u64,
+    pub validity_secs: u64,
 }
 
 #[derive(Clone)]
@@ -172,6 +188,7 @@ pub struct WebAuthnConfig {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
+        reject_removed_v5_public_bearer_env()?;
         let issuer_id = env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".to_string());
 
         let bind_str = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8081".to_string());
@@ -201,6 +218,7 @@ impl Config {
         if hsm_enabled {
             anyhow::bail!(HSM_ENABLE_UNSUPPORTED_MESSAGE);
         }
+        load_v7_additional_signer_configs()?;
 
         // Epoch configuration for key rotation (supports human-readable: "1d", "24h", etc.)
         let epoch_duration_sec = env_duration("EPOCH_DURATION", 86400); // Default: 1 day
@@ -213,6 +231,7 @@ impl Config {
             behind_proxy,
             key_config: KeyConfig::from_env()?,
             public_key_config: PublicKeyConfig::from_env(),
+            native_bearer_v7_config: NativeBearerV7Config::from_env()?,
             exchange_config: ExchangeConfig::from_env()?,
             sybil_config: SybilConfig::from_env()?,
             webauthn_config: WebAuthnConfig::from_env(),
@@ -226,6 +245,25 @@ impl Config {
             unsafe_development_mode,
         })
     }
+}
+
+/// V5 public-bearer producer configuration is not a compatibility input after
+/// the V7 cutover.  Rejecting it prevents a stale deployment manifest from
+/// silently enabling or selecting the retired signer.
+pub fn reject_removed_v5_public_bearer_env() -> Result<()> {
+    for name in [
+        "PUBLIC_BEARER_ENABLE",
+        "PUBLIC_BEARER_SK_PATH",
+        "PUBLIC_BEARER_METADATA_PATH",
+        "PUBLIC_BEARER_VALIDITY",
+        "PUBLIC_BEARER_AUDIENCE",
+        "PUBLIC_BEARER_MODULUS_BITS",
+    ] {
+        if env::var_os(name).is_some() {
+            anyhow::bail!("{name} was removed at the native V7 cutover")
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug)]
@@ -250,6 +288,8 @@ pub struct ExchangeConfig {
 pub struct GraphIssuanceConfig {
     pub enabled: bool,
     pub policy_path: PathBuf,
+    pub v7_verifier_id: String,
+    pub v7_audience: String,
     pub authorization: GraphIssuanceAuthorizationConfig,
 }
 
@@ -305,7 +345,7 @@ pub struct LoadedExchangeConfigV2 {
 impl ExchangeConfig {
     pub fn from_env() -> Result<Self> {
         reject_removed_v1_exchange_env()?;
-        let enabled = env_bool("PUBLIC_BEARER_EXCHANGE_ENABLE");
+        let enabled = env_bool("NATIVE_EXCHANGE_V7_ENABLE");
         let comma_paths = |name: &str| -> Result<Vec<PathBuf>> {
             let Some(value) = env::var(name).ok() else {
                 return Ok(Vec::new());
@@ -324,47 +364,47 @@ impl ExchangeConfig {
                 })
                 .collect()
         };
-        let active_graph_path = env::var("PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH")
+        let active_graph_path = env::var("NATIVE_EXCHANGE_V7_DISCOVERY_PATH")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| "public_bearer_exchange_graph_v2.json".into());
-        let retained_graph_paths = comma_paths("PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS")?;
+            .unwrap_or_else(|_| "native_exchange_v7_discovery.json".into());
+        let retained_graph_paths = comma_paths("NATIVE_EXCHANGE_V7_RETAINED_DISCOVERY_PATHS")?;
         let config = Self {
             enabled,
             active_graph_path,
             retained_graph_paths,
-            public_history_path: env::var("PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH")
+            public_history_path: env::var("NATIVE_EXCHANGE_V7_PUBLIC_HISTORY_PATH")
                 .ok()
                 .filter(|path| !path.trim().is_empty())
                 .map(PathBuf::from),
             disabled_publication_ack_paths: comma_paths(
-                "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
+                "NATIVE_EXCHANGE_V7_DISABLED_PUBLICATION_ACK_PATHS",
             )?,
-            active_receipt_key_path: env::var("PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH")
+            active_receipt_key_path: env::var("NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_KEY_PATH")
                 .map(PathBuf::from)
-                .unwrap_or_else(|_| "public_bearer_exchange_receipt.key".into()),
+                .unwrap_or_else(|_| "native_exchange_v7_receipt.key".into()),
             active_receipt_metadata_path: env::var(
-                "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH",
+                "NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_METADATA_PATH",
             )
             .map(PathBuf::from)
-            .unwrap_or_else(|_| "public_bearer_exchange_receipt_metadata.json".into()),
+            .unwrap_or_else(|_| "native_exchange_v7_receipt_metadata.json".into()),
             retained_receipt_key_paths: comma_paths(
-                "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
+                "NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_KEY_PATHS",
             )?,
             retained_receipt_metadata_paths: comma_paths(
-                "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS",
+                "NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_METADATA_PATHS",
             )?,
-            redis_url: env::var("PUBLIC_BEARER_EXCHANGE_REDIS_URL").ok(),
-            receipt_lifetime_secs: env::var("PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME")
+            redis_url: env::var("NATIVE_EXCHANGE_V7_REDIS_URL").ok(),
+            receipt_lifetime_secs: env::var("NATIVE_EXCHANGE_V7_RECEIPT_LIFETIME")
                 .ok()
                 .map(|value| freebird_common::duration::parse_duration(&value))
                 .transpose()?
                 .unwrap_or(86_400),
-            request_body_limit: env::var("PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES")
+            request_body_limit: env::var("NATIVE_EXCHANGE_V7_MAX_BODY_BYTES")
                 .ok()
                 .map(|value| value.parse::<usize>())
                 .transpose()?
                 .unwrap_or(3 * 1024 * 1024),
-            request_timeout_secs: env::var("PUBLIC_BEARER_EXCHANGE_TIMEOUT")
+            request_timeout_secs: env::var("NATIVE_EXCHANGE_V7_TIMEOUT")
                 .ok()
                 .map(|value| freebird_common::duration::parse_duration(&value))
                 .transpose()?
@@ -384,7 +424,7 @@ impl ExchangeConfig {
                 anyhow::bail!("retained exchange receipt key and metadata path counts must match")
             }
             if config.redis_url.as_deref().is_none_or(str::is_empty) {
-                anyhow::bail!("PUBLIC_BEARER_EXCHANGE_REDIS_URL is required")
+                anyhow::bail!("NATIVE_EXCHANGE_V7_REDIS_URL is required")
             }
             if config.receipt_lifetime_secs == 0
                 || !(1024..=4 * 1024 * 1024).contains(&config.request_body_limit)
@@ -395,7 +435,7 @@ impl ExchangeConfig {
             }
         }
         if config.graph_issuance.enabled && !config.enabled {
-            anyhow::bail!("graph issuance requires PUBLIC_BEARER_EXCHANGE_ENABLE=true")
+            anyhow::bail!("V7 graph issuance requires NATIVE_EXCHANGE_V7_ENABLE=true")
         }
         Ok(config)
     }
@@ -479,12 +519,14 @@ impl ExchangeConfig {
     }
 
     pub async fn validate_redis_durability(&self) -> Result<()> {
-        let store = crate::exchange::store::ExchangeStore::new(
+        let client = redis::Client::open(
             self.redis_url
                 .as_deref()
-                .context("exchange Redis URL missing")?,
+                .context("V7 exchange Redis URL missing")?,
         )?;
-        store.validate_durable_standalone().await
+        let mut connection = client.get_async_connection().await?;
+        let _: String = redis::cmd("PING").query_async(&mut connection).await?;
+        Ok(())
     }
 
     pub(crate) fn load_disabled_publication_acknowledgements(
@@ -498,6 +540,26 @@ impl ExchangeConfig {
 /// aliases instead of silently interpreting or ignoring them.
 pub fn reject_removed_v1_exchange_env() -> Result<()> {
     for name in [
+        "PUBLIC_BEARER_EXCHANGE_ENABLE",
+        "PUBLIC_BEARER_EXCHANGE_REDIS_URL",
+        "PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH",
+        "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
+        "PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH",
+        "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
+        "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
+        "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH",
+        "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
+        "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS",
+        "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
+        "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
+        "PUBLIC_BEARER_EXCHANGE_TIMEOUT",
+        "PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE",
+        "PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH",
+        "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
+        "PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64",
+        "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64",
+        "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL",
+        "PUBLIC_BEARER_GRAPH_ISSUANCE_ALLOW_DEVELOPMENT_MOCK",
         "PUBLIC_BEARER_EXCHANGE_PROFILE_PATH",
         "PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS",
         "PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH",
@@ -513,36 +575,41 @@ impl GraphIssuanceConfig {
     fn from_env() -> Result<Self> {
         use base64ct::{Base64UrlUnpadded, Encoding};
 
-        let enabled = env_bool("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE");
-        let policy_path = env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH")
+        let enabled = env_bool("NATIVE_GRAPH_ISSUANCE_V7_ENABLE");
+        let policy_path = env::var("NATIVE_GRAPH_ISSUANCE_V7_POLICY_PATH")
             .map(PathBuf::from)
-            .unwrap_or_else(|_| "public_bearer_graph_issuance_policy_v2.json".into());
+            .unwrap_or_else(|_| "native_graph_issuance_v7_discovery.json".into());
         if !enabled {
             return Ok(Self {
                 enabled,
                 policy_path,
+                v7_verifier_id: String::new(),
+                v7_audience: String::new(),
                 authorization: GraphIssuanceAuthorizationConfig::Disabled,
             });
         }
         if policy_path.as_os_str().is_empty() {
-            anyhow::bail!("PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH must not be empty")
+            anyhow::bail!("NATIVE_GRAPH_ISSUANCE_V7_POLICY_PATH must not be empty")
         }
-        let mode = env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION")
-            .unwrap_or_else(|_| "hmac_sha256".into());
+        if !env_bool("NATIVE_EXCHANGE_V7_ENABLE") {
+            anyhow::bail!("V7 graph issuance requires NATIVE_EXCHANGE_V7_ENABLE=true")
+        }
+        let mode = env::var("NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION")
+            .unwrap_or_else(|_| "v4_local".into());
+        let (v7_verifier_id, v7_audience) = if mode == "v4_local" {
+            (
+                env::var("NATIVE_GRAPH_ISSUANCE_V7_VERIFIER_ID")
+                    .context("NATIVE_GRAPH_ISSUANCE_V7_VERIFIER_ID is required")?,
+                env::var("NATIVE_GRAPH_ISSUANCE_V7_AUDIENCE")
+                    .context("NATIVE_GRAPH_ISSUANCE_V7_AUDIENCE is required")?,
+            )
+        } else {
+            (String::new(), String::new())
+        };
         let authorization = match mode.as_str() {
-            "hmac_sha256" => {
-                let encoded = env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64")
-                    .context("PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64 is required")?;
-                let secret = Base64UrlUnpadded::decode_vec(&encoded)
-                    .context("invalid graph issuance HMAC secret encoding")?;
-                if secret.len() < 32 || Base64UrlUnpadded::encode_string(&secret) != encoded {
-                    anyhow::bail!("graph issuance HMAC secret must be canonical base64url for at least 32 bytes")
-                }
-                GraphIssuanceAuthorizationConfig::HmacSha256(secret)
-            }
             "v4_local" => {
-                let raw = env::var("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64")
-                    .context("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64 is required")?;
+                let raw = env::var("NATIVE_GRAPH_ISSUANCE_V7_V4_KEYRING_B64")
+                    .context("NATIVE_GRAPH_ISSUANCE_V7_V4_KEYRING_B64 is required")?;
                 let encoded: std::collections::BTreeMap<
                     String,
                     std::collections::BTreeMap<String, String>,
@@ -576,20 +643,16 @@ impl GraphIssuanceConfig {
                 }
                 GraphIssuanceAuthorizationConfig::V4Local { keys }
             }
-            "development_mock" => {
-                if env::var("FREEBIRD_ENV").as_deref() != Ok("development")
-                    || !env_bool("FREEBIRD_UNSAFE_DEVELOPMENT_MODE")
-                    || !env_bool("PUBLIC_BEARER_GRAPH_ISSUANCE_ALLOW_DEVELOPMENT_MOCK")
-                {
-                    anyhow::bail!("development graph issuance authorization requires all development safety fences")
-                }
-                GraphIssuanceAuthorizationConfig::DevelopmentMock
-            }
-            _ => anyhow::bail!("unsupported graph issuance authorization verifier"),
+            "hmac_sha256" | "development_mock" => anyhow::bail!(
+                "V7 graph issuance authorization must be v4_local; {mode} is not supported"
+            ),
+            _ => anyhow::bail!("unsupported V7 graph issuance authorization verifier"),
         };
         Ok(Self {
             enabled,
             policy_path,
+            v7_verifier_id,
+            v7_audience,
             authorization,
         })
     }
@@ -687,6 +750,142 @@ impl PublicKeyConfig {
                 .unwrap_or(2048),
         }
     }
+}
+
+impl NativeBearerV7Config {
+    fn from_env() -> Result<Self> {
+        if env::var("NATIVE_BEARER_V7_ENABLE")
+            .ok()
+            .is_some_and(|value| value.eq_ignore_ascii_case("false") || value == "0")
+        {
+            anyhow::bail!("native V7 bearer issuance is mandatory; NATIVE_BEARER_V7_ENABLE=false is not supported");
+        }
+        let config = Self {
+            sk_path: required_path("NATIVE_BEARER_V7_SK_PATH")?,
+            metadata_path: required_path("NATIVE_BEARER_V7_METADATA_PATH")?,
+            registry_path: required_path("NATIVE_BEARER_V7_REGISTRY_PATH")?,
+            profile_id: env::var("NATIVE_BEARER_V7_PROFILE_ID")
+                .unwrap_or_else(|_| freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into()),
+            descriptor_id: env::var("NATIVE_BEARER_V7_DESCRIPTOR_ID")
+                .context("NATIVE_BEARER_V7_DESCRIPTOR_ID is required")?,
+            token_key_id: env::var("NATIVE_BEARER_V7_TOKEN_KEY_ID")
+                .context("NATIVE_BEARER_V7_TOKEN_KEY_ID is required")?,
+            asset_id: env::var("NATIVE_BEARER_V7_ASSET_ID")
+                .context("NATIVE_BEARER_V7_ASSET_ID is required")?,
+            amount_minor: env::var("NATIVE_BEARER_V7_AMOUNT_MINOR")
+                .context("NATIVE_BEARER_V7_AMOUNT_MINOR is required")?
+                .parse()
+                .context("NATIVE_BEARER_V7_AMOUNT_MINOR must be an integer")?,
+            validity_secs: env::var("NATIVE_BEARER_V7_VALIDITY")
+                .ok()
+                .map(|value| freebird_common::duration::parse_duration(&value))
+                .transpose()?
+                .unwrap_or(30 * 24 * 3600),
+        };
+        if config.sk_path.as_os_str().is_empty()
+            || config.metadata_path.as_os_str().is_empty()
+            || config.registry_path.as_os_str().is_empty()
+        {
+            anyhow::bail!("NATIVE_BEARER_V7 paths must not be empty");
+        }
+        if config.validity_secs == 0 {
+            anyhow::bail!("NATIVE_BEARER_V7_VALIDITY must be positive");
+        }
+        freebird_crypto::V7BodyPolicy::new(config.asset_id.clone(), config.amount_minor).map_err(
+            |error| anyhow::anyhow!("invalid NATIVE_BEARER_V7 fixed body policy: {error:?}"),
+        )?;
+        if config.token_key_id.len() != 64
+            || !config
+                .token_key_id
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            anyhow::bail!(
+                "NATIVE_BEARER_V7_TOKEN_KEY_ID must be 64 lowercase hexadecimal characters"
+            );
+        }
+        if config.profile_id.trim().is_empty() || config.descriptor_id.trim().is_empty() {
+            anyhow::bail!("NATIVE_BEARER_V7_PROFILE_ID and DESCRIPTOR_ID must not be empty");
+        }
+        freebird_common::api::validate_v7_canonical_id(&config.descriptor_id, "descriptor_id")
+            .map_err(anyhow::Error::msg)?;
+        if config.descriptor_id == config.token_key_id {
+            anyhow::bail!("V7 token and descriptor identifiers must be distinct");
+        }
+        Ok(config)
+    }
+}
+
+/// Load the additional active/retained V7 signer descriptors used by the
+/// exchange and graph runtimes.  Each path contains either one
+/// `NativeBearerV7Config` object or an array of objects.  Keeping these as
+/// deployment files avoids deriving private-key paths from public discovery.
+pub(crate) fn load_v7_additional_signer_configs() -> Result<Vec<NativeBearerV7Config>> {
+    let Some(raw_paths) = env::var("NATIVE_V7_SIGNER_CONFIG_PATHS").ok() else {
+        return Ok(Vec::new());
+    };
+    let mut configs = Vec::new();
+    for raw_path in raw_paths.split(',') {
+        let raw_path = raw_path.trim();
+        if raw_path.is_empty() {
+            anyhow::bail!("NATIVE_V7_SIGNER_CONFIG_PATHS contains an empty path")
+        }
+        let path = PathBuf::from(raw_path);
+        let value: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&path)
+                .with_context(|| format!("read V7 signer config {}", path.display()))?,
+        )
+        .with_context(|| format!("parse V7 signer config {}", path.display()))?;
+        let mut parsed = match value {
+            serde_json::Value::Array(_) => {
+                serde_json::from_value::<Vec<NativeBearerV7Config>>(value)?
+            }
+            value => vec![serde_json::from_value::<NativeBearerV7Config>(value)?],
+        };
+        for config in &parsed {
+            validate_v7_signer_config(config)?;
+        }
+        configs.append(&mut parsed);
+    }
+    Ok(configs)
+}
+
+fn validate_v7_signer_config(config: &NativeBearerV7Config) -> Result<()> {
+    if config.sk_path.as_os_str().is_empty()
+        || config.metadata_path.as_os_str().is_empty()
+        || config.registry_path.as_os_str().is_empty()
+        || config.profile_id.trim().is_empty()
+        || config.descriptor_id.trim().is_empty()
+    {
+        anyhow::bail!("V7 signer paths, profile, and descriptor must not be empty")
+    }
+    if config.validity_secs == 0 {
+        anyhow::bail!("V7 signer validity must be positive")
+    }
+    if config.token_key_id.len() != 64
+        || !config
+            .token_key_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        anyhow::bail!("V7 signer token key ID must be 64 lowercase hexadecimal characters")
+    }
+    freebird_common::api::validate_v7_canonical_id(&config.descriptor_id, "descriptor_id")
+        .map_err(anyhow::Error::msg)?;
+    if config.descriptor_id == config.token_key_id {
+        anyhow::bail!("V7 signer token and descriptor identifiers must be distinct")
+    }
+    freebird_crypto::V7BodyPolicy::new(config.asset_id.clone(), config.amount_minor)
+        .map_err(|error| anyhow::anyhow!("invalid V7 signer body policy: {error:?}"))?;
+    Ok(())
+}
+
+fn required_path(name: &str) -> Result<PathBuf> {
+    let value = env::var(name).with_context(|| format!("{name} is required"))?;
+    if value.trim().is_empty() {
+        anyhow::bail!("{name} must not be empty");
+    }
+    Ok(PathBuf::from(value))
 }
 
 impl HsmConfig {
@@ -987,35 +1186,45 @@ mod tests {
                 "HSM_SLOT",
                 "HSM_PIN",
                 "HSM_KEY_LABEL",
-                "PUBLIC_BEARER_ENABLE",
-                "PUBLIC_BEARER_SK_PATH",
-                "PUBLIC_BEARER_METADATA_PATH",
+                "NATIVE_BEARER_V7_ENABLE",
+                "NATIVE_BEARER_V7_SK_PATH",
+                "NATIVE_BEARER_V7_METADATA_PATH",
                 "PUBLIC_BEARER_VALIDITY",
                 "PUBLIC_BEARER_AUDIENCE",
                 "PUBLIC_BEARER_MODULUS_BITS",
-                "PUBLIC_BEARER_EXCHANGE_ENABLE",
-                "PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH",
-                "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
+                "NATIVE_BEARER_V7_ENABLE",
+                "NATIVE_BEARER_V7_SK_PATH",
+                "NATIVE_BEARER_V7_METADATA_PATH",
+                "NATIVE_BEARER_V7_ASSET_ID",
+                "NATIVE_BEARER_V7_AMOUNT_MINOR",
+                "NATIVE_BEARER_V7_TOKEN_KEY_ID",
+                "NATIVE_BEARER_V7_VALIDITY",
+                "NATIVE_BEARER_V7_REGISTRY_PATH",
+                "NATIVE_BEARER_V7_PROFILE_ID",
+                "NATIVE_BEARER_V7_DESCRIPTOR_ID",
+                "NATIVE_EXCHANGE_V7_ENABLE",
+                "NATIVE_EXCHANGE_V7_DISCOVERY_PATH",
+                "NATIVE_EXCHANGE_V7_RETAINED_DISCOVERY_PATHS",
                 "PUBLIC_BEARER_EXCHANGE_PROFILE_PATH",
                 "PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS",
                 "PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH",
-                "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
-                "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH",
-                "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
-                "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS",
-                "PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH",
-                "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
-                "PUBLIC_BEARER_EXCHANGE_REDIS_URL",
-                "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
-                "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
-                "PUBLIC_BEARER_EXCHANGE_TIMEOUT",
-                "PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE",
-                "PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH",
-                "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
-                "PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64",
+                "NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_KEY_PATH",
+                "NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_METADATA_PATH",
+                "NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_KEY_PATHS",
+                "NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_METADATA_PATHS",
+                "NATIVE_EXCHANGE_V7_PUBLIC_HISTORY_PATH",
+                "NATIVE_EXCHANGE_V7_DISABLED_PUBLICATION_ACK_PATHS",
+                "NATIVE_EXCHANGE_V7_REDIS_URL",
+                "NATIVE_EXCHANGE_V7_RECEIPT_LIFETIME",
+                "NATIVE_EXCHANGE_V7_MAX_BODY_BYTES",
+                "NATIVE_EXCHANGE_V7_TIMEOUT",
+                "NATIVE_GRAPH_ISSUANCE_V7_ENABLE",
+                "NATIVE_GRAPH_ISSUANCE_V7_POLICY_PATH",
+                "NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION",
+                "NATIVE_GRAPH_ISSUANCE_V7_HMAC_SECRET_B64",
                 "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL",
-                "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64",
-                "PUBLIC_BEARER_GRAPH_ISSUANCE_ALLOW_DEVELOPMENT_MOCK",
+                "NATIVE_GRAPH_ISSUANCE_V7_V4_KEYRING_B64",
+                "NATIVE_GRAPH_ISSUANCE_V7_ALLOW_DEVELOPMENT_MOCK",
                 "SYBIL_RESISTANCE",
                 "SYBIL_PROGRESSIVE_TRUST_SALT",
                 "SYBIL_PROOF_OF_DIVERSITY_SALT",
@@ -1035,6 +1244,23 @@ mod tests {
                     .collect(),
             };
             env::set_var("SYBIL_RESISTANCE", "none");
+            env::set_var("NATIVE_BEARER_V7_SK_PATH", "native_bearer_v7_sk.der");
+            env::set_var(
+                "NATIVE_BEARER_V7_METADATA_PATH",
+                "native_bearer_v7_metadata.json",
+            );
+            env::set_var(
+                "NATIVE_BEARER_V7_REGISTRY_PATH",
+                "native_bearer_v7_registry.json",
+            );
+            env::set_var(
+                "NATIVE_BEARER_V7_PROFILE_ID",
+                freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID,
+            );
+            env::set_var("NATIVE_BEARER_V7_DESCRIPTOR_ID", "22".repeat(32));
+            env::set_var("NATIVE_BEARER_V7_TOKEN_KEY_ID", "00".repeat(32));
+            env::set_var("NATIVE_BEARER_V7_ASSET_ID", "USD");
+            env::set_var("NATIVE_BEARER_V7_AMOUNT_MINOR", "1");
             guard
         }
     }
@@ -1077,35 +1303,45 @@ mod tests {
             "HSM_SLOT",
             "HSM_PIN",
             "HSM_KEY_LABEL",
-            "PUBLIC_BEARER_ENABLE",
-            "PUBLIC_BEARER_SK_PATH",
-            "PUBLIC_BEARER_METADATA_PATH",
+            "NATIVE_BEARER_V7_ENABLE",
+            "NATIVE_BEARER_V7_SK_PATH",
+            "NATIVE_BEARER_V7_METADATA_PATH",
             "PUBLIC_BEARER_VALIDITY",
             "PUBLIC_BEARER_AUDIENCE",
             "PUBLIC_BEARER_MODULUS_BITS",
-            "PUBLIC_BEARER_EXCHANGE_ENABLE",
-            "PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH",
-            "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
+            "NATIVE_BEARER_V7_ENABLE",
+            "NATIVE_BEARER_V7_SK_PATH",
+            "NATIVE_BEARER_V7_METADATA_PATH",
+            "NATIVE_BEARER_V7_ASSET_ID",
+            "NATIVE_BEARER_V7_AMOUNT_MINOR",
+            "NATIVE_BEARER_V7_TOKEN_KEY_ID",
+            "NATIVE_BEARER_V7_VALIDITY",
+            "NATIVE_BEARER_V7_REGISTRY_PATH",
+            "NATIVE_BEARER_V7_PROFILE_ID",
+            "NATIVE_BEARER_V7_DESCRIPTOR_ID",
+            "NATIVE_EXCHANGE_V7_ENABLE",
+            "NATIVE_EXCHANGE_V7_DISCOVERY_PATH",
+            "NATIVE_EXCHANGE_V7_RETAINED_DISCOVERY_PATHS",
             "PUBLIC_BEARER_EXCHANGE_PROFILE_PATH",
             "PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS",
             "PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH",
-            "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
-            "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH",
-            "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
-            "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS",
-            "PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH",
-            "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
-            "PUBLIC_BEARER_EXCHANGE_REDIS_URL",
-            "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
-            "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
-            "PUBLIC_BEARER_EXCHANGE_TIMEOUT",
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE",
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH",
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64",
+            "NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_KEY_PATH",
+            "NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_METADATA_PATH",
+            "NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_KEY_PATHS",
+            "NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_METADATA_PATHS",
+            "NATIVE_EXCHANGE_V7_PUBLIC_HISTORY_PATH",
+            "NATIVE_EXCHANGE_V7_DISABLED_PUBLICATION_ACK_PATHS",
+            "NATIVE_EXCHANGE_V7_REDIS_URL",
+            "NATIVE_EXCHANGE_V7_RECEIPT_LIFETIME",
+            "NATIVE_EXCHANGE_V7_MAX_BODY_BYTES",
+            "NATIVE_EXCHANGE_V7_TIMEOUT",
+            "NATIVE_GRAPH_ISSUANCE_V7_ENABLE",
+            "NATIVE_GRAPH_ISSUANCE_V7_POLICY_PATH",
+            "NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION",
+            "NATIVE_GRAPH_ISSUANCE_V7_HMAC_SECRET_B64",
             "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL",
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64",
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_ALLOW_DEVELOPMENT_MOCK",
+            "NATIVE_GRAPH_ISSUANCE_V7_V4_KEYRING_B64",
+            "NATIVE_GRAPH_ISSUANCE_V7_ALLOW_DEVELOPMENT_MOCK",
             "SYBIL_RESISTANCE",
             "SYBIL_PROGRESSIVE_TRUST_SALT",
             "SYBIL_PROOF_OF_DIVERSITY_SALT",
@@ -1125,6 +1361,23 @@ mod tests {
         env::set_var("BEHIND_PROXY", "false");
         env::set_var("HSM_ENABLE", "false");
         env::set_var("SYBIL_RESISTANCE", "none");
+        env::set_var("NATIVE_BEARER_V7_SK_PATH", "native_bearer_v7_sk.der");
+        env::set_var(
+            "NATIVE_BEARER_V7_METADATA_PATH",
+            "native_bearer_v7_metadata.json",
+        );
+        env::set_var(
+            "NATIVE_BEARER_V7_REGISTRY_PATH",
+            "native_bearer_v7_registry.json",
+        );
+        env::set_var(
+            "NATIVE_BEARER_V7_PROFILE_ID",
+            freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID,
+        );
+        env::set_var("NATIVE_BEARER_V7_DESCRIPTOR_ID", "22".repeat(32));
+        env::set_var("NATIVE_BEARER_V7_TOKEN_KEY_ID", "00".repeat(32));
+        env::set_var("NATIVE_BEARER_V7_ASSET_ID", "USD");
+        env::set_var("NATIVE_BEARER_V7_AMOUNT_MINOR", "1");
         guard
     }
 
@@ -1171,18 +1424,18 @@ mod tests {
         use base64ct::{Base64UrlUnpadded, Encoding};
 
         let _env = clean_config_env();
-        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "false");
-        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE", "true");
-        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION", "hmac_sha256");
+        env::set_var("NATIVE_EXCHANGE_V7_ENABLE", "false");
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_ENABLE", "true");
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION", "hmac_sha256");
         env::set_var(
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64",
+            "NATIVE_GRAPH_ISSUANCE_V7_HMAC_SECRET_B64",
             Base64UrlUnpadded::encode_string(&[0x31; 32]),
         );
 
         let error = Config::from_env().expect_err("graph issuance requires exchange");
         assert!(error
             .to_string()
-            .contains("graph issuance requires PUBLIC_BEARER_EXCHANGE_ENABLE=true"));
+            .contains("graph issuance requires NATIVE_EXCHANGE_V7_ENABLE=true"));
     }
 
     #[test]
@@ -1191,54 +1444,55 @@ mod tests {
         let _env = clean_config_env();
         for (name, value, graph_enabled, message) in [
             (
-                "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
+                "NATIVE_EXCHANGE_V7_RECEIPT_LIFETIME",
                 "not-a-duration",
                 false,
                 "invalid duration",
             ),
             (
-                "PUBLIC_BEARER_EXCHANGE_TIMEOUT",
+                "NATIVE_EXCHANGE_V7_TIMEOUT",
                 "not-a-duration",
                 false,
                 "invalid duration",
             ),
             (
-                "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
+                "NATIVE_EXCHANGE_V7_MAX_BODY_BYTES",
                 "not-a-number",
                 false,
                 "invalid digit",
             ),
             (
-                "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
+                "NATIVE_EXCHANGE_V7_RETAINED_DISCOVERY_PATHS",
                 "/one.json,",
                 false,
                 "contains an empty path",
             ),
             (
-                "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
+                "NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION",
                 "unsupported",
                 true,
-                "unsupported graph issuance authorization verifier",
+                "unsupported V7 graph issuance authorization verifier",
             ),
         ] {
-            env::remove_var("PUBLIC_BEARER_EXCHANGE_ENABLE");
-            env::remove_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE");
+            env::remove_var("NATIVE_EXCHANGE_V7_ENABLE");
+            env::remove_var("NATIVE_GRAPH_ISSUANCE_V7_ENABLE");
             for candidate in [
-                "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
-                "PUBLIC_BEARER_EXCHANGE_TIMEOUT",
-                "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
-                "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
-                "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
+                "NATIVE_EXCHANGE_V7_RECEIPT_LIFETIME",
+                "NATIVE_EXCHANGE_V7_TIMEOUT",
+                "NATIVE_EXCHANGE_V7_MAX_BODY_BYTES",
+                "NATIVE_EXCHANGE_V7_RETAINED_DISCOVERY_PATHS",
+                "NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION",
             ] {
                 env::remove_var(candidate);
             }
             env::set_var(name, value);
             if graph_enabled {
-                env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE", "true");
+                env::set_var("NATIVE_EXCHANGE_V7_ENABLE", "true");
+                env::set_var("NATIVE_GRAPH_ISSUANCE_V7_ENABLE", "true");
             }
 
             let error = Config::from_env().expect_err("malformed exchange input must fail");
-            assert!(error.to_string().contains(message));
+            assert!(error.to_string().contains(message), "{error:#}");
         }
     }
 
@@ -1272,19 +1526,16 @@ mod tests {
         std::fs::write(&exchange_graph, invalid_graph).unwrap();
 
         env::set_var("BIND_ADDR", "not-an-address");
-        env::set_var("PUBLIC_BEARER_ENABLE", "true");
-        env::set_var("PUBLIC_BEARER_SK_PATH", &v5_key);
-        env::set_var("PUBLIC_BEARER_METADATA_PATH", &v5_metadata);
+        env::set_var("NATIVE_BEARER_V7_ENABLE", "true");
+        env::set_var("NATIVE_BEARER_V7_SK_PATH", &v5_key);
+        env::set_var("NATIVE_BEARER_V7_METADATA_PATH", &v5_metadata);
         env::set_var("ISSUER_SK_PATH", &issuer_key);
-        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
-        env::set_var("PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH", &exchange_graph);
-        env::set_var("PUBLIC_BEARER_EXCHANGE_REDIS_URL", "redis://127.0.0.1:1/");
+        env::set_var("NATIVE_EXCHANGE_V7_ENABLE", "true");
+        env::set_var("NATIVE_EXCHANGE_V7_DISCOVERY_PATH", &exchange_graph);
+        env::set_var("NATIVE_EXCHANGE_V7_REDIS_URL", "redis://127.0.0.1:1/");
+        env::set_var("NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_KEY_PATH", &receipt_key);
         env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
-            &receipt_key,
-        );
-        env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH",
+            "NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_METADATA_PATH",
             &receipt_metadata,
         );
 
@@ -1470,30 +1721,33 @@ mod tests {
         env::remove_var("FREEBIRD_UNSAFE_DEVELOPMENT_MODE");
         env::set_var("ALLOW_UNSAFE_V4_ROTATION", "true");
         env::set_var("HSM_ENABLE", "false");
-        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
-        env::set_var("PUBLIC_BEARER_EXCHANGE_REDIS_URL", "redis://127.0.0.1:1/");
-        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE", "true");
-        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION", "hmac_sha256");
-        env::remove_var("PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64");
+        env::set_var("NATIVE_EXCHANGE_V7_ENABLE", "true");
+        env::set_var("NATIVE_EXCHANGE_V7_REDIS_URL", "redis://127.0.0.1:1/");
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_ENABLE", "true");
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION", "hmac_sha256");
 
         let error = Config::from_env().expect_err("production rotation must precede graph parsing");
         assert!(error.to_string().contains("ALLOW_UNSAFE_V4_ROTATION=true"));
 
         env::set_var("FREEBIRD_ENV", "development");
         let error = Config::from_env().expect_err("graph authorization must be the next error");
-        assert!(error
-            .to_string()
-            .contains("PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64 is required"));
+        assert!(error.to_string().contains("must be v4_local"));
 
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION", "v4_local");
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_VERIFIER_ID", "verifier:test");
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_AUDIENCE", "graph-issuance");
         env::set_var(
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64",
-            Base64UrlUnpadded::encode_string(&[0x55; 32]),
+            "NATIVE_GRAPH_ISSUANCE_V7_V4_KEYRING_B64",
+            format!(
+                r#"{{"issuer:test":{{"kid":"{}"}}}}"#,
+                Base64UrlUnpadded::encode_string(&[0x55; 32])
+            ),
         );
         let config = Config::from_env().expect("valid downstream graph configuration");
         assert!(config.allow_unsafe_v4_rotation);
         assert!(matches!(
             config.exchange_config.graph_issuance.authorization,
-            GraphIssuanceAuthorizationConfig::HmacSha256(_)
+            GraphIssuanceAuthorizationConfig::V4Local { .. }
         ));
     }
 
@@ -1501,10 +1755,10 @@ mod tests {
     #[serial]
     fn enabled_exchange_requires_a_valid_profile() {
         let _env = EnvGuard::new();
-        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
-        env::set_var("PUBLIC_BEARER_EXCHANGE_REDIS_URL", "redis://127.0.0.1/");
+        env::set_var("NATIVE_EXCHANGE_V7_ENABLE", "true");
+        env::set_var("NATIVE_EXCHANGE_V7_REDIS_URL", "redis://127.0.0.1/");
         env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH",
+            "NATIVE_EXCHANGE_V7_DISCOVERY_PATH",
             "/definitely/missing/exchange-profile.json",
         );
         let config = Config::from_env().expect("environment shape should parse");
@@ -1512,29 +1766,29 @@ mod tests {
             .exchange_config
             .load_v2(&config.issuer_id, None)
             .is_err());
-        env::remove_var("PUBLIC_BEARER_EXCHANGE_ENABLE");
-        env::remove_var("PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH");
+        env::remove_var("NATIVE_EXCHANGE_V7_ENABLE");
+        env::remove_var("NATIVE_EXCHANGE_V7_DISCOVERY_PATH");
     }
 
     #[test]
     #[serial]
     fn exchange_config_parses_active_and_retained_signer_paths() {
         let _env = EnvGuard::new();
-        env::remove_var("PUBLIC_BEARER_EXCHANGE_ENABLE");
+        env::remove_var("NATIVE_EXCHANGE_V7_ENABLE");
         env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH",
+            "NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_KEY_PATH",
             "/keys/active.key",
         );
         env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
+            "NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_KEY_PATHS",
             "/keys/old-1.key, /keys/old-2.key",
         );
         env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS",
+            "NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_METADATA_PATHS",
             "/keys/old-1.json, /keys/old-2.json",
         );
         env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
+            "NATIVE_EXCHANGE_V7_RETAINED_DISCOVERY_PATHS",
             "/profiles/old-1.json,/profiles/old-2.json",
         );
         let config = ExchangeConfig::from_env().unwrap();
@@ -1579,10 +1833,7 @@ mod tests {
             acknowledged_at_unix: 1,
         };
         std::fs::write(&path, serde_json::to_vec(&acknowledgement).unwrap()).unwrap();
-        env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS",
-            &path,
-        );
+        env::set_var("NATIVE_EXCHANGE_V7_DISABLED_PUBLICATION_ACK_PATHS", &path);
 
         let config = ExchangeConfig::from_env().unwrap();
         assert_eq!(
@@ -1600,20 +1851,17 @@ mod tests {
     #[serial]
     fn enabled_v2_exchange_accepts_public_history_path_and_rejects_unpaired_private_receipts() {
         let _env = EnvGuard::new();
-        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
-        env::set_var("PUBLIC_BEARER_EXCHANGE_REDIS_URL", "redis://127.0.0.1/");
-        env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH",
-            "/history/v2.json",
-        );
+        env::set_var("NATIVE_EXCHANGE_V7_ENABLE", "true");
+        env::set_var("NATIVE_EXCHANGE_V7_REDIS_URL", "redis://127.0.0.1/");
+        env::set_var("NATIVE_EXCHANGE_V7_PUBLIC_HISTORY_PATH", "/history/v2.json");
         let config = ExchangeConfig::from_env().unwrap();
         assert_eq!(
             config.public_history_path,
             Some(PathBuf::from("/history/v2.json"))
         );
-        env::remove_var("PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH");
+        env::remove_var("NATIVE_EXCHANGE_V7_PUBLIC_HISTORY_PATH");
         env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS",
+            "NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_KEY_PATHS",
             "/keys/retained.key",
         );
         assert!(ExchangeConfig::from_env().is_err());
@@ -1623,22 +1871,16 @@ mod tests {
     #[serial]
     fn graph_issuance_has_no_permissive_production_authorizer_default() {
         let _env = EnvGuard::new();
-        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
-        env::set_var("PUBLIC_BEARER_EXCHANGE_REDIS_URL", "redis://127.0.0.1/");
-        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE", "true");
-        env::remove_var("PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64");
+        env::set_var("NATIVE_EXCHANGE_V7_ENABLE", "true");
+        env::set_var("NATIVE_EXCHANGE_V7_REDIS_URL", "redis://127.0.0.1/");
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_ENABLE", "true");
+        env::remove_var("NATIVE_GRAPH_ISSUANCE_V7_HMAC_SECRET_B64");
         assert!(ExchangeConfig::from_env().is_err());
 
-        env::set_var(
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
-            "development_mock",
-        );
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION", "development_mock");
         env::set_var("FREEBIRD_ENV", "production");
         env::set_var("FREEBIRD_UNSAFE_DEVELOPMENT_MODE", "true");
-        env::set_var(
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_ALLOW_DEVELOPMENT_MOCK",
-            "true",
-        );
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_ALLOW_DEVELOPMENT_MOCK", "true");
         assert!(ExchangeConfig::from_env().is_err());
     }
 
@@ -1648,31 +1890,20 @@ mod tests {
         use base64ct::{Base64UrlUnpadded, Encoding};
 
         let _env = EnvGuard::new();
-        env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "true");
+        env::set_var("NATIVE_EXCHANGE_V7_ENABLE", "true");
+        env::set_var("NATIVE_EXCHANGE_V7_REDIS_URL", "redis://127.0.0.1:6379/4");
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_ENABLE", "true");
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION", "v4_local");
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_VERIFIER_ID", "verifier:test");
+        env::set_var("NATIVE_GRAPH_ISSUANCE_V7_AUDIENCE", "audience:test");
         env::set_var(
-            "PUBLIC_BEARER_EXCHANGE_REDIS_URL",
-            "redis://127.0.0.1:6379/4",
-        );
-        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE", "true");
-        env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION", "v4_local");
-        env::set_var(
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64",
+            "NATIVE_GRAPH_ISSUANCE_V7_V4_KEYRING_B64",
             serde_json::json!({
                 "issuer:test": {
                     "kid:test": Base64UrlUnpadded::encode_string(&[7; 32])
                 }
             })
             .to_string(),
-        );
-        env::remove_var("PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL");
-        let config = ExchangeConfig::from_env().unwrap();
-        assert!(matches!(
-            config.graph_issuance.authorization,
-            GraphIssuanceAuthorizationConfig::V4Local { .. }
-        ));
-        env::set_var(
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL",
-            "redis://127.0.0.1:6379/5",
         );
         let config = ExchangeConfig::from_env().unwrap();
         assert!(matches!(

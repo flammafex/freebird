@@ -16,6 +16,9 @@ spec:
           - path: /.well-known/issuer
             pathType: Exact
             backend: {service: {name: issuer, port: {number: 8081}}}
+          - path: /.well-known/replay-authority
+            pathType: Exact
+            backend: {service: {name: issuer, port: {number: 8081}}}
           - path: /.well-known/keys
             pathType: Exact
             backend: {service: {name: issuer, port: {number: 8081}}}

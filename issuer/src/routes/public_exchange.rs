@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::{
-    exchange::{ProcessDecision, StatusDecision},
+    exchange::{
+        v7::{V7ProcessDecision, V7StatusDecision},
+        ProcessDecision, StatusDecision,
+    },
     AppStateWithSybil,
 };
 use axum::{
@@ -11,6 +14,7 @@ use axum::{
     response::Response,
     Json,
 };
+use freebird_common::api::NativeExchangeV3Request;
 use freebird_common::exchange_api::{parse_operation_id, ExchangeRequestV2};
 use serde::Deserialize;
 use std::sync::Arc;
@@ -80,6 +84,68 @@ pub async fn get_exchange_status(
         Ok(StatusDecision::Pending) => retryable(),
         Ok(StatusDecision::Unknown) => error(StatusCode::NOT_FOUND, "unknown_operation"),
         Ok(StatusDecision::Unauthorized) => error(StatusCode::FORBIDDEN, "status_unauthorized"),
+        Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "exchange_unavailable"),
+    }
+}
+
+/// Unregistered Phase 3 V7 exchange handler. Registration is intentionally
+/// deferred until the V7 startup lane is promoted.
+pub async fn post_exchange_v7(
+    State((state, _)): State<SharedState>,
+    headers: HeaderMap,
+    request: Result<Json<NativeExchangeV3Request>, JsonRejection>,
+) -> Response {
+    let status_capability = match status_capability(&headers) {
+        Ok(capability) => capability,
+        Err(()) => return error(StatusCode::BAD_REQUEST, "invalid_status_capability"),
+    };
+    let Json(request) = match request {
+        Ok(request) => request,
+        Err(rejection) if rejection.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return error(StatusCode::PAYLOAD_TOO_LARGE, "exchange_request_too_large")
+        }
+        Err(_) => return error(StatusCode::BAD_REQUEST, "invalid_exchange_request"),
+    };
+    let Some(engine) = state.native_exchange_v7.as_ref() else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "exchange_unavailable");
+    };
+    match engine
+        .process_or_recover(&request, &status_capability)
+        .await
+    {
+        Ok(V7ProcessDecision::Committed(bytes)) => exact(StatusCode::OK, bytes),
+        Ok(V7ProcessDecision::Retryable) => retryable(),
+        Ok(V7ProcessDecision::Conflict) => error(StatusCode::CONFLICT, "operation_conflict"),
+        Ok(V7ProcessDecision::Rejected) => error(StatusCode::BAD_REQUEST, "invalid_v7_exchange"),
+        Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "exchange_unavailable"),
+    }
+}
+
+/// Unregistered status handler for the Phase 3 V7 exchange engine.
+pub async fn get_exchange_status_v7(
+    State((state, _)): State<SharedState>,
+    headers: HeaderMap,
+    query: Result<Query<ExchangeStatusQuery>, QueryRejection>,
+) -> Response {
+    let status_capability = match status_capability(&headers) {
+        Ok(capability) => capability,
+        Err(()) => return error(StatusCode::BAD_REQUEST, "invalid_status_capability"),
+    };
+    let operation_id = match query
+        .ok()
+        .and_then(|Query(query)| parse_operation_id(&query.public_operation_id).ok())
+    {
+        Some(operation_id) => operation_id,
+        None => return error(StatusCode::BAD_REQUEST, "invalid_public_operation_id"),
+    };
+    let Some(engine) = state.native_exchange_v7.as_ref() else {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "exchange_unavailable");
+    };
+    match engine.status(&operation_id, &status_capability).await {
+        Ok(V7StatusDecision::Committed(bytes)) => exact(StatusCode::OK, bytes),
+        Ok(V7StatusDecision::Pending) => retryable(),
+        Ok(V7StatusDecision::Unknown) => error(StatusCode::NOT_FOUND, "unknown_operation"),
+        Ok(V7StatusDecision::Unauthorized) => error(StatusCode::FORBIDDEN, "status_unauthorized"),
         Err(_) => error(StatusCode::SERVICE_UNAVAILABLE, "exchange_unavailable"),
     }
 }

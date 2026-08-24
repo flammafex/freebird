@@ -18,6 +18,7 @@ pub mod rate_limit;
 pub mod spend_key;
 pub mod tls_enforcement;
 pub mod v4_admission;
+pub mod v7_registry;
 pub mod logging {
     use std::sync::Once;
     use tracing::level_filters::LevelFilter;

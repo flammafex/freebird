@@ -23,6 +23,8 @@ mod sybil_audit_runtime;
 mod webauthn_runtime;
 pub use exchange_runtime::exchange_discovery_v2;
 pub(crate) use exchange_runtime::validate_disabled_publication_acknowledgements_v2;
+pub(crate) use exchange_runtime::validate_v7_exchange_inventory;
+pub use exchange_runtime::validate_v7_runtime_config;
 use exchange_runtime::ExchangeRuntime;
 pub use http_runtime::{apply_public_layers, exchange_router, graph_issuance_router, PublicState};
 use http_runtime::{HttpRuntime, HttpRuntimeInputs};
@@ -53,16 +55,27 @@ impl Application {
             kid,
             pubkey_b64,
             voprf,
-            public_issuer,
+            native_bearer_v7,
+            native_bearer_v7_retained,
+            v7_signer_inventory,
         } = key_material::KeyMaterial::build(&config).await?;
 
-        let exchange_runtime = ExchangeRuntime::build(&config, public_issuer.as_deref()).await?;
+        // V5 direct-bearer material is retired from the active issuer.  The
+        // exchange subsystem remains separately staged, but never receives a
+        // V5 direct signer from startup.
+        let exchange_runtime = ExchangeRuntime::build(&config, v7_signer_inventory).await?;
         let ExchangeRuntime {
             exchange_engine,
             exchange_metadata,
             exchange_readiness,
             graph_issuance_engine,
             graph_issuance_readiness,
+            native_exchange_v7,
+            native_exchange_v7_discovery,
+            native_graph_issuance_v7,
+            native_graph_issuance_v7_discovery,
+            native_exchange_v7_readiness,
+            native_graph_issuance_v7_readiness,
         } = exchange_runtime;
 
         // 2. WebAuthn Setup
@@ -90,7 +103,9 @@ impl Application {
             sybil_checker,
             invitation_system,
             multi_party_vouching_system,
-            public_issuer,
+            native_bearer_v7,
+            native_bearer_v7_retained,
+            public_issuer: None,
             exchange_engine,
             exchange_metadata,
             graph_issuance_engine,
@@ -99,6 +114,12 @@ impl Application {
             storage_paths,
             exchange_readiness,
             graph_issuance_readiness,
+            native_exchange_v7,
+            native_exchange_v7_discovery,
+            native_graph_issuance_v7,
+            native_graph_issuance_v7_discovery,
+            native_exchange_v7_readiness,
+            native_graph_issuance_v7_readiness,
             webauthn_state: webauthn_state.clone(),
         })?;
         let HttpRuntime {
@@ -108,6 +129,8 @@ impl Application {
             storage_paths,
             exchange_readiness,
             graph_issuance_readiness,
+            native_exchange_v7_readiness,
+            native_graph_issuance_v7_readiness,
         } = http_runtime;
 
         let listener = TcpListener::bind(config.bind_addr)
@@ -121,6 +144,8 @@ impl Application {
             voprf.clone(),
             exchange_readiness,
             graph_issuance_readiness,
+            native_exchange_v7_readiness,
+            native_graph_issuance_v7_readiness,
         );
 
         info!("🚀 Server ready at {}", config.bind_addr);

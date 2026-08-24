@@ -12,14 +12,18 @@ export function tokenId(token: FreebirdToken): string {
 
 function isExpired(token: FreebirdToken, nowMs: number): boolean {
   if (token.valid_until === undefined) return false;
-  // valid_until is a Unix timestamp in seconds (see PublicKeyInfo.valid_until).
+  // valid_until is a Unix timestamp in seconds.
   return token.valid_until * 1000 <= nowMs;
 }
 
 function isToken(value: unknown): value is FreebirdToken {
+  const version = typeof value === 'object' && value !== null
+    ? (value as { version?: unknown }).version
+    : undefined;
   return typeof value === 'object' && value !== null &&
     typeof (value as FreebirdToken).tokenValue === 'string' &&
-    typeof (value as FreebirdToken).issuerId === 'string';
+    typeof (value as FreebirdToken).issuerId === 'string' &&
+    (version === undefined || version === 4 || version === 7);
 }
 
 /**

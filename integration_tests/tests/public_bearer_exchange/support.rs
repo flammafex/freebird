@@ -37,7 +37,8 @@ pub(super) use freebird_crypto::{
 use freebird_issuer::{
     config::{
         Config, ExchangeConfig, GraphIssuanceAuthorizationConfig, GraphIssuanceConfig,
-        GraphIssuanceV4VerificationKey, KeyConfig, PublicKeyConfig, SybilConfig,
+        GraphIssuanceV4VerificationKey, KeyConfig, NativeBearerV7Config, PublicKeyConfig,
+        SybilConfig,
     },
     exchange::profiles::{
         ExchangeAdmissionStateV2, ExchangeDescriptorV2, ExchangeKeyV2, ExchangeKeysetV2,
@@ -54,7 +55,6 @@ pub(super) use freebird_issuer::{
     startup::{exchange_discovery_v2, Application},
 };
 pub(super) use freebird_verifier::{
-    discovery::trusted_public_keys,
     replay_authority::{ReplayAuthorityConfig, ReplayAuthorityHealth},
     store::{RedisStore, SpendStore},
 };
@@ -333,6 +333,17 @@ impl GraphFixture {
                 audience: Some(AUDIENCE.into()),
                 modulus_bits: 2048,
             },
+            native_bearer_v7_config: NativeBearerV7Config {
+                sk_path: root.join("native-v7.der"),
+                metadata_path: root.join("native-v7.json"),
+                registry_path: root.join("native-v7-registry.json"),
+                profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
+                descriptor_id: "79".repeat(32),
+                token_key_id: "7a".repeat(32),
+                asset_id: "USD".into(),
+                amount_minor: 1,
+                validity_secs: 3600,
+            },
             exchange_config: ExchangeConfig {
                 enabled: true,
                 active_graph_path: self.graph_path.clone(),
@@ -350,6 +361,8 @@ impl GraphFixture {
                 graph_issuance: GraphIssuanceConfig {
                     enabled: true,
                     policy_path: self.graph_issuance_policy_path.clone(),
+                    v7_verifier_id: "verifier:test".into(),
+                    v7_audience: AUDIENCE.into(),
                     authorization: GraphIssuanceAuthorizationConfig::DevelopmentMock,
                 },
             },
@@ -555,7 +568,7 @@ fn transition(
     transition
 }
 
-fn test_sybil_config(root: &Path) -> SybilConfig {
+pub(super) fn test_sybil_config(root: &Path) -> SybilConfig {
     SybilConfig {
         mode: "none".into(),
         pow_difficulty: 20,
@@ -1304,7 +1317,6 @@ fn v4_issuer_info(secret: [u8; 32]) -> Result<IssuerInfo> {
         ctx: VOPRF_CONTEXT_V4.to_vec(),
         verification_key: Some(secret),
         deprecated_verification_keys: HashMap::new(),
-        public_keys: HashMap::new(),
         last_refreshed: Some(Instant::now()),
     })
 }

@@ -56,7 +56,7 @@ impl Settings {
 
         // ---------- Backend selection ----------
         let accepted_raw = std::env::var("VERIFIER_ACCEPTED_TOKEN_VERSIONS")
-            .context("VERIFIER_ACCEPTED_TOKEN_VERSIONS is required")?;
+            .unwrap_or_else(|_| "v4,v7".to_string());
         let accepted_token_families = parse_accepted_token_families(&accepted_raw)?;
 
         let memory_opt_in =
@@ -161,8 +161,8 @@ pub(crate) fn parse_accepted_token_families(raw: &str) -> anyhow::Result<Vec<Tok
     for value in raw.split(',').map(str::trim).filter(|v| !v.is_empty()) {
         let family = match value.to_ascii_lowercase().as_str() {
             "v4" => TokenFamily::V4,
-            "v5" => TokenFamily::V5,
-            _ => anyhow::bail!("VERIFIER_ACCEPTED_TOKEN_VERSIONS must contain only v4 and/or v5"),
+            "v7" => TokenFamily::V7,
+            _ => anyhow::bail!("VERIFIER_ACCEPTED_TOKEN_VERSIONS must contain only v4 and/or v7"),
         };
         if !families.contains(&family) {
             families.push(family);
@@ -226,7 +226,11 @@ mod tests {
         assert!(parse_accepted_token_families("").is_err());
         let accepted = parse_accepted_token_families("v4").unwrap();
         assert!(accepted.contains(&TokenFamily::V4));
-        assert!(!accepted.contains(&TokenFamily::V5));
+        assert!(!accepted.contains(&TokenFamily::V7));
+        assert_eq!(
+            parse_accepted_token_families("v7,v4,v7").unwrap(),
+            vec![TokenFamily::V7, TokenFamily::V4]
+        );
         assert!(!in_memory_replay_allowed(true, Some("production"), false));
         assert!(!in_memory_replay_allowed(false, Some("development"), false));
         assert!(!in_memory_replay_allowed(true, Some("production"), true));

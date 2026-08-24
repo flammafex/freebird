@@ -31,15 +31,26 @@ pub(super) struct HttpRuntimeInputs {
     pub(super) invitation_system: Option<Arc<InvitationSystem>>,
     pub(super) multi_party_vouching_system:
         Option<Arc<crate::sybil_resistance::MultiPartyVouchingSystem>>,
+    pub(super) native_bearer_v7: Arc<crate::native_bearer_v7::NativeBearerV7Issuer>,
+    pub(super) native_bearer_v7_retained: Vec<freebird_common::api::NativeBearerV7KeyInfo>,
     pub(super) public_issuer: Option<Arc<crate::public_tokens::PublicTokenIssuer>>,
     pub(super) exchange_engine: Option<Arc<crate::exchange::ExchangeEngine>>,
     pub(super) exchange_metadata: Option<freebird_common::api::ExchangeDiscoveryV2>,
     pub(super) graph_issuance_engine: Option<Arc<crate::graph_issuance::GraphIssuanceEngine>>,
+    pub(super) native_exchange_v7: Option<Arc<crate::exchange::v7::V7ExchangeEngine>>,
+    pub(super) native_exchange_v7_discovery:
+        Option<freebird_common::api::NativeExchangeV3Discovery>,
+    pub(super) native_graph_issuance_v7: Option<Arc<crate::graph_issuance::V7GraphIssuanceEngine>>,
+    pub(super) native_graph_issuance_v7_discovery:
+        Option<freebird_common::api::NativeGraphIssuanceV7Discovery>,
     pub(super) admin_api_key: String,
     pub(super) sybil_replay_store: Arc<dyn ReplayStore>,
     pub(super) storage_paths: Vec<(String, PathBuf)>,
     pub(super) exchange_readiness: Option<crate::readiness::ExchangeReadinessState>,
     pub(super) graph_issuance_readiness: Option<crate::readiness::GraphIssuanceReadinessState>,
+    pub(super) native_exchange_v7_readiness: Option<crate::readiness::V7ExchangeReadinessState>,
+    pub(super) native_graph_issuance_v7_readiness:
+        Option<crate::readiness::V7GraphIssuanceReadinessState>,
     pub(super) webauthn_state: Option<Arc<crate::webauthn::WebAuthnState>>,
 }
 
@@ -50,6 +61,9 @@ pub(super) struct HttpRuntime {
     pub(super) storage_paths: Vec<(String, PathBuf)>,
     pub(super) exchange_readiness: Option<crate::readiness::ExchangeReadinessState>,
     pub(super) graph_issuance_readiness: Option<crate::readiness::GraphIssuanceReadinessState>,
+    pub(super) native_exchange_v7_readiness: Option<crate::readiness::V7ExchangeReadinessState>,
+    pub(super) native_graph_issuance_v7_readiness:
+        Option<crate::readiness::V7GraphIssuanceReadinessState>,
 }
 
 fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
@@ -81,12 +95,12 @@ pub type PublicState = (
 pub fn exchange_router(body_limit: usize, timeout_secs: u64) -> Router<PublicState> {
     Router::new()
         .route(
-            "/v2/public/exchange",
-            post(routes::public_exchange::post_exchange),
+            "/v7/public/exchange",
+            post(routes::public_exchange::post_exchange_v7),
         )
         .route(
-            "/v2/public/exchange/status",
-            get(routes::public_exchange::get_exchange_status),
+            "/v7/public/exchange/status",
+            get(routes::public_exchange::get_exchange_status_v7),
         )
         .layer(TimeoutLayer::new(Duration::from_secs(timeout_secs)))
         .layer(DefaultBodyLimit::max(body_limit))
@@ -113,12 +127,12 @@ pub fn exchange_router(body_limit: usize, timeout_secs: u64) -> Router<PublicSta
 pub fn graph_issuance_router(body_limit: usize, timeout_secs: u64) -> Router<PublicState> {
     Router::new()
         .route(
-            "/v1/public/graph/issue",
-            post(routes::public_graph_issuance::post),
+            "/v7/public/graph/issue",
+            post(routes::public_graph_issuance::post_v7),
         )
         .route(
-            "/v1/public/graph/issue/status",
-            get(routes::public_graph_issuance::status),
+            "/v7/public/graph/issue/status",
+            get(routes::public_graph_issuance::status_v7),
         )
         .route(
             "/v1/public/graph/replay-authority/probe",
@@ -170,15 +184,23 @@ impl HttpRuntime {
             sybil_checker,
             invitation_system,
             multi_party_vouching_system,
+            native_bearer_v7,
+            native_bearer_v7_retained,
             public_issuer,
             exchange_engine,
             exchange_metadata,
             graph_issuance_engine,
+            native_exchange_v7,
+            native_exchange_v7_discovery,
+            native_graph_issuance_v7,
+            native_graph_issuance_v7_discovery,
             admin_api_key,
             sybil_replay_store,
             storage_paths,
             exchange_readiness,
             graph_issuance_readiness,
+            native_exchange_v7_readiness,
+            native_graph_issuance_v7_readiness,
             webauthn_state,
         } = inputs;
 
@@ -191,11 +213,17 @@ impl HttpRuntime {
             behind_proxy: config.behind_proxy,
             sybil_checker: sybil_checker.clone(),
             invitation_system: invitation_system.clone(),
+            native_bearer_v7: native_bearer_v7.clone(),
+            native_bearer_v7_retained,
             public_issuer: public_issuer.clone(),
             exchange_engine: exchange_engine.clone(),
             exchange_metadata,
             graph_issuance_engine,
             graph_issuance_metadata: None,
+            native_exchange_v7,
+            native_exchange_v7_discovery,
+            native_graph_issuance_v7,
+            native_graph_issuance_v7_discovery,
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
             admin_api_key: Some(admin_api_key.clone()),
@@ -221,6 +249,10 @@ impl HttpRuntime {
                 "/.well-known/issuer",
                 get(routes::metadata::well_known_handler),
             )
+            .route(
+                routes::metadata::REPLAY_AUTHORITY_DISCOVERY_ROUTE,
+                get(routes::metadata::replay_authority_handler),
+            )
             .route("/.well-known/keys", get(routes::metadata::keys_handler))
             .route("/v1/oprf/issue", post(routes::issue::handle))
             .route("/v1/oprf/renew", post(routes::issue::renew))
@@ -228,10 +260,13 @@ impl HttpRuntime {
                 "/v1/oprf/issue/batch",
                 post(routes::batch_issue::handle_batch),
             )
-            .route("/v1/public/issue", post(routes::public_issue::handle))
             .route(
-                "/v1/public/issue/batch",
-                post(routes::public_issue::handle_batch),
+                "/v7/native-bearer/issue",
+                post(routes::native_bearer_v7::handle),
+            )
+            .route(
+                "/v7/native-bearer/issue/batch",
+                post(routes::native_bearer_v7::handle_batch),
             )
             .layer(
                 CorsLayer::new()
@@ -312,6 +347,8 @@ impl HttpRuntime {
             storage_paths,
             exchange_readiness,
             graph_issuance_readiness,
+            native_exchange_v7_readiness,
+            native_graph_issuance_v7_readiness,
         })
     }
 }

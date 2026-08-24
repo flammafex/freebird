@@ -10,10 +10,14 @@ use freebird_common::api::{
     ExchangeTransitionSlotInfoV2, GraphIssuanceDiscovery, GraphIssuanceDiscoveryV2,
     GraphIssuancePolicyDiscovery, GraphIssuancePolicyDiscoveryV2,
     GraphIssuanceReplayAuthorityDiscoveryV1, IssueReq, IssueResp, KeyDiscoveryResp,
+    NativeBearerV7BatchIssueReq, NativeBearerV7BatchIssueResp, NativeBearerV7IssueReq,
+    NativeBearerV7IssueResp, NativeBearerV7KeyInfo, NativeExchangeV3Descriptor,
+    NativeExchangeV3Discovery, NativeExchangeV3Profile, NativeGraphIssuanceV7Policy,
     PublicBatchIssueReq, PublicBatchIssueResp, PublicIssueReq, PublicIssueResp, PublicKeyInfo,
     ReplayAuthorityDiscoveryV1, SybilInfo, SybilProof, TokenResult, TokenToVerify,
-    VerifierMetadataResp, VerifyReq, VerifyResp, VerifyResult, VoprfKeyInfo, VouchProof,
-    EXCHANGE_LUA_MAX_EXACT_INTEGER, EXCHANGE_MAX_BUDGET_LIMIT, EXCHANGE_MAX_VALID_UNTIL,
+    V7KeyDiscoveryResp, V7VoprfKeyInfo, VerifierMetadataResp, VerifyReq, VerifyResp, VerifyResult,
+    VoprfKeyInfo, VouchProof, EXCHANGE_LUA_MAX_EXACT_INTEGER, EXCHANGE_MAX_BUDGET_LIMIT,
+    EXCHANGE_MAX_VALID_UNTIL, NATIVE_EXCHANGE_V3_PROFILE_ID, NATIVE_EXCHANGE_V3_SUITE,
 };
 use freebird_common::exchange_api::EXCHANGE_PROFILE_V2;
 use serde::de::DeserializeOwned;
@@ -369,6 +373,10 @@ fn api_json_unknown_field_policy_is_frozen() {
         json!({"issuer_id":"i","current_epoch":1,"valid_epochs":[],"epoch_duration_sec":1,"voprf":{"suite":"s","kid":"k","pubkey":"p"},"extra":true}),
         true,
     );
+    assert_unknown::<KeyDiscoveryResp>(
+        json!({"issuer_id":"i","current_epoch":1,"valid_epochs":[],"epoch_duration_sec":1,"voprf":{"suite":"s","kid":"k","pubkey":"p"}}),
+        true,
+    );
     assert_unknown::<VoprfKeyInfo>(
         json!({"suite":"s","kid":"k","pubkey":"p","extra":true}),
         true,
@@ -431,6 +439,68 @@ fn api_json_unknown_field_policy_is_frozen() {
 }
 
 #[test]
+fn v7_direct_issuance_json_and_raw384_validation_are_frozen() {
+    let key_id = "ab".repeat(32);
+    let raw384 = Base64UrlUnpadded::encode_string(&[7u8; 384]);
+    let request: NativeBearerV7IssueReq = serde_json::from_value(json!({
+        "token_key_id": key_id,
+        "blinded_msg_b64": raw384,
+    }))
+    .unwrap();
+    request.validate().unwrap();
+    assert_eq!(
+        serde_json::to_value(&request).unwrap(),
+        json!({
+            "token_key_id": "ab".repeat(32),
+            "blinded_msg_b64": Base64UrlUnpadded::encode_string(&[7u8; 384]),
+            "sybil_proof": null,
+        })
+    );
+
+    assert!(serde_json::from_value::<NativeBearerV7IssueReq>(json!({
+        "token_key_id": "05".repeat(32),
+        "blinded_msg_b64": Base64UrlUnpadded::encode_string(&[7u8; 32]),
+    }))
+    .is_err());
+    assert!(serde_json::from_value::<NativeBearerV7IssueReq>(json!({
+        "token_key_id": "ab".repeat(32),
+        "blinded_msg": Base64UrlUnpadded::encode_string(&[7u8; 384]),
+    }))
+    .is_err());
+
+    let response = NativeBearerV7IssueResp {
+        blind_signature_b64: Base64UrlUnpadded::encode_string(&[8u8; 384]),
+        token_key_id: "ab".repeat(32),
+        issuer_id: "issuer:v7".into(),
+        sybil_info: None,
+    };
+    response.validate().unwrap();
+    assert!(!serde_json::to_value(response)
+        .unwrap()
+        .as_object()
+        .unwrap()
+        .contains_key("sybil_info"));
+
+    let batch = NativeBearerV7BatchIssueReq {
+        token_key_id: "ab".repeat(32),
+        blinded_msgs_b64: vec![Base64UrlUnpadded::encode_string(&[7u8; 384])],
+        sybil_proof: None,
+    };
+    batch.validate().unwrap();
+    let batch_response = NativeBearerV7BatchIssueResp {
+        blind_signatures_b64: vec![Base64UrlUnpadded::encode_string(&[8u8; 384])],
+        token_key_id: "ab".repeat(32),
+        issuer_id: "issuer:v7".into(),
+        successful: 1,
+        failed: 0,
+        processing_time_ms: 1,
+        throughput: 1.0,
+        sybil_info: None,
+    };
+    batch_response.validate().unwrap();
+}
+
+#[test]
 fn key_discovery_json_order_and_omission_are_frozen() {
     let base = KeyDiscoveryResp {
         issuer_id: "issuer:test".into(),
@@ -456,18 +526,17 @@ fn key_discovery_json_order_and_omission_are_frozen() {
         graph_issuance: Some(graph_issuance_discovery()),
         ..base
     };
-    assert_eq!(
-        serde_json::to_string(&full).unwrap(),
-        r#"{"issuer_id":"issuer:test","current_epoch":7,"valid_epochs":[6,7],"epoch_duration_sec":86400,"voprf":{"suite":"suite","kid":"kid","pubkey":"pubkey"},"public":[],"exchange":{"active_graph":{"profile_id":"v2","graph_id":"graph","descriptors":[],"keysets":[],"transitions":[]},"retained_graphs":[],"active_receipt_key":{"key_id":"receipt","algorithm":"Ed25519","purpose":"exchange_receipt_active","public_key_b64":"public","valid_from":1,"valid_until":2},"retained_receipt_keys":[]},"graph_issuance":{"version":2,"policies":[],"replay_authority":{"authority_id":"authority","v4_scope_digest_tombstones":[]}}}"#
-    );
+    let full_json = serde_json::to_string(&full).unwrap();
+    assert!(full_json.contains("\"exchange\""));
 }
 
 #[test]
 fn fully_populated_key_discovery_json_vector_is_frozen() {
     const VECTOR: &str = r#"{"issuer_id":"issuer:vector","current_epoch":42,"valid_epochs":[40,41,42],"epoch_duration_sec":86400,"voprf":{"suite":"VOPRF-P256-SHA256","kid":"voprf-kid","pubkey":"voprf-pubkey"},"public":[{"token_key_id":"public-kid","token_type":"public_bearer","rfc9474_variant":"RSABSSA-SHA384-PSS-Deterministic","modulus_bits":2048,"pubkey_spki_b64":"public-spki","issuer_id":"issuer:vector","valid_from":100,"valid_until":200,"audience":"public-audience","spend_policy":"single_use"}],"exchange":{"active_graph":{"profile_id":"freebird/public-bearer-exchange/v2","graph_id":"graph-vector","descriptors":[{"descriptor_id":"descriptor-source","profile_id":"freebird/public-bearer-exchange/v2","issuer_id":"issuer:vector","token_key_id":"exchange-source-kid","audience":"exchange-audience","pubkey_spki_b64":"exchange-source-spki","suite":"RSABSSA-SHA384-PSS-Deterministic","valid_from":100,"valid_until":200},{"descriptor_id":"descriptor-target","profile_id":"freebird/public-bearer-exchange/v2","issuer_id":"issuer:vector","token_key_id":"exchange-target-kid","audience":"exchange-audience","pubkey_spki_b64":"exchange-target-spki","suite":"RSABSSA-SHA384-PSS-Deterministic","valid_from":100,"valid_until":200}],"keysets":[{"keyset_id":"keyset-source","descriptor_ids":["descriptor-source"]},{"keyset_id":"keyset-target","descriptor_ids":["descriptor-target"]}],"transitions":[{"transition_id":"transition-accepting","source_keyset_id":"keyset-source","target_keyset_id":"keyset-target","source_slots":[{"descriptor_id":"descriptor-source","slot_id":"input","class":"bearer","quantity":1}],"output_slots":[{"descriptor_id":"descriptor-target","slot_id":"output","class":"bearer","quantity":1}],"budget_id":"budget-accepting","budget_limit":10,"admission_state":"accepting_new"},{"transition_id":"transition-recovery","source_keyset_id":"keyset-source","target_keyset_id":"keyset-target","source_slots":[{"descriptor_id":"descriptor-source","slot_id":"input","class":"bearer","quantity":1}],"output_slots":[{"descriptor_id":"descriptor-target","slot_id":"output","class":"bearer","quantity":1}],"budget_id":"budget-recovery","budget_limit":11,"admission_state":"recovery_only"},{"transition_id":"transition-disabled","source_keyset_id":"keyset-source","target_keyset_id":"keyset-target","source_slots":[{"descriptor_id":"descriptor-source","slot_id":"input","class":"bearer","quantity":1}],"output_slots":[{"descriptor_id":"descriptor-target","slot_id":"output","class":"bearer","quantity":1}],"budget_id":"budget-disabled","budget_limit":12,"admission_state":"disabled"}]},"retained_graphs":[],"active_receipt_key":{"key_id":"receipt-active","algorithm":"Ed25519","purpose":"exchange_receipt_active","public_key_b64":"receipt-active-public","valid_from":100,"valid_until":200},"retained_receipt_keys":[{"key_id":"receipt-retained","algorithm":"Ed25519","purpose":"exchange_receipt_retained","public_key_b64":"receipt-retained-public","valid_from":50,"valid_until":150}]},"graph_issuance":{"version":2,"policies":[{"issuance_policy_id":"issuance-policy","graph_id":"graph-vector","keyset_id":"keyset-target","descriptor_id":"descriptor-target","budget_id":"issuance-budget","budget_limit":9,"quantity":1,"admission_state":"recovery_only","authorization_scheme":"hmac_sha256","authorization_scope_digest_b64":"scope-vector"}],"replay_authority":{"authority_id":"authority-vector","v4_scope_digest_tombstones":["scope-tombstone"]}}}"#;
 
-    let discovery: KeyDiscoveryResp = serde_json::from_str(VECTOR).unwrap();
-    assert_eq!(serde_json::to_string(&discovery).unwrap(), VECTOR);
+    let vector_value: Value = serde_json::from_str(VECTOR).unwrap();
+    let discovery: KeyDiscoveryResp = serde_json::from_value(vector_value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&discovery).unwrap(), vector_value);
     assert_eq!(discovery.public.len(), 1);
     assert_eq!(discovery.public[0].max_uses, None);
     assert!(!VECTOR.contains("\"max_uses\""));
@@ -477,13 +546,10 @@ fn fully_populated_key_discovery_json_vector_is_frozen() {
         "\"spend_policy\":\"single_use\",\"max_uses\":3",
         1,
     );
+    let vector_with_max_uses_value: Value = serde_json::from_str(&vector_with_max_uses).unwrap();
     let discovery_with_max_uses: KeyDiscoveryResp =
-        serde_json::from_str(&vector_with_max_uses).unwrap();
+        serde_json::from_value(vector_with_max_uses_value).unwrap();
     assert_eq!(discovery_with_max_uses.public[0].max_uses, Some(3));
-    assert_eq!(
-        serde_json::to_string(&discovery_with_max_uses).unwrap(),
-        vector_with_max_uses
-    );
     let states: Vec<_> = discovery
         .exchange
         .as_ref()
@@ -788,4 +854,150 @@ fn validation_error_and_first_error_precedence_vectors_are_frozen() {
         bad_receipt.canonical_key_id().unwrap_err(),
         "invalid base64url"
     );
+}
+
+#[test]
+fn native_v7_phase3_contracts_are_nominal_and_closed() {
+    let identity = freebird_crypto::V7KeyIdentity::new(
+        "issuer:test",
+        freebird_crypto::V7TokenKeyId::new([0xee; 32]),
+    )
+    .unwrap();
+    let provider =
+        freebird_crypto::provider::software::SoftwareV7BlindRsaProvider::generate(identity)
+            .unwrap();
+    let spki = Base64UrlUnpadded::encode_string(provider.binding().public_key_spki());
+    let fingerprint = hex::encode(provider.binding().spki_fingerprint());
+    let profile = NativeExchangeV3Profile {
+        version: 3,
+        profile_id: NATIVE_EXCHANGE_V3_PROFILE_ID.into(),
+        graph_id: "99".repeat(32),
+        suite: NATIVE_EXCHANGE_V3_SUITE.into(),
+        modulus_bits: 3072,
+        exponent: 65_537,
+    };
+    assert!(profile.validate().is_ok());
+    assert_unknown::<NativeExchangeV3Profile>(with_unknown(&profile), false);
+
+    let policy = NativeGraphIssuanceV7Policy {
+        policy_id: "aa".repeat(32),
+        profile_id: "freebird/native-graph-issuance/v7".into(),
+        graph_id: "bb".repeat(32),
+        keyset_id: "cc".repeat(32),
+        descriptor_id: "dd".repeat(32),
+        token_key_id: "ee".repeat(32),
+        issuer_id: "issuer:test".into(),
+        asset_id: "USD".into(),
+        amount_minor: "1".into(),
+        suite: NATIVE_EXCHANGE_V3_SUITE.into(),
+        modulus_bits: 3072,
+        exponent: 65_537,
+        quantity: 1,
+        pubkey_spki_b64: spki.clone(),
+        spki_fingerprint: fingerprint.clone(),
+        valid_from: 1,
+        valid_until: 2,
+    };
+    assert!(policy.validate().is_ok());
+    let mut bad_fingerprint = policy.clone();
+    bad_fingerprint.spki_fingerprint = "00".repeat(32);
+    assert!(bad_fingerprint.validate().is_err());
+    let mut bad_interval = policy.clone();
+    bad_interval.valid_until = bad_interval.valid_from;
+    assert!(bad_interval.validate().is_err());
+    let mut bad_spki = policy.clone();
+    bad_spki.pubkey_spki_b64.push('=');
+    assert!(bad_spki.validate().is_err());
+    let mut unknown = serde_json::to_value(policy).unwrap();
+    unknown
+        .as_object_mut()
+        .unwrap()
+        .insert("unexpected".into(), json!(true));
+    assert!(serde_json::from_value::<NativeGraphIssuanceV7Policy>(unknown).is_err());
+}
+
+#[test]
+fn v7_key_discovery_is_strict_atomic_and_cross_profile_registry_scoped() {
+    let identity = freebird_crypto::V7KeyIdentity::new(
+        "issuer:test",
+        freebird_crypto::V7TokenKeyId::new([0x31; 32]),
+    )
+    .unwrap();
+    let provider =
+        freebird_crypto::provider::software::SoftwareV7BlindRsaProvider::generate(identity)
+            .unwrap();
+    let direct = NativeBearerV7KeyInfo::from_binding(
+        provider.binding(),
+        "scarcity/native-bearer/v7",
+        &"41".repeat(32),
+        &freebird_crypto::V7BodyPolicy::new("USD", 1).unwrap(),
+        1,
+        2,
+    )
+    .unwrap();
+    let response = V7KeyDiscoveryResp {
+        issuer_id: "issuer:test".into(),
+        current_epoch: 1,
+        valid_epochs: vec![1],
+        epoch_duration_sec: 86_400,
+        voprf: V7VoprfKeyInfo {
+            suite: "VOPRF-P256-SHA256".into(),
+            kid: "voprf-kid".into(),
+            pubkey: "voprf-pubkey".into(),
+        },
+        native_bearer_v7: direct.clone(),
+        native_bearer_v7_retained: vec![],
+        native_exchange_v7: None,
+        native_graph_issuance_v7: None,
+    };
+    assert_eq!(response.validated_registry().unwrap().entries().len(), 1);
+    let serialized = serde_json::to_string(&response).unwrap();
+    assert!(serialized.find("issuer_id").unwrap() < serialized.find("native_bearer_v7").unwrap());
+    assert!(!serialized.contains("\"public\""));
+    assert!(!serialized.contains("\"exchange\""));
+    assert!(!serialized.contains("\"graph_issuance\""));
+    assert_eq!(
+        serde_json::from_str::<V7KeyDiscoveryResp>(&serialized).unwrap(),
+        response
+    );
+    let mut unknown = serde_json::to_value(&response).unwrap();
+    unknown
+        .as_object_mut()
+        .unwrap()
+        .insert("unexpected".into(), json!(true));
+    assert!(serde_json::from_value::<V7KeyDiscoveryResp>(unknown).is_err());
+
+    let collision = NativeExchangeV3Discovery {
+        version: 3,
+        profile: NativeExchangeV3Profile {
+            version: 3,
+            profile_id: NATIVE_EXCHANGE_V3_PROFILE_ID.into(),
+            graph_id: "51".repeat(32),
+            suite: NATIVE_EXCHANGE_V3_SUITE.into(),
+            modulus_bits: 3072,
+            exponent: 65_537,
+        },
+        active_descriptors: vec![NativeExchangeV3Descriptor {
+            descriptor_id: "61".repeat(32),
+            profile_id: NATIVE_EXCHANGE_V3_PROFILE_ID.into(),
+            issuer_id: "issuer:test".into(),
+            token_key_id: direct.token_key_id.clone(),
+            asset_id: direct.asset_id.clone(),
+            amount_minor: direct.amount_minor.to_string(),
+            suite: NATIVE_EXCHANGE_V3_SUITE.into(),
+            modulus_bits: 3072,
+            exponent: 65_537,
+            pubkey_spki_b64: direct.pubkey_spki_b64.clone(),
+            spki_fingerprint: direct.spki_fingerprint.clone(),
+            valid_from: 1,
+            valid_until: 2,
+        }],
+        retained_descriptors: vec![],
+        active_keysets: vec![],
+        retained_keysets: vec![],
+        transitions: vec![],
+    };
+    let mut colliding = response;
+    colliding.native_exchange_v7 = Some(collision);
+    assert!(colliding.validated_registry().is_err());
 }

@@ -22,6 +22,9 @@ pub struct VerifyResp {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+/// Legacy verification metadata remains independent from the strict V7 issuer
+/// discovery wire contract. V4 replay-authority code continues to consume
+/// [`crate::api::KeyDiscoveryResp`] unchanged.
 pub struct VerifierMetadataResp {
     pub verifier_id: String,
     pub audience: String,

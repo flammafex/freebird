@@ -13,14 +13,15 @@ export type FreebirdErrorCode =
   | 'discovery'
   | 'verification'
   | 'verifier_not_configured'
-  | 'exchange'
-  | 'graph_issuance'
   | 'issuance'
   | 'rate_limited'
   | 'verifier_unavailable'
   | 'invalid_token'
   | 'replayed_token'
-  | 'poll';
+;
+
+/** Public V4/V7 error codes. Retired operation errors are not part of this union. */
+export type PublicFreebirdErrorCode = FreebirdErrorCode;
 
 /**
  * Base class for every typed error thrown by the SDK.
@@ -70,22 +71,24 @@ export class VerifierNotConfiguredError extends FreebirdError {
 }
 
 /** A V2 public bearer exchange operation failed. */
-export class ExchangeError extends FreebirdError {
+export class ExchangeError extends Error {
+  readonly code = 'exchange' as const;
   readonly outcome?: ExchangeOutcome;
 
   constructor(message = 'Exchange operation failed', outcome?: ExchangeOutcome) {
-    super('exchange', message);
+    super(message);
     this.name = 'ExchangeError';
     this.outcome = outcome;
   }
 }
 
 /** A graph issuance operation failed. */
-export class GraphIssuanceError extends FreebirdError {
+export class GraphIssuanceError extends Error {
+  readonly code = 'graph_issuance' as const;
   readonly outcome?: GraphIssuanceOutcome;
 
   constructor(message = 'Graph issuance failed', outcome?: GraphIssuanceOutcome) {
-    super('graph_issuance', message);
+    super(message);
     this.name = 'GraphIssuanceError';
     this.outcome = outcome;
   }
@@ -127,9 +130,10 @@ export class ReplayedTokenError extends VerificationError {
 }
 
 /** A polling operation failed (base class for poll-specific errors). */
-export class PollError extends FreebirdError {
+export class PollError extends Error {
+  readonly code = 'poll' as const;
   constructor(message = 'Polling operation failed') {
-    super('poll', message);
+    super(message);
     this.name = 'PollError';
   }
 }

@@ -15,7 +15,7 @@ export interface ClientConfig {
    *
    * When unset, the TTL is derived from the metadata's `epoch_duration_sec`
    * (i.e. the cache expires when the current epoch advances). Set this to
-   * override the epoch-derived TTL, e.g. to poll for key rotation more
+    * override the epoch-derived TTL, e.g. to observe key rotation more
    * aggressively than once per epoch.
    */
   keyCacheTtlMs?: number;
@@ -41,14 +41,14 @@ export interface ClientConfig {
    * Optional custom `fetch` implementation used for all outbound HTTP.
    *
    * When provided, every request the client makes (discovery, issuance,
-   * verification, exchange, graph-issuance) is routed through this function
+    * verification) is routed through this function
    * instead of the global `fetch`. This lets consumers route traffic through a
    * proxy (e.g. Tor/SOCKS5) for network-level privacy. Defaults to the global
    * `fetch` when unset.
    */
   fetch?: typeof fetch;
   /**
-   * Maximum UTF-8 JSON body size for V4/V5 batch issuance requests.
+   * Maximum UTF-8 JSON body size for V4 batch issuance requests.
    *
    * The default is 60 KiB. The value may be lowered but not raised above the
    * SDK ceiling. Requests are greedily split before the existing 10,000-item
@@ -66,13 +66,6 @@ export interface IssuerMetadata {
     suite: string;
     kid: string;
     pubkey: string; // Base64url encoded SEC1 compressed point
-  };
-  public?: {
-    token_type: string;
-    token_key_id: string;
-    rfc9474_variant: string;
-    modulus_bits: number;
-    spend_policy: string;
   };
   /**
    * Issuer-published Sybil resistance requirements. Absent on issuers that do
@@ -819,14 +812,13 @@ export interface FreebirdToken {
   /** The Issuer ID this token belongs to (extracted for convenience) */
   issuerId: string;
   /** Token wire version */
-  version?: 4 | 5;
+  version?: 4 | 7;
   /** V4 key ID used for issuance */
   kid?: string;
-  /** V5 public bearer token key ID */
+  /** V7 native bearer token key ID */
   tokenKeyId?: string;
   /**
-   * Unix timestamp (seconds) at which the token expires, taken from
-   * `PublicKeyInfo.valid_until`. Token stores use this to evict expired
+   * Unix timestamp (seconds) at which the token expires. Token stores use this to evict expired
    * tokens on `load`/`list`. Absent for tokens without a known expiry.
    */
   valid_until?: number;
@@ -906,4 +898,266 @@ export interface BatchVerifyResp {
   failed: number;
   processing_time_ms: number;
   throughput: number;
+}
+
+/** A nominal, lowercase hexadecimal V7 identifier (the encoded form of 32 bytes). */
+export type V7CanonicalId = string & { readonly __freebirdV7CanonicalId: unique symbol };
+export type V7TokenKeyId = V7CanonicalId & { readonly __freebirdV7TokenKeyId: unique symbol };
+export type V7DescriptorId = V7CanonicalId & { readonly __freebirdV7DescriptorId: unique symbol };
+export type V7SpkiFingerprint = V7CanonicalId & { readonly __freebirdV7SpkiFingerprint: unique symbol };
+export type V7GraphId = V7CanonicalId & { readonly __freebirdV7GraphId: unique symbol };
+export type V7KeysetId = V7CanonicalId & { readonly __freebirdV7KeysetId: unique symbol };
+export type V7TransitionId = V7CanonicalId & { readonly __freebirdV7TransitionId: unique symbol };
+export type V7PolicyId = V7CanonicalId & { readonly __freebirdV7PolicyId: unique symbol };
+
+/** A nominal V7 fixed-width byte string. Values are always exactly 32 bytes. */
+export type V7Bytes32 = Uint8Array & { readonly __freebirdV7Bytes32: unique symbol };
+export type V7OwnerCommitment = V7Bytes32 & { readonly __freebirdV7OwnerCommitment: unique symbol };
+export type V7Nonce = V7Bytes32 & { readonly __freebirdV7Nonce: unique symbol };
+export type V7Nullifier = V7Bytes32 & { readonly __freebirdV7Nullifier: unique symbol };
+export type V7MessageRandomizer = V7Bytes32 & { readonly __freebirdV7MessageRandomizer: unique symbol };
+/** A V7 amount in minor units. It is deliberately bigint, never a JS Number. */
+export type V7Amount = bigint & { readonly __freebirdV7Amount: unique symbol };
+/** A raw V7 RSA-3072 blind message or signature. */
+export type V7Raw384 = Uint8Array & { readonly __freebirdV7Raw384: unique symbol };
+
+/** Nominal V7 issuer/key identity. */
+export interface V7KeyIdentity {
+  readonly issuer_id: string;
+  readonly token_key_id: V7TokenKeyId;
+  readonly __freebirdV7KeyIdentity: true;
+}
+
+/** Nominal immutable V7 public-key binding retained by a registry. */
+export interface V7KeyBinding {
+  readonly identity: V7KeyIdentity;
+  readonly token_key_id: V7TokenKeyId;
+  readonly descriptor_id: V7DescriptorId;
+  readonly spki_fingerprint: V7SpkiFingerprint;
+  readonly pubkey_spki_b64: string;
+  readonly __freebirdV7KeyBinding: true;
+}
+
+/** Canonical V7 body fields supplied to the native bearer protocol. */
+export interface V7Body {
+  readonly asset_id: string;
+  readonly amount_minor: V7Amount;
+  readonly identity: V7KeyIdentity;
+  readonly nonce: V7Nonce;
+  readonly nullifier: V7Nullifier;
+  /** Callers must supply this exact 32-byte commitment; it is never derived. */
+  readonly owner_commitment: V7OwnerCommitment;
+  readonly __freebirdV7Body: true;
+}
+
+/** A complete nominal V7 bearer artifact. */
+export interface V7Token {
+  readonly body: V7Body;
+  readonly message_randomizer: V7MessageRandomizer;
+  readonly signature: V7Raw384;
+  readonly __freebirdV7Token: true;
+}
+
+/** Opaque state retained between V7 blinding and finalization. */
+export interface V7BlindState {
+  readonly identity: V7KeyIdentity;
+  readonly spki_fingerprint: V7SpkiFingerprint;
+  readonly randomizer: V7MessageRandomizer;
+  readonly __freebirdV7BlindState: true;
+}
+
+/** Validated direct V7 key material and fixed-body policy used by crypto primitives. */
+export interface V7DirectBinding {
+  readonly identity: V7KeyIdentity;
+  readonly public_key_spki: Uint8Array;
+  readonly spki_fingerprint: V7SpkiFingerprint;
+  readonly asset_id: string;
+  readonly amount_minor: V7Amount;
+  readonly valid_from: bigint;
+  readonly valid_until: bigint;
+  readonly __freebirdV7DirectBinding: true;
+}
+
+export type V7RegistryRole = 'direct' | 'exchange' | 'graph_issuance';
+
+export interface V7RegistryReference {
+  readonly role: V7RegistryRole;
+  readonly descriptor_id: V7DescriptorId;
+  readonly policy_id?: V7PolicyId;
+  readonly graph_id?: V7GraphId;
+  readonly keyset_id?: V7KeysetId;
+}
+
+/** One immutable issuer-local V7 registry binding with merged role references. */
+export interface V7RegistryEntry extends V7KeyBinding {
+  readonly profile_id: string;
+  readonly issuer_id: string;
+  readonly asset_id: string;
+  readonly amount_minor: V7Amount;
+  readonly suite: string;
+  readonly modulus_bits: 3072;
+  readonly exponent: 65537;
+  readonly valid_from: bigint;
+  readonly valid_until: bigint;
+  readonly roles: readonly V7RegistryRole[];
+  readonly references: readonly V7RegistryReference[];
+}
+
+/** Atomically materialized direct, exchange, and graph V7 trust state. */
+export interface V7Registry {
+  readonly issuer_id: string;
+  readonly entries: readonly V7RegistryEntry[];
+  readonly by_token_key_id: ReadonlyMap<V7TokenKeyId, V7RegistryEntry>;
+  readonly __freebirdV7Registry: true;
+}
+
+/** Direct-only V7 registry entry exposed to SDK consumers. */
+export interface V7DirectRegistryEntry extends V7KeyBinding {
+  readonly profile_id: 'scarcity/native-bearer/v7';
+  readonly issuer_id: string;
+  readonly asset_id: string;
+  readonly amount_minor: V7Amount;
+  readonly suite: string;
+  readonly modulus_bits: 3072;
+  readonly exponent: 65537;
+  readonly valid_from: bigint;
+  readonly valid_until: bigint;
+}
+
+/** Direct-only V7 registry DTO; non-direct references remain private. */
+export interface V7DirectRegistry {
+  readonly issuer_id: string;
+  readonly entries: readonly V7DirectRegistryEntry[];
+  readonly by_token_key_id: ReadonlyMap<V7TokenKeyId, V7DirectRegistryEntry>;
+  readonly __freebirdV7DirectRegistry: true;
+}
+
+export interface V7VoprfKeyInfo {
+  readonly suite: string;
+  readonly kid: string;
+  readonly pubkey: string;
+}
+
+export interface V7NativeBearerKeyInfo {
+  readonly profile_id: string;
+  readonly issuer_id: string;
+  readonly descriptor_id: V7DescriptorId;
+  readonly token_key_id: V7TokenKeyId;
+  readonly asset_id: string;
+  readonly amount_minor: V7Amount;
+  readonly suite: string;
+  readonly modulus_bits: 3072;
+  readonly exponent: 65537;
+  readonly pubkey_spki_b64: string;
+  readonly spki_fingerprint: V7SpkiFingerprint;
+  readonly valid_from: bigint;
+  readonly valid_until: bigint;
+}
+
+export interface V7ExchangeProfile {
+  readonly version: 3;
+  readonly profile_id: 'freebird/native-exchange/v3';
+  readonly graph_id: V7GraphId;
+  readonly suite: 'RSABSSA-SHA384-PSS-Randomized-V7';
+  readonly modulus_bits: 3072;
+  readonly exponent: 65537;
+}
+
+export interface V7ExchangeDescriptor {
+  readonly descriptor_id: V7DescriptorId;
+  readonly profile_id: 'freebird/native-exchange/v3';
+  readonly issuer_id: string;
+  readonly token_key_id: V7TokenKeyId;
+  readonly asset_id: string;
+  readonly amount_minor: string;
+  readonly suite: 'RSABSSA-SHA384-PSS-Randomized-V7';
+  readonly modulus_bits: 3072;
+  readonly exponent: 65537;
+  readonly pubkey_spki_b64: string;
+  readonly spki_fingerprint: V7SpkiFingerprint;
+  readonly valid_from: bigint;
+  readonly valid_until: bigint;
+}
+
+export interface V7ExchangeKeyset {
+  readonly keyset_id: V7KeysetId;
+  readonly profile_id: 'freebird/native-exchange/v3';
+  readonly descriptor_ids: readonly V7DescriptorId[];
+}
+
+export interface V7ExchangeSlot {
+  readonly descriptor_id: V7DescriptorId;
+  readonly keyset_id: V7KeysetId;
+  readonly slot_id: string;
+  readonly quantity: 1;
+}
+
+export interface V7ExchangeTransition {
+  readonly transition_id: V7TransitionId;
+  readonly profile_id: 'freebird/native-exchange/v3';
+  readonly source_keyset_id: V7KeysetId;
+  readonly target_keyset_id: V7KeysetId;
+  readonly source_slots: readonly V7ExchangeSlot[];
+  readonly output_slots: readonly V7ExchangeSlot[];
+}
+
+export interface V7ExchangeDiscovery {
+  readonly version: 3;
+  readonly profile: V7ExchangeProfile;
+  readonly active_descriptors: readonly V7ExchangeDescriptor[];
+  readonly retained_descriptors: readonly V7ExchangeDescriptor[];
+  readonly active_keysets: readonly V7ExchangeKeyset[];
+  readonly retained_keysets: readonly V7ExchangeKeyset[];
+  readonly transitions: readonly V7ExchangeTransition[];
+}
+
+export interface V7GraphIssuancePolicy {
+  readonly policy_id: V7PolicyId;
+  readonly profile_id: 'freebird/native-graph-issuance/v7';
+  readonly graph_id: V7GraphId;
+  readonly keyset_id: V7KeysetId;
+  readonly descriptor_id: V7DescriptorId;
+  readonly token_key_id: V7TokenKeyId;
+  readonly issuer_id: string;
+  readonly asset_id: string;
+  readonly amount_minor: string;
+  readonly suite: 'RSABSSA-SHA384-PSS-Randomized-V7';
+  readonly modulus_bits: 3072;
+  readonly exponent: 65537;
+  readonly quantity: 1;
+  readonly pubkey_spki_b64: string;
+  readonly spki_fingerprint: V7SpkiFingerprint;
+  readonly valid_from: bigint;
+  readonly valid_until: bigint;
+}
+
+export interface V7GraphIssuanceDiscovery {
+  readonly version: 7;
+  readonly profile_id: 'freebird/native-graph-issuance/v7';
+  readonly active_policies: readonly V7GraphIssuancePolicy[];
+  readonly retained_policies: readonly V7GraphIssuancePolicy[];
+}
+
+/** Strict V7-only response returned by `GET /.well-known/keys`. */
+export interface V7KeyDiscoveryResp {
+  readonly issuer_id: string;
+  readonly current_epoch: number;
+  readonly valid_epochs: readonly number[];
+  readonly epoch_duration_sec: bigint;
+  readonly voprf: V7VoprfKeyInfo;
+  readonly native_bearer_v7: V7NativeBearerKeyInfo;
+  readonly native_bearer_v7_retained: readonly V7NativeBearerKeyInfo[];
+  readonly native_exchange_v7?: V7ExchangeDiscovery;
+  readonly native_graph_issuance_v7?: V7GraphIssuanceDiscovery;
+}
+
+/** Public direct-only projection of strict V7 key discovery. */
+export interface V7DirectKeyDiscovery {
+  readonly issuer_id: string;
+  readonly current_epoch: number;
+  readonly valid_epochs: readonly number[];
+  readonly epoch_duration_sec: bigint;
+  readonly voprf: V7VoprfKeyInfo;
+  readonly native_bearer_v7: V7NativeBearerKeyInfo;
+  readonly native_bearer_v7_retained: readonly V7NativeBearerKeyInfo[];
 }

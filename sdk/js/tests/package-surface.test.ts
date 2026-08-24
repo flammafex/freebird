@@ -7,152 +7,80 @@ import { describe, expect, it } from 'vitest';
 
 const packageRoot = fileURLToPath(new URL('..', import.meta.url));
 const runtimeExports = [
-  'BatchIssuanceError',
-  'BatchIssuanceInterruptedError',
-  'DiscoveryError',
-  'ExchangeError',
-  'FreebirdClient',
-  'FreebirdError',
-  'GraphIssuanceError',
-  'InvalidTokenError',
-  'MemoryTokenStore',
-  'PollAbortedError',
-  'PollError',
-  'PollTimeoutError',
-  'RateLimitedError',
-  'ReplayedTokenError',
-  'StorageTokenStore',
-  'StalePublicKeyError',
-  'VerificationError',
-  'VerifierNotConfiguredError',
-  'VerifierUnavailableError',
-  'buildBatchBinding',
-  'buildGraphIssuanceHmacAuthorizationV2',
-  'buildHmacAuthorizationV2',
-  'buildIssueBinding',
-  'buildPublicIssueBinding',
-  'buildRenewBinding',
-  'crypto',
-  'deserializeGraphIssuanceRecoveryContext',
-  'exchangePasses',
-  'finalizeExchangePasses',
-  'generateOperationId',
-  'generateProofOfWork',
-  'generateStatusCapability',
-  'graphIssuanceHmacAuthorizationTagV2',
-  'graphIssuanceHmacAuthorizationTranscriptV2',
-  'hmacAuthorizationTagV2',
-  'hmacAuthorizationTranscriptV2',
-  'parseGraphIssuanceHmacAuthorizationV2',
-  'parseHmacAuthorizationV2',
-  'pollExchangeStatus',
-  'pollGraphIssuanceStatus',
-  'pollUntilTerminal',
-  'prepareExchangePasses',
-  'serializeGraphIssuanceRecoveryContext',
-  'tokenId',
-  'verifyGraphIssuanceHmacAuthorizationV2',
-  'verifyHmacAuthorizationV2',
-  'verifyPow',
+  'BatchIssuanceError', 'BatchIssuanceInterruptedError', 'DiscoveryError', 'FreebirdClient',
+  'FreebirdError', 'InvalidTokenError', 'MemoryTokenStore', 'RateLimitedError',
+  'ReplayedTokenError', 'StorageTokenStore', 'StalePublicKeyError', 'VerificationError',
+  'VerifierNotConfiguredError', 'VerifierUnavailableError', 'buildBatchBinding',
+  'buildIssueBinding', 'buildNativeBearerV7BatchBinding', 'buildNativeBearerV7IssueBinding',
+  'buildRenewBinding', 'crypto', 'generateProofOfWork', 'tokenId', 'verifyPow',
 ].sort();
 const cryptoExports = [
-  'blind',
-  'buildGraphIssuanceHmacAuthorizationV2',
-  'buildHmacAuthorizationV2',
-  'buildPrivateTokenInput',
-  'buildPublicBearerMessage',
-  'buildPublicBearerPass',
-  'buildRedemptionToken',
-  'buildScopeDigest',
-  'finalize',
-  'graphIssuanceHmacAuthorizationTagV2',
-  'graphIssuanceHmacAuthorizationTranscriptV2',
-  'hmacAuthorizationTagV2',
-  'hmacAuthorizationTranscriptV2',
-  'parseGraphIssuanceHmacAuthorizationV2',
-  'parseHmacAuthorizationV2',
-  'parsePublicBearerPass',
-  'parseRedemptionToken',
-  'rsaBlind',
-  'rsaUnblind',
-  'rsaVerify',
-  'tokenKeyIdFromHex',
-  'tokenKeyIdFromSpki',
-  'tokenKeyIdToHex',
-  'verifyGraphIssuanceHmacAuthorizationV2',
-  'verifyHmacAuthorizationV2',
+  'blind', 'buildPrivateTokenInput', 'buildRedemptionToken', 'buildScopeDigest', 'finalize',
+  'nativeBearerV7', 'parseRedemptionToken',
+].sort();
+const nativeV7Exports = [
+  'bindingFromV7Discovery', 'blindV7', 'buildV7Body', 'deriveV7Nullifier',
+  'directBindingFromDiscovery', 'finalizeV7', 'parseV7Body', 'parseV7Token',
+  'serializeV7Token', 'v7ApplicationDigest', 'v7ArtifactDigest', 'v7BodyTranscript',
+  'verifyV7Token',
 ].sort();
 
 function assertRuntimeSurface(source: Record<string, unknown>): void {
-  if (JSON.stringify(Object.keys(source).sort()) !== JSON.stringify(runtimeExports)) {
-    throw new Error(`unexpected runtime exports: ${Object.keys(source).sort().join(',')}`);
-  }
-  const crypto = source.crypto as Record<string, unknown>;
-  if (JSON.stringify(Object.keys(crypto).sort()) !== JSON.stringify(cryptoExports)) {
-    throw new Error(`unexpected crypto exports: ${Object.keys(crypto).sort().join(',')}`);
-  }
-  if (source.FreebirdClient === undefined || typeof crypto.blind !== 'function') {
-    throw new Error('required SDK runtime export is missing');
-  }
-  if (typeof (source.FreebirdClient as typeof import('../src/client.js').FreebirdClient)
-    .prototype.issueTokenWithProofFactory !== 'function') {
-    throw new Error('current V4 proof-factory API is missing');
-  }
+  expect(Object.keys(source).sort()).toEqual(runtimeExports);
+  expect(Object.keys(source.crypto as object).sort()).toEqual(cryptoExports);
+  expect(Object.keys((source.crypto as { nativeBearerV7: object }).nativeBearerV7).sort())
+    .toEqual(nativeV7Exports);
+  const client = source.FreebirdClient as typeof import('../src/client.js').FreebirdClient;
+  expect(typeof client.prototype.issueToken).toBe('function');
+  expect(typeof client.prototype.issueTokens).toBe('function');
+  expect(typeof client.prototype.issueNativeBearerV7).toBe('function');
+  expect(typeof client.prototype.issueNativeBearerV7Batch).toBe('function');
+  expect(typeof client.prototype.verifyNativeBearerV7Locally).toBe('function');
+  for (const removed of [
+    'issuePublicToken', 'issuePublicTokens', 'issuePublicBlindSignature',
+    'issuePublicTokenForCurrentKey', 'issuePublicTokensForCurrentKey',
+    'verifyPublicBearerPassLocally', 'exchange', 'exchangePasses', 'issueGraphBlindSignature',
+    'pollExchangeStatus', 'pollGraphIssuanceStatus',
+  ]) expect(removed in client.prototype).toBe(false);
+  for (const removed of [
+    'buildPublicIssueBinding', 'buildPublicBearerMessage', 'buildPublicBearerPass',
+    'parsePublicBearerPass', 'exchangePasses', 'pollExchangeStatus',
+  ]) expect(removed in source).toBe(false);
 }
 
-describe('SDK index and package surface', () => {
+describe('SDK package surface', () => {
   it('publishes condition-specific declaration and runtime targets', () => {
     const manifest = JSON.parse(readFileSync(`${packageRoot}/package.json`, 'utf8')) as {
       exports: { '.': { import: Record<string, string>; require: Record<string, string> } };
     };
-    expect(manifest.exports['.'].import).toEqual({
-      types: './dist/index.d.ts',
-      default: './dist/index.js',
-    });
-    expect(manifest.exports['.'].require).toEqual({
-      types: './dist/index.d.cts',
-      default: './dist/index.cjs',
-    });
+    expect(manifest.exports['.'].import).toEqual({ types: './dist/index.d.ts', default: './dist/index.js' });
+    expect(manifest.exports['.'].require).toEqual({ types: './dist/index.d.cts', default: './dist/index.cjs' });
   });
 
-  it('keeps the source index runtime facade explicit', async () => {
-    const source = await import('../src/index.js');
-    assertRuntimeSurface(source as unknown as Record<string, unknown>);
+  it('declares the Node.js engine required by the V7 crypto dependency', () => {
+    const manifest = JSON.parse(readFileSync(`${packageRoot}/package.json`, 'utf8')) as {
+      engines?: { node?: string };
+    };
+    const lockfile = JSON.parse(readFileSync(`${packageRoot}/package-lock.json`, 'utf8')) as {
+      packages?: { '': { engines?: { node?: string } } };
+    };
+    expect(manifest.engines?.node).toBe('>=24');
+    expect(lockfile.packages?.['']?.engines?.node).toBe('>=24');
+  });
+
+  it('keeps the source index runtime facade V4/V7-only', async () => {
+    assertRuntimeSurface(await import('../src/index.js') as unknown as Record<string, unknown>);
   });
 
   it('builds and supports both package self-reference entry points', async () => {
     execFileSync('npm', ['run', 'build'], { cwd: packageRoot, stdio: 'pipe' });
-
     const tsc = `${packageRoot}/node_modules/typescript/bin/tsc`;
-    execFileSync(process.execPath, [tsc, '--project', 'tests/package-consumers/tsconfig.esm.json'], {
-      cwd: packageRoot,
-      stdio: 'pipe',
-    });
-    execFileSync(process.execPath, [tsc, '--project', 'tests/package-consumers/tsconfig.cjs.json'], {
-      cwd: packageRoot,
-      stdio: 'pipe',
-    });
-
+    execFileSync(process.execPath, [tsc, '--project', 'tests/package-consumers/tsconfig.esm.json'], { cwd: packageRoot, stdio: 'pipe' });
+    execFileSync(process.execPath, [tsc, '--project', 'tests/package-consumers/tsconfig.cjs.json'], { cwd: packageRoot, stdio: 'pipe' });
     const expected = JSON.stringify(runtimeExports);
-    const cjsScript = `
-      const sdk = require('@flammafex/freebird');
-      const expected = ${JSON.stringify(expected)};
-      if (JSON.stringify(Object.keys(sdk).sort()) !== expected) process.exit(1);
-      if (typeof sdk.FreebirdClient !== 'function' || typeof sdk.crypto.blind !== 'function') process.exit(2);
-    `;
+    const cjsScript = `const sdk=require('@flammafex/freebird'); if(JSON.stringify(Object.keys(sdk).sort())!==${JSON.stringify(expected)})process.exit(1);`;
+    const esmScript = `const sdk=await import('@flammafex/freebird'); if(JSON.stringify(Object.keys(sdk).sort())!==${JSON.stringify(expected)})process.exit(1);`;
     execFileSync(process.execPath, ['--eval', cjsScript], { cwd: packageRoot, stdio: 'pipe' });
-
-    const esmScript = `
-      const sdk = await import('@flammafex/freebird');
-      const expected = ${JSON.stringify(expected)};
-      if (JSON.stringify(Object.keys(sdk).sort()) !== expected) process.exit(1);
-      if (typeof sdk.FreebirdClient !== 'function' || typeof sdk.crypto.blind !== 'function') process.exit(2);
-    `;
-    execFileSync(process.execPath, ['--input-type=module', '--eval', esmScript], {
-      cwd: packageRoot,
-      stdio: 'pipe',
-    });
-
-    expect(expected).toBe(JSON.stringify(runtimeExports));
+    execFileSync(process.execPath, ['--input-type=module', '--eval', esmScript], { cwd: packageRoot, stdio: 'pipe' });
   });
 });

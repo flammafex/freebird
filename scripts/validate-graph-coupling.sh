@@ -33,34 +33,47 @@ value_from_file() {
 
 for file in "$issuer_env" "$verifier_env"; do
   [ -f "$file" ] || error "environment file does not exist: $file"
+  if [ -f "$file" ] && grep -Eq '^[[:space:]]*PUBLIC_BEARER_[A-Za-z0-9_]*=' "$file"; then
+    error "retired PUBLIC_BEARER_* configuration is not accepted: $file"
+  fi
 done
 if [ "$errors" -ne 0 ]; then
   exit 1
 fi
 
-issuer_graph=$(value_from_file "$issuer_env" PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE)
+issuer_native=$(value_from_file "$issuer_env" NATIVE_BEARER_V7_ENABLE)
+issuer_graph=$(value_from_file "$issuer_env" NATIVE_GRAPH_ISSUANCE_V7_ENABLE)
 issuer_graph=${issuer_graph:-false}
-verifier_graph=$(value_from_file "$verifier_env" PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE)
+verifier_graph=$(value_from_file "$verifier_env" NATIVE_GRAPH_ISSUANCE_V7_ENABLE)
 verifier_graph=${verifier_graph:-false}
 verifier_urls=$(value_from_file "$verifier_env" VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS)
-issuer_exchange=$(value_from_file "$issuer_env" PUBLIC_BEARER_EXCHANGE_ENABLE)
+issuer_exchange=$(value_from_file "$issuer_env" NATIVE_EXCHANGE_V7_ENABLE)
 issuer_exchange=${issuer_exchange:-false}
 
+case "$issuer_native" in
+  true|1) ;;
+  false|0) error "issuer NATIVE_BEARER_V7_ENABLE must be true; V7 native bearer issuance is mandatory" ;;
+  *) error "issuer NATIVE_BEARER_V7_ENABLE must be true" ;;
+esac
 case "$issuer_graph" in
   true|1|false|0) ;;
-  *) error "issuer PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE must be true or false" ;;
+  *) error "issuer NATIVE_GRAPH_ISSUANCE_V7_ENABLE must be true or false" ;;
 esac
 case "$verifier_graph" in
   true|1|false|0) ;;
-  *) error "verifier PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE must be true or false" ;;
+  *) error "verifier NATIVE_GRAPH_ISSUANCE_V7_ENABLE must be true or false" ;;
+esac
+case "$issuer_exchange" in
+  true|1|false|0) ;;
+  *) error "issuer NATIVE_EXCHANGE_V7_ENABLE must be true or false" ;;
 esac
 
 if [ "$issuer_graph" = true ] || [ "$issuer_graph" = 1 ]; then
   if [ "$issuer_exchange" != true ] && [ "$issuer_exchange" != 1 ]; then
-    error "issuer graph issuance requires PUBLIC_BEARER_EXCHANGE_ENABLE=true"
+    error "V7 graph issuance requires NATIVE_EXCHANGE_V7_ENABLE=true"
   fi
   if [ "$verifier_graph" != true ] && [ "$verifier_graph" != 1 ]; then
-    error "graph-enabled issuer requires PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE=true in every participating verifier environment"
+    error "V7 graph-enabled issuer requires NATIVE_GRAPH_ISSUANCE_V7_ENABLE=true in every participating verifier environment"
   fi
   [ -n "$verifier_urls" ] || error "graph-enabled issuer requires VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS in the verifier environment"
   case "$verifier_urls" in
@@ -76,7 +89,7 @@ if [ "$issuer_graph" = true ] || [ "$issuer_graph" = 1 ]; then
   [ "${verifier_stale:-60s}" = 60s ] || error "VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS must be 60s"
 else
   if [ "$verifier_graph" = true ] || [ "$verifier_graph" = 1 ]; then
-    error "verifier graph issuance marker is enabled while issuer graph issuance is disabled"
+    error "verifier V7 graph marker is enabled while issuer V7 graph issuance is disabled"
   fi
   [ -z "$verifier_urls" ] || error "VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS must be empty when issuer graph issuance is disabled"
 fi

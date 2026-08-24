@@ -93,6 +93,10 @@ done
 
 common_checks() {
   local name=$1 output=$2
+  if grep -q 'PUBLIC_BEARER_' "$output"; then
+    printf '%s\n' "$name: retired PUBLIC_BEARER configuration is present" >&2
+    return 1
+  fi
   if grep -q '10\.244\.0\.0/16\|172\.18\.0\.0/16' "$output"; then
     printf '%s\n' "$name: broad assumed network trust is forbidden" >&2
     return 1
@@ -136,7 +140,11 @@ common_checks() {
     return 1
   fi
   if ! grep -q '/v1/public/graph/replay-authority/probe' "$output"; then
-    printf '%s\n' "$name: V2 replay-authority probe route is not exposed" >&2
+    printf '%s\n' "$name: V7 graph replay-authority probe route is not exposed" >&2
+    return 1
+  fi
+  if ! grep -q 'path: /\.well-known/replay-authority' "$output"; then
+    printf '%s\n' "$name: V4 replay-authority metadata route is not exposed" >&2
     return 1
   fi
   if ! grep -q 'VERIFIER_REPLAY_AUTHORITY_PROBE_INTERVAL: 30s' "$output" || \
@@ -169,9 +177,9 @@ check_graph_coupling() {
     return 0
   fi
   local issuer_graph verifier_graph issuer_exchange verifier_urls
-  issuer_graph=$(config_value "$output" issuer-config PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE)
-  verifier_graph=$(config_value "$output" verifier-config PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE)
-  issuer_exchange=$(config_value "$output" issuer-config PUBLIC_BEARER_EXCHANGE_ENABLE)
+  issuer_graph=$(config_value "$output" issuer-config NATIVE_GRAPH_ISSUANCE_V7_ENABLE)
+  verifier_graph=$(config_value "$output" verifier-config NATIVE_GRAPH_ISSUANCE_V7_ENABLE)
+  issuer_exchange=$(config_value "$output" issuer-config NATIVE_EXCHANGE_V7_ENABLE)
   verifier_urls=$(config_value "$output" verifier-config VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS)
   if [ "$issuer_graph" = true ] || [ "$issuer_graph" = "1" ]; then
     [ "$issuer_exchange" = true ] || [ "$issuer_exchange" = "1" ] || {
@@ -316,6 +324,7 @@ check_probe_contract() {
   check_route_backend "$name" "$output" /readyz issuer-probe required
   check_route_backend "$name" "$output" /health verifier-probe required
   check_route_backend "$name" "$output" /ready verifier-probe required
+  check_route_backend "$name" "$output" /.well-known/replay-authority issuer required
 
   for route in \
     /.well-known/issuer \

@@ -3,9 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DiscoveryError,
-  ExchangeError,
   FreebirdError,
-  GraphIssuanceError,
   InvalidTokenError,
   RateLimitedError,
   ReplayedTokenError,
@@ -13,7 +11,7 @@ import {
   VerifierNotConfiguredError,
   VerifierUnavailableError,
 } from '../src/index.js';
-import type { FreebirdErrorCode } from '../src/index.js';
+import type { FreebirdErrorCode } from '../src/errors.js';
 
 describe('FreebirdError hierarchy', () => {
   it('FreebirdError is an Error with a code and generic message', () => {
@@ -30,8 +28,6 @@ describe('FreebirdError hierarchy', () => {
       [new DiscoveryError(), 'discovery', 'DiscoveryError'],
       [new VerificationError(), 'verification', 'VerificationError'],
       [new VerifierNotConfiguredError(), 'verifier_not_configured', 'VerifierNotConfiguredError'],
-      [new ExchangeError(), 'exchange', 'ExchangeError'],
-      [new GraphIssuanceError(), 'graph_issuance', 'GraphIssuanceError'],
       [new RateLimitedError(30), 'rate_limited', 'RateLimitedError'],
       [new VerifierUnavailableError(), 'verifier_unavailable', 'VerifierUnavailableError'],
       [new InvalidTokenError(), 'invalid_token', 'InvalidTokenError'],
@@ -67,13 +63,6 @@ describe('FreebirdError hierarchy', () => {
     const error = new RateLimitedError(120);
     expect(error.retryAfter).toBe(120);
     expect(error.code).toBe('rate_limited');
-  });
-
-  it('ExchangeError and GraphIssuanceError carry an optional outcome', () => {
-    const exchange = new ExchangeError('msg');
-    expect(exchange.outcome).toBeUndefined();
-    const graph = new GraphIssuanceError('msg');
-    expect(graph.outcome).toBeUndefined();
   });
 
   it('messages are generic and do not leak server detail', () => {

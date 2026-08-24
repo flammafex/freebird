@@ -26,6 +26,15 @@ pub struct AuthorizationClaim {
     pub global_spend_key: Option<String>,
 }
 
+/// Authenticated V4-local material needed by the V7 holder-proof lane. The
+/// V4 credential parsing, scope, trust, authenticator, nullifier, and spend
+/// key derivation are still performed by the existing shared path.
+pub struct V4LocalAuthorization {
+    pub claim: AuthorizationClaim,
+    pub nonce: [u8; 32],
+    pub nullifier: String,
+}
+
 pub trait GraphIssuanceAuthorizer: Send + Sync {
     fn validate_policy_configuration(&self, _policy: &GraphIssuancePolicy) -> Result<()> {
         Ok(())
@@ -182,33 +191,16 @@ impl V4LocalGraphIssuanceAuthorizer {
         }
         Ok(Self { keys: trusted })
     }
-}
 
-impl GraphIssuanceAuthorizer for V4LocalGraphIssuanceAuthorizer {
-    fn validate_policy_configuration(&self, policy: &GraphIssuancePolicy) -> Result<()> {
-        let v4 = policy
-            .v4_local
-            .as_ref()
-            .context("v4_local graph issuance policy is incomplete")?;
-        for issuer in &v4.trusted_issuers {
-            for kid in &issuer.key_ids {
-                if !self
-                    .keys
-                    .contains_key(&(issuer.issuer_id.clone(), kid.clone()))
-                {
-                    bail!("v4_local policy references unavailable private verification key")
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn authorize(
+    /// Verify one V4-local credential without changing the legacy verifier
+    /// behavior. V7 uses the returned authenticated nonce solely as an
+    /// Ed25519 public key for its additional holder proof.
+    pub fn verify_credential(
         &self,
         policy: &GraphIssuancePolicy,
         _request_binding: &[u8; 32],
         authorization: &str,
-    ) -> Result<AuthorizationClaim> {
+    ) -> Result<V4LocalAuthorization> {
         if policy.authorization_scheme != "v4_local" {
             bail!("unsupported graph issuance authorization scheme")
         }
@@ -246,9 +238,44 @@ impl GraphIssuanceAuthorizer for V4LocalGraphIssuanceAuthorizer {
         let nullifier_digest: [u8; 32] = Base64UrlUnpadded::decode_vec(&verified.nullifier)?
             .try_into()
             .map_err(|_| anyhow::anyhow!("invalid canonical V4 nullifier"))?;
-        Ok(AuthorizationClaim {
-            nullifier_digest,
-            global_spend_key: Some(verified.spend_key),
+        Ok(V4LocalAuthorization {
+            claim: AuthorizationClaim {
+                nullifier_digest,
+                global_spend_key: Some(verified.spend_key),
+            },
+            nonce: verified.token.nonce,
+            nullifier: verified.nullifier,
         })
+    }
+}
+
+impl GraphIssuanceAuthorizer for V4LocalGraphIssuanceAuthorizer {
+    fn validate_policy_configuration(&self, policy: &GraphIssuancePolicy) -> Result<()> {
+        let v4 = policy
+            .v4_local
+            .as_ref()
+            .context("v4_local graph issuance policy is incomplete")?;
+        for issuer in &v4.trusted_issuers {
+            for kid in &issuer.key_ids {
+                if !self
+                    .keys
+                    .contains_key(&(issuer.issuer_id.clone(), kid.clone()))
+                {
+                    bail!("v4_local policy references unavailable private verification key")
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn authorize(
+        &self,
+        policy: &GraphIssuancePolicy,
+        request_binding: &[u8; 32],
+        authorization: &str,
+    ) -> Result<AuthorizationClaim> {
+        Ok(self
+            .verify_credential(policy, request_binding, authorization)?
+            .claim)
     }
 }

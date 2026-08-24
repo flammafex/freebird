@@ -10,6 +10,15 @@ use base64ct::{Base64UrlUnpadded, Encoding};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+
+// Closed native V7 graph issuance is nominally distinct from the V2 graph
+// issuance contract and is re-exported here for the public graph API surface.
+pub use crate::api::{
+    native_graph_issuance_v7_authorization_proof_digest, NativeGraphIssuanceV7Discovery,
+    NativeGraphIssuanceV7Error, NativeGraphIssuanceV7Policy, NativeGraphIssuanceV7Request,
+    NativeGraphIssuanceV7Result, NATIVE_GRAPH_ISSUANCE_V7_DOMAIN_AUTHORIZATION_BINDING,
+    NATIVE_GRAPH_ISSUANCE_V7_DOMAIN_AUTHORIZATION_PROOF,
+};
 use subtle::ConstantTimeEq;
 
 pub const GRAPH_ISSUANCE_VERSION_V2: u8 = 2;

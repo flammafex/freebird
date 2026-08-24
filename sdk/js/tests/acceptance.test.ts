@@ -6,7 +6,7 @@
 // the SDK's high-level methods (`issueToken` → `verifyToken` → `checkToken` →
 // `verifyBatch`) against a mocked issuer/verifier, proving a consumer can
 // complete the V4 flow using ONLY the SDK surface — no hand-rolled VOPRF,
-// blinding, or wire-format code. The live-service examples cover V5 and V2.
+// blinding, or wire-format code. Live-service coverage is outside this test.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,14 +15,11 @@ vi.mock('../src/crypto/voprf.js', () => ({
   finalize: vi.fn(() => new Uint8Array([6, 7])),
   buildScopeDigest: vi.fn(() => new Uint8Array([1, 2, 3])),
   buildPrivateTokenInput: vi.fn(() => new Uint8Array([8])),
-  buildRedemptionToken: vi.fn(() => new Uint8Array([9, 8, 7])),
+  buildRedemptionToken: vi.fn(() => new Uint8Array([4, 8, 7])),
   parseRedemptionToken: vi.fn(),
   tokenKeyIdFromSpki: vi.fn(),
   tokenKeyIdToHex: vi.fn(),
   tokenKeyIdFromHex: vi.fn(),
-  buildPublicBearerMessage: vi.fn(),
-  buildPublicBearerPass: vi.fn(),
-  parsePublicBearerPass: vi.fn(),
 }));
 
 import { FreebirdClient, crypto } from '../src/index.js';

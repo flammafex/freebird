@@ -9,21 +9,26 @@ The current source tree supports two token modes:
 
 - V4 private-verification tokens using a Freebird-specific, bespoke P-256
   VOPRF-like construction; it is not RFC 9497 interoperable.
-- V5 public bearer passes using RFC 9474 blind RSA signatures.
+- V7 native bearer tokens using randomized RSA blind signatures and issuer-published
+  discovery metadata.
+
+V5 public bearer passes are retired and are not accepted by the current verifier.
+V6 is reserved. V4 private-verification support remains available for existing
+clients and operator-controlled admission credentials.
 
 The `freebird-interface` binary exercises the V4 flow against local services on
 `127.0.0.1:8081` and `127.0.0.1:8082`.
 
-The optional public bearer exchange atomically spends one or more single-use V5
-artifacts and signs configured caller-blinded outputs. Clients use
-`POST /v2/public/exchange` and
-`GET /v2/public/exchange/status?public_operation_id=...`. A request carries a
+The optional native V7 bearer exchange atomically spends one or more single-use
+V7 artifacts and signs configured caller-blinded outputs. Clients use
+`POST /v7/public/exchange` and
+`GET /v7/public/exchange/status?public_operation_id=...`. A request carries a
 public, non-authorizing 16-byte operation ID in its body; both routes require
 exactly one separate `Exchange-Status-Capability` header containing canonical
 base64url for 32 random bytes. The capability is header-only and must never be
 put in a body, URL, query, or log. Responses use `Cache-Control: no-store`, and
 durable retries recover the original response without signing or spending
-twice. Discovery publishes role-neutral V2 graphs and active/retained Ed25519
+twice. Discovery publishes role-neutral V7 native-bearer graphs and active/retained Ed25519
 receipt verification keys; public-only history keeps outputs and receipts
 verifiable after private signers retire. See [Public Bearer
 Exchange](docs/public-bearer-exchange.md) for the API, graph, Redis, recovery,
@@ -257,10 +262,11 @@ and the second use of the same token is rejected.
 - `VERIFIER_ID` and `VERIFIER_AUDIENCE` define the verifier scope. V4 clients
   bind this scope into the token before issuance.
 - `VERIFIER_SK_PATH=issuer_sk.bin` lets the verifier validate V4 private tokens
-  from the local issuer. V5 public bearer verification uses public key discovery
-  instead.
+  from the local issuer. V7 native bearer verification uses issuer key discovery
+  instead and consumes the V7 body's nullifier.
 - `VERIFIER_ACCEPTED_TOKEN_VERSIONS` is required and controls both accepted and
-  advertised token families. The local V4 command enables only `v4`.
+  advertised token families. Production deployments enable `v4,v7`; the local
+  V4-only command may intentionally enable only `v4`.
 - `VERIFIER_ENV=development` plus `IN_MEMORY_REPLAY_STORE=true` is the explicit
   unsafe local memory-backend configuration. Production deployments must use
   Redis; an unsafe override cannot enable memory replay in production.
@@ -274,14 +280,17 @@ Issuer public endpoints:
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/.well-known/issuer` | Issuer ID, active VOPRF key, and V5 public mode summary. |
-| `GET` | `/.well-known/keys` | Key discovery, active epoch, valid epochs, V5 public keys. |
+| `GET` | `/.well-known/issuer` | V4 issuer metadata: issuer ID and active VOPRF authority information. |
+| `GET` | `/.well-known/replay-authority` | Distinct V4 authority-only metadata consumed by verifier health refresh. |
+| `GET` | `/.well-known/keys` | Strict V7 native-bearer key and graph discovery container. |
 | `POST` | `/v1/oprf/issue` | Issue one V4 VOPRF evaluation for a blinded element. |
 | `POST` | `/v1/oprf/issue/batch` | Batch V4 issuance. |
-| `POST` | `/v1/public/issue` | Issue one V5 blind RSA signature. |
-| `POST` | `/v1/public/issue/batch` | Batch V5 public bearer issuance. |
-| `POST` | `/v2/public/exchange` | Atomically consume V5 sources and blind-sign outputs selected by a V2 graph transition. |
-| `GET` | `/v2/public/exchange/status?public_operation_id=...` | Recover exchange status using the separate 32-byte `Exchange-Status-Capability` header. |
+| `POST` | `/v7/native-bearer/issue` | Issue one V7 native bearer blind signature. |
+| `POST` | `/v7/native-bearer/issue/batch` | Batch V7 native bearer issuance. |
+| `POST` | `/v7/public/exchange` | Atomically consume V7 sources and blind-sign outputs selected by a V7 graph transition. |
+| `GET` | `/v7/public/exchange/status?public_operation_id=...` | Recover V7 exchange status using the separate 32-byte `Exchange-Status-Capability` header. |
+| `POST` | `/v7/public/graph/issue` | Issue one V7 native bearer under an authorized graph policy. |
+| `GET` | `/v7/public/graph/issue/status?public_operation_id=...` | Recover V7 graph-issuance status using its separate capability header. |
 
 Verifier public endpoints:
 
@@ -293,11 +302,21 @@ Verifier public endpoints:
 | `POST` | `/v1/verify` | Validate and consume a token. Reuse is rejected. |
 | `POST` | `/v1/verify/batch` | Batch verify and consume tokens. |
 
+V4 issuer metadata, V4 replay-authority health metadata, and V7 bearer discovery
+are separate contracts. Verifier health refresh consumes only
+`GET /.well-known/replay-authority`; it is distinct from strict V7
+`GET /.well-known/keys`, which must contain the complete `native_bearer_v7`
+container. Do not use either metadata route as a substitute for the other, or
+accept a legacy V5/V2 discovery shape as a compatibility fallback. The stable
+V4 replay-authority probe for V7 graph participants is the separate
+`POST /v1/public/graph/replay-authority/probe` authority check; it is not
+authority metadata, a V7 keyset, or a V7 issuance route.
+
 Stable public error responses include `POST /v1/verify` replay rejection:
 HTTP 401 with `{"ok":false,"error":"replay_detected","verified_at":0}`.
-Other verification failures remain generic. A requested V5 public key that is
-not active is rejected before Sybil processing by both public issuance routes
-with HTTP 400 and `{"error":"token_key_not_active"}`.
+Other verification failures remain generic. A requested V7 token key that is
+not active is rejected before issuance with HTTP 400 and
+`{"error":"token_key_not_active"}`. V5 artifacts are retired and rejected.
 
 Admin endpoints live under `/admin` and require `X-Admin-Key:
 <ADMIN_API_KEY>` or a login session cookie. The verifier always mounts its admin
@@ -354,11 +373,11 @@ Issuer variables:
 | `SOCIAL_GRAPH_REPLAY_TTL` | `600` | Replay-store TTL for accepted social-graph proofs. |
 | `SOCIAL_GRAPH_STATE_PATH` | `social_graph_state.json` | Persistent social-graph gate state path. |
 | `SOCIAL_GRAPH_FAIL_CLOSED` | `true` | Reject startup/verification if trusted attester keys are unavailable. |
-| `PUBLIC_BEARER_ENABLE` | `true` | Enables V5 public bearer issuer. |
-| `PUBLIC_BEARER_SK_PATH` | `public_bearer_sk.der` | V5 RSA private key path. |
-| `PUBLIC_BEARER_METADATA_PATH` | `public_bearer_metadata.json` | V5 key metadata path. |
-| `PUBLIC_BEARER_VALIDITY` | `30d` | V5 key validity window. |
-| `PUBLIC_BEARER_AUDIENCE` | none | Optional V5 audience binding. |
+| `NATIVE_BEARER_V7_ENABLE` | `true` | Enables the mandatory V7 native bearer issuer. |
+| `NATIVE_BEARER_V7_SK_PATH` | `native_bearer_v7.der` | V7 randomized RSA private key path. |
+| `NATIVE_BEARER_V7_METADATA_PATH` | `native_bearer_v7.json` | V7 signer metadata path. |
+| `NATIVE_BEARER_V7_REGISTRY_PATH` | `native_bearer_v7_registry.json` | Append-only V7 key registry path. |
+| `NATIVE_BEARER_V7_VALIDITY` | `30d` | V7 fixed body validity window. |
 
 Verifier variables:
 
@@ -366,11 +385,11 @@ Verifier variables:
 | --- | --- | --- |
 | `VERIFIER_ID` | none | Required. V4 tokens are bound to this verifier ID. |
 | `VERIFIER_AUDIENCE` | `VERIFIER_ID` | Audience used in the verifier scope digest. |
-| `VERIFIER_ACCEPTED_TOKEN_VERSIONS` | none | Required comma-separated accepted families (`v4`, `v5`). |
+| `VERIFIER_ACCEPTED_TOKEN_VERSIONS` | none | Required comma-separated accepted families (`v4`, `v7`); V5 is retired and V6 is reserved. |
 | `VERIFIER_ENV` | none | Must be `development` for the explicit in-memory development backend. |
 | `IN_MEMORY_REPLAY_STORE` | `false` | Must be `true` with `VERIFIER_ENV=development`; otherwise Redis is required. |
 | `ISSUER_URL` / `ISSUER_URLS` | `http://127.0.0.1:8081/.well-known/issuer` | One issuer URL or comma-separated issuer URLs. HTTPS is required when `REQUIRE_TLS=true`. |
-| `VERIFIER_SK_PATH` | none | V4 private verification key. Usually the issuer key file for local testing. |
+| `VERIFIER_SK_PATH` | none | V4 private verification key. V7 uses discovery and does not need this key. |
 | `VERIFIER_SK_B64` | none | Base64url raw 32-byte V4 key alternative. |
 | `VERIFIER_KEYRING_B64` | none | JSON map of `kid` to base64url raw 32-byte keys for rotation windows. |
 | `REDIS_URL` | none | Required for verifier nullifier storage outside explicit development memory mode. |

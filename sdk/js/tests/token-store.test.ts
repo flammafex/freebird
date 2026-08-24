@@ -4,11 +4,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   MemoryTokenStore,
   StorageTokenStore,
-  deserializeGraphIssuanceRecoveryContext,
-  serializeGraphIssuanceRecoveryContext,
 } from '../src/index.js';
-import type { FreebirdToken, GraphIssuanceRecoveryContext } from '../src/index.js';
-import { GraphIssuanceError } from '../src/index.js';
+import type { FreebirdToken } from '../src/index.js';
 
 function token(value: string, validUntil?: number): FreebirdToken {
   return { tokenValue: value, issuerId: 'issuer:test', valid_until: validUntil };
@@ -119,60 +116,5 @@ describe('StorageTokenStore (Node filesystem)', () => {
     await store.save(token('a'));
     await store.clear();
     await expect(fs.promises.stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-});
-
-describe('GraphIssuanceRecoveryContext JSON round-trip', () => {
-  const context: GraphIssuanceRecoveryContext = {
-    request: {
-      version: 2,
-      public_operation_id: 'AAAAAAAAAAAAAAAAAAAAAA',
-      issuance_policy_id: 'policy-1',
-      graph_id: 'a'.repeat(64),
-      keyset_id: 'b'.repeat(64),
-      descriptor_id: 'c'.repeat(64),
-      blinded_message: 'blinded',
-      authorization: 'auth',
-    },
-    requestDigest: 'd'.repeat(43),
-    publicOperationId: 'AAAAAAAAAAAAAAAAAAAAAA',
-    issuancePolicyId: 'policy-1',
-    graphId: 'a'.repeat(64),
-    keysetId: 'b'.repeat(64),
-    descriptorId: 'c'.repeat(64),
-    statusCapability: 'e'.repeat(43),
-    expectedTokenKeyId: 'f'.repeat(64),
-    // JSON-safe opaque caller-owned blinding state.
-    blindingState: { tag: 'opaque', nonce: 'abc' },
-  };
-
-  it('round-trips all fields including opaque blindingState', () => {
-    const serialized = serializeGraphIssuanceRecoveryContext(context);
-    const restored = deserializeGraphIssuanceRecoveryContext(serialized);
-    expect(restored).toEqual(context);
-    expect(restored.blindingState).toEqual({ tag: 'opaque', nonce: 'abc' });
-  });
-
-  it('produces a documented versioned envelope', () => {
-    const parsed = JSON.parse(serializeGraphIssuanceRecoveryContext(context)) as {
-      version: number;
-      type: string;
-      context: unknown;
-    };
-    expect(parsed.version).toBe(1);
-    expect(parsed.type).toBe('graph_issuance_recovery_context');
-    expect(parsed.context).toEqual(context);
-  });
-
-  it('rejects malformed serializations', () => {
-    expect(() => deserializeGraphIssuanceRecoveryContext('not json'))
-      .toThrow(GraphIssuanceError);
-    expect(() => deserializeGraphIssuanceRecoveryContext(JSON.stringify({ version: 99 })))
-      .toThrow(GraphIssuanceError);
-    expect(() => deserializeGraphIssuanceRecoveryContext(JSON.stringify({
-      version: 1,
-      type: 'graph_issuance_recovery_context',
-      context: { missing: 'fields' },
-    }))).toThrow(GraphIssuanceError);
   });
 });

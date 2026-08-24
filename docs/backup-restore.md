@@ -30,19 +30,19 @@ fails closed rather than omitting replay evidence.
 
 Backups quiesce services, synchronously save Redis (including AOF-aware state), capture complete resolved issuer and Redis volumes, and stream tar directly into age. No plaintext tar is created. Restore rejects legacy plaintext archives, unsafe entries, links, duplicates, undeclared files, bad signatures, and archives ahead of the protected generation high-water mark. The high-water generation is allocation history, distinct from the currently accepted restore; every archive at or below it requires its exact digest plus a non-empty rollback reason. It creates a signed/encrypted recovery archive in the same format before changing volumes. Acceptance requires bounded volume identity, readiness, and spent-fixture replay checks.
 
-When public bearer exchange is enabled, treat these as one recovery unit:
+When native V7 bearer exchange is enabled, treat these as one recovery unit:
 
-* the authoritative Redis AOF operation ledger and shared V5 spend keys;
-* active and retained target profiles and RSA private keys;
+* the authoritative Redis AOF operation ledger and shared V7 body-nullifier spend keys;
+* active and retained V7 discovery graphs and RSA private keys;
 * active and retained Ed25519 receipt seeds; and
-* `PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH`.
+* `NATIVE_EXCHANGE_V7_PUBLIC_HISTORY_PATH`.
 
-For V2 graph issuance, the same Redis capture must include the permanent
+For V7 graph issuance, the same Redis capture must include the permanent
 replay-authority container:
 
 * `freebird:v4-replay-authority:v1:id`;
 * `freebird:v4-replay-authority:v1:scope-tombstones`;
-* graph-issuance operations, budgets, probe challenges/acknowledgements, and
+* V7 graph-issuance operations, budgets, probe challenges/acknowledgements, and
   the shared `freebird:spent:v4:` markers.
 
 The authority identity and scope tombstones are append-only security state, not
@@ -63,6 +63,11 @@ capability is a private bearer secret: retain it for recovery only in separately
 encrypted, access-controlled operator evidence and never expose it in a body,
 URL, log, or manifest.
 
+For V7 verification, the authoritative replay identity is the issuer namespace
+plus the lowercase hexadecimal body nullifier. Back up the Redis entries and
+their inclusive V7 validity horizon; do not substitute an artifact or signature
+digest.
+
 Private historical target and receipt keys remain configured until readiness
 confirms that their pending-reference counts are zero. Public history has a
 different lifetime: copy canonical public keysets, target descriptors, and
@@ -73,7 +78,7 @@ After restore, before admitting traffic:
 
 1. confirm Redis still reports master role, non-cluster mode, no eviction,
    active healthy AOF, and `appendfsync always`;
-2. require issuer and verifier readiness;
+2. require issuer and verifier readiness for V4/V7 token families;
 3. wait for a fresh replay-authority probe when graph issuance is configured;
 4. compare discovered target descriptor/keyset IDs, replay authority ID,
    retained scope tombstones, and receipt key IDs/public

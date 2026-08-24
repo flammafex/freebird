@@ -26,7 +26,7 @@ function client(config: ConstructorParameters<typeof FreebirdClient>[0] = {
   return new FreebirdClient(config);
 }
 
-const token: FreebirdToken = { tokenValue: 'token-b64', issuerId: 'issuer:test' };
+const token: FreebirdToken = { tokenValue: 'BAU', issuerId: 'issuer:test' };
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -43,7 +43,7 @@ describe('verifyToken', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://verifier.example/v1/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token_b64: 'token-b64' }),
+      body: JSON.stringify({ token_b64: 'BAU' }),
     });
   });
 
@@ -145,7 +145,7 @@ describe('checkToken', () => {
     expect(fetchMock).toHaveBeenCalledWith('https://verifier.example/v1/check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token_b64: 'token-b64' }),
+      body: JSON.stringify({ token_b64: 'BAU' }),
     });
   });
 
@@ -188,15 +188,15 @@ describe('verifyBatch', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const tokens = [
-      { tokenValue: 'a', issuerId: 'issuer:test' },
-      { tokenValue: 'b', issuerId: 'issuer:test' },
-      { tokenValue: 'c', issuerId: 'issuer:test' },
+      { tokenValue: 'BAU', issuerId: 'issuer:test' },
+      { tokenValue: 'BAU', issuerId: 'issuer:test' },
+      { tokenValue: 'BAU', issuerId: 'issuer:test' },
     ];
     await expect(client().verifyBatch(tokens)).resolves.toEqual(batchResp);
     expect(fetchMock).toHaveBeenCalledWith('https://verifier.example/v1/verify/batch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tokens: [{ token_b64: 'a' }, { token_b64: 'b' }, { token_b64: 'c' }] }),
+      body: JSON.stringify({ tokens: [{ token_b64: 'BAU' }, { token_b64: 'BAU' }, { token_b64: 'BAU' }] }),
     });
   });
 

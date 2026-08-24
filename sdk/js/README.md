@@ -1,13 +1,11 @@
 # @flammafex/freebird
 
-Anonymous authentication using VOPRF (Verifiable Oblivious Pseudorandom Function).
-This is the TypeScript client SDK for [Freebird](https://git.carpocratian.org/sibyl/freebird),
-a privacy-preserving token issuance and verification system.
+The Freebird SDK provides the active V4 private-token and direct V7 native-bearer
+client flows. It ships ESM and CommonJS builds with TypeScript declarations and
+uses the platform `fetch` implementation.
 
-The SDK lets you issue anonymous tokens from a Freebird issuer and verify them
-against a Freebird verifier without composing bespoke protocol code. It covers
-the V4 (private VOPRF), V5 (RFC 9474 public bearer blind RSA), V2 (public bearer
-exchange), and policy-authorized graph-issuance flows.
+The SDK requires **Node.js 24 or newer**. This requirement comes from the
+approved `@cloudflare/blindrsa-ts@0.4.6` dependency used by the direct V7 flow.
 
 ## Install
 
@@ -15,11 +13,7 @@ exchange), and policy-authorized graph-issuance flows.
 npm install @flammafex/freebird
 ```
 
-The package ships dual ESM/CJS builds with TypeScript declarations. It has no
-runtime dependency on Node.js-specific APIs beyond `fetch`, so it works in
-modern browsers and Node.js (>= 18) alike.
-
-## Quick start
+## V4 quick start
 
 ```ts
 import { FreebirdClient } from '@flammafex/freebird';
@@ -30,276 +24,105 @@ const client = new FreebirdClient({
 });
 
 await client.init();
-
-// Issue an anonymous token, then verify it.
 const token = await client.issueToken();
-const valid = await client.verifyToken(token);
+const result = await client.verifyToken(token);
 ```
+
+`issueToken` accepts an optional request-bound `SybilProof`. Use
+`issueTokenWithProofFactory` when a fresh proof must be created after retry.
+`checkToken` validates without consuming; `verifyToken` consumes the token.
+`issueTokens` and `verifyBatch` provide bounded V4 batch operations.
+
+## Direct V7 native bearer
+
+```ts
+const v7 = await client.issueNativeBearerV7({
+  owner_commitment: globalThis.crypto.getRandomValues(new Uint8Array(32)),
+});
+
+const v7Batch = await client.issueNativeBearerV7Batch({
+  owner_commitments: [globalThis.crypto.getRandomValues(new Uint8Array(32))],
+});
+
+const locallyValid = await client.verifyNativeBearerV7Locally(v7.tokenValue);
+```
+
+Direct V7 issuance uses the validated `/.well-known/keys` direct-bearer record
+and these routes:
+
+- `POST /v7/native-bearer/issue`
+- `POST /v7/native-bearer/issue/batch`
+
+The owner commitment must be exactly 32 bytes. The SDK constructs the canonical
+body, blinds it, binds Sybil proofs to the exact request, finalizes the returned
+blind signature, and stores the token when a `tokenStore` is configured.
+
+`getV7KeyDiscoveryMetadata()` and `refreshV7KeyDiscoveryMetadata()` return only
+direct-bearer discovery DTOs. Internal validation may process additional issuer
+metadata, but those structures are not part of the public SDK declarations.
+
+For local verification, pass either a serialized token value, serialized bytes,
+or a parsed `V7Token`. The SDK can select an active or retained direct key from
+validated discovery, or you can provide a `V7DirectBinding` explicitly.
+
+## Remote verification
+
+`verifyToken`, `verifyTokenValid`, `checkToken`, and `verifyBatch` support V4 and
+V7 token envelopes. Retired, reserved, malformed, and unknown envelope versions
+are rejected before any verifier request is made.
 
 ## Configuration
 
-`FreebirdClient` takes a single `ClientConfig`:
+| Field | Required | Description |
+| --- | --- | --- |
+| `issuerUrl` | yes | Issuer base URL. |
+| `verifierUrl` | no | Verifier base URL for remote checks. |
+| `verifierId` / `audience` | no | V4 scope overrides when verifier discovery is unavailable. |
+| `keyCacheTtlMs` | no | Direct V7 discovery cache lifetime. |
+| `tokenStore` | no | `MemoryTokenStore` or `StorageTokenStore` for issued tokens. |
+| `powDifficulty` | no | Optional client PoW difficulty when required by the issuer. |
+| `batchBodyLimitBytes` | no | V4 batch JSON limit, up to 60 KiB. |
+| `fetch` | no | Custom fetch implementation for browser, proxy, or test use. |
 
-| Field           | Required | Description                                                                 |
-| --------------- | -------- | --------------------------------------------------------------------------- |
-| `issuerUrl`     | yes      | Base URL of the issuer (e.g. `https://issuer.example.com`).                 |
-| `verifierUrl`   | no       | Base URL of the verifier. Required for verification methods.                |
-| `verifierId`    | no       | Optional verifier scope override when `verifierUrl` is unavailable.         |
-| `audience`      | no       | Optional audience override when `verifierUrl` is unavailable.               |
-| `keyCacheTtlMs` | no       | Optional TTL (ms) for the cached `/.well-known/keys` metadata. When unset,  |
-|                 |          | the TTL is derived from the metadata's `epoch_duration_sec`.                |
-| `tokenStore`    | no       | Optional persistent store for issued tokens (see `TokenStore` below).       |
-| `powDifficulty` | no       | Optional Proof-of-Work difficulty (leading zero bits) to mine when the      |
-|                 |          | issuer requires PoW Sybil resistance.                                       |
-| `batchBodyLimitBytes` | no  | Maximum UTF-8 JSON body size for V4/V5 batch issuance. Defaults to 60 KiB; |
-|                 |          | may be lowered, but never raised above the SDK's 60 KiB ceiling.             |
+## Sybil proofs
 
-## Flows
+Proofs are bound to the exact issuance request. Direct V7 single-issue bindings
+include the issuer ID, token key ID, and blinded message. Batch bindings include
+the issuer ID, token key ID, ordered item count, and ordered-message digest.
+Never reuse a proof after changing request data.
 
-The SDK supports the four core Freebird token flows.
+## Errors
 
-### V4 — private VOPRF token
+SDK errors are typed `FreebirdError` subclasses with stable public codes. Branch
+on `error.code`, not message text. Common codes include `discovery`,
+`verification`, `invalid_token`, `replayed_token`, `issuance`,
+`rate_limited`, `verifier_unavailable`, and `verifier_not_configured`.
 
-The classic anonymous token flow. The client blinds a private input, the issuer
-signs it without learning the input, and the client unblinds to obtain a
-redemption token.
+## Token storage
 
-```ts
-const token = await client.issueToken();
-const valid = await client.verifyToken(token);
-```
+`MemoryTokenStore` is process-local. `StorageTokenStore` persists token records
+with restrictive permissions in Node.js and uses local storage in browsers.
+Keep blinding state and other secrets out of logs and analytics.
 
-`issueToken` accepts an optional `SybilProof` when the issuer requires one.
+## Low-level crypto
 
-### V5 — public bearer pass (RFC 9474 blind RSA)
+The `crypto` namespace exposes V4 VOPRF helpers and the direct V7 native-bearer
+helpers under `crypto.nativeBearerV7`. These are lower-level primitives; callers
+must protect opaque blinding state and validate discovery before using key-bound
+operations.
 
-A public bearer pass is a blind-RSA signature over a public message. The client
-blinds a message, requests a blind signature from the issuer, and unblinds it.
+## Live service acceptance
 
-```ts
-const message = new TextEncoder().encode('public message');
-const response = await client.issuePublicBlindSignature(message);
-// response.blind_signature_b64, response.token_key_id, response.issuer_id
-```
-
-`issuePublicBlindSignature` accepts an optional `SybilProof` and an optional
-`tokenKeyId` to target a specific key.
-
-### V2 — public bearer exchange
-
-The V2 exchange flow converts public bearer passes between keysets along an
-immutable graph/transition. It is durable: operations are identified by a
-`public_operation_id` and can be retried or observed via a status capability.
-
-```ts
-const selection = await client.selectExchangeTransition(graphId, transitionId);
-
-const request = {
-  version: 2,
-  public_operation_id: /* canonical base64url, 16 bytes */,
-  graph_id: selection.graph.graph_id,
-  transition_id: selection.transition.transition_id,
-  source_keyset_id: selection.transition.source_keyset_id,
-  target_keyset_id: selection.transition.target_keyset_id,
-  sources: /* ExchangeRequestSource[] */,
-  outputs: /* ExchangeRequestOutput[] */,
-};
-
-const outcome = await client.exchange(request, statusCapability);
-// outcome.kind === 'committed' | 'pending' | 'error'
-```
-
-`getExchangeStatus` looks up an in-flight operation by request (or by
-`public_operation_id` plus the original request). `exchangeRequestDigest`
-computes the request digest used for status capabilities.
-
-### Graph issuance (policy-authorized)
-
-The SDK also supports policy-authorized graph blind issuance, including durable
-recovery:
-
-```ts
-const policy = await client.selectGraphIssuancePolicy(policyId);
-const outcome = await client.issueGraphBlindSignature(request, statusCapability);
-```
-
-`createGraphIssuanceRecoveryContext`, `retryGraphBlindSignature`, and
-`getGraphIssuanceStatus` support resuming an operation from a persisted
-`GraphIssuanceRecoveryContext`.
-
-Batch issuance options accept a typed `proofFactory({ binding })`. It is called
-once for each exact request payload, including a newly bound retry; a fixed
-request-bound proof is not reused across chunks. V4 and V5 batch methods greedily
-chunk on the exact UTF-8 byte length of the emitted JSON body, including context,
-token-key, and Sybil-proof fields. A single item that cannot fit is rejected
-locally and is never posted.
-
-## API surface
-
-### Issuance
-
-| Method | Description |
-| ------ | ----------- |
-| `init()` | Fetches the issuer's public key metadata. |
-| `issueToken(sybilProof?)` | Issues a single V4 anonymous token. |
-| `issueTokenWithProofFactory(proofFactory)` | Issues V4 with a fresh request-bound proof for each stale-key retry. |
-| `issueTokens(msgs, opts?)` | Issues a batch of V4 tokens (greedily chunked by exact UTF-8 JSON size, capped at 10,000 items). Throws `BatchIssuanceError` on partial failure. |
-| `issuePublicBlindSignature(blindedMsg, sybilProof?, tokenKeyId?)` | Requests a V5 public bearer blind signature. |
-| `issuePublicToken(msg, opts)` | Issues a complete V5 public bearer pass in one call (blinds, signs, unblinds). |
-| `issuePublicTokens(msgs, opts)` | Issues a batch of V5 public bearer passes (exact UTF-8 JSON byte-budget chunking, capped at 10,000 items). |
-| `issuePublicTokenForCurrentKey(opts?)` | Refreshes discovery, derives a V5 message for the current key, and safely retries one stale-key response. |
-| `issuePublicTokensForCurrentKey(nonces, opts?)` | Current-key V5 batch issuance with exact body-budget chunking, per-chunk rebinding, and recovery. |
-| `getKeyDiscoveryMetadata()` | Fetches the issuer's `/.well-known/keys` discovery metadata. |
-| `refreshKeyDiscoveryMetadata()` | Forces a fresh discovery fetch, bypassing the TTL cache. |
-
-### Verification
-
-| Method | Description |
-| ------ | ----------- |
-| `verifyToken(token)` | Verifies a token against the configured verifier, consuming it. Throws typed errors on failure. |
-| `verifyTokenValid(token)` | Boolean convenience over `verifyToken`; returns `false` for invalid/replayed tokens, rethrows infrastructure errors. |
-| `checkToken(token)` | Checks token validity WITHOUT consuming it (distinct `/v1/check` endpoint). |
-| `verifyBatch(tokens)` | Verifies a batch of tokens in one request, consuming each. |
-| `verifyPublicBearerPassLocally(pass, keyInfo)` | Locally verifies the RSA-PSS signature of a V5 pass. Does NOT check spend status. |
-
-### V2 exchange
-
-| Method | Description |
-| ------ | ----------- |
-| `selectExchangeTransition(graphId, transitionId)` | Resolves an explicit immutable graph/transition selection. |
-| `exchange(request, statusCapability)` | Starts or exactly retries a V2 exchange operation. |
-| `getExchangeStatus(...)` | Looks up a V2 exchange operation. |
-| `exchangeRequestDigest(request)` | Computes the request digest used for status capabilities. |
-| `generateOperationId()` | Generates a canonical 16-byte base64url exchange operation id. |
-| `generateStatusCapability()` | Generates a canonical 32-byte base64url exchange status capability. |
-| `exchangePasses(sources, transition, opts?)` | Assembles a valid V2 `ExchangeRequest`, blinding the output slots. |
-| `prepareExchangePasses(sources, transition, opts?)` | Prepares an exchange and retains in-memory blinding state for finalization. |
-| `finalizeExchangePasses(prepared, outcome)` | Verifies committed exchange signatures and returns finalized V5 passes. |
-| `pollExchangeStatus(request, statusCapability, options?)` | Polls an exchange operation until committed or terminally failed. |
-
-### Graph issuance
-
-| Method | Description |
-| ------ | ----------- |
-| `selectGraphIssuancePolicy(policyId)` | Resolves one current graph issuance policy. |
-| `issueGraphBlindSignature(request, statusCapability)` | Starts a fresh policy-authorized graph blind issuance operation. |
-| `retryGraphBlindSignature(context)` / `retryGraphIssuance(context)` | Retries an already-created graph issuance operation. |
-| `createGraphIssuanceRecoveryContext(...)` | Builds a complete context suitable for durable recovery. |
-| `getGraphIssuanceStatus(context)` | Observes a graph issuance result using persisted recovery context. |
-| `pollGraphIssuanceStatus(context, options?)` | Polls a graph issuance operation until committed or terminally failed. |
-| `graphIssuanceRequestDigest(request)` | Computes the graph issuance request digest. |
-| `graphIssuanceAuthorizationBindingDigest(request)` | Computes the graph issuance authorization binding digest. |
-
-### Token persistence
-
-The `TokenStore` interface (`save`, `load`, `list`, `clear`) lets you persist
-issued tokens across sessions. Two implementations ship with the SDK:
-
-- `MemoryTokenStore` — an in-memory store (not durable across restarts).
-- `StorageTokenStore` — a durable store backed by a `Storage`-like interface
-  (e.g. `localStorage`), configured via `StorageTokenStoreOptions`.
-
-Configure one via `ClientConfig.tokenStore` and access it through
-`client.tokenStore`. The `tokenId(token)` helper returns the stable id (the
-token's `tokenValue`) used to key stored tokens.
-
-## Typed errors
-
-Every failure thrown by the SDK is a subclass of `FreebirdError`, which carries
-a stable machine-readable `code` (`FreebirdErrorCode`) and a generic,
-non-leaky message. Branch on the `code` rather than message text.
-
-| Error | `code` | Meaning |
-| ----- | ------ | ------- |
-| `FreebirdError` | — | Base class for all typed errors. |
-| `DiscoveryError` | `discovery` | Discovery metadata could not be fetched or failed validation. |
-| `VerificationError` | `verification` | A token could not be verified. |
-| `VerifierNotConfiguredError` | `verifier_not_configured` | The client has no verifier endpoint configured. |
-| `InvalidTokenError` | `invalid_token` | The presented token is invalid (subclass of `VerificationError`). |
-| `ReplayedTokenError` | `replayed_token` | The presented token has already been used (subclass of `VerificationError`). |
-| `RateLimitedError` | `rate_limited` | The server rate-limited the request; `retryAfter` is in whole seconds. |
-| `VerifierUnavailableError` | `verifier_unavailable` | The verifier is temporarily unavailable (retryable). |
-| `ExchangeError` | `exchange` | A V2 public bearer exchange operation failed. |
-| `GraphIssuanceError` | `graph_issuance` | A graph issuance operation failed. |
-| `BatchIssuanceError` | `issuance` | One or more tokens in a batch issuance failed; carries `results`, `tokens`, and `failed`. |
-| `BatchIssuanceInterruptedError` | `issuance` | A chunked issuance stopped after completed chunks; carries `completed` and `cause`. |
-| `PollError` | `poll` | Base class for poll-specific errors. |
-| `PollTimeoutError` | `poll` | A polling operation exceeded its `timeoutMs` cap. |
-| `PollAbortedError` | `poll` | A polling operation was cancelled via its `AbortSignal`. |
-
-## Tests against live services
-
-The normal test suite uses protocol mocks. To run the direct service acceptance
-test, set both explicit service URLs:
+The live acceptance test runs V4 and direct V7 issue/check/verify/replay flows
+against explicitly configured services:
 
 ```bash
-FREEBIRD_SDK_ISSUER_URL=https://issuer.example \
-FREEBIRD_SDK_VERIFIER_URL=https://verifier.example \
+FREEBIRD_SDK_ISSUER_URL=http://127.0.0.1:8081 \
+FREEBIRD_SDK_VERIFIER_URL=http://127.0.0.1:8082 \
 npm test -- --run tests/live-service.test.ts
 ```
 
-When either variable is absent, the live test is skipped locally.
-
-## Low-level `crypto` escape hatch
-
-For advanced use cases, the SDK exports a `crypto` namespace with the raw
-protocol primitives, so you can blind/unblind and build/parse token wire
-formats without the client wrapper:
-
-```ts
-import { crypto } from '@flammafex/freebird';
-
-const { blinded, state } = crypto.blind(input);
-const token = crypto.buildRedemptionToken(/* ... */);
-```
-
-Available primitives include:
-
-- VOPRF: `blind`, `finalize`, `buildScopeDigest`, `buildPrivateTokenInput`,
-  `buildRedemptionToken`, `parseRedemptionToken`.
-- Token-key helpers: `tokenKeyIdFromSpki`, `tokenKeyIdToHex`, `tokenKeyIdFromHex`.
-- V5 public bearer: `buildPublicBearerMessage`, `buildPublicBearerPass`,
-  `parsePublicBearerPass`.
-- RSA blind RSA: `rsaBlind`, `rsaUnblind`, `rsaVerify`.
-- V2 HMAC authorization helpers: `buildHmacAuthorizationV2`,
-  `parseHmacAuthorizationV2`, `verifyHmacAuthorizationV2`, and their
-  graph-issuance-qualified aliases (`buildGraphIssuanceHmacAuthorizationV2`,
-  `parseGraphIssuanceHmacAuthorizationV2`,
-  `verifyGraphIssuanceHmacAuthorizationV2`, plus the transcript/tag helpers).
-
-> **Warning:** these are low-level primitives. Prefer the high-level
-> `FreebirdClient` methods unless you have a specific need. Blinding state
-> contains secret material — keep it secure and never persist it.
-
-## Scope
-
-The core `FreebirdClient` is scoped to the **client-side issuance, exchange,
-and verification** flows described above. The following are **out of scope** for
-the core client:
-
-- **Admin operations** — managing issuers, keys, Sybil configuration, and other
-  operator tasks. Use the `freebird-cli` binary or the `admin-ui` instead.
-- **WebAuthn ceremony** — the browser passkey flow used to obtain `web_authn`
-  Sybil proofs. See `docs/webauthn-browser-flow.md`.
-- **Attester interaction** — obtaining `social_graph` proofs requires talking to
-  the external Social Graph Attester service; the core client does not do this.
-- **`/v1/oprf/renew`** — an admin-authenticated, `RegisteredUser`-only endpoint;
-  not exposed by the core client.
-- **`POST /v1/public/graph/replay-authority/probe`** — a verifier-operator-only
-  endpoint; not exposed by the core client.
-
-## Versioning and compatibility
-
-The first public JS SDK release is `0.9.0`, aligned with the Rust workspace
-release for initial publication. After that aligned first release, the JS SDK
-**follows its own independent semver** and is not forced to match Rust release
-numbers.
-
-Instead, each SDK release records the wire-format and API compatibility it was
-built against. See the [CHANGELOG](./CHANGELOG.md) for the compatibility notes
-attached to each release. When upgrading, check the CHANGELOG entry for the
-Rust release your issuer/verifier runs to confirm the SDK speaks the same wire
-format.
+When either URL is absent, the live test is skipped.
 
 ## License
 

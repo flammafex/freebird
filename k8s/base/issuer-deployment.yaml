@@ -19,21 +19,34 @@ data:
   SYBIL_INVITE_EXPIRES: "30d"
   SYBIL_INVITE_AUTOSAVE_INTERVAL: "5m"
   SYBIL_INVITE_BOOTSTRAP_USERS: "admin:100"
-  PUBLIC_BEARER_ENABLE: "true"
-  # V2 exchange/graph issuance are opt-in. When enabled, provision all
-  # referenced graph, history, acknowledgement, metadata, and signer files.
-  PUBLIC_BEARER_EXCHANGE_ENABLE: "false"
-  PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH: "/data/config/public-bearer-exchange-graph-v2.json"
-  PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS: ""
-  PUBLIC_BEARER_EXCHANGE_PUBLIC_HISTORY_PATH: "/data/config/exchange-public-history-v2.json"
-  PUBLIC_BEARER_EXCHANGE_DISABLED_PUBLICATION_ACK_PATHS: ""
-  PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_KEY_PATH: "/data/keys/exchange-receipt-active.key"
-  PUBLIC_BEARER_EXCHANGE_ACTIVE_RECEIPT_METADATA_PATH: "/data/config/exchange-receipt-active.json"
-  PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_KEY_PATHS: ""
-  PUBLIC_BEARER_EXCHANGE_RETAINED_RECEIPT_METADATA_PATHS: ""
-  PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE: "false"
-  PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH: "/data/config/graph-issuance-policy-v2.json"
-  PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION: "hmac_sha256"
+  NATIVE_BEARER_V7_ENABLE: "true"
+  NATIVE_BEARER_V7_SK_PATH: "/data/keys/native_bearer_v7.der"
+  NATIVE_BEARER_V7_METADATA_PATH: "/data/config/native_bearer_v7.json"
+  NATIVE_BEARER_V7_REGISTRY_PATH: "/data/config/native_bearer_v7_registry.json"
+  NATIVE_BEARER_V7_PROFILE_ID: "scarcity/native-bearer/v7"
+  NATIVE_BEARER_V7_ASSET_ID: "USD"
+  NATIVE_BEARER_V7_AMOUNT_MINOR: "1"
+  NATIVE_BEARER_V7_VALIDITY: "30d"
+  # V7 exchange/graph issuance are opt-in. When enabled, provision all
+  # referenced discovery, history, acknowledgement, receipt, policy, and
+  # signer files.
+  NATIVE_EXCHANGE_V7_ENABLE: "false"
+  NATIVE_EXCHANGE_V7_DISCOVERY_PATH: "/data/config/native-exchange-v7-discovery.json"
+  NATIVE_EXCHANGE_V7_RETAINED_DISCOVERY_PATHS: ""
+  NATIVE_EXCHANGE_V7_PUBLIC_HISTORY_PATH: "/data/config/native-exchange-v7-history.json"
+  NATIVE_EXCHANGE_V7_DISABLED_PUBLICATION_ACK_PATHS: ""
+  NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_KEY_PATH: "/data/keys/native-exchange-v7-receipt.key"
+  NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_METADATA_PATH: "/data/config/native-exchange-v7-receipt.json"
+  NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_KEY_PATHS: ""
+  NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_METADATA_PATHS: ""
+  NATIVE_EXCHANGE_V7_RECEIPT_LIFETIME: "1d"
+  NATIVE_EXCHANGE_V7_MAX_BODY_BYTES: "3145728"
+  NATIVE_EXCHANGE_V7_TIMEOUT: "30s"
+  NATIVE_GRAPH_ISSUANCE_V7_ENABLE: "false"
+  NATIVE_GRAPH_ISSUANCE_V7_POLICY_PATH: "/data/config/native-graph-issuance-v7-discovery.json"
+  NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION: "v4_local"
+  NATIVE_GRAPH_ISSUANCE_V7_VERIFIER_ID: "verifier:k8s:v4"
+  NATIVE_GRAPH_ISSUANCE_V7_AUDIENCE: "freebird-native-graph-v7"
 
 ---
 apiVersion: v1
@@ -95,7 +108,7 @@ spec:
           command:
             - sh
             - -c
-            - mkdir -p /data/keys /data/state && chmod 750 /data/*
+             - mkdir -p /data/keys /data/state /data/config && chmod 750 /data/*
           volumeMounts:
             - name: data
               mountPath: /data
@@ -139,19 +152,19 @@ spec:
               value: /data/state/invitations.json
             - name: SYBIL_INVITE_SIGNING_KEY_PATH
               value: /data/keys/invitation_signing_key.bin
-            - name: PUBLIC_BEARER_SK_PATH
-              value: /data/keys/public_bearer_sk.der
-            - name: PUBLIC_BEARER_METADATA_PATH
-              value: /data/keys/public_bearer_metadata.json
-            - name: PUBLIC_BEARER_EXCHANGE_REDIS_URL
+            - name: NATIVE_EXCHANGE_V7_REDIS_URL
               value: redis://:$(REDIS_PASSWORD)@redis:6379
-            - name: PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64
+            - name: NATIVE_BEARER_V7_DESCRIPTOR_ID
               valueFrom:
                 secretKeyRef:
-                  name: graph-issuance-credentials
-                  key: hmac-secret-b64
-                  optional: true
-            - name: PUBLIC_BEARER_GRAPH_ISSUANCE_V4_KEYRING_B64
+                  name: native-bearer-v7-credentials
+                  key: descriptor-id
+            - name: NATIVE_BEARER_V7_TOKEN_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: native-bearer-v7-credentials
+                  key: token-key-id
+            - name: NATIVE_GRAPH_ISSUANCE_V7_V4_KEYRING_B64
               valueFrom:
                 secretKeyRef:
                   name: graph-issuance-credentials

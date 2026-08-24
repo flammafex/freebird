@@ -10,9 +10,6 @@ vi.mock('../src/crypto/voprf.js', () => ({
   tokenKeyIdFromSpki: vi.fn(),
   tokenKeyIdToHex: vi.fn(),
   tokenKeyIdFromHex: vi.fn(),
-  buildPublicBearerMessage: vi.fn(),
-  buildPublicBearerPass: vi.fn(),
-  parsePublicBearerPass: vi.fn(),
 }));
 
 import { FreebirdClient } from '../src/index.js';
@@ -73,27 +70,6 @@ describe('existing SDK issuance, discovery, and verification APIs', () => {
     });
   });
 
-  it('preserves legacy key discovery without exchange metadata', async () => {
-    const metadata = {
-      issuer_id: 'issuer:legacy',
-      current_epoch: 7,
-      valid_epochs: [7, 6],
-      epoch_duration_sec: 86400,
-      voprf: { suite: 'suite', kid: 'kid', pubkey: 'key' },
-      public: [],
-    };
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(json(metadata)));
-
-    const discovered = await new FreebirdClient({
-      issuerUrl: 'https://issuer.example',
-      verifierId: 'verifier:test',
-      audience: 'test',
-    }).getKeyDiscoveryMetadata();
-
-    expect(discovered).toEqual(metadata);
-    expect(discovered.exchange).toBeUndefined();
-  });
-
   it('preserves successful and rejected verifier behavior', async () => {
     const fetchMock = vi
       .fn()
@@ -104,14 +80,14 @@ describe('existing SDK issuance, discovery, and verification APIs', () => {
       issuerUrl: 'https://issuer.example',
       verifierUrl: 'https://verifier.example',
     });
-    const token = { tokenValue: 'token', issuerId: 'issuer:test' };
+    const token = { tokenValue: 'BAU', issuerId: 'issuer:test' };
 
     await expect(client.verifyToken(token)).resolves.toEqual({ ok: true, verified_at: 1 });
     await expect(client.verifyToken(token)).rejects.toMatchObject({ code: 'invalid_token' });
     expect(fetchMock).toHaveBeenNthCalledWith(1, 'https://verifier.example/v1/verify', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token_b64: 'token' }),
+      body: JSON.stringify({ token_b64: 'BAU' }),
     });
   });
 });

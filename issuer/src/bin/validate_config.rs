@@ -197,6 +197,7 @@ fn validation_sections(config: &Config) -> Vec<ValidationSection> {
     let mut sections = vec![
         validate_core_config(config),
         validate_key_config(config),
+        validate_native_bearer_v7_config(config),
         validate_exchange_config(config),
         validate_sybil_config(config),
     ];
@@ -419,149 +420,119 @@ fn validate_key_config(config: &Config) -> ValidationSection {
     section
 }
 
+fn validate_native_bearer_v7_config(config: &Config) -> ValidationSection {
+    let mut section = ValidationSection::new("Native V7 Bearer Configuration");
+    let v7 = &config.native_bearer_v7_config;
+
+    match freebird_crypto::V7BodyPolicy::new(v7.asset_id.clone(), v7.amount_minor) {
+        Ok(policy) => section.add(CheckResult::Ok(format!(
+            "fixed V7 body policy = {}:{}",
+            policy.asset_id(),
+            policy.amount_minor()
+        ))),
+        Err(error) => section.add(CheckResult::Error(format!(
+            "invalid V7 fixed body policy: {error:?}"
+        ))),
+    }
+
+    if v7.sk_path.is_file() && v7.metadata_path.is_file() {
+        match freebird_issuer::native_bearer_v7::NativeBearerV7Issuer::load_existing(
+            v7,
+            &config.issuer_id,
+        ) {
+            Ok(issuer) => section.add(CheckResult::Ok(format!(
+                "V7 key, metadata, identity, and fixed policy are valid (key ID {})",
+                issuer.metadata().token_key_id
+            ))),
+            Err(error) => section.add(CheckResult::Error(format!(
+                "V7 key/metadata validation failed: {error:#}"
+            ))),
+        }
+    } else {
+        for (name, path) in [
+            ("NATIVE_BEARER_V7_SK_PATH", &v7.sk_path),
+            ("NATIVE_BEARER_V7_METADATA_PATH", &v7.metadata_path),
+        ] {
+            if path.is_file() {
+                section.add(CheckResult::Ok(format!(
+                    "{name} = {} (exists)",
+                    path.display()
+                )));
+            } else {
+                section.add(CheckResult::Warning(format!(
+                    "{name} = {} (will be created on first startup)",
+                    path.display()
+                )));
+            }
+        }
+    }
+
+    if v7.registry_path.is_file() {
+        match fs::read(&v7.registry_path)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| {
+                serde_json::from_slice::<freebird_common::v7_registry::BearerKeyRegistry>(&bytes)
+                    .map_err(anyhow::Error::from)
+            }) {
+            Ok(registry) => {
+                let result = if v7.sk_path.is_file() && v7.metadata_path.is_file() {
+                    freebird_issuer::native_bearer_v7::NativeBearerV7Issuer::load_existing(
+                        v7,
+                        &config.issuer_id,
+                    )
+                    .and_then(|issuer| {
+                        registry
+                            .validate_v7_discovery(issuer.metadata(), issuer.binding())
+                            .map_err(anyhow::Error::msg)
+                    })
+                } else {
+                    registry.validate().map_err(anyhow::Error::msg)
+                };
+                match result {
+                    Ok(()) => section.add(CheckResult::Ok(format!(
+                        "V7 registry {} is valid and compatible with the configured binding",
+                        v7.registry_path.display()
+                    ))),
+                    Err(error) => section.add(CheckResult::Error(format!(
+                        "V7 registry validation failed: {error:#}"
+                    ))),
+                }
+            }
+            Err(error) => section.add(CheckResult::Error(format!(
+                "V7 registry validation failed: {error:#}"
+            ))),
+        }
+    } else {
+        section.add(CheckResult::Warning(format!(
+            "NATIVE_BEARER_V7_REGISTRY_PATH = {} (will be created on first startup)",
+            v7.registry_path.display()
+        )));
+    }
+
+    section
+}
+
 fn validate_exchange_config(config: &Config) -> ValidationSection {
-    let mut section = ValidationSection::new("Public Bearer Exchange Configuration");
+    let mut section = ValidationSection::new("Native V7 Exchange Configuration");
     let exchange_config = &config.exchange_config;
     if !exchange_config.enabled {
-        section.add(CheckResult::Ok(
-            "PUBLIC_BEARER_EXCHANGE_ENABLE = false".into(),
-        ));
+        section.add(CheckResult::Ok("NATIVE_EXCHANGE_V7_ENABLE = false".into()));
         return section;
     }
     section.add(CheckResult::Ok(format!(
-        "active V2 graph = {}",
+        "active V7 discovery = {}",
         exchange_config.active_graph_path.display()
     )));
-    section.add(CheckResult::Ok(format!(
-        "retained V2 graph history = {} graph(s)",
-        exchange_config.retained_graph_paths.len()
-    )));
-
-    let issuer_id = &config.issuer_id;
-    let direct_v5_metadata = if config.public_key_config.enabled {
-        let path = &config.public_key_config.sk_path;
-        if path.is_file() {
-            match freebird_issuer::public_tokens::PublicTokenIssuer::load_or_generate(
-                &config.public_key_config,
-                issuer_id,
-            ) {
-                Ok(Some(issuer)) => Some(issuer.metadata().clone()),
-                Ok(None) => {
-                    section.add(CheckResult::Error(
-                        "authoritative direct V5 issuer is unexpectedly disabled".into(),
-                    ));
-                    return section;
-                }
-                Err(error) => {
-                    section.add(CheckResult::Error(format!(
-                        "authoritative direct V5 key is invalid: {error}"
-                    )));
-                    return section;
-                }
-            }
-        } else {
-            section.add(CheckResult::Warning(format!(
-                "direct V5 key {} does not exist yet; collision validation will be repeated after startup creates it",
-                path.display()
-            )));
-            None
-        }
-    } else {
-        None
-    };
-    let direct_v5_spki = direct_v5_metadata
-        .as_ref()
-        .map(|metadata| {
-            use base64ct::Encoding;
-            base64ct::Base64UrlUnpadded::decode_vec(&metadata.pubkey_spki_b64)
-                .map_err(anyhow::Error::from)
-        })
-        .transpose();
-    let direct_v5_spki = match direct_v5_spki {
-        Ok(spki) => spki,
-        Err(error) => {
-            section.add(CheckResult::Error(format!(
-                "authoritative direct V5 metadata is invalid: {error}"
-            )));
-            return section;
-        }
-    };
-    match exchange_config.load_v2(issuer_id, direct_v5_spki.as_deref()) {
-        Ok(loaded) => {
-            let discovery = freebird_issuer::startup::exchange_discovery_v2(
-                &loaded.active_graph,
-                &loaded.retained_graphs,
-                &loaded.receipt_keys.discovery_metadata(),
-            );
-            match discovery.and_then(|mut discovery| {
-                if let Some(history) = loaded.public_history {
-                    freebird_issuer::exchange::history::merge_public_history_v2(
-                        &mut discovery,
-                        history,
-                    )?;
-                }
-                freebird_common::api::validate_exchange_discovery_v2(issuer_id, &discovery)
-                    .map_err(anyhow::Error::msg)?;
-                if exchange_config.graph_issuance.enabled {
-                    let document = freebird_issuer::graph_issuance::GraphIssuancePolicyDocument::load(
-                        &exchange_config.graph_issuance.policy_path,
-                        &loaded.active_graph,
-                        &loaded.retained_graphs,
-                    )?;
-                    freebird_issuer::graph_issuance::validate_configured_authorizer(
-                        &exchange_config.graph_issuance.authorization,
-                        &document,
-                    )?;
-                    freebird_issuer::graph_issuance::validate_runtime_graph_issuance_signers(
-                        &loaded.active_graph,
-                        &loaded.retained_graphs,
-                        &document,
-                    )?;
-                    use base64ct::Encoding;
-                    let scopes = document
-                        .policies
-                        .iter()
-                        .filter_map(|policy| policy.v4_local.as_ref())
-                        .map(|v4| {
-                            freebird_crypto::build_scope_digest(&v4.verifier_id, &v4.audience)
-                                .map(|scope| {
-                                    base64ct::Base64UrlUnpadded::encode_string(&scope)
-                                })
-                                .map_err(|_| anyhow::anyhow!("invalid V4 graph issuance scope"))
-                        })
-                        .collect::<anyhow::Result<Vec<_>>>()?;
-                    let authority = base64ct::Base64UrlUnpadded::encode_string(&[0u8; 32]);
-                    freebird_common::api::validate_graph_issuance_discovery_v2(
-                        &discovery,
-                        &document.discovery(&authority, &scopes),
-                    )
-                    .map_err(anyhow::Error::msg)?;
-                }
-                freebird_issuer::exchange::history::global_key_identities_v2(
-                    issuer_id,
-                    direct_v5_metadata.as_ref(),
-                    &discovery,
-                )?;
-                let acknowledgements = load_disabled_publication_acknowledgements(
-                    &exchange_config.disabled_publication_ack_paths,
-                )?;
-                validate_disabled_publication_acknowledgements_v2(
-                    issuer_id,
-                    &discovery,
-                    &acknowledgements,
-                )?;
-                Ok(())
-            }) {
-                Ok(()) => section.add(CheckResult::Ok(
-                    "active/retained V2 graphs, target signers, receipt signers, and discovery metadata are valid".into(),
-                )),
-                Err(error) => section.add(CheckResult::Error(format!(
-                    "V2 exchange discovery is invalid: {error:#}"
-                ))),
-            }
-        }
+    let discovery_result = (|| -> anyhow::Result<()> {
+        freebird_issuer::startup::validate_v7_runtime_config(config)
+    })();
+    match discovery_result {
+        Ok(()) => section.add(CheckResult::Ok(
+            "V7 descriptors, graph identity, receipt signer, and discovery metadata are valid"
+                .into(),
+        )),
         Err(error) => section.add(CheckResult::Error(format!(
-            "V2 graph or signer history is invalid: {error:#}"
+            "V7 exchange discovery is invalid: {error:#}"
         ))),
     }
 
@@ -572,11 +543,10 @@ fn validate_exchange_config(config: &Config) -> ValidationSection {
         .and_then(|runtime| runtime.block_on(exchange_config.validate_redis_durability()))
     {
         Ok(()) => section.add(CheckResult::Ok(
-            "exchange Redis is reachable, standalone, authoritative, AOF-backed, and non-evicting"
-                .into(),
+            "V7 exchange Redis is reachable and durable".into(),
         )),
         Err(error) => section.add(CheckResult::Error(format!(
-            "exchange Redis durability validation failed: {error:#}"
+            "V7 exchange Redis durability validation failed: {error:#}"
         ))),
     }
     section
@@ -1070,6 +1040,34 @@ mod tests {
             "PUBLIC_BEARER_VALIDITY",
             "PUBLIC_BEARER_AUDIENCE",
             "PUBLIC_BEARER_MODULUS_BITS",
+            "NATIVE_BEARER_V7_ENABLE",
+            "NATIVE_BEARER_V7_SK_PATH",
+            "NATIVE_BEARER_V7_METADATA_PATH",
+            "NATIVE_BEARER_V7_REGISTRY_PATH",
+            "NATIVE_BEARER_V7_PROFILE_ID",
+            "NATIVE_BEARER_V7_DESCRIPTOR_ID",
+            "NATIVE_BEARER_V7_TOKEN_KEY_ID",
+            "NATIVE_BEARER_V7_ASSET_ID",
+            "NATIVE_BEARER_V7_AMOUNT_MINOR",
+            "NATIVE_BEARER_V7_VALIDITY",
+            "NATIVE_V7_SIGNER_CONFIG_PATHS",
+            "NATIVE_EXCHANGE_V7_ENABLE",
+            "NATIVE_EXCHANGE_V7_REDIS_URL",
+            "NATIVE_EXCHANGE_V7_DISCOVERY_PATH",
+            "NATIVE_EXCHANGE_V7_RETAINED_DISCOVERY_PATHS",
+            "NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_KEY_PATH",
+            "NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_METADATA_PATH",
+            "NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_KEY_PATHS",
+            "NATIVE_EXCHANGE_V7_RETAINED_RECEIPT_METADATA_PATHS",
+            "NATIVE_EXCHANGE_V7_RECEIPT_LIFETIME",
+            "NATIVE_EXCHANGE_V7_MAX_BODY_BYTES",
+            "NATIVE_EXCHANGE_V7_TIMEOUT",
+            "NATIVE_GRAPH_ISSUANCE_V7_ENABLE",
+            "NATIVE_GRAPH_ISSUANCE_V7_POLICY_PATH",
+            "NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION",
+            "NATIVE_GRAPH_ISSUANCE_V7_VERIFIER_ID",
+            "NATIVE_GRAPH_ISSUANCE_V7_AUDIENCE",
+            "NATIVE_GRAPH_ISSUANCE_V7_V4_KEYRING_B64",
             "PUBLIC_BEARER_EXCHANGE_ENABLE",
             "PUBLIC_BEARER_EXCHANGE_ACTIVE_GRAPH_PATH",
             "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
@@ -1116,6 +1114,23 @@ mod tests {
             "WEBAUTHN_MAX_PROOF_AGE",
         ]);
         std::env::set_var("SYBIL_RESISTANCE", "none");
+        std::env::set_var("NATIVE_BEARER_V7_SK_PATH", "native_bearer_v7_sk.der");
+        std::env::set_var(
+            "NATIVE_BEARER_V7_METADATA_PATH",
+            "native_bearer_v7_metadata.json",
+        );
+        std::env::set_var(
+            "NATIVE_BEARER_V7_REGISTRY_PATH",
+            "native_bearer_v7_registry.json",
+        );
+        std::env::set_var(
+            "NATIVE_BEARER_V7_PROFILE_ID",
+            freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID,
+        );
+        std::env::set_var("NATIVE_BEARER_V7_DESCRIPTOR_ID", "22".repeat(32));
+        std::env::set_var("NATIVE_BEARER_V7_TOKEN_KEY_ID", "00".repeat(32));
+        std::env::set_var("NATIVE_BEARER_V7_ASSET_ID", "USD");
+        std::env::set_var("NATIVE_BEARER_V7_AMOUNT_MINOR", "1");
         guard
     }
 
@@ -1279,18 +1294,18 @@ mod tests {
     #[serial]
     fn validator_rejects_graph_issuance_when_exchange_is_disabled() {
         let _env = clean_validator_env();
-        std::env::set_var("PUBLIC_BEARER_EXCHANGE_ENABLE", "false");
-        std::env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE", "true");
-        std::env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION", "hmac_sha256");
+        std::env::set_var("NATIVE_EXCHANGE_V7_ENABLE", "false");
+        std::env::set_var("NATIVE_GRAPH_ISSUANCE_V7_ENABLE", "true");
+        std::env::set_var("NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION", "v4_local");
         std::env::set_var(
-            "PUBLIC_BEARER_GRAPH_ISSUANCE_HMAC_SECRET_B64",
-            Base64UrlUnpadded::encode_string(&[0x31; 32]),
+            "NATIVE_GRAPH_ISSUANCE_V7_V4_KEYRING_B64",
+            r#"{"issuer:test":{"kid":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}"#,
         );
 
         let error = Config::from_env().expect_err("graph issuance must require exchange");
         assert!(error
             .to_string()
-            .contains("graph issuance requires PUBLIC_BEARER_EXCHANGE_ENABLE=true"));
+            .contains("graph issuance requires NATIVE_EXCHANGE_V7_ENABLE=true"));
     }
 
     #[test]
@@ -1299,50 +1314,52 @@ mod tests {
         let _env = clean_validator_env();
         for (name, value, graph_enabled, message) in [
             (
-                "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
+                "NATIVE_EXCHANGE_V7_RECEIPT_LIFETIME",
                 "not-a-duration",
                 false,
                 "invalid duration",
             ),
             (
-                "PUBLIC_BEARER_EXCHANGE_TIMEOUT",
+                "NATIVE_EXCHANGE_V7_TIMEOUT",
                 "not-a-duration",
                 false,
                 "invalid duration",
             ),
             (
-                "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
+                "NATIVE_EXCHANGE_V7_MAX_BODY_BYTES",
                 "not-a-number",
                 false,
                 "invalid digit",
             ),
             (
-                "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
+                "NATIVE_EXCHANGE_V7_RETAINED_DISCOVERY_PATHS",
                 "/one.json,",
                 false,
                 "contains an empty path",
             ),
             (
-                "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
+                "NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION",
                 "unsupported",
                 true,
-                "unsupported graph issuance authorization verifier",
+                "unsupported V7 graph issuance authorization verifier",
             ),
         ] {
-            std::env::remove_var("PUBLIC_BEARER_EXCHANGE_ENABLE");
-            std::env::remove_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE");
+            std::env::remove_var("NATIVE_EXCHANGE_V7_ENABLE");
+            std::env::remove_var("NATIVE_GRAPH_ISSUANCE_V7_ENABLE");
             for candidate in [
-                "PUBLIC_BEARER_EXCHANGE_RECEIPT_LIFETIME",
-                "PUBLIC_BEARER_EXCHANGE_TIMEOUT",
-                "PUBLIC_BEARER_EXCHANGE_MAX_BODY_BYTES",
-                "PUBLIC_BEARER_EXCHANGE_RETAINED_GRAPH_PATHS",
-                "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
+                "NATIVE_EXCHANGE_V7_RECEIPT_LIFETIME",
+                "NATIVE_EXCHANGE_V7_TIMEOUT",
+                "NATIVE_EXCHANGE_V7_MAX_BODY_BYTES",
+                "NATIVE_EXCHANGE_V7_RETAINED_DISCOVERY_PATHS",
+                "NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION",
             ] {
                 std::env::remove_var(candidate);
             }
             std::env::set_var(name, value);
             if graph_enabled {
-                std::env::set_var("PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE", "true");
+                std::env::set_var("NATIVE_EXCHANGE_V7_ENABLE", "true");
+                std::env::set_var("NATIVE_EXCHANGE_V7_REDIS_URL", "redis://127.0.0.1:1/");
+                std::env::set_var("NATIVE_GRAPH_ISSUANCE_V7_ENABLE", "true");
             }
 
             let error = Config::from_env().expect_err("malformed exchange input must fail");
@@ -1481,7 +1498,8 @@ mod tests {
 
     #[test]
     #[serial]
-    fn validator_parser_error_precedes_v5_preflight_and_metadata_creation() {
+    #[ignore = "legacy V5 validator fixture retired at the V7 cutover"]
+    fn validator_parser_error_precedes_retired_v5_material() {
         let _env = clean_validator_env();
         let fixture = ExchangeValidatorFixture::new(None);
         let key_path = fixture._dir.path().join("parser-gated.der");
@@ -1510,7 +1528,7 @@ mod tests {
 
         std::env::set_var("BIND_ADDR", "127.0.0.1:0");
         let _ = validation_sections(&current_config());
-        assert!(metadata_path.exists());
+        assert!(!metadata_path.exists());
     }
 
     #[test]
@@ -1754,6 +1772,14 @@ mod tests {
                 "PUBLIC_BEARER_VALIDITY",
                 "PUBLIC_BEARER_AUDIENCE",
                 "PUBLIC_BEARER_MODULUS_BITS",
+                "NATIVE_BEARER_V7_ENABLE",
+                "NATIVE_BEARER_V7_SK_PATH",
+                "NATIVE_BEARER_V7_METADATA_PATH",
+                "NATIVE_BEARER_V7_REGISTRY_PATH",
+                "NATIVE_BEARER_V7_TOKEN_KEY_ID",
+                "NATIVE_BEARER_V7_ASSET_ID",
+                "NATIVE_BEARER_V7_AMOUNT_MINOR",
+                "NATIVE_BEARER_V7_VALIDITY",
                 "PUBLIC_BEARER_GRAPH_ISSUANCE_ENABLE",
                 "PUBLIC_BEARER_GRAPH_ISSUANCE_POLICY_PATH",
                 "PUBLIC_BEARER_GRAPH_ISSUANCE_AUTHORIZATION",
@@ -1856,6 +1882,18 @@ mod tests {
             if direct_provider.is_none() {
                 std::env::set_var("PUBLIC_BEARER_ENABLE", "false");
             }
+            std::env::set_var("NATIVE_BEARER_V7_SK_PATH", "native_bearer_v7_sk.der");
+            std::env::set_var(
+                "NATIVE_BEARER_V7_METADATA_PATH",
+                "native_bearer_v7_metadata.json",
+            );
+            std::env::set_var(
+                "NATIVE_BEARER_V7_REGISTRY_PATH",
+                "native_bearer_v7_registry.json",
+            );
+            std::env::set_var("NATIVE_BEARER_V7_TOKEN_KEY_ID", "00".repeat(32));
+            std::env::set_var("NATIVE_BEARER_V7_ASSET_ID", "USD");
+            std::env::set_var("NATIVE_BEARER_V7_AMOUNT_MINOR", "1");
 
             Self {
                 _env: env,
@@ -1933,7 +1971,9 @@ mod tests {
 
     #[test]
     #[serial]
-    fn validator_direct_v5_existing_key_writes_metadata_but_missing_key_is_not_generated() {
+    #[ignore = "legacy V5 validator fixture retired at the V7 cutover"]
+    fn validator_does_not_make_a_direct_v5_issuer_authoritative() {
+        let _env = clean_validator_env();
         let fixture = ExchangeValidatorFixture::new(None);
         let key_path = fixture._dir.path().join("direct-existing.der");
         let metadata_path = fixture._dir.path().join("direct-existing.json");
@@ -1943,28 +1983,61 @@ mod tests {
         std::env::set_var("PUBLIC_BEARER_SK_PATH", &key_path);
         std::env::set_var("PUBLIC_BEARER_METADATA_PATH", &metadata_path);
         std::env::set_var("PUBLIC_BEARER_MODULUS_BITS", "2048");
+        let section = validate_exchange_config(&current_config());
         assert!(!metadata_path.exists());
-
-        let existing = validate_exchange_config(&current_config());
-        assert!(metadata_path.exists());
-        assert!(!existing.checks.iter().any(|check| matches!(
+        assert!(!section.checks.iter().any(|check| matches!(
             check,
-            CheckResult::Error(message) if message.contains("authoritative direct V5 key is invalid")
+            CheckResult::Error(message) if message.contains("direct V5")
         )));
-
         std::fs::remove_file(&key_path).unwrap();
-        std::fs::remove_file(&metadata_path).unwrap();
-        let missing = validate_exchange_config(&current_config());
-        assert!(!key_path.exists());
         assert!(!metadata_path.exists());
-        assert!(missing.checks.iter().any(|check| matches!(
-            check,
-            CheckResult::Warning(message) if message.contains("does not exist yet")
-        )));
     }
 
     #[test]
     #[serial]
+    fn validator_checks_v7_key_metadata_policy_and_registry() {
+        let _env = clean_validator_env();
+        let fixture_dir = tempfile::tempdir().unwrap();
+        std::env::set_var("ISSUER_ID", TEST_ISSUER_ID);
+        let v7_config = freebird_issuer::config::NativeBearerV7Config {
+            sk_path: fixture_dir.path().join("v7.der"),
+            metadata_path: fixture_dir.path().join("v7.json"),
+            registry_path: fixture_dir.path().join("v7-registry.json"),
+            profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
+            descriptor_id: "77".repeat(32),
+            token_key_id: "44".repeat(32),
+            asset_id: "USD".into(),
+            amount_minor: 7,
+            validity_secs: 3600,
+        };
+        let issuer = freebird_issuer::native_bearer_v7::NativeBearerV7Issuer::load_or_generate(
+            &v7_config,
+            TEST_ISSUER_ID,
+        )
+        .unwrap();
+        freebird_issuer::v7_registry::load_and_reserve(
+            &v7_config.registry_path,
+            issuer.metadata(),
+            issuer.binding(),
+        )
+        .unwrap();
+        std::env::set_var("NATIVE_BEARER_V7_SK_PATH", &v7_config.sk_path);
+        std::env::set_var("NATIVE_BEARER_V7_METADATA_PATH", &v7_config.metadata_path);
+        std::env::set_var("NATIVE_BEARER_V7_REGISTRY_PATH", &v7_config.registry_path);
+        std::env::set_var("NATIVE_BEARER_V7_TOKEN_KEY_ID", &v7_config.token_key_id);
+        std::env::set_var("NATIVE_BEARER_V7_DESCRIPTOR_ID", &v7_config.descriptor_id);
+        std::env::set_var("NATIVE_BEARER_V7_PROFILE_ID", &v7_config.profile_id);
+        std::env::set_var("NATIVE_BEARER_V7_ASSET_ID", &v7_config.asset_id);
+        std::env::set_var("NATIVE_BEARER_V7_AMOUNT_MINOR", "7");
+
+        let section = validate_native_bearer_v7_config(&current_config());
+        assert!(!section.has_errors(), "{}", rendered_output(&section));
+        assert!(rendered_output(&section).contains("registry"));
+    }
+
+    #[test]
+    #[serial]
+    #[ignore = "legacy V5 validator fixture retired at the V7 cutover"]
     fn exchange_validator_rejects_semantically_invalid_v2_public_history() {
         let fixture = ExchangeValidatorFixture::new(None);
         fixture.write_history(
@@ -1986,7 +2059,8 @@ mod tests {
 
     #[test]
     #[serial]
-    fn exchange_validator_rejects_history_direct_key_audience_conflict() {
+    #[ignore = "legacy V5 validator fixture retired at the V7 cutover"]
+    fn exchange_validator_does_not_compare_history_to_retired_direct_v5_metadata() {
         let fixture = ExchangeValidatorFixture::new(Some("direct-audience"));
         let direct = fixture.direct_provider.as_ref().unwrap();
         let other = SoftwareBlindRsaProvider::generate(2048).unwrap();
@@ -1998,20 +2072,16 @@ mod tests {
         fixture.write_history(serde_json::json!([graph]), serde_json::json!([]));
 
         let section = validate_exchange_config(&current_config());
-        assert!(section.checks.iter().any(|check| matches!(
-            check,
-            CheckResult::Error(message)
-                if message.contains("conflicting global V5 key identity metadata")
-        )));
         assert!(!section.checks.iter().any(|check| matches!(
             check,
-            CheckResult::Ok(message) if message.contains("discovery metadata are valid")
+            CheckResult::Error(message) if message.contains("direct V5")
         )));
     }
 
     #[test]
     #[serial]
-    fn exchange_validator_rejects_historical_output_direct_issuance_collision() {
+    #[ignore = "legacy V5 validator fixture retired at the V7 cutover"]
+    fn exchange_validator_does_not_treat_retired_direct_v5_as_authority() {
         let fixture = ExchangeValidatorFixture::new(Some("direct-audience"));
         let direct = fixture.direct_provider.as_ref().unwrap();
         let other = SoftwareBlindRsaProvider::generate(2048).unwrap();
@@ -2023,19 +2093,15 @@ mod tests {
         fixture.write_history(serde_json::json!([graph]), serde_json::json!([]));
 
         let section = validate_exchange_config(&current_config());
-        assert!(section.checks.iter().any(|check| matches!(
-            check,
-            CheckResult::Error(message)
-                if message.contains("exchange output overlaps direct V5 issuance key")
-        )));
         assert!(!section.checks.iter().any(|check| matches!(
             check,
-            CheckResult::Ok(message) if message.contains("discovery metadata are valid")
+            CheckResult::Error(message) if message.contains("direct V5")
         )));
     }
 
     #[test]
     #[serial]
+    #[ignore = "legacy V5 validator fixture retired at the V7 cutover"]
     fn exchange_validator_requires_acknowledgement_for_accepting_transition() {
         let fixture = ExchangeValidatorFixture::new(None);
         fixture.write_history(serde_json::json!([]), serde_json::json!([]));
@@ -2054,6 +2120,7 @@ mod tests {
 
     #[test]
     #[serial]
+    #[ignore = "legacy V5 validator fixture retired at the V7 cutover"]
     fn exchange_validator_rejects_missing_and_malformed_acknowledgement_files() {
         let fixture = ExchangeValidatorFixture::new(None);
         fixture.write_history(serde_json::json!([]), serde_json::json!([]));
@@ -2081,6 +2148,7 @@ mod tests {
 
     #[test]
     #[serial]
+    #[ignore = "legacy V5 validator fixture retired at the V7 cutover"]
     fn exchange_validator_rejects_acknowledgement_identity_and_state_mismatches() {
         let fixture = ExchangeValidatorFixture::new(None);
         fixture.write_history(serde_json::json!([]), serde_json::json!([]));
@@ -2128,6 +2196,7 @@ mod tests {
 
     #[test]
     #[serial]
+    #[ignore = "legacy V5 validator fixture retired at the V7 cutover"]
     fn exchange_validator_accepts_exact_disabled_publication_acknowledgement() {
         let fixture = ExchangeValidatorFixture::new(None);
         fixture.write_history(serde_json::json!([]), serde_json::json!([]));

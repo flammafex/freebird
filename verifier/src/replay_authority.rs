@@ -29,6 +29,7 @@ use tracing::{debug, warn};
 use crate::store::SpendStore;
 
 pub const REPLAY_AUTHORITY_PROBE_ROUTE: &str = "/v1/public/graph/replay-authority/probe";
+pub const REPLAY_AUTHORITY_DISCOVERY_ROUTE: &str = "/.well-known/replay-authority";
 pub const REPLAY_AUTHORITY_PROBE_INTERVAL: Duration = Duration::from_secs(30);
 pub const REPLAY_AUTHORITY_MAX_STALENESS: Duration = Duration::from_secs(60);
 pub const REPLAY_AUTHORITY_PROBE_TTL: Duration = Duration::from_secs(30);
@@ -525,9 +526,7 @@ impl ReplayAuthorityHealth {
 
 fn discovery_url(raw: &str) -> Result<reqwest::Url> {
     let mut url = reqwest::Url::parse(raw).context("parse graph issuer URL")?;
-    if !url.path().ends_with("/.well-known/keys") {
-        url.set_path("/.well-known/keys");
-    }
+    url.set_path(REPLAY_AUTHORITY_DISCOVERY_ROUTE);
     url.set_query(None);
     url.set_fragment(None);
     Ok(url)
@@ -755,7 +754,7 @@ mod tests {
             discovery_url("https://issuer.example/custom?x=1")
                 .unwrap()
                 .path(),
-            "/.well-known/keys"
+            REPLAY_AUTHORITY_DISCOVERY_ROUTE
         );
         assert_eq!(
             probe_url("https://issuer.example/.well-known/issuer#fragment")

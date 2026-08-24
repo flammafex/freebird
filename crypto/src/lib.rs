@@ -55,6 +55,19 @@ use subtle::ConstantTimeEq;
 pub mod voprf;
 use voprf as v;
 
+// Native amount-bearing V7 body. This is deliberately separate from the V5
+// public bearer framing above.
+pub mod public_bearer_v7;
+pub use public_bearer_v7::{
+    blind_v7, build_native_bearer_v7_token, finalize_v7, parse_native_bearer_v7_token,
+    serialize_native_bearer_v7_token, v7_artifact_digest, validate_public_bearer_spki_v7,
+    verify_native_bearer_v7_token, verify_v7, NativeBearerV7Token, PublicBearerV7Body,
+    V7ApplicationMessage, V7BlindMessage, V7BlindSignature, V7BlindState, V7BodyPolicy,
+    V7KeyIdentity, V7MessageRandomizer, V7PublicKeyBinding, V7Signature, V7TokenKeyId,
+    V7_ARTIFACT_DOMAIN, V7_ENVELOPE_VERSION, V7_RESERVED_ENVELOPE_VERSION,
+    V7_RETIRED_ENVELOPE_VERSION, V7_RFC9474_VARIANT,
+};
+
 // Cryptographic provider abstraction for software and HSM backends
 pub mod provider;
 

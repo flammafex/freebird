@@ -1,8 +1,8 @@
 # Client Sybil Proofs
 
-Freebird issuance accepts an optional `sybil_proof` object on V4 and V5 issuance
-requests. If the issuer is configured with a Sybil mode, issuance requires a
-matching proof.
+Freebird issuance accepts an optional `sybil_proof` object on V4 and V7 native
+bearer issuance requests. If the issuer is configured with a Sybil mode,
+issuance requires a matching proof. V5 public bearer issuance is retired.
 
 The local `freebird-interface` binary can attach proofs in two ways:
 
@@ -30,6 +30,11 @@ freebird:issue:v1:<issuer_id>:<blinded_element_b64>
 
 The interface computes this automatically when `--pow-difficulty` or
 `FREEBIRD_POW_DIFFICULTY` is set.
+
+V7 native bearer issuance uses the same request-bound proof model, but the
+binding is the exact canonical V7 request body and route. A client must mine
+against the bytes it sends to `/v7/native-bearer/issue`; changing the body,
+token-key ID, or V7 descriptor requires a fresh proof.
 
 ## JSON Proof Input
 

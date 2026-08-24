@@ -1,120 +1,45 @@
-/**
- * Freebird SDK
- * Anonymous authentication using VOPRF (Verifiable Oblivious Pseudorandom Function).
- *
- * @module @flammafex/freebird
- */
+/** @module @flammafex/freebird */
 
-// Export the main client class
 export { FreebirdClient } from './client.js';
 
-// Export protocol utilities for V2 exchange request assembly
-export {
-  generateOperationId,
-  generateStatusCapability,
-  exchangePasses,
-  prepareExchangePasses,
-  finalizeExchangePasses,
-} from './client/protocol.js';
-export type { ExchangePassesOptions } from './client/protocol.js';
-
-// Export the typed error hierarchy
 export {
   FreebirdError,
   DiscoveryError,
   StalePublicKeyError,
   VerificationError,
   VerifierNotConfiguredError,
-  ExchangeError,
-  GraphIssuanceError,
   RateLimitedError,
   VerifierUnavailableError,
   InvalidTokenError,
   ReplayedTokenError,
-  PollError,
-  PollTimeoutError,
-  PollAbortedError,
   BatchIssuanceError,
   BatchIssuanceInterruptedError,
 } from './errors.js';
-export type { FreebirdErrorCode } from './errors.js';
+export type { PublicFreebirdErrorCode as FreebirdErrorCode } from './errors.js';
 
-// Export token persistence and polling helpers
-export {
-  MemoryTokenStore,
-  StorageTokenStore,
-  tokenId,
-} from './client/token_store.js';
+export { MemoryTokenStore, StorageTokenStore, tokenId } from './client/token_store.js';
 export type { StorageTokenStoreOptions } from './client/token_store.js';
-export {
-  pollExchangeStatus,
-  pollGraphIssuanceStatus,
-  pollUntilTerminal,
-} from './client/poll.js';
-export type { PollOptions } from './client/poll.js';
-export {
-  serializeGraphIssuanceRecoveryContext,
-  deserializeGraphIssuanceRecoveryContext,
-} from './client/graph_recovery.js';
 
-// Proof-of-Work Sybil helpers (client-generable PoW only — never the
-// server-keyed HMAC variants).
 export {
   generateProofOfWork,
   verifyPow,
   buildIssueBinding,
-  buildPublicIssueBinding,
   buildRenewBinding,
   buildBatchBinding,
+  buildNativeBearerV7IssueBinding,
+  buildNativeBearerV7BatchBinding,
 } from './client/sybil.js';
 
-// Export types needed for configuration and usage
 export type {
   ClientConfig,
   IssuerMetadata,
-  KeyDiscoveryMetadata,
-  PublicKeyInfo,
   VerifierMetadata,
   IssueRequest,
   IssueResponse,
-  PublicIssueRequest,
-  PublicIssueResponse,
-  PublicIssueErrorResponse,
   BatchIssueReq,
   BatchIssueResp,
   TokenResult,
-  PublicBatchIssueReq,
-  PublicBatchIssueResp,
   IssueTokensOptions,
-  IssuePublicTokensOptions,
-  IssuePublicTokenForCurrentKeyOptions,
-  IssuePublicTokensForCurrentKeyOptions,
-  ExchangeSlot,
-  ExchangeRequestSource,
-  ExchangeRequestOutput,
-  ExchangeRequest,
-  ExchangeResultOutput,
-  ExchangeResult,
-  ExchangeReceipt,
-  ExchangeSuccessResponse,
-  ExchangeReceiptKeyInfo,
-  ExchangeTargetKeysetInfo,
-  ExchangeDescriptorInfo,
-  ExchangeDiscoveryMetadata,
-  ExchangeErrorCode,
-  ExchangePendingResponse,
-  ExchangeErrorResponse,
-  ExchangeCommittedOutcome,
-  ExchangePendingOutcome,
-  ExchangeErrorOutcome,
-  ExchangeOutcome,
-  GraphIssuancePolicyInfo,
-  GraphIssuanceDiscoveryMetadata,
-  GraphIssuanceReplayAuthorityDiscovery,
-  GraphIssuanceRequest,
-  GraphIssuanceResult,
-  GraphIssuanceOutcome,
-  GraphIssuanceRecoveryContext,
   FreebirdToken,
   TokenStore,
   SybilProof,
@@ -126,24 +51,43 @@ export type {
   BatchVerifyReq,
   VerifyResult,
   BatchVerifyResp,
-  PublicBearerPass,
-  RsaBlindState,
-  PreparedExchange,
-  PreparedExchangeOutput,
-  FinalizedExchangeOutput,
-  IssuePublicTokenOptions,
   SybilConfigSummary,
   SybilModeSettings,
   TrustLevelSummary,
-  // Export internal types that might be useful for debugging
-  BlindState
+  BlindState,
+  V7CanonicalId,
+  V7TokenKeyId,
+  V7DescriptorId,
+  V7SpkiFingerprint,
+  V7Bytes32,
+  V7OwnerCommitment,
+  V7Nonce,
+  V7Nullifier,
+  V7MessageRandomizer,
+  V7Amount,
+  V7Raw384,
+  V7KeyIdentity,
+  V7KeyBinding,
+  V7Body,
+  V7Token,
+  V7BlindState,
+  V7DirectBinding,
+  V7VoprfKeyInfo,
+  V7NativeBearerKeyInfo,
+  V7DirectKeyDiscovery,
+  V7DirectRegistry,
+  V7DirectRegistryEntry,
 } from './types.js';
+export type { V7BodyInput } from './crypto/native_bearer_v7.js';
+export type {
+  NativeBearerV7IssueOptions,
+  NativeBearerV7BatchIssueOptions,
+} from './client/native_bearer_v7.js';
 
-// Optionally export low-level crypto for advanced use cases
-// (e.g. if a user wants to manually blind/unblind without the client wrapper)
 import * as voprf from './crypto/voprf.js';
-import * as graphIssuance from './crypto/graph_issuance.js';
-import * as rsa from './crypto/rsa.js';
+import * as nativeBearerV7 from './crypto/native_bearer_v7.js';
+
+/** Low-level V4 and direct V7 cryptographic helpers. */
 export const crypto = {
   blind: voprf.blind,
   finalize: voprf.finalize,
@@ -151,40 +95,19 @@ export const crypto = {
   buildPrivateTokenInput: voprf.buildPrivateTokenInput,
   buildRedemptionToken: voprf.buildRedemptionToken,
   parseRedemptionToken: voprf.parseRedemptionToken,
-  tokenKeyIdFromSpki: voprf.tokenKeyIdFromSpki,
-  tokenKeyIdToHex: voprf.tokenKeyIdToHex,
-  tokenKeyIdFromHex: voprf.tokenKeyIdFromHex,
-  buildPublicBearerMessage: voprf.buildPublicBearerMessage,
-  buildPublicBearerPass: voprf.buildPublicBearerPass,
-  parsePublicBearerPass: voprf.parsePublicBearerPass,
-  rsaBlind: rsa.rsaBlind,
-  rsaUnblind: rsa.rsaUnblind,
-  rsaVerify: rsa.rsaVerify,
-  graphIssuanceHmacAuthorizationTranscriptV2:
-    graphIssuance.graphIssuanceHmacAuthorizationTranscriptV2,
-  graphIssuanceHmacAuthorizationTagV2: graphIssuance.graphIssuanceHmacAuthorizationTagV2,
-  buildGraphIssuanceHmacAuthorizationV2:
-    graphIssuance.buildGraphIssuanceHmacAuthorizationV2,
-  parseGraphIssuanceHmacAuthorizationV2:
-    graphIssuance.parseGraphIssuanceHmacAuthorizationV2,
-  verifyGraphIssuanceHmacAuthorizationV2:
-    graphIssuance.verifyGraphIssuanceHmacAuthorizationV2,
-  hmacAuthorizationTranscriptV2: graphIssuance.hmacAuthorizationTranscriptV2,
-  hmacAuthorizationTagV2: graphIssuance.hmacAuthorizationTagV2,
-  buildHmacAuthorizationV2: graphIssuance.buildHmacAuthorizationV2,
-  parseHmacAuthorizationV2: graphIssuance.parseHmacAuthorizationV2,
-  verifyHmacAuthorizationV2: graphIssuance.verifyHmacAuthorizationV2,
+  nativeBearerV7: {
+    bindingFromV7Discovery: nativeBearerV7.bindingFromV7Discovery,
+    blindV7: nativeBearerV7.blindV7,
+    buildV7Body: nativeBearerV7.buildV7Body,
+    deriveV7Nullifier: nativeBearerV7.deriveV7Nullifier,
+    directBindingFromDiscovery: nativeBearerV7.directBindingFromDiscovery,
+    finalizeV7: nativeBearerV7.finalizeV7,
+    parseV7Body: nativeBearerV7.parseV7Body,
+    parseV7Token: nativeBearerV7.parseV7Token,
+    serializeV7Token: nativeBearerV7.serializeV7Token,
+    v7ApplicationDigest: nativeBearerV7.v7ApplicationDigest,
+    v7ArtifactDigest: nativeBearerV7.v7ArtifactDigest,
+    v7BodyTranscript: nativeBearerV7.v7BodyTranscript,
+    verifyV7Token: nativeBearerV7.verifyV7Token,
+  },
 };
-
-export {
-  graphIssuanceHmacAuthorizationTranscriptV2,
-  graphIssuanceHmacAuthorizationTagV2,
-  buildGraphIssuanceHmacAuthorizationV2,
-  parseGraphIssuanceHmacAuthorizationV2,
-  verifyGraphIssuanceHmacAuthorizationV2,
-  hmacAuthorizationTranscriptV2,
-  hmacAuthorizationTagV2,
-  buildHmacAuthorizationV2,
-  parseHmacAuthorizationV2,
-  verifyHmacAuthorizationV2,
-} from './crypto/graph_issuance.js';

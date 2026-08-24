@@ -12,7 +12,7 @@ import type {
   KeyDiscoveryMetadata,
   VerifierMetadata,
 } from '../types.js';
-import type { ClientState } from './state.js';
+import { pinIssuerIdentity, type ClientState } from './state.js';
 import { DiscoveryError, VerifierNotConfiguredError } from '../errors.js';
 import {
   ascii,
@@ -68,7 +68,10 @@ export async function init(state: ClientState): Promise<void> {
  * document whenever it is available.
  */
 export async function getIssuerMetadata(state: ClientState): Promise<IssuerMetadata> {
-  if (state.metadata) return state.metadata;
+  if (state.metadata) {
+    pinIssuerIdentity(state, state.metadata.issuer_id);
+    return state.metadata;
+  }
 
   const url = `${state.config.issuerUrl}/.well-known/issuer`;
   const res = await (state.config.fetch ?? fetch)(url);
@@ -85,6 +88,7 @@ export async function getIssuerMetadata(state: ClientState): Promise<IssuerMetad
   // fetch implementation.
   if ('current_epoch' in body && Array.isArray(body.public) && body.voprf) {
     if (typeof body.issuer_id !== 'string') throw new DiscoveryError('Invalid issuer metadata');
+    pinIssuerIdentity(state, body.issuer_id);
     state.keyDiscoveryMetadata = body as unknown as KeyDiscoveryMetadata;
     state.keyDiscoveryMetadataFetchedAt = Date.now();
     state.metadata = {
@@ -97,14 +101,21 @@ export async function getIssuerMetadata(state: ClientState): Promise<IssuerMetad
   if (typeof body.issuer_id !== 'string' || typeof body.voprf !== 'object' || body.voprf === null) {
     throw new DiscoveryError('Invalid issuer metadata');
   }
+  pinIssuerIdentity(state, body.issuer_id);
   state.metadata = body as unknown as IssuerMetadata;
   return state.metadata;
 }
 
 /** Forces a fresh fetch of issuer requirements and identity metadata. */
 export async function refreshIssuerMetadata(state: ClientState): Promise<IssuerMetadata> {
+  const previous = state.metadata;
   state.metadata = null;
-  return getIssuerMetadata(state);
+  try {
+    return await getIssuerMetadata(state);
+  } catch (error) {
+    state.metadata = previous;
+    throw error;
+  }
 }
 
 export async function getKeyDiscoveryMetadata(state: ClientState): Promise<KeyDiscoveryMetadata> {
@@ -146,6 +157,7 @@ async function fetchKeyDiscoveryMetadata(state: ClientState): Promise<KeyDiscove
     if (!metadata.exchange) throw new DiscoveryError('Invalid graph issuance discovery metadata');
     validateGraphIssuanceDiscovery(metadata.graph_issuance, metadata.exchange);
   }
+  pinIssuerIdentity(state, metadata.issuer_id);
   state.keyDiscoveryMetadata = metadata;
   state.keyDiscoveryMetadataFetchedAt = Date.now();
   return state.keyDiscoveryMetadata;

@@ -5,7 +5,7 @@ use base64ct::Encoding;
 use ed25519_dalek::{Signature, Signer, Verifier};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use freebird_common::{
-    api::{ExchangeReceiptKeyInfo, EXCHANGE_MAX_VALID_UNTIL},
+    api::{ExchangeReceiptKeyInfo, NativeExchangeV3Receipt, EXCHANGE_MAX_VALID_UNTIL},
     exchange_api::ExchangeReceiptV2,
 };
 use rand::{rngs::OsRng, RngCore};
@@ -59,6 +59,25 @@ impl ReceiptKeyRing {
                 &mut metadata,
             )
             .context("invalid retained V2 receipt key")?;
+        }
+        Ok(Self {
+            active_id,
+            keys,
+            metadata,
+        })
+    }
+
+    /// Load the V7-only exchange receipt key ring. V7 uses a distinct purpose
+    /// namespace and never accepts V2 receipt records or metadata.
+    pub fn load_v7(active: ReceiptKeyConfig, retained: &[ReceiptKeyConfig]) -> Result<Self> {
+        let mut keys = HashMap::new();
+        let mut metadata = HashMap::new();
+        let active_id = active.metadata.key_id.clone();
+        load_configured_key(&active, "exchange_receipt_v7", &mut keys, &mut metadata)
+            .context("invalid active V7 receipt key")?;
+        for config in retained {
+            load_configured_key(config, "exchange_receipt_v7", &mut keys, &mut metadata)
+                .context("invalid retained V7 receipt key")?;
         }
         Ok(Self {
             active_id,
@@ -236,6 +255,27 @@ impl ReceiptKey {
         public
             .verify(&digest, &signature)
             .context("invalid receipt signature")
+    }
+
+    pub fn sign_receipt_v7(&self, receipt: &NativeExchangeV3Receipt) -> Result<Vec<u8>> {
+        let digest = receipt
+            .receipt_digest()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(self.signing.sign(&digest).to_bytes().to_vec())
+    }
+
+    pub fn verify_receipt_v7(
+        receipt: &NativeExchangeV3Receipt,
+        public: &VerifyingKey,
+        signature: &[u8],
+    ) -> Result<()> {
+        let signature = Signature::from_slice(signature).context("invalid V7 receipt signature")?;
+        let digest = receipt
+            .receipt_digest()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        public
+            .verify(&digest, &signature)
+            .context("invalid V7 receipt signature")
     }
 }
 
