@@ -75,6 +75,7 @@ impl ReadinessReport {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn evaluate(
     store_health: &StoreHealth,
     issuers: &HashMap<String, IssuerInfo>,

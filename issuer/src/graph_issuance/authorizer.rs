@@ -3,23 +3,9 @@
 
 use anyhow::{bail, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use freebird_common::graph_issuance_api;
-use sha2::{Digest, Sha256};
-use std::{collections::HashMap, sync::Arc};
-use zeroize::Zeroizing;
+use std::collections::HashMap;
 
-use super::policy::{
-    GraphIssuanceAdmissionState, GraphIssuancePolicy, GraphIssuancePolicyDocument,
-};
-
-pub(super) const NULLIFIER_DOMAIN: &[u8] = b"freebird graph issuance authorization nullifier v1\0";
-
-pub(super) fn domain_digest(domain: &[u8], value: &[u8]) -> [u8; 32] {
-    let mut hash = Sha256::new();
-    hash.update(domain);
-    hash.update(value);
-    hash.finalize().into()
-}
+use super::policy::GraphIssuancePolicy;
 
 pub struct AuthorizationClaim {
     pub nullifier_digest: [u8; 32],
@@ -49,69 +35,6 @@ pub trait GraphIssuanceAuthorizer: Send + Sync {
     ) -> Result<AuthorizationClaim>;
 }
 
-pub struct HmacGraphIssuanceAuthorizer {
-    secret: Zeroizing<Vec<u8>>,
-}
-
-impl HmacGraphIssuanceAuthorizer {
-    pub fn new(secret: Vec<u8>) -> Result<Self> {
-        if secret.len() < 32 {
-            bail!("graph issuance HMAC secret must contain at least 32 bytes")
-        }
-        Ok(Self {
-            secret: Zeroizing::new(secret),
-        })
-    }
-}
-
-impl GraphIssuanceAuthorizer for HmacGraphIssuanceAuthorizer {
-    fn authorize(
-        &self,
-        policy: &GraphIssuancePolicy,
-        request_binding: &[u8; 32],
-        authorization: &str,
-    ) -> Result<AuthorizationClaim> {
-        if policy.authorization_scheme != "hmac_sha256" {
-            bail!("unsupported graph issuance authorization scheme")
-        }
-        let nonce = graph_issuance_api::verify_hmac_authorization_v2(
-            &self.secret,
-            &policy.issuance_policy_id,
-            request_binding,
-            authorization,
-        )
-        .map_err(|_| anyhow::anyhow!("invalid graph issuance authorization"))?;
-        Ok(AuthorizationClaim {
-            nullifier_digest: domain_digest(NULLIFIER_DOMAIN, &nonce),
-            global_spend_key: None,
-        })
-    }
-}
-
-/// Explicitly unsafe authorizer for development and tests only.
-pub struct DevelopmentMockAuthorizer;
-
-impl GraphIssuanceAuthorizer for DevelopmentMockAuthorizer {
-    fn authorize(
-        &self,
-        policy: &GraphIssuancePolicy,
-        _request_binding: &[u8; 32],
-        authorization: &str,
-    ) -> Result<AuthorizationClaim> {
-        if policy.authorization_scheme != "development_mock" {
-            bail!("unsupported graph issuance authorization scheme")
-        }
-        let nonce = Base64UrlUnpadded::decode_vec(authorization)?;
-        if nonce.len() != 32 || Base64UrlUnpadded::encode_string(&nonce) != authorization {
-            bail!("invalid development graph issuance authorization")
-        }
-        Ok(AuthorizationClaim {
-            nullifier_digest: domain_digest(NULLIFIER_DOMAIN, &nonce),
-            global_spend_key: None,
-        })
-    }
-}
-
 /// Keeps the durable authority and recovery/probe surface available while
 /// fresh graph issuance is disabled by configuration.
 pub struct DisabledGraphIssuanceAuthorizer;
@@ -125,39 +48,6 @@ impl GraphIssuanceAuthorizer for DisabledGraphIssuanceAuthorizer {
     ) -> Result<AuthorizationClaim> {
         bail!("graph issuance authorization is disabled")
     }
-}
-
-/// Validate that the configured verifier can serve every accepting policy.
-/// Used by both runtime startup and the offline configuration validator.
-pub fn validate_configured_authorizer(
-    config: &crate::config::GraphIssuanceAuthorizationConfig,
-    document: &GraphIssuancePolicyDocument,
-) -> Result<()> {
-    let (scheme, authorizer): (&str, Arc<dyn GraphIssuanceAuthorizer>) = match config {
-        crate::config::GraphIssuanceAuthorizationConfig::HmacSha256(secret) => (
-            "hmac_sha256",
-            Arc::new(HmacGraphIssuanceAuthorizer::new(secret.clone())?),
-        ),
-        crate::config::GraphIssuanceAuthorizationConfig::V4Local { keys } => (
-            "v4_local",
-            Arc::new(V4LocalGraphIssuanceAuthorizer::new(keys.clone())?),
-        ),
-        crate::config::GraphIssuanceAuthorizationConfig::DevelopmentMock => {
-            ("development_mock", Arc::new(DevelopmentMockAuthorizer))
-        }
-        crate::config::GraphIssuanceAuthorizationConfig::Disabled => {
-            bail!("graph issuance authorization verifier is disabled")
-        }
-    };
-    for policy in &document.policies {
-        if policy.admission_state == GraphIssuanceAdmissionState::AcceptingNew {
-            if policy.authorization_scheme != scheme {
-                bail!("accepting graph issuance policy authorization scheme mismatch")
-            }
-            authorizer.validate_policy_configuration(policy)?;
-        }
-    }
-    Ok(())
 }
 
 pub struct V4LocalGraphIssuanceAuthorizer {

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-import type { ExchangeOutcome, FreebirdToken, GraphIssuanceOutcome, TokenResult } from './types.js';
+import type { FreebirdToken, TokenResult } from './types.js';
 
 /**
  * Stable machine-readable failure codes carried by every {@link FreebirdError}.
@@ -67,30 +67,6 @@ export class VerifierNotConfiguredError extends FreebirdError {
   constructor(message = 'Verifier is not configured') {
     super('verifier_not_configured', message);
     this.name = 'VerifierNotConfiguredError';
-  }
-}
-
-/** A V2 public bearer exchange operation failed. */
-export class ExchangeError extends Error {
-  readonly code = 'exchange' as const;
-  readonly outcome?: ExchangeOutcome;
-
-  constructor(message = 'Exchange operation failed', outcome?: ExchangeOutcome) {
-    super(message);
-    this.name = 'ExchangeError';
-    this.outcome = outcome;
-  }
-}
-
-/** A graph issuance operation failed. */
-export class GraphIssuanceError extends Error {
-  readonly code = 'graph_issuance' as const;
-  readonly outcome?: GraphIssuanceOutcome;
-
-  constructor(message = 'Graph issuance failed', outcome?: GraphIssuanceOutcome) {
-    super(message);
-    this.name = 'GraphIssuanceError';
-    this.outcome = outcome;
   }
 }
 

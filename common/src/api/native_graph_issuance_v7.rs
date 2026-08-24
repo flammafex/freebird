@@ -208,6 +208,7 @@ fn amount(value: &str) -> Result<u64, NativeGraphIssuanceV7Error> {
     Ok(amount)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn common(
     version: u8,
     profile_id: &str,

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
-use super::graph_discovery::{ExchangeDiscoveryV2, GraphIssuanceDiscoveryV2};
 use super::native_bearer_v7::{validate_native_bearer_v7_discovery, NativeBearerV7KeyInfo};
 use super::{
     NativeExchangeV3Discovery, NativeGraphIssuanceV7Discovery, NATIVE_BEARER_V7_PROFILE_ID,
@@ -17,12 +16,6 @@ pub struct KeyDiscoveryResp {
     pub valid_epochs: Vec<u32>,
     pub epoch_duration_sec: u64,
     pub voprf: VoprfKeyInfo,
-    #[serde(default)]
-    pub public: Vec<PublicKeyInfo>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub exchange: Option<ExchangeDiscoveryV2>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub graph_issuance: Option<GraphIssuanceDiscoveryV2>,
 }
 
 impl KeyDiscoveryResp {
@@ -42,9 +35,8 @@ pub struct VoprfKeyInfo {
 
 /// Strict V7-only issuer discovery metadata.
 ///
-/// This is deliberately nominally separate from [`KeyDiscoveryResp`]. The
-/// latter remains the legacy V4/V5 discovery response consumed by replay
-/// authority code and must not acquire V7-only fields.
+/// This is deliberately nominally separate from [`KeyDiscoveryResp`] and must
+/// not acquire legacy V4-only fields.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct V7KeyDiscoveryResp {
@@ -189,21 +181,4 @@ fn v7_text(value: &str) -> bool {
 
 fn registry_error(error: BearerKeyRegistryError) -> String {
     error.to_string()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublicKeyInfo {
-    pub token_key_id: String,
-    pub token_type: String,
-    pub rfc9474_variant: String,
-    pub modulus_bits: u16,
-    pub pubkey_spki_b64: String,
-    pub issuer_id: String,
-    pub valid_from: i64,
-    pub valid_until: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub audience: Option<String>,
-    pub spend_policy: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_uses: Option<u32>,
 }

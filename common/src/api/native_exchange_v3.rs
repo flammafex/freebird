@@ -18,6 +18,9 @@ pub const NATIVE_EXCHANGE_V3_SUITE: &str = "RSABSSA-SHA384-PSS-Randomized-V7";
 pub const NATIVE_EXCHANGE_V3_MAX_ITEMS: usize = 64;
 pub const NATIVE_EXCHANGE_V3_QUANTITY: u32 = 1;
 pub const NATIVE_EXCHANGE_V3_RECEIPT_LIFETIME_SECS: u64 = 2_592_000;
+pub const EXCHANGE_LUA_MAX_EXACT_INTEGER: u64 = (1u64 << 53) - 1;
+pub const EXCHANGE_MAX_VALID_UNTIL: i64 = EXCHANGE_LUA_MAX_EXACT_INTEGER as i64;
+pub const EXCHANGE_MAX_BUDGET_LIMIT: u64 = EXCHANGE_LUA_MAX_EXACT_INTEGER;
 pub(crate) const NATIVE_EXCHANGE_V3_RAW384_BYTES: usize = 384;
 
 pub const NATIVE_EXCHANGE_V3_DOMAIN_SOURCE_LEAF: &[u8] =
@@ -524,6 +527,7 @@ impl NativeExchangeV3Discovery {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_output_common(
     output_id: &str,
     descriptor_id: &str,
@@ -649,6 +653,7 @@ impl NativeExchangeV3Source {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn prefix(
     version: u8,
     profile_id: &str,

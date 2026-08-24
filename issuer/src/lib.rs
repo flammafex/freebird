@@ -5,8 +5,8 @@ pub mod graph_issuance;
 pub mod keys;
 pub mod multi_key_voprf;
 pub mod native_bearer_v7;
-pub mod public_tokens;
 pub mod readiness;
+pub mod replay_authority;
 pub mod routes;
 pub mod shutdown;
 pub mod startup;
@@ -22,7 +22,6 @@ pub use main_state::AppStateWithSybil;
 // We need to move AppStateWithSybil out of main.rs to a shared place.
 // Let's create a small internal module for it or put it in lib.rs directly.
 pub mod main_state {
-    use crate::public_tokens::PublicTokenIssuer;
     use crate::sybil_resistance::{invitation::InvitationSystem, SybilResistance};
     use std::sync::Arc;
 
@@ -40,13 +39,6 @@ pub mod main_state {
         pub native_bearer_v7: Arc<crate::native_bearer_v7::NativeBearerV7Issuer>,
         /// Immutable retained V7 discovery records published with the active key.
         pub native_bearer_v7_retained: Vec<freebird_common::api::NativeBearerV7KeyInfo>,
-        pub public_issuer: Option<Arc<PublicTokenIssuer>>,
-        pub exchange_engine: Option<Arc<crate::exchange::ExchangeEngine>>,
-        pub exchange_metadata: Option<freebird_common::api::ExchangeDiscoveryV2>,
-        pub graph_issuance_engine: Option<Arc<crate::graph_issuance::GraphIssuanceEngine>>,
-        /// Deprecated compatibility slot; discovery is read from the durable
-        /// graph issuance store at publication time.
-        pub graph_issuance_metadata: Option<freebird_common::api::GraphIssuanceDiscoveryV2>,
         /// Active V7 exchange engine and immutable discovery.
         pub native_exchange_v7: Option<Arc<crate::exchange::v7::V7ExchangeEngine>>,
         pub native_exchange_v7_discovery: Option<freebird_common::api::NativeExchangeV3Discovery>,
@@ -54,6 +46,7 @@ pub mod main_state {
         pub native_graph_issuance_v7: Option<Arc<crate::graph_issuance::V7GraphIssuanceEngine>>,
         pub native_graph_issuance_v7_discovery:
             Option<freebird_common::api::NativeGraphIssuanceV7Discovery>,
+        pub replay_authority: Option<Arc<crate::replay_authority::ReplayAuthority>>,
         /// Duration of each epoch in seconds (default: 86400 = 1 day)
         pub epoch_duration_sec: u64,
         /// Number of previous epochs to accept (for graceful rotation)

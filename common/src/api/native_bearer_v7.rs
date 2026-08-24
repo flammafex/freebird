@@ -13,13 +13,14 @@ pub const NATIVE_BEARER_V7_TOKEN_KEY_ID_HEX_LEN: usize = 64;
 pub const NATIVE_BEARER_V7_DESCRIPTOR_ID_HEX_LEN: usize = 64;
 pub const NATIVE_BEARER_V7_FINGERPRINT_HEX_LEN: usize = 64;
 pub const NATIVE_BEARER_V7_MAX_SPKI_BYTES: usize = 4096;
-pub const NATIVE_BEARER_V7_MAX_VALID_UNTIL: i64 = super::graph_discovery::EXCHANGE_MAX_VALID_UNTIL;
+pub const NATIVE_BEARER_V7_MAX_VALID_UNTIL: i64 =
+    super::native_exchange_v3::EXCHANGE_MAX_VALID_UNTIL;
 pub const NATIVE_BEARER_V7_BLINDED_MESSAGE_LEN: usize =
     freebird_crypto::public_bearer_v7::V7_SIGNATURE_LEN;
 pub const NATIVE_BEARER_V7_BLINDED_MESSAGE_B64_LEN: usize = 512;
 
 /// Discovery metadata for one native V7 randomized bearer key.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeBearerV7KeyInfo {
     pub profile_id: String,
@@ -40,26 +41,6 @@ pub struct NativeBearerV7KeyInfo {
     pub spki_fingerprint: String,
     pub valid_from: i64,
     pub valid_until: i64,
-}
-
-impl Default for NativeBearerV7KeyInfo {
-    fn default() -> Self {
-        Self {
-            profile_id: String::new(),
-            issuer_id: String::new(),
-            descriptor_id: String::new(),
-            token_key_id: String::new(),
-            asset_id: String::new(),
-            amount_minor: 0,
-            suite: String::new(),
-            modulus_bits: 0,
-            exponent: 0,
-            pubkey_spki_b64: String::new(),
-            spki_fingerprint: String::new(),
-            valid_from: 0,
-            valid_until: 0,
-        }
-    }
 }
 
 impl NativeBearerV7KeyInfo {
@@ -100,7 +81,7 @@ impl NativeBearerV7KeyInfo {
             &self.spki_fingerprint,
         )?;
         let token_key_id = decode_lower_hex_32(&self.token_key_id, "token_key_id")?;
-        let spki = crate::exchange_api::decode_base64url(
+        let spki = crate::v7_wire::decode_base64url(
             &self.pubkey_spki_b64,
             NATIVE_BEARER_V7_MAX_SPKI_BYTES,
         )

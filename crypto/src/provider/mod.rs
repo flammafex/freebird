@@ -71,34 +71,9 @@ pub trait CryptoProvider: Send + Sync {
     fn context(&self) -> &[u8];
 }
 
-/// Cryptographic provider for V5 public bearer pass blind RSA signatures.
-///
-/// This is deliberately separate from `CryptoProvider`: V4 private verification
-/// uses VOPRF keys, while V5 public verification uses RFC 9474 blind RSA keys.
-#[async_trait]
-pub trait BlindRsaProvider: Send + Sync {
-    /// Sign one RFC 9474 blinded message.
-    async fn blind_sign(&self, blinded_msg: &[u8]) -> Result<Vec<u8>>;
-
-    /// Return the RFC 9474 SPKI public key bytes used for V5 verification.
-    fn public_key_spki(&self) -> &[u8];
-
-    /// Return `SHA-256(public_key_spki)`.
-    fn token_key_id(&self) -> &[u8; crate::PUBLIC_BEARER_TOKEN_KEY_ID_LEN];
-
-    /// Return the RSA modulus size.
-    fn modulus_bits(&self) -> u16;
-
-    /// Return the RFC 9474 suite identifier used by this provider.
-    fn variant(&self) -> &str {
-        crate::PUBLIC_BEARER_RFC9474_VARIANT
-    }
-}
-
 /// Cryptographic provider for the separate V7 randomized public bearer flow.
 ///
-/// V7 deliberately does not extend [`BlindRsaProvider`].  In particular, a
-/// V5 deterministic provider cannot accidentally be used to issue a V7 token.
+/// V7 deliberately uses its own provider trait and identity binding.
 #[async_trait]
 pub trait V7BlindRsaProvider: Send + Sync {
     /// Sign a V7 blinded message for the explicitly requested identity.

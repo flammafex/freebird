@@ -94,8 +94,10 @@ pub struct V7SignerSpec {
 impl V7SignerSpec {
     /// Convert the direct V7 configuration into the shared inventory shape.
     pub fn from_native_config(config: &NativeBearerV7Config, issuer_id: &str) -> Result<Self> {
-        let token_key_id = freebird_crypto::decode_token_key_id_hex(&config.token_key_id)
-            .map_err(|error| anyhow::anyhow!("invalid configured V7 token key ID: {error:?}"))?;
+        let token_key_id: [u8; 32] = hex::decode(&config.token_key_id)
+            .map_err(|error| anyhow::anyhow!("invalid configured V7 token key ID: {error}"))?
+            .try_into()
+            .map_err(|_| anyhow::anyhow!("invalid configured V7 token key ID length"))?;
         Ok(Self {
             identity: V7SignerIdentity::new(
                 issuer_id,
@@ -537,7 +539,7 @@ mod tests {
         let wrong = V7SignerIdentity::new(
             identity.issuer_id(),
             identity.profile_id(),
-            &"05".repeat(32),
+            "05".repeat(32),
             *identity.token_key_id(),
         )
         .unwrap();

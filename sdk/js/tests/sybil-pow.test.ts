@@ -18,21 +18,6 @@ vi.mock('../src/crypto/voprf.js', () => ({
   buildPrivateTokenInput: vi.fn(() => new Uint8Array([8])),
   buildRedemptionToken: vi.fn(() => new Uint8Array([9, 8, 7])),
   parseRedemptionToken: vi.fn(),
-  tokenKeyIdFromSpki: vi.fn(),
-  tokenKeyIdToHex: vi.fn(),
-  tokenKeyIdFromHex: vi.fn(),
-  buildPublicBearerMessage: vi.fn(),
-  buildPublicBearerPass: vi.fn(),
-  parsePublicBearerPass: vi.fn(),
-}));
-
-vi.mock('../src/crypto/rsa.js', () => ({
-  rsaBlind: vi.fn(async () => ({
-    blinded: new Uint8Array([1, 2]),
-    state: { inv: new Uint8Array(), prepared: new Uint8Array(), publicKey: new Uint8Array() },
-  })),
-  rsaUnblind: vi.fn(async () => new Uint8Array([3, 4, 5])),
-  rsaVerify: vi.fn(),
 }));
 
 function json(body: unknown, status = 200): Response {

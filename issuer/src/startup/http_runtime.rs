@@ -33,10 +33,6 @@ pub(super) struct HttpRuntimeInputs {
         Option<Arc<crate::sybil_resistance::MultiPartyVouchingSystem>>,
     pub(super) native_bearer_v7: Arc<crate::native_bearer_v7::NativeBearerV7Issuer>,
     pub(super) native_bearer_v7_retained: Vec<freebird_common::api::NativeBearerV7KeyInfo>,
-    pub(super) public_issuer: Option<Arc<crate::public_tokens::PublicTokenIssuer>>,
-    pub(super) exchange_engine: Option<Arc<crate::exchange::ExchangeEngine>>,
-    pub(super) exchange_metadata: Option<freebird_common::api::ExchangeDiscoveryV2>,
-    pub(super) graph_issuance_engine: Option<Arc<crate::graph_issuance::GraphIssuanceEngine>>,
     pub(super) native_exchange_v7: Option<Arc<crate::exchange::v7::V7ExchangeEngine>>,
     pub(super) native_exchange_v7_discovery:
         Option<freebird_common::api::NativeExchangeV3Discovery>,
@@ -46,11 +42,10 @@ pub(super) struct HttpRuntimeInputs {
     pub(super) admin_api_key: String,
     pub(super) sybil_replay_store: Arc<dyn ReplayStore>,
     pub(super) storage_paths: Vec<(String, PathBuf)>,
-    pub(super) exchange_readiness: Option<crate::readiness::ExchangeReadinessState>,
-    pub(super) graph_issuance_readiness: Option<crate::readiness::GraphIssuanceReadinessState>,
     pub(super) native_exchange_v7_readiness: Option<crate::readiness::V7ExchangeReadinessState>,
     pub(super) native_graph_issuance_v7_readiness:
         Option<crate::readiness::V7GraphIssuanceReadinessState>,
+    pub(super) replay_authority: Option<Arc<crate::replay_authority::ReplayAuthority>>,
     pub(super) webauthn_state: Option<Arc<crate::webauthn::WebAuthnState>>,
 }
 
@@ -59,11 +54,10 @@ pub(super) struct HttpRuntime {
     pub(super) readiness: ReadinessState,
     pub(super) sybil_replay_store: Arc<dyn ReplayStore>,
     pub(super) storage_paths: Vec<(String, PathBuf)>,
-    pub(super) exchange_readiness: Option<crate::readiness::ExchangeReadinessState>,
-    pub(super) graph_issuance_readiness: Option<crate::readiness::GraphIssuanceReadinessState>,
     pub(super) native_exchange_v7_readiness: Option<crate::readiness::V7ExchangeReadinessState>,
     pub(super) native_graph_issuance_v7_readiness:
         Option<crate::readiness::V7GraphIssuanceReadinessState>,
+    pub(super) replay_authority: Option<Arc<crate::replay_authority::ReplayAuthority>>,
 }
 
 fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
@@ -150,7 +144,7 @@ pub fn graph_issuance_router(body_limit: usize, timeout_secs: u64) -> Router<Pub
                 ])
                 .allow_headers([
                     axum::http::header::CONTENT_TYPE,
-                    routes::public_graph_issuance::STATUS_CAPABILITY,
+                    routes::public_exchange::STATUS_CAPABILITY,
                 ]),
         )
         .layer(freebird_common::rate_limit::PublicRateLimitLayer::default())
@@ -186,10 +180,6 @@ impl HttpRuntime {
             multi_party_vouching_system,
             native_bearer_v7,
             native_bearer_v7_retained,
-            public_issuer,
-            exchange_engine,
-            exchange_metadata,
-            graph_issuance_engine,
             native_exchange_v7,
             native_exchange_v7_discovery,
             native_graph_issuance_v7,
@@ -197,12 +187,12 @@ impl HttpRuntime {
             admin_api_key,
             sybil_replay_store,
             storage_paths,
-            exchange_readiness,
-            graph_issuance_readiness,
             native_exchange_v7_readiness,
             native_graph_issuance_v7_readiness,
+            replay_authority,
             webauthn_state,
         } = inputs;
+        let replay_authority_for_readiness = replay_authority.clone();
 
         // 6. App State & Router
         let state = Arc::new(AppStateWithSybil {
@@ -215,15 +205,11 @@ impl HttpRuntime {
             invitation_system: invitation_system.clone(),
             native_bearer_v7: native_bearer_v7.clone(),
             native_bearer_v7_retained,
-            public_issuer: public_issuer.clone(),
-            exchange_engine: exchange_engine.clone(),
-            exchange_metadata,
-            graph_issuance_engine,
-            graph_issuance_metadata: None,
             native_exchange_v7,
             native_exchange_v7_discovery,
             native_graph_issuance_v7,
             native_graph_issuance_v7_discovery,
+            replay_authority,
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
             admin_api_key: Some(admin_api_key.clone()),
@@ -345,10 +331,9 @@ impl HttpRuntime {
             readiness,
             sybil_replay_store,
             storage_paths,
-            exchange_readiness,
-            graph_issuance_readiness,
             native_exchange_v7_readiness,
             native_graph_issuance_v7_readiness,
+            replay_authority: replay_authority_for_readiness,
         })
     }
 }

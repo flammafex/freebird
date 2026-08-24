@@ -75,8 +75,8 @@ pub async fn mark_spent_atomic<C: ConnectionLike + Send>(
 }
 
 /// Convert an inclusive validity endpoint to Redis's exclusive absolute
-/// expiry. The upper bound is shared with exchange V2, whose Lua paths must
-/// represent validity timestamps exactly.
+/// expiry. The upper bound is shared with the issuer-side absolute-expiry
+/// paths, which must represent validity timestamps exactly.
 pub fn replay_expires_at(valid_until: i64) -> Result<u64> {
     if !(1..=EXCHANGE_MAX_VALID_UNTIL).contains(&valid_until) {
         anyhow::bail!("replay validity endpoint is out of range");
@@ -454,13 +454,13 @@ mod tests {
 
         let verifier_first = store_at(now.clone());
         assert!(verifier_first
-            .mark_spent_through(&key, graph_valid_until)
+            .mark_spent_through(key, graph_valid_until)
             .await
             .unwrap());
         now.store(direct_valid_until as u64 + 1, Ordering::Relaxed);
         assert!(now.load(Ordering::Relaxed) < graph_valid_until as u64);
         assert!(
-            !emulate_exchange_reservation(&verifier_first, &key, graph_valid_until)
+            !emulate_exchange_reservation(&verifier_first, key, graph_valid_until)
                 .await
                 .unwrap(),
             "exchange must reject a verifier-first spend after the shorter direct window"
@@ -468,12 +468,12 @@ mod tests {
 
         let exchange_first = store_at(now);
         assert!(
-            emulate_exchange_reservation(&exchange_first, &key, graph_valid_until)
+            emulate_exchange_reservation(&exchange_first, key, graph_valid_until)
                 .await
                 .unwrap()
         );
         assert!(!exchange_first
-            .mark_spent_through(&key, graph_valid_until)
+            .mark_spent_through(key, graph_valid_until)
             .await
             .unwrap());
     }

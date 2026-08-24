@@ -9,18 +9,6 @@ vi.mock('../src/crypto/voprf.js', () => ({
   buildPrivateTokenInput: vi.fn(() => new Uint8Array([8])),
   buildRedemptionToken: vi.fn((nonce: Uint8Array) => nonce.slice()),
   parseRedemptionToken: vi.fn(),
-  tokenKeyIdFromHex: vi.fn(() => new Uint8Array(32)),
-  tokenKeyIdFromSpki: vi.fn(),
-  tokenKeyIdToHex: vi.fn(),
-}));
-
-vi.mock('../src/crypto/rsa.js', () => ({
-  rsaBlind: vi.fn(async () => ({
-    blinded: new Uint8Array([1, 2]),
-    state: { inv: new Uint8Array(), prepared: new Uint8Array(), publicKey: new Uint8Array() },
-  })),
-  rsaUnblind: vi.fn(async () => new Uint8Array([3, 4, 5])),
-  rsaVerify: vi.fn(),
 }));
 
 import {
@@ -48,17 +36,6 @@ const keyDiscoveryMetadata = {
   valid_epochs: [1],
   epoch_duration_sec: 86_400,
   voprf: { suite: 'P256-SHA256', kid: 'kid-1', pubkey: 'public-key' },
-  public: [{
-    token_key_id: 'a'.repeat(64),
-    token_type: 'public_bearer_pass',
-    rfc9474_variant: 'RSABSSA-SHA384-PSS-Deterministic',
-    modulus_bits: 2048,
-    pubkey_spki_b64: 'AQID',
-    issuer_id: 'issuer:test',
-    valid_from: 1,
-    valid_until: 2,
-    spend_policy: 'single_use',
-  }],
 };
 
 function json(body: unknown, status = 200): Response {

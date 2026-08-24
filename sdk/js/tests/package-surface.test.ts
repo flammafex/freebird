@@ -72,6 +72,14 @@ describe('SDK package surface', () => {
     assertRuntimeSurface(await import('../src/index.js') as unknown as Record<string, unknown>);
   });
 
+  it('does not retain retired public issuance or discovery acceptance paths', () => {
+    const discovery = readFileSync(`${packageRoot}/src/client/discovery.ts`, 'utf8');
+    const types = readFileSync(`${packageRoot}/src/types.ts`, 'utf8');
+    expect(discovery).not.toContain('body.public');
+    expect(types).not.toMatch(/export interface Public(?:Batch)?Issue(?:Request|Response|ErrorResponse|KeyInfo)/);
+    expect(types).not.toMatch(/\n\s+public:\s+PublicKeyInfo\[\]/);
+  });
+
   it('builds and supports both package self-reference entry points', async () => {
     execFileSync('npm', ['run', 'build'], { cwd: packageRoot, stdio: 'pipe' });
     const tsc = `${packageRoot}/node_modules/typescript/bin/tsc`;

@@ -213,7 +213,7 @@ impl BearerKeyReservation {
             BearerKeyRegistryError::Invalid(format!("invalid V7 fixed body policy: {error:?}"))
         })?;
         let spki =
-            crate::exchange_api::decode_base64url(&self.pubkey_spki_b64, MAX_CANONICAL_SPKI_BYTES)
+            crate::v7_wire::decode_base64url(&self.pubkey_spki_b64, MAX_CANONICAL_SPKI_BYTES)
                 .map_err(|error| BearerKeyRegistryError::Invalid(error.to_string()))?;
         if Base64UrlUnpadded::encode_string(&spki) != self.pubkey_spki_b64
             || hex::encode(Sha256::digest(&spki)) != self.spki_fingerprint

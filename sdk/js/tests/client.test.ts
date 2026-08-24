@@ -9,9 +9,6 @@ vi.mock('../src/crypto/voprf.js', () => ({
   buildPrivateTokenInput: vi.fn(() => new Uint8Array([8])),
   buildRedemptionToken: vi.fn(() => new Uint8Array([9, 8, 7])),
   parseRedemptionToken: vi.fn(),
-  tokenKeyIdFromSpki: vi.fn(),
-  tokenKeyIdToHex: vi.fn(),
-  tokenKeyIdFromHex: vi.fn(),
 }));
 
 import { buildIssueBinding, FreebirdClient } from '../src/index.js';
@@ -37,7 +34,6 @@ const keyDiscoveryMetadata = {
   valid_epochs: [1],
   epoch_duration_sec: 86_400,
   voprf: { suite: 'P256-SHA256', kid: 'kid-1', pubkey: 'public-key' },
-  public: [],
 };
 
 function json(body: unknown, status = 200): Response {

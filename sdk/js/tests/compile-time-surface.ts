@@ -18,6 +18,7 @@ import type {
   V7Token,
   VerifyResp,
 } from '../src/index.js';
+import type { KeyDiscoveryMetadata } from '../src/types.js';
 
 type Equal<Left, Right> =
   (<Value>() => Value extends Left ? 1 : 2) extends
@@ -43,6 +44,7 @@ type ExpectedClientKeys =
 type _clientKeys = Assert<Equal<Exclude<keyof FreebirdClient, 'state'>, ExpectedClientKeys>>;
 type _tokenVersion = Assert<Equal<NonNullable<FreebirdToken['version']>, 4 | 7>>;
 type _issuerHasNoV5Public = Assert<Equal<Extract<keyof IssuerMetadata, 'public'>, never>>;
+type _keyDiscoveryHasNoV5Public = Assert<Equal<Extract<keyof KeyDiscoveryMetadata, 'public'>, never>>;
 type _directDiscoveryHasNoNonDirectFields = Assert<Equal<Exclude<keyof V7DirectKeyDiscovery,
   'issuer_id' | 'current_epoch' | 'valid_epochs' | 'epoch_duration_sec' | 'voprf' |
   'native_bearer_v7' | 'native_bearer_v7_retained'>, never>>;
@@ -113,6 +115,10 @@ import { exchangePasses } from '../src/index.js';
 import { pollGraphIssuanceStatus } from '../src/index.js';
 // @ts-expect-error V5 token versions are retired
 const retired: FreebirdToken = { tokenValue: 'BQ', issuerId: 'issuer', version: 5 };
+// @ts-expect-error retired public issuance DTOs are removed from the source surface
+import type { PublicIssueRequest } from '../src/types.js';
+// @ts-expect-error retired public batch issuance DTOs are removed from the source surface
+import type { PublicBatchIssueReq } from '../src/types.js';
 void PublicBearerPass;
 void buildPublicIssueBinding;
 void exchangePasses;

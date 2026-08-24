@@ -872,7 +872,7 @@ fn canonical_v7_public_bearer_spki(pubkey_spki: &[u8]) -> Result<Vec<u8>, Error>
         .unwrap_or(exponent.len());
     let exponent = &exponent[first_nonzero..];
     if modulus.len() != V7_SIGNATURE_LEN
-        || modulus.first().map_or(true, |byte| byte & 0x80 == 0)
+        || modulus.first().is_none_or(|byte| byte & 0x80 == 0)
         || exponent != [1, 0, 1]
     {
         return Err(Error::InvalidInput(
@@ -920,7 +920,7 @@ pub fn blind_v7(
     let randomizer = result
         .msg_randomizer
         .map(|randomizer| V7MessageRandomizer::new(randomizer.0))
-        .ok_or_else(|| Error::Internal)?;
+        .ok_or(Error::Internal)?;
     let blind_message = V7BlindMessage::new(
         result
             .blind_message

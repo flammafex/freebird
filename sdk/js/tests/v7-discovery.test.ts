@@ -286,7 +286,7 @@ describe('strict V7 discovery', () => {
 
   it('pins one issuer across V4-before/after-V7 discovery without losing either state', async () => {
     const v4 = { issuer_id: 'issuer:shared', current_epoch: 1, epoch_duration_sec: 86400,
-      public: [], voprf: { suite: 'VOPRF-P256-SHA256', kid: 'kid', pubkey: 'pubkey' } };
+      voprf: { suite: 'VOPRF-P256-SHA256', kid: 'kid', pubkey: 'pubkey' } };
     const v7 = fullDocument('issuer:shared');
     const first = createClientState({ issuerUrl: 'https://issuer.example', fetch: vi.fn() });
     first.config.fetch = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(v4)))

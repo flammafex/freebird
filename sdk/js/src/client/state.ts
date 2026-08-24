@@ -16,7 +16,7 @@ export interface ClientState {
   keyDiscoveryMetadata: KeyDiscoveryMetadata | null;
   /** Epoch ms at which `keyDiscoveryMetadata` was last fetched (null if never). */
   keyDiscoveryMetadataFetchedAt: number | null;
-  /** Strict V7-only discovery snapshot; independent from legacy V4/V5 state. */
+  /** Strict V7-only discovery snapshot; independent from legacy V4 state. */
   v7KeyDiscoveryMetadata: V7KeyDiscoveryResp | null;
   /** Atomically materialized V7 issuer-local registry. */
   v7Registry: V7Registry | null;

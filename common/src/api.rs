@@ -1,34 +1,20 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-mod graph_discovery;
 mod issuance;
 mod key_discovery;
 mod native_bearer_v7;
 mod native_exchange_v3;
 mod native_graph_issuance_v7;
+mod replay_authority;
 mod sybil;
 mod verification;
 
-pub use graph_discovery::{
-    validate_exchange_discovery_v2, validate_graph_issuance_discovery_v2,
-    validate_graph_issuance_discovery_v2_update, ExchangeAdmissionStateV2,
-    ExchangeDescriptorDiscoveryV2, ExchangeDescriptorInfoV2, ExchangeDiscoveryV2,
-    ExchangeGraphDiscoveryV2, ExchangeGraphInfoV2, ExchangeKeysetDiscoveryV2, ExchangeKeysetInfoV2,
-    ExchangeReceiptKeyInfo, ExchangeTransitionDiscoveryV2, ExchangeTransitionInfoV2,
-    ExchangeTransitionSlotDiscoveryV2, ExchangeTransitionSlotInfoV2, GraphIssuanceDiscovery,
-    GraphIssuanceDiscoveryV2, GraphIssuancePolicyDiscovery, GraphIssuancePolicyDiscoveryV2,
-    GraphIssuanceReplayAuthorityDiscoveryV1, ReplayAuthorityDiscoveryV1,
-    EXCHANGE_LUA_MAX_EXACT_INTEGER, EXCHANGE_MAX_BUDGET_LIMIT, EXCHANGE_MAX_VALID_UNTIL,
-};
 pub use issuance::{
     BatchIssueReq, BatchIssueResp, ErrorResp, IssueReq, IssueResp, NativeBearerV7BatchIssueReq,
-    NativeBearerV7BatchIssueResp, NativeBearerV7IssueReq, NativeBearerV7IssueResp,
-    PublicBatchIssueReq, PublicBatchIssueResp, PublicIssueReq, PublicIssueResp, SybilInfo,
+    NativeBearerV7BatchIssueResp, NativeBearerV7IssueReq, NativeBearerV7IssueResp, SybilInfo,
     TokenResult,
 };
-pub use key_discovery::{
-    KeyDiscoveryResp, PublicKeyInfo, V7KeyDiscoveryResp, V7VoprfKeyInfo, VoprfKeyInfo,
-};
+pub use key_discovery::{KeyDiscoveryResp, V7KeyDiscoveryResp, V7VoprfKeyInfo, VoprfKeyInfo};
 pub use native_bearer_v7::{
     validate_native_bearer_v7_discovery, validate_v7_canonical_id,
     validate_v7_identifier_namespace, NativeBearerV7KeyInfo,
@@ -44,7 +30,8 @@ pub use native_exchange_v3::{
     NativeExchangeV3Error, NativeExchangeV3Keyset, NativeExchangeV3Output, NativeExchangeV3Profile,
     NativeExchangeV3Receipt, NativeExchangeV3Request, NativeExchangeV3Result,
     NativeExchangeV3ResultOutput, NativeExchangeV3Slot, NativeExchangeV3Source,
-    NativeExchangeV3Transition, NATIVE_EXCHANGE_V3_DOMAIN_EMPTY_LEAF,
+    NativeExchangeV3Transition, EXCHANGE_LUA_MAX_EXACT_INTEGER, EXCHANGE_MAX_BUDGET_LIMIT,
+    EXCHANGE_MAX_VALID_UNTIL, NATIVE_EXCHANGE_V3_DOMAIN_EMPTY_LEAF,
     NATIVE_EXCHANGE_V3_DOMAIN_MERKLE_NODE, NATIVE_EXCHANGE_V3_DOMAIN_RECEIPT,
     NATIVE_EXCHANGE_V3_DOMAIN_REQUEST, NATIVE_EXCHANGE_V3_DOMAIN_REQUEST_OUTPUT_LEAF,
     NATIVE_EXCHANGE_V3_DOMAIN_RESULT, NATIVE_EXCHANGE_V3_DOMAIN_RESULT_OUTPUT_LEAF,
@@ -59,6 +46,9 @@ pub use native_graph_issuance_v7::{
     NATIVE_GRAPH_ISSUANCE_V7_DOMAIN_AUTHORIZATION_PROOF, NATIVE_GRAPH_ISSUANCE_V7_DOMAIN_REQUEST,
     NATIVE_GRAPH_ISSUANCE_V7_DOMAIN_RESULT, NATIVE_GRAPH_ISSUANCE_V7_PROFILE_ID,
     NATIVE_GRAPH_ISSUANCE_V7_QUANTITY, NATIVE_GRAPH_ISSUANCE_V7_VERSION,
+};
+pub use replay_authority::{
+    decode_canonical_32, V4ReplayAuthorityDiscovery, V4_REPLAY_AUTHORITY_MAX_TOMBSTONES,
 };
 pub use sybil::{SybilProof, VouchProof};
 pub use verification::{

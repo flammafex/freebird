@@ -15,7 +15,7 @@ use freebird_common::api::{
     NativeExchangeV3ResultOutput, NATIVE_EXCHANGE_V3_PROFILE_ID,
     NATIVE_EXCHANGE_V3_RECEIPT_LIFETIME_SECS, NATIVE_EXCHANGE_V3_VERSION,
 };
-use freebird_common::exchange_api::{decode_base64url, parse_operation_id, MAX_ARTIFACT};
+use freebird_common::v7_wire::{decode_base64url, parse_operation_id, MAX_ARTIFACT};
 use freebird_crypto::{
     V7BlindMessage, V7BodyPolicy, V7KeyIdentity, V7PublicKeyBinding, V7TokenKeyId,
 };
@@ -578,11 +578,11 @@ fn descriptor_binding(descriptor: &NativeExchangeV3Descriptor) -> Result<V7Publi
 }
 
 fn descriptor_policy(descriptor: &NativeExchangeV3Descriptor) -> Result<V7BodyPolicy> {
-    Ok(V7BodyPolicy::new(
+    V7BodyPolicy::new(
         descriptor.asset_id.clone(),
         descriptor.amount_minor.parse()?,
     )
-    .map_err(|error| anyhow::anyhow!(format!("{error:?}")))?)
+    .map_err(|error| anyhow::anyhow!(format!("{error:?}")))
 }
 
 fn valid_now(valid_from: u64, valid_until: u64) -> Result<bool> {

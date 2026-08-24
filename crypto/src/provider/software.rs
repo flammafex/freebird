@@ -14,12 +14,9 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use blind_rsa_signatures::{
-    DefaultRng, KeyPairSha384PSSDeterministic, KeyPairSha384PSSRandomized,
-    SecretKeySha384PSSDeterministic, SecretKeySha384PSSRandomized,
-};
+use blind_rsa_signatures::{DefaultRng, KeyPairSha384PSSRandomized, SecretKeySha384PSSRandomized};
 
-use super::{BlindRsaProvider, CryptoProvider, V7BlindRsaProvider};
+use super::{CryptoProvider, V7BlindRsaProvider};
 use crate::public_bearer_v7::{
     V7BlindMessage, V7BlindSignature, V7KeyIdentity, V7PublicKeyBinding,
 };
@@ -43,21 +40,12 @@ pub struct SoftwareCryptoProvider {
     context: Vec<u8>,
 }
 
-/// Software provider for V5 public bearer pass blind RSA signatures.
-pub struct SoftwareBlindRsaProvider {
-    secret_key: SecretKeySha384PSSDeterministic,
-    public_key_spki: Vec<u8>,
-    token_key_id: [u8; crate::PUBLIC_BEARER_TOKEN_KEY_ID_LEN],
-    modulus_bits: u16,
-}
-
 /// The fixed V7 RSA profile.
 const V7_MODULUS_BITS: usize = 3072;
 
 /// Software provider for the separate V7 randomized public bearer flow.
 ///
-/// This type intentionally stores the randomized RSA-BSSA key type directly;
-/// it neither implements nor converts from [`SoftwareBlindRsaProvider`].
+/// This type stores the randomized RSA-BSSA key type directly.
 pub struct SoftwareV7BlindRsaProvider {
     secret_key: SecretKeySha384PSSRandomized,
     binding: V7PublicKeyBinding,
@@ -92,49 +80,6 @@ impl SoftwareCryptoProvider {
             public_key,
             key_id,
             context,
-        })
-    }
-}
-
-impl SoftwareBlindRsaProvider {
-    /// Generate a new RSA blind-signature key.
-    pub fn generate(modulus_bits: usize) -> Result<Self> {
-        let mut rng = DefaultRng;
-        let key_pair = KeyPairSha384PSSDeterministic::generate(&mut rng, modulus_bits)
-            .map_err(|e| anyhow::anyhow!("failed to generate blind RSA key: {e}"))?;
-        Self::from_secret_key(key_pair.sk)
-    }
-
-    /// Load a provider from PKCS#8 or PKCS#1 DER private key bytes.
-    pub fn from_der(der: &[u8]) -> Result<Self> {
-        let secret_key = SecretKeySha384PSSDeterministic::from_der(der)
-            .map_err(|e| anyhow::anyhow!("invalid blind RSA private key: {e}"))?;
-        Self::from_secret_key(secret_key)
-    }
-
-    pub fn to_der(&self) -> Result<Vec<u8>> {
-        self.secret_key
-            .to_der()
-            .map_err(|e| anyhow::anyhow!("failed to encode blind RSA private key: {e}"))
-    }
-
-    fn from_secret_key(secret_key: SecretKeySha384PSSDeterministic) -> Result<Self> {
-        let public_key = secret_key
-            .public_key()
-            .map_err(|e| anyhow::anyhow!("invalid blind RSA public key: {e}"))?;
-        let public_key_spki = public_key
-            .to_spki()
-            .map_err(|e| anyhow::anyhow!("failed to encode blind RSA public key SPKI: {e}"))?;
-        let token_key_id = crate::token_key_id_from_spki(&public_key_spki);
-        let modulus_bits = public_key.components().n().len().saturating_mul(8);
-        let modulus_bits = u16::try_from(modulus_bits)
-            .map_err(|_| anyhow::anyhow!("blind RSA modulus is too large"))?;
-
-        Ok(Self {
-            secret_key,
-            public_key_spki,
-            token_key_id,
-            modulus_bits,
         })
     }
 }
@@ -215,29 +160,6 @@ impl CryptoProvider for SoftwareCryptoProvider {
 
     fn context(&self) -> &[u8] {
         &self.context
-    }
-}
-
-#[async_trait]
-impl BlindRsaProvider for SoftwareBlindRsaProvider {
-    async fn blind_sign(&self, blinded_msg: &[u8]) -> Result<Vec<u8>> {
-        let sig = self
-            .secret_key
-            .blind_sign(blinded_msg)
-            .map_err(|e| anyhow::anyhow!("blind RSA signing failed: {e}"))?;
-        Ok(sig.0)
-    }
-
-    fn public_key_spki(&self) -> &[u8] {
-        &self.public_key_spki
-    }
-
-    fn token_key_id(&self) -> &[u8; crate::PUBLIC_BEARER_TOKEN_KEY_ID_LEN] {
-        &self.token_key_id
-    }
-
-    fn modulus_bits(&self) -> u16 {
-        self.modulus_bits
     }
 }
 
