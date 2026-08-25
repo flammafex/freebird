@@ -37,6 +37,8 @@ and retention contract.
 
 ## Project Documents
 
+- [Documentation Site](docs/index.md): documentation-first overview and
+  navigation for the repository's operational and protocol documents.
 - [Security Policy](SECURITY.md): vulnerability reporting, production baseline,
   and known limitations.
 - [Profile and Claim Matrix](docs/profile-claim-matrix.md): authoritative status
@@ -66,6 +68,20 @@ and retention contract.
   and environment file templates.
 - [Audit Logging](docs/audit-logging.md): audit fields, retention model, privacy
   impact, and limitations.
+
+## Documentation Site
+
+The documentation site's source is `docs/`; its generated output is `site/`.
+The existing legacy `docs/*.md` files are preserved alongside the new structure;
+the documentation-first site navigation does not remove them.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-docs.txt
+mkdocs serve
+mkdocs build --strict
+```
 
 ## Workspace
 

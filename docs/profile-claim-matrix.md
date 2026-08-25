@@ -20,7 +20,7 @@ retired historical material, not current deployment instructions.
 | `ticket-v1` | **PLANNED** | Profile-controlled ticket admission and redemption semantics, with durable shared state where the profile requires it. Redis is required for this profile. | Only the ticket/profile guarantees specified by its eventual implementation and deployment guide. | That the current V4 or V7 routes issue `ticket-v1` tokens, global human uniqueness, or protection from issuer/verifier metadata correlation. |
 | `enhanced-privacy-v1` | **PLANNED** | A `ticket-v1`-class (or independently reviewed equivalent) admission path plus independently operated relay/gateway paths and minimized identifying logs. Redis is required for this profile. | Carefully qualified anonymous-issuance language only after its relay, logging, and non-collusion requirements are implemented and independently operated. | Anonymity against colluding parties, a guarantee that network metadata is hidden, global proof of humanity, or an audit conclusion. |
 
-The experimental/pre-1.0 notice in [SECURITY.md](../SECURITY.md) applies to
+The experimental/pre-1.0 notice in [SECURITY.md](https://github.com/flammafex/freebird/blob/main/SECURITY.md) applies to
 every row. No planned profile exists in the current source tree.
 
 ## Isolation requirements for planned profiles
@@ -91,7 +91,7 @@ that documentation does not imply RFC conformance:
 | V4 VOPRF known-answer fixtures | `crypto/src/voprf/core.rs` (`freebird_v4_voprf_known_answer`, `freebird_v4_dleq_blinding_proof_known_answer`) | Deterministic fixtures for the exact Freebird-specific PRF and DLEQ/blinding-proof construction. Separate negative coverage rejects wrong context/key and altered proofs. They are not RFC 9497 conformance or interoperability fixtures. |
 | V5 fixed valid signature fixture (retired history) | `crypto/src/lib.rs` (`v5_wire_signature_message_and_nullifier_fixture`) | Historical fixed externally generated RSA fixture retained for migration/regression provenance; it is not evidence of an active V5 route. |
 
-[`crypto/tests/fixture-provenance.md`](../crypto/tests/fixture-provenance.md)
+[`crypto/tests/fixture-provenance.md`](https://github.com/flammafex/freebird/blob/main/crypto/tests/fixture-provenance.md)
 is the authoritative provenance record for the deterministic V4 and retired
 historical V5 fixtures, including their inputs, domain separators, independent generation or
 verification method, reviewer, and check date. RFC 9497 vectors may be retained
