@@ -26,6 +26,21 @@ must be a writable master with AOF enabled, `appendfsync always`, and
 `maxmemory-policy noeviction`. URL equality is not proof; the V4 replay
 authority probe proves the logical-database relationship.
 
+## V7 canonical-descriptor migration
+
+In v0.10.0, direct and exchange descriptor IDs are derived from finalized signer
+metadata and canonical transcripts. Old arbitrary descriptor IDs are rejected.
+The corrected exchange descriptor transcript invalidates prior exchange, keyset,
+transition, and graph-policy derived IDs.
+
+For an affected deployment, regenerate and rotate the affected V7 signer
+metadata, then regenerate the registry and discovery/history from the canonical
+material. Do not reuse old V7 signer metadata, registry, discovery, exchange
+state, keysets, transitions, graph policies, or other derived data. For direct
+bootstrap, omit `NATIVE_BEARER_V7_DESCRIPTOR_ID` on the first start, persist the
+derived canonical output, and only then optionally set the variable to that
+public expected value as a pin.
+
 ## Minimum environment
 
 ```bash
@@ -53,16 +68,19 @@ NATIVE_BEARER_V7_SK_PATH=/data/keys/native_bearer_v7.der
 NATIVE_BEARER_V7_METADATA_PATH=/data/config/native_bearer_v7.json
 NATIVE_BEARER_V7_REGISTRY_PATH=/data/config/native_bearer_v7_registry.json
 NATIVE_BEARER_V7_PROFILE_ID=scarcity/native-bearer/v7
-NATIVE_BEARER_V7_DESCRIPTOR_ID=<64-lowercase-hex>
 NATIVE_BEARER_V7_TOKEN_KEY_ID=<64-lowercase-hex>
 NATIVE_BEARER_V7_ASSET_ID=USD
 NATIVE_BEARER_V7_AMOUNT_MINOR=1
 NATIVE_BEARER_V7_VALIDITY=30d
 ```
 
-The V7 descriptor and token-key IDs are operator-pinned canonical identities.
-Do not replace them casually or reuse an RSA key with changed issuer, suite,
-audience, or validity bounds.
+`NATIVE_BEARER_V7_DESCRIPTOR_ID` is optional. Omit it on first boot: the issuer
+derives the canonical descriptor ID from finalized direct signer metadata. After
+that metadata is persisted, an operator may set the variable to the persisted
+derived value as a public expected-value pin. It is not an arbitrary identity and
+must not be fabricated. The token-key ID remains required. Do not replace either
+identity casually or reuse an RSA key with changed issuer, suite, audience, or
+validity bounds.
 
 ## V7 exchange and graph issuance
 

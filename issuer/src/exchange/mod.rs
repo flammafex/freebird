@@ -5,6 +5,9 @@ pub(crate) mod receipt;
 pub mod v7;
 pub(crate) mod v7_store;
 
+#[cfg(test)]
+mod v7_tests;
+
 pub use receipt::{
     load_or_generate_receipt_key, ReceiptKey, ReceiptKeyConfig, ReceiptKeyMetadata, ReceiptKeyRing,
 };

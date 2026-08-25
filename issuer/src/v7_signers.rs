@@ -7,6 +7,7 @@
 //! introducing another key store or another signer type.
 
 use anyhow::{bail, Context, Result};
+use base64ct::Encoding;
 use blind_rsa_signatures::PublicKeySha384PSSRandomized;
 use freebird_common::api::{validate_v7_canonical_id, NativeBearerV7KeyInfo};
 use freebird_crypto::{
@@ -84,6 +85,9 @@ impl V7SignerIdentity {
 #[derive(Clone, Debug)]
 pub struct V7SignerSpec {
     pub identity: V7SignerIdentity,
+    /// Exchange descriptors are derived after key generation when this is
+    /// absent; a supplied value is an operator pin, never a bootstrap value.
+    configured_descriptor_id: Option<String>,
     pub sk_path: PathBuf,
     pub metadata_path: PathBuf,
     pub asset_id: String,
@@ -98,13 +102,21 @@ impl V7SignerSpec {
             .map_err(|error| anyhow::anyhow!("invalid configured V7 token key ID: {error}"))?
             .try_into()
             .map_err(|_| anyhow::anyhow!("invalid configured V7 token key ID length"))?;
+        let configured_descriptor_id =
+            (!config.descriptor_id.trim().is_empty()).then(|| config.descriptor_id.clone());
+        let identity_descriptor = configured_descriptor_id.clone().unwrap_or_else(|| {
+            let mut placeholder = token_key_id;
+            placeholder[0] ^= 1;
+            hex::encode(placeholder)
+        });
         Ok(Self {
             identity: V7SignerIdentity::new(
                 issuer_id,
                 config.profile_id.clone(),
-                config.descriptor_id.clone(),
+                identity_descriptor,
                 V7TokenKeyId::new(token_key_id),
             )?,
+            configured_descriptor_id,
             sk_path: config.sk_path.clone(),
             metadata_path: config.metadata_path.clone(),
             asset_id: config.asset_id.clone(),
@@ -122,11 +134,38 @@ pub struct V7Signer {
     policy: V7BodyPolicy,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum V7SignerRole {
+    Direct,
+    Exchange,
+    GraphIssuance,
+}
+
+fn signer_role(profile_id: &str) -> Result<V7SignerRole> {
+    match profile_id {
+        freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID => Ok(V7SignerRole::Direct),
+        freebird_common::api::NATIVE_EXCHANGE_V3_PROFILE_ID => Ok(V7SignerRole::Exchange),
+        freebird_common::api::NATIVE_GRAPH_ISSUANCE_V7_PROFILE_ID => {
+            Ok(V7SignerRole::GraphIssuance)
+        }
+        _ => bail!("unsupported native V7 signer profile"),
+    }
+}
+
 impl V7Signer {
     fn load_or_generate(spec: &V7SignerSpec) -> Result<Self> {
+        let role = signer_role(spec.identity.profile_id())?;
+        let key_exists = spec.sk_path.exists();
+        let metadata_exists = spec.metadata_path.exists();
+        if matches!(role, V7SignerRole::Direct | V7SignerRole::Exchange)
+            && spec.configured_descriptor_id.is_some()
+            && !metadata_exists
+        {
+            bail!("native V7 descriptor ID is a pin, not a bootstrap value; start once without it to create V7 key material, then configure the persisted descriptor ID");
+        }
         let policy = V7BodyPolicy::new(spec.asset_id.clone(), spec.amount_minor)
             .map_err(|error| anyhow::anyhow!("invalid V7 fixed body policy: {error:?}"))?;
-        let provider = if spec.sk_path.exists() {
+        let provider = if key_exists {
             SoftwareV7BlindRsaProvider::from_der(
                 &std::fs::read(&spec.sk_path)
                     .with_context(|| format!("read V7 secret key {}", spec.sk_path.display()))?,
@@ -138,27 +177,58 @@ impl V7Signer {
             provider
         };
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        let computed = NativeBearerV7KeyInfo::from_binding(
-            provider.binding(),
-            &spec.identity.profile_id,
-            &spec.identity.descriptor_id,
-            &policy,
-            now,
-            now + i64::try_from(spec.validity_secs).context("V7 validity too large")?,
-        )
-        .map_err(anyhow::Error::msg)?;
-        let metadata = if spec.metadata_path.exists() {
+        let metadata = if metadata_exists {
             let metadata = read_metadata(&spec.metadata_path)?;
-            validate_metadata(&metadata, &computed, &spec.identity, &policy, now, false)?;
+            let identity = identity_for_metadata(spec, &metadata)?;
+            validate_configured_descriptor(spec, &metadata)?;
+            validate_metadata(&metadata, &metadata, &identity, &policy, now, false)?;
+            if role == V7SignerRole::Exchange {
+                validate_exchange_metadata(&metadata, provider.binding(), spec)?;
+            }
             metadata
         } else {
+            let valid_until = now
+                .checked_add(i64::try_from(spec.validity_secs).context("V7 validity too large")?)
+                .context("V7 validity overflow")?;
+            let computed = match role {
+                V7SignerRole::Direct => NativeBearerV7KeyInfo::from_binding(
+                    provider.binding(),
+                    &spec.identity.profile_id,
+                    &spec.identity.descriptor_id,
+                    &policy,
+                    now,
+                    valid_until,
+                )
+                .map_err(anyhow::Error::msg)?,
+                V7SignerRole::Exchange => {
+                    exchange_metadata(provider.binding(), spec, &policy, now, valid_until)?
+                }
+                V7SignerRole::GraphIssuance => NativeBearerV7KeyInfo::from_binding(
+                    provider.binding(),
+                    &spec.identity.profile_id,
+                    &spec.identity.descriptor_id,
+                    &policy,
+                    now,
+                    valid_until,
+                )
+                .map_err(anyhow::Error::msg)?,
+            };
+            if let Some(expected) = &spec.configured_descriptor_id {
+                if computed.descriptor_id != *expected {
+                    bail!(
+                        "configured native V7 descriptor ID does not match generated key material"
+                    );
+                }
+            }
             write_metadata(&spec.metadata_path, &computed)?;
             computed
         };
-        Self::from_parts(spec.identity.clone(), provider, metadata, policy)
+        let identity = identity_for_metadata(spec, &metadata)?;
+        Self::from_parts(identity, provider, metadata, policy)
     }
 
     pub(crate) fn load_existing(spec: &V7SignerSpec, allow_expired: bool) -> Result<Self> {
+        let role = signer_role(spec.identity.profile_id())?;
         if !spec.sk_path.is_file() || !spec.metadata_path.is_file() {
             bail!("V7 signer key and metadata must both exist");
         }
@@ -170,15 +240,13 @@ impl V7Signer {
         )?;
         let metadata = read_metadata(&spec.metadata_path)?;
         let now = OffsetDateTime::now_utc().unix_timestamp();
-        validate_metadata(
-            &metadata,
-            &metadata,
-            &spec.identity,
-            &policy,
-            now,
-            allow_expired,
-        )?;
-        Self::from_parts(spec.identity.clone(), provider, metadata, policy)
+        let identity = identity_for_metadata(spec, &metadata)?;
+        validate_configured_descriptor(spec, &metadata)?;
+        validate_metadata(&metadata, &metadata, &identity, &policy, now, allow_expired)?;
+        if role == V7SignerRole::Exchange {
+            validate_exchange_metadata(&metadata, provider.binding(), spec)?;
+        }
+        Self::from_parts(identity, provider, metadata, policy)
     }
 
     fn from_parts(
@@ -375,6 +443,39 @@ fn validate_blind_representative(
     Ok(())
 }
 
+fn identity_for_metadata(
+    spec: &V7SignerSpec,
+    metadata: &NativeBearerV7KeyInfo,
+) -> Result<V7SignerIdentity> {
+    let binding = metadata.decode_binding().map_err(anyhow::Error::msg)?;
+    if metadata.profile_id != spec.identity.profile_id()
+        || metadata.issuer_id != spec.identity.issuer_id()
+        || metadata.token_key_id != hex::encode(spec.identity.token_key_id().as_bytes())
+        || binding.issuer_id() != spec.identity.issuer_id()
+    {
+        bail!("V7 signer metadata identity does not match configuration");
+    }
+    let descriptor_id = metadata.descriptor_id.clone();
+    V7SignerIdentity::new(
+        spec.identity.issuer_id(),
+        spec.identity.profile_id(),
+        descriptor_id,
+        *spec.identity.token_key_id(),
+    )
+}
+
+fn validate_configured_descriptor(
+    spec: &V7SignerSpec,
+    metadata: &NativeBearerV7KeyInfo,
+) -> Result<()> {
+    if let Some(expected) = &spec.configured_descriptor_id {
+        if metadata.descriptor_id != *expected {
+            bail!("configured V7 descriptor ID does not match persisted metadata");
+        }
+    }
+    Ok(())
+}
+
 fn read_metadata(path: &Path) -> Result<NativeBearerV7KeyInfo> {
     serde_json::from_slice(
         &std::fs::read(path).with_context(|| format!("read V7 metadata {}", path.display()))?,
@@ -407,6 +508,95 @@ fn validate_metadata(
     if actual.valid_from >= actual.valid_until || (!allow_expired && actual.valid_until <= now) {
         bail!("V7 signer metadata has an invalid validity window");
     }
+    Ok(())
+}
+
+fn exchange_metadata(
+    binding: &V7PublicKeyBinding,
+    spec: &V7SignerSpec,
+    policy: &V7BodyPolicy,
+    valid_from: i64,
+    valid_until: i64,
+) -> Result<NativeBearerV7KeyInfo> {
+    let valid_from_u64 = u64::try_from(valid_from).context("invalid V7 exchange start")?;
+    let valid_until_u64 = u64::try_from(valid_until).context("invalid V7 exchange end")?;
+    let token_key_id = hex::encode(binding.identity().token_key_id().as_bytes());
+    let spki_fingerprint = hex::encode(binding.spki_fingerprint());
+    let descriptor_id = freebird_common::api::derive_native_exchange_v3_descriptor_id(
+        &spec.identity.profile_id,
+        binding.identity().issuer_id(),
+        &token_key_id,
+        policy.asset_id(),
+        policy.amount_minor(),
+        freebird_common::api::NATIVE_EXCHANGE_V3_SUITE,
+        3_072,
+        65_537,
+        binding.public_key_spki(),
+        &spki_fingerprint,
+        valid_from_u64,
+        valid_until_u64,
+    )
+    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let metadata = NativeBearerV7KeyInfo {
+        profile_id: spec.identity.profile_id.clone(),
+        issuer_id: binding.identity().issuer_id().to_owned(),
+        descriptor_id,
+        token_key_id,
+        asset_id: policy.asset_id().to_owned(),
+        amount_minor: policy.amount_minor(),
+        suite: freebird_common::api::NATIVE_EXCHANGE_V3_SUITE.to_owned(),
+        modulus_bits: 3_072,
+        exponent: 65_537,
+        pubkey_spki_b64: base64ct::Base64UrlUnpadded::encode_string(binding.public_key_spki()),
+        spki_fingerprint,
+        valid_from,
+        valid_until,
+    };
+    validate_exchange_metadata(&metadata, binding, spec)?;
+    Ok(metadata)
+}
+
+fn validate_exchange_metadata(
+    metadata: &NativeBearerV7KeyInfo,
+    binding: &V7PublicKeyBinding,
+    spec: &V7SignerSpec,
+) -> Result<()> {
+    if metadata.profile_id != freebird_common::api::NATIVE_EXCHANGE_V3_PROFILE_ID
+        || metadata.profile_id != spec.identity.profile_id
+        || metadata.issuer_id != spec.identity.issuer_id
+        || metadata.token_key_id != hex::encode(spec.identity.token_key_id().as_bytes())
+        || metadata.asset_id != spec.asset_id
+        || metadata.amount_minor != spec.amount_minor
+        || metadata.suite != freebird_common::api::NATIVE_EXCHANGE_V3_SUITE
+        || metadata.modulus_bits != 3_072
+        || metadata.exponent != 65_537
+        || metadata.valid_from <= 0
+        || metadata.valid_from >= metadata.valid_until
+        || metadata.valid_until > freebird_common::api::EXCHANGE_MAX_VALID_UNTIL
+    {
+        bail!("invalid native V7 exchange signer metadata");
+    }
+    if metadata.decode_binding().map_err(anyhow::Error::msg)? != *binding {
+        bail!("V7 exchange signer metadata does not match private key");
+    }
+    let descriptor = freebird_common::api::NativeExchangeV3Descriptor {
+        descriptor_id: metadata.descriptor_id.clone(),
+        profile_id: metadata.profile_id.clone(),
+        issuer_id: metadata.issuer_id.clone(),
+        token_key_id: metadata.token_key_id.clone(),
+        asset_id: metadata.asset_id.clone(),
+        amount_minor: metadata.amount_minor.to_string(),
+        suite: metadata.suite.clone(),
+        modulus_bits: metadata.modulus_bits,
+        exponent: metadata.exponent,
+        pubkey_spki_b64: metadata.pubkey_spki_b64.clone(),
+        spki_fingerprint: metadata.spki_fingerprint.clone(),
+        valid_from: u64::try_from(metadata.valid_from).context("invalid V7 exchange start")?,
+        valid_until: u64::try_from(metadata.valid_until).context("invalid V7 exchange end")?,
+    };
+    descriptor
+        .validate()
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     Ok(())
 }
 
@@ -456,7 +646,8 @@ mod tests {
     }
 
     fn spec(root: &Path, id: u8, descriptor: &str) -> V7SignerSpec {
-        spec_with_profile(root, id, "scarcity/native-bearer/v7", descriptor)
+        let _ = descriptor;
+        spec_with_profile(root, id, "scarcity/native-bearer/v7", "")
     }
 
     #[test]
@@ -471,7 +662,17 @@ mod tests {
         )
         .is_err());
 
-        let duplicate_descriptor = spec(root.path(), 2, &"06".repeat(32));
+        let first_descriptor = V7Signer::load_or_generate(&first)
+            .unwrap()
+            .metadata()
+            .descriptor_id
+            .clone();
+        let duplicate_descriptor = spec_with_profile(
+            root.path(),
+            2,
+            "freebird/native-exchange/v3",
+            &first_descriptor,
+        );
         assert!(V7SignerInventory::load_or_generate(
             first.clone(),
             vec![duplicate_descriptor],
@@ -497,7 +698,12 @@ mod tests {
             &root.path().join("registry-durable.json"),
         )
         .unwrap();
-        let changed_descriptor = spec(root.path(), 4, &"09".repeat(32));
+        let changed_descriptor = spec_with_profile(
+            root.path(),
+            4,
+            "scarcity/native-bearer/v7",
+            &"09".repeat(32),
+        );
         assert!(V7SignerInventory::load_or_generate(
             changed_descriptor,
             Vec::new(),
@@ -505,24 +711,84 @@ mod tests {
         )
         .is_err());
 
-        let exchange = spec_with_profile(
-            root.path(),
-            5,
-            "freebird/native-exchange/v3",
-            &"0a".repeat(32),
-        );
+        let exchange = spec_with_profile(root.path(), 5, "freebird/native-exchange/v3", "");
+        let exchange = V7SignerInventory::load_or_generate(
+            exchange,
+            Vec::new(),
+            &root.path().join("registry-exchange.json"),
+        )
+        .unwrap();
         assert_eq!(
-            V7SignerInventory::load_or_generate(
-                exchange,
-                Vec::new(),
-                &root.path().join("registry-exchange.json"),
-            )
-            .unwrap()
-            .active()
-            .identity()
-            .profile_id(),
+            exchange.active().identity().profile_id(),
             "freebird/native-exchange/v3"
         );
+        assert_eq!(
+            exchange.active().identity().descriptor_id(),
+            exchange.active().metadata().descriptor_id
+        );
+    }
+
+    #[test]
+    fn exchange_bootstrap_can_be_pinned_only_to_its_derived_descriptor() {
+        let root = tempdir().unwrap();
+        let bootstrap = spec_with_profile(root.path(), 6, "freebird/native-exchange/v3", "");
+        let registry = root.path().join("exchange-pin-registry.json");
+        let signer = V7SignerInventory::load_or_generate(bootstrap, Vec::new(), &registry).unwrap();
+        let descriptor = signer.active().metadata().descriptor_id.clone();
+
+        let pinned = spec_with_profile(root.path(), 6, "freebird/native-exchange/v3", &descriptor);
+        V7SignerInventory::load_or_generate(pinned, Vec::new(), &registry).unwrap();
+
+        let arbitrary = spec_with_profile(
+            root.path(),
+            6,
+            "freebird/native-exchange/v3",
+            &"aa".repeat(32),
+        );
+        assert!(V7SignerInventory::load_or_generate(arbitrary, Vec::new(), &registry).is_err());
+    }
+
+    #[test]
+    fn fresh_pinned_exchange_never_creates_key_or_metadata() {
+        let root = tempdir().unwrap();
+        let spec = spec_with_profile(
+            root.path(),
+            7,
+            "freebird/native-exchange/v3",
+            &"aa".repeat(32),
+        );
+        let sk_path = spec.sk_path.clone();
+        let metadata_path = spec.metadata_path.clone();
+        assert!(V7SignerInventory::load_or_generate(
+            spec,
+            Vec::new(),
+            &root.path().join("fresh-pin-registry.json"),
+        )
+        .is_err());
+        assert!(!sk_path.exists());
+        assert!(!metadata_path.exists());
+    }
+
+    #[test]
+    fn graph_signer_bootstraps_and_restarts_without_exchange_validation() {
+        let root = tempdir().unwrap();
+        let config = spec_with_profile(
+            root.path(),
+            8,
+            freebird_common::api::NATIVE_GRAPH_ISSUANCE_V7_PROFILE_ID,
+            &"bb".repeat(32),
+        );
+        let registry = root.path().join("graph-registry.json");
+        let first =
+            V7SignerInventory::load_or_generate(config.clone(), Vec::new(), &registry).unwrap();
+        assert_eq!(
+            first.active().metadata().profile_id,
+            freebird_common::api::NATIVE_GRAPH_ISSUANCE_V7_PROFILE_ID
+        );
+        assert_eq!(first.active().metadata().descriptor_id, "bb".repeat(32));
+
+        let restarted = V7SignerInventory::load_or_generate(config, Vec::new(), &registry).unwrap();
+        assert_eq!(restarted.active().metadata().descriptor_id, "bb".repeat(32));
     }
 
     #[tokio::test]

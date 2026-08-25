@@ -6,8 +6,8 @@ eight required checks before creating the tag. Do not tag a commit that has not
 first landed on `main`:
 
 ```bash
-git tag -a v0.9.0 -m "Freebird 0.9.0"
-git push origin v0.9.0
+git tag -a v0.10.0 -m "Freebird 0.10.0"
+git push origin v0.10.0
 ```
 
 Pushing a `v*` tag starts two workflows:
@@ -24,6 +24,21 @@ Pushing a dedicated `sdk-v*` tag starts the `Publish @flammafex/freebird` workfl
 It validates, packs, consumer-tests, and publishes the `@flammafex/freebird` npm
 package. It uses the protected `npm-publish` GitHub Environment and a granular
 npm automation token; it does not use OIDC or npm provenance.
+
+## v0.10.0 V7 canonical-descriptor migration
+
+v0.10.0 derives canonical direct and exchange descriptor IDs from finalized
+signer metadata and the canonical exchange descriptor transcript. Old arbitrary
+descriptor IDs are rejected. The corrected exchange transcript therefore
+invalidates prior exchange, keyset, transition, and graph-policy derived IDs.
+
+Before releasing or upgrading an affected V7 deployment, operators must
+regenerate and rotate the affected signer metadata, then regenerate the V7
+registry and discovery/history from the canonical material. Do not reuse old V7
+signer metadata, registry, discovery, keyset, transition, graph-policy, or other
+derived data. For direct bootstrap, start once without
+`NATIVE_BEARER_V7_DESCRIPTOR_ID`, persist the derived canonical output, and only
+then optionally pin that public expected value for subsequent starts.
 
 ## npm SDK publishing
 
@@ -70,7 +85,7 @@ Before creating an SDK release tag, configure all of the following:
   `security`, `javascript-sdk`, `repository-hygiene`, and `compose-smoke`.
 - Create a GitHub repository ruleset targeting `sdk-v*.*.*`. Restrict tag
   creation to release maintainers, block tag updates and deletions, and block
-  force pushes. Once `sdk-v0.9.0` is created, do not retarget or recreate it.
+  force pushes. Once `sdk-v0.10.0` is created, do not retarget or recreate it.
 - Require the `npm-publish` Environment for the publishing job, with required
   reviewers and the `NPM_TOKEN` environment secret. Allow `main` only because
   manual dispatch is constrained to protected `main`; tag pushes use
@@ -81,21 +96,23 @@ to `origin/main`, runs `scripts/release-gate.py` for the exact SHA, and checks
 out that SHA for packaging. Neither a moving branch nor a manually supplied
 SHA can bypass the gate.
 
-### First publication (`@flammafex/freebird@0.9.0`)
+### SDK release (`@flammafex/freebird@0.10.0`)
 
 SDK npm releases use dedicated immutable `sdk-vMAJOR.MINOR.PATCH` tags rather
 than the Rust/container `v*` tags. After the npm organization, token, and
 Environment are configured:
 
+The SDK release requires Node.js 24 or newer.
+
 1. In the reviewed release commit, update `sdk/js/package.json` and the root
-   `sdk/js/package-lock.json` entry to `0.9.0`. Confirm that their names and
+   `sdk/js/package-lock.json` entry to `0.10.0`. Confirm that their names and
    versions match exactly, merge that commit to protected `main`, and wait for
    all required CI checks to pass.
 2. Create and push the dedicated tag only after that review and gate:
 
    ```bash
-   git tag -a sdk-v0.9.0 <reviewed-commit> -m "Publish @flammafex/freebird 0.9.0"
-   git push origin sdk-v0.9.0
+   git tag -a sdk-v0.10.0 <reviewed-commit> -m "Publish @flammafex/freebird 0.10.0"
+   git push origin sdk-v0.10.0
    ```
 
 3. The tag push starts the workflow. Alternatively, start it manually from
@@ -103,7 +120,7 @@ Environment are configured:
    and gates that tag commit and cannot select a branch or SHA:
 
    ```bash
-   gh workflow run npm-publish.yml --ref main -f tag=sdk-v0.9.0
+   gh workflow run npm-publish.yml --ref main -f tag=sdk-v0.10.0
    ```
 
 4. Approve the `npm-publish` Environment deployment and wait for the workflow's
@@ -122,12 +139,12 @@ The workflow run is the first verification. A maintainer should also confirm
 the public registry record and both consumer forms after publication:
 
 ```bash
-npm view @flammafex/freebird@0.9.0 version dist.tarball --registry=https://registry.npmjs.org
+npm view @flammafex/freebird@0.10.0 version dist.tarball --registry=https://registry.npmjs.org
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 cd "$tmp"
 npm init --yes >/dev/null
-npm install --ignore-scripts --no-audit --no-fund @flammafex/freebird@0.9.0 typescript@^5
+npm install --ignore-scripts --no-audit --no-fund @flammafex/freebird@0.10.0 typescript@^5
 node --input-type=module --eval "import('@flammafex/freebird').then(({FreebirdClient, crypto}) => { if (typeof FreebirdClient !== 'function' || typeof crypto.blind !== 'function') process.exit(1); })"
 node --eval "const {FreebirdClient, crypto} = require('@flammafex/freebird'); if (typeof FreebirdClient !== 'function' || typeof crypto.blind !== 'function') process.exit(1)"
 ```
@@ -189,7 +206,7 @@ The archive contains:
 Verify the archive checksum before installing:
 
 ```bash
-sha256sum -c freebird-0.9.0-linux-x86_64.tar.gz.sha256
+sha256sum -c freebird-0.10.0-linux-x86_64.tar.gz.sha256
 ```
 
 ## Container Images
@@ -197,10 +214,10 @@ sha256sum -c freebird-0.9.0-linux-x86_64.tar.gz.sha256
 Tag releases publish:
 
 ```text
-ghcr.io/flammafex/freebird-issuer:0.9.0
-ghcr.io/flammafex/freebird-issuer:0.9
-ghcr.io/flammafex/freebird-verifier:0.9.0
-ghcr.io/flammafex/freebird-verifier:0.9
+ghcr.io/flammafex/freebird-issuer:0.10.0
+ghcr.io/flammafex/freebird-issuer:0.10
+ghcr.io/flammafex/freebird-verifier:0.10.0
+ghcr.io/flammafex/freebird-verifier:0.10
 ```
 
 The default branch also publishes `latest`. Production deployments must replace
@@ -215,7 +232,7 @@ After installing `cosign`, verify a pinned image digest with:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/.*/.github/workflows/docker.yml@refs/tags/v0.9.0' \
+  --certificate-identity-regexp 'https://github.com/.*/.github/workflows/docker.yml@refs/tags/v0.10.0' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/flammafex/freebird-issuer@sha256:<digest>
 ```

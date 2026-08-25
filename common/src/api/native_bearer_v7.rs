@@ -4,6 +4,7 @@
 
 use base64ct::{Base64UrlUnpadded, Encoding};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 pub const NATIVE_BEARER_V7_PROFILE_ID: &str = "scarcity/native-bearer/v7";
 pub const NATIVE_BEARER_V7_SUITE: &str = "RSABSSA-SHA384-PSS-Randomized-V7";
@@ -53,10 +54,28 @@ impl NativeBearerV7KeyInfo {
         valid_from: i64,
         valid_until: i64,
     ) -> Result<Self, String> {
+        let descriptor_id = if profile_id == NATIVE_BEARER_V7_PROFILE_ID {
+            derive_native_bearer_v7_descriptor_id(
+                profile_id,
+                binding.identity().issuer_id(),
+                &hex::encode(binding.identity().token_key_id().as_bytes()),
+                policy.asset_id(),
+                NATIVE_BEARER_V7_SUITE,
+                NATIVE_BEARER_V7_MODULUS_BITS,
+                NATIVE_BEARER_V7_EXPONENT,
+                binding.public_key_spki(),
+                &hex::encode(binding.spki_fingerprint()),
+                policy.amount_minor(),
+                valid_from,
+                valid_until,
+            )?
+        } else {
+            descriptor_id.to_owned()
+        };
         let info = Self {
             profile_id: profile_id.to_owned(),
             issuer_id: binding.identity().issuer_id().to_owned(),
-            descriptor_id: descriptor_id.to_owned(),
+            descriptor_id,
             token_key_id: hex::encode(binding.identity().token_key_id().as_bytes()),
             asset_id: policy.asset_id().to_owned(),
             amount_minor: policy.amount_minor(),
@@ -100,6 +119,25 @@ impl NativeBearerV7KeyInfo {
         {
             return Err("non-canonical or mismatched V7 public key metadata".into());
         }
+        if self.profile_id == NATIVE_BEARER_V7_PROFILE_ID {
+            let expected = derive_native_bearer_v7_descriptor_id(
+                &self.profile_id,
+                &self.issuer_id,
+                &self.token_key_id,
+                &self.asset_id,
+                &self.suite,
+                self.modulus_bits,
+                self.exponent,
+                &spki,
+                &self.spki_fingerprint,
+                self.amount_minor,
+                self.valid_from,
+                self.valid_until,
+            )?;
+            if self.descriptor_id != expected {
+                return Err("non-canonical native V7 direct descriptor ID".into());
+            }
+        }
         Ok(binding)
     }
 
@@ -120,6 +158,8 @@ impl NativeBearerV7KeyInfo {
             || self.profile_id.len() > 128
             || !self.profile_id.is_ascii()
             || self.issuer_id.is_empty()
+            || !self.issuer_id.is_ascii()
+            || !self.asset_id.is_ascii()
             || self.suite != NATIVE_BEARER_V7_SUITE
             || self.modulus_bits != NATIVE_BEARER_V7_MODULUS_BITS
             || self.exponent != NATIVE_BEARER_V7_EXPONENT
@@ -133,6 +173,58 @@ impl NativeBearerV7KeyInfo {
             .map_err(|error| format!("invalid native V7 fixed body policy: {error:?}"))?;
         Ok(())
     }
+}
+
+/// Compute the SDK-frozen descriptor identity for a direct V7 bearer record.
+///
+/// Every variable-length value uses a big-endian u32 byte length followed by
+/// its raw bytes. This framing is shared with the JavaScript SDK.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_native_bearer_v7_descriptor_id(
+    profile_id: &str,
+    issuer_id: &str,
+    token_key_id: &str,
+    asset_id: &str,
+    suite: &str,
+    modulus_bits: u16,
+    exponent: u32,
+    spki: &[u8],
+    spki_fingerprint: &str,
+    amount_minor: u64,
+    valid_from: i64,
+    valid_until: i64,
+) -> Result<String, String> {
+    if [profile_id, issuer_id, token_key_id, asset_id, suite]
+        .iter()
+        .any(|value| !value.is_ascii())
+        || !spki_fingerprint.is_ascii()
+    {
+        return Err("descriptor transcript text must be ASCII".into());
+    }
+    let valid_from = u64::try_from(valid_from).map_err(|_| "negative valid_from")?;
+    let valid_until = u64::try_from(valid_until).map_err(|_| "negative valid_until")?;
+    let mut transcript = Vec::new();
+    for value in [profile_id, issuer_id, token_key_id, asset_id, suite] {
+        append_length_prefixed(&mut transcript, value.as_bytes())?;
+    }
+    transcript.extend_from_slice(&modulus_bits.to_be_bytes());
+    transcript.extend_from_slice(&exponent.to_be_bytes());
+    append_length_prefixed(&mut transcript, spki)?;
+    append_length_prefixed(&mut transcript, spki_fingerprint.as_bytes())?;
+    transcript.extend_from_slice(&amount_minor.to_be_bytes());
+    transcript.extend_from_slice(&valid_from.to_be_bytes());
+    transcript.extend_from_slice(&valid_until.to_be_bytes());
+
+    let mut input = b"scarcity native bearer descriptor v7\0".to_vec();
+    input.extend_from_slice(&transcript);
+    Ok(hex::encode(Sha256::digest(input)))
+}
+
+fn append_length_prefixed(output: &mut Vec<u8>, value: &[u8]) -> Result<(), String> {
+    let length = u32::try_from(value.len()).map_err(|_| "descriptor transcript value too long")?;
+    output.extend_from_slice(&length.to_be_bytes());
+    output.extend_from_slice(value);
+    Ok(())
 }
 
 fn decode_lower_hex_32(value: &str, field: &str) -> Result<[u8; 32], String> {
@@ -264,7 +356,7 @@ mod tests {
     }
 
     #[test]
-    fn native_v7_metadata_preserves_explicit_role_profile_and_descriptor() {
+    fn native_v7_metadata_derives_direct_descriptor_but_preserves_other_roles() {
         let (_, binding) = provider_binding();
         let descriptor = "09".repeat(32);
         let info = NativeBearerV7KeyInfo::from_binding(
@@ -279,6 +371,18 @@ mod tests {
         assert_eq!(info.profile_id, "freebird/native-exchange/v3");
         assert_eq!(info.descriptor_id, descriptor);
         assert!(info.decode_binding().is_ok());
+
+        let direct = NativeBearerV7KeyInfo::from_binding(
+            &binding,
+            NATIVE_BEARER_V7_PROFILE_ID,
+            &descriptor,
+            &policy(),
+            1,
+            2,
+        )
+        .unwrap();
+        assert_ne!(direct.descriptor_id, descriptor);
+        assert!(direct.validate().is_ok());
     }
 
     #[test]
@@ -307,6 +411,15 @@ mod tests {
         invalid.descriptor_id = invalid.spki_fingerprint.clone();
         assert!(invalid.validate().is_err());
         let mut invalid = info.clone();
+        let replacement = if invalid.descriptor_id.starts_with('f') {
+            "0"
+        } else {
+            "f"
+        };
+        invalid.descriptor_id.replace_range(0..1, replacement);
+        assert_ne!(invalid.descriptor_id, info.descriptor_id);
+        assert!(invalid.validate().is_err());
+        let mut invalid = info.clone();
         invalid.pubkey_spki_b64.push('=');
         assert!(invalid.validate().is_err());
         let mut invalid = info.clone();
@@ -326,8 +439,35 @@ mod tests {
         .unwrap();
         invalid.asset_id.clear();
         assert!(invalid.validate().is_err());
+        invalid.asset_id = "EÜ".into();
+        assert!(invalid.validate().is_err());
+        invalid.asset_id = "USD".into();
+        invalid.issuer_id = "issuer:é".into();
+        assert!(invalid.validate().is_err());
         invalid.amount_minor = 0;
         assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn direct_descriptor_transcript_matches_frozen_vector() {
+        assert_eq!(
+            derive_native_bearer_v7_descriptor_id(
+                NATIVE_BEARER_V7_PROFILE_ID,
+                "issuer:test",
+                &"07".repeat(32),
+                "USD",
+                NATIVE_BEARER_V7_SUITE,
+                3072,
+                65_537,
+                &[1, 2, 3],
+                &"ab".repeat(32),
+                42,
+                1,
+                2,
+            )
+            .unwrap(),
+            "c293e13a215ac4ffcc1ac0683212aca1b3a693f4417dc2e11733c696e3ab07b2"
+        );
     }
 
     #[test]

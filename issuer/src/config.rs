@@ -49,6 +49,7 @@ pub struct NativeBearerV7Config {
     pub metadata_path: PathBuf,
     pub registry_path: PathBuf,
     pub profile_id: String,
+    #[serde(default)]
     pub descriptor_id: String,
     /// Explicit lowercase hexadecimal encoding of the raw 32-byte V7 key ID.
     pub token_key_id: String,
@@ -87,7 +88,9 @@ impl NativeBearerV7Config {
             profile_id: env::var("NATIVE_BEARER_V7_PROFILE_ID")
                 .unwrap_or_else(|_| freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into()),
             descriptor_id: env::var("NATIVE_BEARER_V7_DESCRIPTOR_ID")
-                .context("NATIVE_BEARER_V7_DESCRIPTOR_ID is required")?,
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .unwrap_or_default(),
             token_key_id: env::var("NATIVE_BEARER_V7_TOKEN_KEY_ID")
                 .context("NATIVE_BEARER_V7_TOKEN_KEY_ID is required")?,
             asset_id: env::var("NATIVE_BEARER_V7_ASSET_ID")
@@ -104,7 +107,6 @@ impl NativeBearerV7Config {
         };
         if config.validity_secs == 0
             || config.profile_id.trim().is_empty()
-            || config.descriptor_id.trim().is_empty()
             || config.token_key_id.len() != 64
             || !config
                 .token_key_id
@@ -113,8 +115,16 @@ impl NativeBearerV7Config {
         {
             anyhow::bail!("invalid NATIVE_BEARER_V7 configuration")
         }
-        freebird_common::api::validate_v7_canonical_id(&config.descriptor_id, "descriptor_id")
-            .map_err(anyhow::Error::msg)?;
+        if config.profile_id != freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID {
+            anyhow::bail!(
+                "NATIVE_BEARER_V7_PROFILE_ID must be {}",
+                freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID
+            )
+        }
+        if !config.descriptor_id.is_empty() {
+            freebird_common::api::validate_v7_canonical_id(&config.descriptor_id, "descriptor_id")
+                .map_err(anyhow::Error::msg)?;
+        }
         freebird_crypto::V7BodyPolicy::new(config.asset_id.clone(), config.amount_minor)
             .map_err(|error| anyhow::anyhow!("invalid V7 body policy: {error:?}"))?;
         Ok(config)
@@ -122,15 +132,11 @@ impl NativeBearerV7Config {
 }
 
 pub(crate) fn load_v7_additional_signer_configs() -> Result<Vec<NativeBearerV7Config>> {
-    let Some(raw_paths) = env::var("NATIVE_V7_SIGNER_CONFIG_PATHS").ok() else {
-        return Ok(Vec::new());
-    };
+    let paths = parse_v7_additional_signer_config_paths(
+        env::var("NATIVE_V7_SIGNER_CONFIG_PATHS").ok().as_deref(),
+    )?;
     let mut configs = Vec::new();
-    for raw_path in raw_paths.split(',') {
-        let path = PathBuf::from(raw_path.trim());
-        if path.as_os_str().is_empty() {
-            anyhow::bail!("NATIVE_V7_SIGNER_CONFIG_PATHS contains an empty path")
-        }
+    for path in paths {
         let value: serde_json::Value = serde_json::from_slice(
             &std::fs::read(&path)
                 .with_context(|| format!("read V7 signer config {}", path.display()))?,
@@ -147,6 +153,23 @@ pub(crate) fn load_v7_additional_signer_configs() -> Result<Vec<NativeBearerV7Co
         configs.append(&mut parsed);
     }
     Ok(configs)
+}
+
+fn parse_v7_additional_signer_config_paths(raw_paths: Option<&str>) -> Result<Vec<PathBuf>> {
+    let Some(raw_paths) = raw_paths.filter(|paths| !paths.trim().is_empty()) else {
+        return Ok(Vec::new());
+    };
+
+    raw_paths
+        .split(',')
+        .map(|raw_path| {
+            let path = PathBuf::from(raw_path.trim());
+            if path.as_os_str().is_empty() {
+                anyhow::bail!("NATIVE_V7_SIGNER_CONFIG_PATHS contains an empty path")
+            }
+            Ok(path)
+        })
+        .collect()
 }
 
 #[derive(Clone)]
@@ -573,9 +596,8 @@ fn validate_v7_signer_config(config: &NativeBearerV7Config) -> Result<()> {
         || config.metadata_path.as_os_str().is_empty()
         || config.registry_path.as_os_str().is_empty()
         || config.profile_id.trim().is_empty()
-        || config.descriptor_id.trim().is_empty()
     {
-        anyhow::bail!("V7 signer paths, profile, and descriptor must not be empty")
+        anyhow::bail!("V7 signer paths and profile must not be empty")
     }
     if config.validity_secs == 0 {
         anyhow::bail!("V7 signer validity must be positive")
@@ -588,9 +610,11 @@ fn validate_v7_signer_config(config: &NativeBearerV7Config) -> Result<()> {
     {
         anyhow::bail!("V7 signer token key ID must be 64 lowercase hexadecimal characters")
     }
-    freebird_common::api::validate_v7_canonical_id(&config.descriptor_id, "descriptor_id")
-        .map_err(anyhow::Error::msg)?;
-    if config.descriptor_id == config.token_key_id {
+    if !config.descriptor_id.trim().is_empty() {
+        freebird_common::api::validate_v7_canonical_id(&config.descriptor_id, "descriptor_id")
+            .map_err(anyhow::Error::msg)?;
+    }
+    if !config.descriptor_id.is_empty() && config.descriptor_id == config.token_key_id {
         anyhow::bail!("V7 signer token and descriptor identifiers must be distinct")
     }
     freebird_crypto::V7BodyPolicy::new(config.asset_id.clone(), config.amount_minor)
@@ -871,4 +895,58 @@ fn generate_random_salt() -> String {
     let mut salt = [0u8; 32];
     OsRng.fill_bytes(&mut salt);
     hex::encode(salt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        parse_v7_additional_signer_config_paths, validate_v7_signer_config, NativeBearerV7Config,
+    };
+    use std::path::PathBuf;
+
+    #[test]
+    fn unset_v7_additional_signer_config_paths_are_empty() {
+        assert_eq!(
+            parse_v7_additional_signer_config_paths(None).unwrap(),
+            Vec::<PathBuf>::new()
+        );
+    }
+
+    #[test]
+    fn empty_v7_additional_signer_config_paths_are_empty() {
+        assert_eq!(
+            parse_v7_additional_signer_config_paths(Some("")).unwrap(),
+            Vec::<PathBuf>::new()
+        );
+    }
+
+    #[test]
+    fn whitespace_only_v7_additional_signer_config_paths_are_empty() {
+        assert_eq!(
+            parse_v7_additional_signer_config_paths(Some(" \t\n ")).unwrap(),
+            Vec::<PathBuf>::new()
+        );
+    }
+
+    #[test]
+    fn internal_empty_v7_additional_signer_config_path_is_rejected() {
+        assert!(parse_v7_additional_signer_config_paths(Some("first,,second")).is_err());
+    }
+
+    #[test]
+    fn graph_signer_descriptor_may_be_bootstrapped_or_pinned() {
+        let base = PathBuf::from("graph-v7-test");
+        let config = NativeBearerV7Config {
+            sk_path: base.join("signer.der"),
+            metadata_path: base.join("signer.json"),
+            registry_path: base.join("registry.json"),
+            profile_id: freebird_common::api::NATIVE_GRAPH_ISSUANCE_V7_PROFILE_ID.into(),
+            descriptor_id: String::new(),
+            token_key_id: "01".repeat(32),
+            asset_id: "USD".into(),
+            amount_minor: 1,
+            validity_secs: 3600,
+        };
+        assert!(validate_v7_signer_config(&config).is_ok());
+    }
 }

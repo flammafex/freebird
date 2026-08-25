@@ -207,14 +207,14 @@ check_configuration() {
 
     if grep -Eq '^[[:space:]]*NATIVE_BEARER_V7_ENABLE=(true|1)' "$ENV_FILE"; then
         check_pass "NATIVE_BEARER_V7_ENABLE is enabled"
-        for required in NATIVE_BEARER_V7_SK_PATH NATIVE_BEARER_V7_METADATA_PATH NATIVE_BEARER_V7_REGISTRY_PATH NATIVE_BEARER_V7_PROFILE_ID NATIVE_BEARER_V7_DESCRIPTOR_ID NATIVE_BEARER_V7_TOKEN_KEY_ID NATIVE_BEARER_V7_ASSET_ID NATIVE_BEARER_V7_AMOUNT_MINOR; do
+        for required in NATIVE_BEARER_V7_SK_PATH NATIVE_BEARER_V7_METADATA_PATH NATIVE_BEARER_V7_REGISTRY_PATH NATIVE_BEARER_V7_PROFILE_ID NATIVE_BEARER_V7_TOKEN_KEY_ID NATIVE_BEARER_V7_ASSET_ID NATIVE_BEARER_V7_AMOUNT_MINOR; do
             if grep -Eq "^[[:space:]]*${required}=.+" "$ENV_FILE"; then
                 check_pass "${required} is configured"
             else
                 check_fail "${required} is required for V7 native bearer deployment"
             fi
         done
-        for id_name in NATIVE_BEARER_V7_DESCRIPTOR_ID NATIVE_BEARER_V7_TOKEN_KEY_ID; do
+        for id_name in NATIVE_BEARER_V7_TOKEN_KEY_ID; do
             id_value=$(awk -F= -v name="$id_name" '$1 ~ "^[[:space:]]*" name "[[:space:]]*$" { value=$2 } END { gsub(/"/, "", value); gsub(/\047/, "", value); print value }' "$ENV_FILE")
             if printf '%s' "$id_value" | grep -Eq '^[0-9a-f]{64}$'; then
                 check_pass "${id_name} is canonical lowercase hexadecimal"
@@ -222,6 +222,14 @@ check_configuration() {
                 check_fail "${id_name} must be 64 lowercase hexadecimal characters"
             fi
         done
+        descriptor_id=$(awk -F= '/^[[:space:]]*NATIVE_BEARER_V7_DESCRIPTOR_ID[[:space:]]*=/ { value=$2 } END { gsub(/"/, "", value); gsub(/\047/, "", value); print value }' "$ENV_FILE")
+        if [[ -z "$descriptor_id" ]]; then
+            check_pass "NATIVE_BEARER_V7_DESCRIPTOR_ID is omitted; issuer derives the canonical pin"
+        elif printf '%s' "$descriptor_id" | grep -Eq '^[0-9a-f]{64}$'; then
+            check_pass "NATIVE_BEARER_V7_DESCRIPTOR_ID is an optional canonical lowercase hexadecimal pin"
+        else
+            check_fail "NATIVE_BEARER_V7_DESCRIPTOR_ID must be 64 lowercase hexadecimal characters when set"
+        fi
     else
         check_fail "NATIVE_BEARER_V7_ENABLE=true is required; V7 native bearer issuance is mandatory"
     fi

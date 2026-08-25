@@ -50,7 +50,7 @@ Key files to know:
 ## Setup
 
 Requires: Rust stable, Cargo. Redis optional for local source testing
-(auto-skips when unreachable). Node.js only for the TS SDK.
+(auto-skips when unreachable). Node.js 24 or newer is required for the TS SDK.
 
 ```bash
 cargo build --workspace
@@ -72,7 +72,7 @@ cargo run -p freebird-issuer --bin freebird-issuer
 ADMIN_API_KEY=local-admin-key-must-be-at-least-32-chars \
 BIND_ADDR=127.0.0.1:8082 VERIFIER_ID=verifier:local:v4 VERIFIER_AUDIENCE=local \
 ISSUER_URL=http://127.0.0.1:8081/.well-known/issuer \
-VERIFIER_ACCEPTED_TOKEN_VERSIONS=v4 VERIFIER_ENV=development \
+VERIFIER_ACCEPTED_TOKEN_VERSIONS=v4,v7 VERIFIER_ENV=development \
 IN_MEMORY_REPLAY_STORE=true VERIFIER_SK_PATH=issuer_sk.bin \
 REFRESH_INTERVAL_MIN=1 REQUIRE_TLS=false \
 cargo run -p freebird-verifier --bin freebird-verifier
@@ -125,7 +125,7 @@ docker-compose build issuer verifier
 ## Coding conventions
 
 - **Edition 2021**, workspace `resolver = "2"`, all crates versioned in
-  lockstep (currently `0.9.0`). Bump all crates together for each release.
+  lockstep (currently `0.10.0`). Bump all crates together for each release.
 - **License header** on source files:
   `// SPDX-License-Identifier: Apache-2.0 OR MIT`
   Manifests: `license = "MIT OR Apache-2.0"`.
@@ -177,7 +177,7 @@ docker-compose build issuer verifier
 - **Update docs in the same PR** when changing: HTTP API, env vars, Sybil
   modes, token wire formats, or deployment. Docs live in `docs/` and
   `README.md`.
-- **Keep crate versions in lockstep.** The current release is `0.9.0`; when
+- **Keep crate versions in lockstep.** The current release is `0.10.0`; when
   preparing a release, bump all workspace crates together and update
   `Cargo.lock`.
 - **Do not introduce dependency version skew.** Currently issuer uses

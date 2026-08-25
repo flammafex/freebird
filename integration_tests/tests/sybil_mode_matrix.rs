@@ -65,7 +65,7 @@ async fn build_state(
                 metadata_path: native_root.path().join("v7.json"),
                 registry_path: native_root.path().join("registry.json"),
                 profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
-                descriptor_id: "71".repeat(32),
+                descriptor_id: String::new(),
                 token_key_id: "72".repeat(32),
                 asset_id: "USD".into(),
                 amount_minor: 1,

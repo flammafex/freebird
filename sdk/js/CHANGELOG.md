@@ -5,6 +5,19 @@ All notable changes to `@flammafex/freebird` are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-08-24
+
+This is a breaking release. The SDK supports V4 and V7; V5 and V2 have been
+removed, and V6 is reserved and rejected. Node.js 24 or newer is required.
+
+V7 discovery consumed by this release uses canonical direct and exchange
+descriptor IDs derived from finalized signer material. Legacy arbitrary
+descriptors are rejected by the service. The exchange descriptor transcript
+correction invalidates prior exchange, keyset, transition, and graph-policy
+derived IDs; operators must regenerate and rotate affected signer metadata,
+then publish registry/discovery material regenerated from canonical inputs.
+Clients must refresh discovery rather than reuse old V7 data.
+
 ## [0.9.0] - 2026-08-08
 
 First public SDK release. This version is aligned with the Freebird Rust
@@ -162,4 +175,5 @@ Initial development release of the Freebird TypeScript SDK.
 
 [0.2.0]: https://git.carpocratian.org/sibyl/freebird
 [0.1.0]: https://git.carpocratian.org/sibyl/freebird
+[0.10.0]: https://git.carpocratian.org/sibyl/freebird
 [0.9.0]: https://git.carpocratian.org/sibyl/freebird

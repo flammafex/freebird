@@ -154,11 +154,6 @@ spec:
               value: /data/keys/invitation_signing_key.bin
             - name: NATIVE_EXCHANGE_V7_REDIS_URL
               value: redis://:$(REDIS_PASSWORD)@redis:6379
-            - name: NATIVE_BEARER_V7_DESCRIPTOR_ID
-              valueFrom:
-                secretKeyRef:
-                  name: native-bearer-v7-credentials
-                  key: descriptor-id
             - name: NATIVE_BEARER_V7_TOKEN_KEY_ID
               valueFrom:
                 secretKeyRef:

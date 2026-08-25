@@ -74,6 +74,7 @@ impl V7ExchangeEngine {
         if graph_id != discovery.profile.graph_id {
             bail!("V7 exchange graph identity does not match discovery profile")
         }
+        crate::startup::validate_v7_exchange_inventory(&discovery, &inventory)?;
         let mut descriptors = BTreeMap::new();
         for descriptor in discovery
             .active_descriptors
@@ -368,10 +369,20 @@ impl V7ExchangeEngine {
             V7TokenKeyId::new(token_key_id),
         )?;
         let signer = self.inventory.lookup(&identity)?;
-        if signer.metadata().spki_fingerprint != descriptor.spki_fingerprint
-            || signer.metadata().pubkey_spki_b64 != descriptor.pubkey_spki_b64
-            || signer.metadata().profile_id != descriptor.profile_id
-            || signer.metadata().descriptor_id != descriptor.descriptor_id
+        let metadata = signer.metadata();
+        if metadata.profile_id != descriptor.profile_id
+            || metadata.issuer_id != descriptor.issuer_id
+            || metadata.descriptor_id != descriptor.descriptor_id
+            || metadata.token_key_id != descriptor.token_key_id
+            || metadata.asset_id != descriptor.asset_id
+            || metadata.amount_minor.to_string() != descriptor.amount_minor
+            || metadata.suite != descriptor.suite
+            || metadata.modulus_bits != descriptor.modulus_bits
+            || metadata.exponent != descriptor.exponent
+            || metadata.pubkey_spki_b64 != descriptor.pubkey_spki_b64
+            || metadata.spki_fingerprint != descriptor.spki_fingerprint
+            || u64::try_from(metadata.valid_from).ok() != Some(descriptor.valid_from)
+            || u64::try_from(metadata.valid_until).ok() != Some(descriptor.valid_until)
         {
             bail!("V7 output descriptor does not match immutable signer inventory")
         }

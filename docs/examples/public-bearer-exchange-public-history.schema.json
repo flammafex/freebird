@@ -1,6 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Freebird public bearer exchange V2 public history",
+  "title": "Historical/legacy Freebird public bearer exchange V2 public history (rejected in v0.10.0)",
+  "description": "Historical schema retained for provenance only. V2 is rejected in v0.10.0 and this is not a current supported example.",
   "type": "object",
   "additionalProperties": false,
   "properties": {

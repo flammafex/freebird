@@ -25,23 +25,34 @@ impl NativeBearerV7Issuer {
         config: &NativeBearerV7Config,
         issuer_id: &str,
     ) -> Result<Self> {
+        validate_direct_profile(config)?;
         let spec = V7SignerSpec::from_native_config(config, issuer_id)?;
-        inventory.lookup(&spec.identity)?;
-        let crypto_identity = spec.identity.crypto_identity()?;
+        let active = inventory.active();
+        if active.identity().issuer_id() != issuer_id
+            || active.identity().profile_id() != config.profile_id
+            || active.identity().token_key_id() != spec.identity.token_key_id()
+            || (!config.descriptor_id.trim().is_empty()
+                && active.identity().descriptor_id() != config.descriptor_id)
+        {
+            anyhow::bail!("configured direct V7 signer is not the active inventory signer");
+        }
+        let active_identity = active.identity().clone();
+        let crypto_identity = active_identity.crypto_identity()?;
         Ok(Self {
             inventory,
-            active_identity: spec.identity,
+            active_identity,
             crypto_identity,
         })
     }
 
     /// Load or create the direct signer and reserve it in the V7 registry.
     pub fn load_or_generate(config: &NativeBearerV7Config, issuer_id: &str) -> Result<Self> {
+        validate_direct_profile(config)?;
         let spec = V7SignerSpec::from_native_config(config, issuer_id)?;
-        let active_identity = spec.identity.clone();
-        let crypto_identity = spec.identity.crypto_identity()?;
         let inventory =
             V7SignerInventory::load_or_generate(spec, Vec::new(), &config.registry_path)?;
+        let active_identity = inventory.active().identity().clone();
+        let crypto_identity = active_identity.crypto_identity()?;
         Ok(Self {
             inventory: Arc::new(inventory),
             active_identity,
@@ -51,11 +62,12 @@ impl NativeBearerV7Issuer {
 
     /// Load existing direct material without creating or reserving files.
     pub fn load_existing(config: &NativeBearerV7Config, issuer_id: &str) -> Result<Self> {
+        validate_direct_profile(config)?;
         let spec = V7SignerSpec::from_native_config(config, issuer_id)?;
         let signer = Arc::new(crate::v7_signers::V7Signer::load_existing(&spec, false)?);
-        let active_identity = spec.identity.clone();
-        let crypto_identity = spec.identity.crypto_identity()?;
         let inventory = V7SignerInventory::from_signers(signer.clone(), vec![signer], None)?;
+        let active_identity = inventory.active().identity().clone();
+        let crypto_identity = active_identity.crypto_identity()?;
         Ok(Self {
             inventory: Arc::new(inventory),
             active_identity,
@@ -103,6 +115,16 @@ impl NativeBearerV7Issuer {
     }
 }
 
+fn validate_direct_profile(config: &NativeBearerV7Config) -> Result<()> {
+    if config.profile_id != freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID {
+        anyhow::bail!(
+            "direct native V7 issuer requires profile {}",
+            freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,7 +138,7 @@ mod tests {
             metadata_path: root.path().join("v7.json"),
             registry_path: root.path().join("registry.json"),
             profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
-            descriptor_id: "10".repeat(32),
+            descriptor_id: String::new(),
             token_key_id: "11".repeat(32),
             asset_id: "USD".into(),
             amount_minor: 1,
@@ -125,5 +147,64 @@ mod tests {
         let issuer = NativeBearerV7Issuer::load_or_generate(&config, "issuer:test").unwrap();
         assert_eq!(issuer.inventory().len(), 1);
         assert_eq!(issuer.metadata().token_key_id, "11".repeat(32));
+    }
+
+    #[test]
+    fn direct_descriptor_bootstrap_restart_and_pin_contract() {
+        let root = tempdir().unwrap();
+        let config = NativeBearerV7Config {
+            sk_path: root.path().join("v7.der"),
+            metadata_path: root.path().join("v7.json"),
+            registry_path: root.path().join("registry.json"),
+            profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
+            descriptor_id: String::new(),
+            token_key_id: "21".repeat(32),
+            asset_id: "USD".into(),
+            amount_minor: 7,
+            validity_secs: 3600,
+        };
+        let first = NativeBearerV7Issuer::load_or_generate(&config, "issuer:test").unwrap();
+        let descriptor = first.metadata().descriptor_id.clone();
+        let validity = (first.metadata().valid_from, first.metadata().valid_until);
+
+        let restarted = NativeBearerV7Issuer::load_or_generate(&config, "issuer:test").unwrap();
+        assert_eq!(restarted.metadata().descriptor_id, descriptor);
+        assert_eq!(
+            (
+                restarted.metadata().valid_from,
+                restarted.metadata().valid_until
+            ),
+            validity
+        );
+
+        let mut pinned = config.clone();
+        pinned.descriptor_id = descriptor;
+        assert!(NativeBearerV7Issuer::load_or_generate(&pinned, "issuer:test").is_ok());
+
+        let mut mismatched = pinned.clone();
+        mismatched.descriptor_id = "ff".repeat(32);
+        assert!(NativeBearerV7Issuer::load_or_generate(&mismatched, "issuer:test").is_err());
+
+        std::fs::remove_file(&pinned.metadata_path).unwrap();
+        assert!(NativeBearerV7Issuer::load_or_generate(&pinned, "issuer:test").is_err());
+        assert!(pinned.sk_path.is_file());
+
+        let mut wrong_profile = config.clone();
+        wrong_profile.profile_id = "freebird/native-exchange/v3".into();
+        assert!(NativeBearerV7Issuer::load_or_generate(&wrong_profile, "issuer:test").is_err());
+
+        let fresh_root = tempdir().unwrap();
+        let mut fresh_pinned = config;
+        fresh_pinned.sk_path = fresh_root.path().join("v7.der");
+        fresh_pinned.metadata_path = fresh_root.path().join("v7.json");
+        fresh_pinned.registry_path = fresh_root.path().join("registry.json");
+        fresh_pinned.descriptor_id = "01".repeat(32);
+        let error = match NativeBearerV7Issuer::load_or_generate(&fresh_pinned, "issuer:test") {
+            Ok(_) => panic!("fresh bootstrap with a descriptor pin must fail"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("pin, not a bootstrap value"));
+        assert!(!fresh_pinned.sk_path.exists());
+        assert!(!fresh_pinned.metadata_path.exists());
     }
 }

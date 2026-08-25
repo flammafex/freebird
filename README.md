@@ -5,15 +5,16 @@ verification. The issuer evaluates blinded client requests, the client finalizes
 the result into a bearer token, and the verifier checks that token while
 recording a nullifier so the same token cannot be spent twice.
 
-The current source tree supports two token modes:
+The current source tree supports two token modes, V4 and V7:
 
 - V4 private-verification tokens using a Freebird-specific, bespoke P-256
   VOPRF-like construction; it is not RFC 9497 interoperable.
 - V7 native bearer tokens using randomized RSA blind signatures and issuer-published
   discovery metadata.
 
-V5 public bearer passes are retired and are not accepted by the current verifier.
-V6 is reserved. V4 private-verification support remains available for existing
+V4 and V7 are supported. V5 public bearer passes and V2 exchange/issuance
+protocols have been removed and are rejected by current services. V6 is reserved
+and rejected. V4 private-verification support remains available for existing
 clients and operator-controlled admission credentials.
 
 The `freebird-interface` binary exercises the V4 flow against local services on
@@ -86,7 +87,7 @@ and retention contract.
 - Redis is required by default for verifier replay protection. For explicitly
   unsafe local development only, use `IN_MEMORY_REPLAY_STORE=true` together
   with `VERIFIER_ENV=development`.
-- Node.js is only needed for the TypeScript SDK.
+- Node.js 24 or newer is required for the TypeScript SDK.
 
 ## Quickstart (Docker)
 

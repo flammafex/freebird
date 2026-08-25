@@ -12,12 +12,15 @@ They assume:
 - secret management outside Git
 - one issuer replica and one or more verifier replicas
 
+The current release supports V4 and V7. V5 and V2 have been removed and are
+rejected; V6 is reserved and rejected.
+
 ## Image Pinning
 
 Every registry image in the raw and base manifests is a
 `@sha256:REQUIRED_*_IMAGE_DIGEST` sentinel. Replace both sentinels with
 operator-provided, signature-verified immutable `@sha256:` references from the
-feature-bearing release artifact before applying. No v0.9.0 GHCR digest is
+feature-bearing release artifact before applying. No v0.10.0 GHCR digest is
 invented or checked in here because those release digests are not publicly
 discoverable in this lane. Historical v0.7.0 images are not graph-capable and
 must not be used for graph issuance.
@@ -260,7 +263,8 @@ The issuer receives:
 The verifier receives:
 
 - `REDIS_URL`
-- `VERIFIER_ACCEPTED_TOKEN_VERSIONS` (`v4,v7`; V5 is retired and V6 is reserved)
+- `VERIFIER_ACCEPTED_TOKEN_VERSIONS` (`v4,v7`; V5 and V2 are removed and
+  rejected; V6 is reserved and rejected)
 - `VERIFIER_ENV=production`
 - `IN_MEMORY_REPLAY_STORE=false`
 - `VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS` when participating in V7 graph

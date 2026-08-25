@@ -244,6 +244,83 @@ const MAX_BATCH_SIZE: usize = 10_000;
 /// Minimum batch size for parallel processing
 const MIN_PARALLEL_BATCH_SIZE: usize = 10;
 
+async fn verify_one_async(
+    token_req: &TokenToVerify,
+    issuers_snapshot: &HashMap<String, crate::routes::admin::IssuerInfo>,
+    st: &AppState,
+    now: i64,
+) -> VerifyResult {
+    let version = match decode_token_version(&token_req.token_b64) {
+        Ok(version) => version,
+        Err((_status, msg)) => {
+            return VerifyResult::Error {
+                message: msg,
+                code: "verification_failed".to_string(),
+            }
+        }
+    };
+
+    let (spend_key, valid_until) = match version {
+        freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 => {
+            let parsed =
+                match verify_v4_token(&token_req.token_b64, issuers_snapshot, &st.scope_digest) {
+                    Ok((parsed, _issuer)) => parsed,
+                    Err((_status, msg)) => {
+                        return VerifyResult::Error {
+                            message: msg,
+                            code: "verification_failed".to_string(),
+                        };
+                    }
+                };
+            let null_key =
+                match freebird_crypto::nullifier_key_v4(&parsed, &st.verifier_id, &st.audience) {
+                    Ok(key) => key,
+                    Err(_) => {
+                        return VerifyResult::Error {
+                            message: "verification failed".to_string(),
+                            code: "verification_failed".to_string(),
+                        };
+                    }
+                };
+            (v4_spend_key(&null_key), None)
+        }
+        freebird_crypto::public_bearer_v7::V7_ENVELOPE_VERSION => {
+            let trust = v7_trust_registry();
+            let (parsed, entry) = match verify_v7_public_token(&token_req.token_b64, &trust) {
+                Ok(result) => result,
+                Err((_status, msg)) => {
+                    return VerifyResult::Error {
+                        message: msg,
+                        code: "verification_failed".to_string(),
+                    };
+                }
+            };
+            (
+                v7_spend_key_for_body(parsed.body()),
+                Some(entry.valid_until),
+            )
+        }
+        _ => {
+            return VerifyResult::Error {
+                message: "unsupported token version".to_string(),
+                code: "verification_failed".to_string(),
+            }
+        }
+    };
+
+    match record_spend(st.store.as_ref(), &spend_key, valid_until).await {
+        Ok(true) => VerifyResult::Success { verified_at: now },
+        Ok(false) => VerifyResult::Error {
+            message: "token already used".to_string(),
+            code: "replay_detected".to_string(),
+        },
+        Err(_) => VerifyResult::Error {
+            message: "store error".to_string(),
+            code: "store_error".to_string(),
+        },
+    }
+}
+
 // ---------- Batch Verification Handler (V4) ----------
 #[instrument(name = "batch_verify", skip_all, fields(batch_size = req.tokens.len()))]
 async fn batch_verify(
@@ -376,7 +453,11 @@ async fn batch_verify(
             "using sequential processing for small batch (n={})",
             batch_size
         );
-        req.tokens.iter().map(verify_one).collect()
+        let mut results = Vec::with_capacity(batch_size);
+        for token_req in &req.tokens {
+            results.push(verify_one_async(token_req, &issuers_snapshot, &st, now).await);
+        }
+        results
     } else {
         debug!("using parallel processing for batch (n={})", batch_size);
         req.tokens.par_iter().map(verify_one).collect()
@@ -786,6 +867,81 @@ mod tests {
                     .collect::<Vec<_>>()
             }),
         )
+    }
+
+    fn v4_batch_request(tokens: &[String]) -> Request<Body> {
+        json_request(
+            "/v1/verify/batch",
+            json!({
+                "tokens": tokens
+                    .iter()
+                    .map(|token| json!({"token_b64": token}))
+                    .collect::<Vec<_>>()
+            }),
+        )
+    }
+
+    #[tokio::test]
+    async fn successful_v4_two_token_batch_is_replayed_as_two_rejections() {
+        let sk = [0x43u8; 32];
+        let state = verification_state(sk);
+        let tokens = [
+            token_b64(&issue_v4_token(sk, [0x10u8; 32])),
+            token_b64(&issue_v4_token(sk, [0x11u8; 32])),
+        ];
+        let app = router(state);
+
+        let response = app
+            .clone()
+            .oneshot(v4_batch_request(&tokens))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["successful"], 2);
+        assert_eq!(body["failed"], 0);
+        assert!(body["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|result| result["status"] == "success"));
+
+        let replay = app.oneshot(v4_batch_request(&tokens)).await.unwrap();
+        assert_eq!(replay.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(replay.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["successful"], 0);
+        assert_eq!(body["failed"], 2);
+        assert!(body["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|result| result["status"] == "error" && result["code"] == "replay_detected"));
+    }
+
+    #[tokio::test]
+    async fn v4_batch_threshold_sizes_complete_without_runtime_panics() {
+        for (batch_size, seed) in [(1, 0x50u8), (9, 0x60), (10, 0x70)] {
+            let sk = [seed; 32];
+            let state = verification_state(sk);
+            let tokens: Vec<_> = (0..batch_size)
+                .map(|index| token_b64(&issue_v4_token(sk, [index as u8; 32])))
+                .collect();
+
+            let response = router(state)
+                .oneshot(v4_batch_request(&tokens))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "batch size {batch_size}");
+            let body: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(body["successful"], batch_size, "batch size {batch_size}");
+            assert_eq!(body["failed"], 0, "batch size {batch_size}");
+        }
     }
 
     #[tokio::test]

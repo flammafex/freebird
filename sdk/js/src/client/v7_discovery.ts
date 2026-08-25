@@ -246,8 +246,11 @@ export function canonicalV7DirectDescriptorId(record: Record<string, unknown>, s
 
 function exchangeDescriptorId(record: Record<string, unknown>, spki: Uint8Array): string {
   const bytes: number[] = [];
-  for (const value of [record.profile_id, record.issuer_id, record.token_key_id, record.asset_id,
-    record.amount_minor, record.suite]) lp(bytes, value as string);
+  for (const value of [record.profile_id, record.issuer_id, record.token_key_id, record.asset_id]) {
+    lp(bytes, value as string);
+  }
+  u64(bytes, record.amount_minor as bigint);
+  lp(bytes, record.suite as string);
   u16(bytes, record.modulus_bits as number);
   u32(bytes, record.exponent as number);
   lp(bytes, spki);
@@ -702,7 +705,7 @@ function fresh(state: ClientState): boolean {
   const ttl = state.config.keyCacheTtlMs;
   if (ttl !== undefined) return Date.now() - state.v7KeyDiscoveryMetadataFetchedAt < ttl;
   const seconds = state.v7KeyDiscoveryMetadata.epoch_duration_sec;
-  const ttlMs = seconds > BigInt(Number.MAX_SAFE_INTEGER / 1000) ? Number.MAX_SAFE_INTEGER : Number(seconds) * 1000;
+  const ttlMs = seconds > BigInt(Math.floor(Number.MAX_SAFE_INTEGER / 1000)) ? Number.MAX_SAFE_INTEGER : Number(seconds) * 1000;
   return Date.now() - state.v7KeyDiscoveryMetadataFetchedAt < ttlMs;
 }
 

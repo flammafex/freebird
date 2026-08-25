@@ -1,7 +1,8 @@
 # @flammafex/freebird
 
-The Freebird SDK provides the active V4 private-token and direct V7 native-bearer
-client flows. It ships ESM and CommonJS builds with TypeScript declarations and
+The Freebird SDK supports the active V4 private-token and direct V7 native-bearer
+client flows. V5 and V2 APIs have been removed and are rejected; V6 is reserved
+and rejected. It ships ESM and CommonJS builds with TypeScript declarations and
 uses the platform `fetch` implementation.
 
 The SDK requires **Node.js 24 or newer**. This requirement comes from the

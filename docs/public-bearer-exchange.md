@@ -2,12 +2,14 @@
 
 The optional native V7 bearer exchange atomically spends valid single-use V7
 artifacts and blind-signs outputs selected by a directed transition graph. It is
-disabled by default. V5 public bearer exchange is retired and must not be
-enabled; V6 is reserved.
+disabled by default. V5 public bearer exchange is removed and rejected; V2
+exchange is removed and rejected; V6 is reserved and rejected.
 
-This is a fresh-install V7 contract. Do not load legacy exchange profiles,
+This is a fresh-install V7 contract. V4 private tokens remain supported
+independently. The current compatibility set is V4 and V7. Do not load legacy
+exchange profiles,
 recover legacy operation records, or migrate legacy Redis state into the V7
-authority database. V4 private tokens remain supported independently.
+authority database.
 
 ## Configuration
 

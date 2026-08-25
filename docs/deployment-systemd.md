@@ -8,6 +8,9 @@ it does not implement or select a named profile. V4 key rotation is unsafe for
 production until Phase C. Keep the stable issuer key and matching verifier key
 in place until then.
 
+V4 and V7 are supported. V5 and V2 have been removed and are rejected; V6 is
+reserved and rejected.
+
 ## Layout
 
 Install binaries:
@@ -102,7 +105,8 @@ admin or wildcard route for probes.
 The active issuer routes are `POST /v1/oprf/issue` and `/v1/oprf/issue/batch`
 for V4, `POST /v7/native-bearer/issue` and `/v7/native-bearer/issue/batch` for
 V7 direct issuance, and the V7 exchange and graph routes under `/v7/public/`.
-V5 direct/public routes are retired and must not be proxied.
+V5 and V2 direct/public routes are removed and rejected; they must not be
+proxied. V6 is reserved and rejected.
 
 For native V7 graph issuance, proxy the strict V7 discovery route
 `GET /.well-known/keys` and the exact issuer route

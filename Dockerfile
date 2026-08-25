@@ -62,9 +62,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -r -g 1000 freebird && useradd -r -u 1000 -g freebird freebird
 
 # Create data directories with proper permissions
-RUN mkdir -p /data/keys /data/state && \
+RUN mkdir -p /data/config /data/keys /data/state && \
     chown -R 1000:1000 /data && \
-    chmod 750 /data /data/keys /data/state
+    chmod 750 /data /data/config /data/keys /data/state
 
 # Copy binaries from build stage
 COPY --from=issuer-builder /app/target/release/freebird-issuer /usr/local/bin/freebird-issuer

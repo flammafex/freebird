@@ -62,7 +62,6 @@ jobs:
       - run: cargo audit --ignore RUSTSEC-2023-0071
 
   javascript-sdk:
-    name: JavaScript SDK (Node 24)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -107,6 +106,7 @@ jobs:
           cp .env.example .env
           sed -i 's/^ADMIN_API_KEY=.*/ADMIN_API_KEY=ci-sdk-test-key-at-least-32-chars/' .env
           sed -i 's/^SYBIL_RESISTANCE=.*/SYBIL_RESISTANCE=none/' .env
+          sed -i 's/^NATIVE_BEARER_V7_TOKEN_KEY_ID=.*/NATIVE_BEARER_V7_TOKEN_KEY_ID=3d7a1f9c5e2b8d604a6c0f3e7b1d9a5c2f8e4b0d6a1c7e3f9b5d2a8c4e0f6b1b/' .env
           docker compose up -d --build --wait
       - name: Run SDK tests
         env:
@@ -161,6 +161,7 @@ jobs:
           # Override dev defaults that would block startup
           sed -i 's/^ADMIN_API_KEY=.*/ADMIN_API_KEY=ci-smoke-test-key-at-least-32-chars/' .env
           sed -i 's/^SYBIL_RESISTANCE=.*/SYBIL_RESISTANCE=none/' .env
+          sed -i 's/^NATIVE_BEARER_V7_TOKEN_KEY_ID=.*/NATIVE_BEARER_V7_TOKEN_KEY_ID=3d7a1f9c5e2b8d604a6c0f3e7b1d9a5c2f8e4b0d6a1c7e3f9b5d2a8c4e0f6b1b/' .env
       - name: Build and start services
         run: docker compose up -d --build --wait
       - name: Verify well-known endpoints

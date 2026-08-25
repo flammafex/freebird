@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.10.0 - 2026-08-24
+
+This is a breaking release. V4 and V7 are supported; V5 and V2 have been
+removed; V6 is reserved and rejected.
+
+- V7 direct and exchange descriptor IDs are now derived from canonical finalized
+  signer material. Old arbitrary descriptor IDs are rejected.
+- The corrected exchange descriptor transcript invalidates prior exchange,
+  keyset, transition, and graph-policy derived IDs. Operators must regenerate and rotate
+  affected V7 signer metadata, then rebuild the registry and discovery from that
+  canonical material; do not reuse old V7 data.
+- For direct V7 bootstrap, omit `NATIVE_BEARER_V7_DESCRIPTOR_ID` once, persist
+  the derived canonical output, and only then optionally pin that public expected
+  value.
+
 ## 0.9.0 - 2026-08-01
 
 - Removed the obsolete fixed-profile public bearer exchange V1 protocol,

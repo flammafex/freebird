@@ -311,6 +311,9 @@ pub(crate) fn validate_v7_exchange_inventory(
         .iter()
         .chain(discovery.retained_descriptors.iter())
     {
+        descriptor
+            .validate()
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         let token_key_id: [u8; 32] = hex::decode(&descriptor.token_key_id)?
             .try_into()
             .map_err(|_| anyhow::anyhow!("invalid V7 exchange token key ID"))?;
@@ -321,11 +324,7 @@ pub(crate) fn validate_v7_exchange_inventory(
             freebird_crypto::V7TokenKeyId::new(token_key_id),
         )?;
         let signer = inventory.lookup(&identity)?;
-        if signer.metadata().pubkey_spki_b64 != descriptor.pubkey_spki_b64
-            || signer.metadata().spki_fingerprint != descriptor.spki_fingerprint
-            || signer.metadata().asset_id != descriptor.asset_id
-            || signer.metadata().amount_minor.to_string() != descriptor.amount_minor
-        {
+        if !exchange_descriptor_matches_signer(descriptor, signer) {
             bail!("V7 exchange descriptor does not match shared signer inventory")
         }
     }
@@ -335,6 +334,26 @@ pub(crate) fn validate_v7_exchange_inventory(
         }
     }
     Ok(())
+}
+
+fn exchange_descriptor_matches_signer(
+    descriptor: &freebird_common::api::NativeExchangeV3Descriptor,
+    signer: &crate::v7_signers::V7Signer,
+) -> bool {
+    let metadata = signer.metadata();
+    metadata.profile_id == descriptor.profile_id
+        && metadata.issuer_id == descriptor.issuer_id
+        && metadata.descriptor_id == descriptor.descriptor_id
+        && metadata.token_key_id == descriptor.token_key_id
+        && metadata.asset_id == descriptor.asset_id
+        && metadata.amount_minor.to_string() == descriptor.amount_minor
+        && metadata.suite == descriptor.suite
+        && metadata.modulus_bits == descriptor.modulus_bits
+        && metadata.exponent == descriptor.exponent
+        && metadata.pubkey_spki_b64 == descriptor.pubkey_spki_b64
+        && metadata.spki_fingerprint == descriptor.spki_fingerprint
+        && u64::try_from(metadata.valid_from).ok() == Some(descriptor.valid_from)
+        && u64::try_from(metadata.valid_until).ok() == Some(descriptor.valid_until)
 }
 
 fn load_v7_graph_policies(

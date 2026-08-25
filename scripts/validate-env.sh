@@ -43,12 +43,13 @@ if [ "${SERVICE_ROLE:-}" = issuer ]; then
   [ -n "${NATIVE_BEARER_V7_METADATA_PATH:-}" ] || error "NATIVE_BEARER_V7_METADATA_PATH is required"
   [ -n "${NATIVE_BEARER_V7_REGISTRY_PATH:-}" ] || error "NATIVE_BEARER_V7_REGISTRY_PATH is required"
   [ -n "${NATIVE_BEARER_V7_PROFILE_ID:-}" ] || error "NATIVE_BEARER_V7_PROFILE_ID is required"
-  [ -n "${NATIVE_BEARER_V7_DESCRIPTOR_ID:-}" ] || error "NATIVE_BEARER_V7_DESCRIPTOR_ID is required"
   [ -n "${NATIVE_BEARER_V7_TOKEN_KEY_ID:-}" ] || error "NATIVE_BEARER_V7_TOKEN_KEY_ID is required"
   [ -n "${NATIVE_BEARER_V7_ASSET_ID:-}" ] || error "NATIVE_BEARER_V7_ASSET_ID is required"
   [ -n "${NATIVE_BEARER_V7_AMOUNT_MINOR:-}" ] || error "NATIVE_BEARER_V7_AMOUNT_MINOR is required"
-  printf '%s' "${NATIVE_BEARER_V7_DESCRIPTOR_ID:-}" | grep -Eq '^[0-9a-f]{64}$' || \
-    error "NATIVE_BEARER_V7_DESCRIPTOR_ID must be 64 lowercase hexadecimal characters"
+  if [ -n "${NATIVE_BEARER_V7_DESCRIPTOR_ID:-}" ]; then
+    printf '%s' "${NATIVE_BEARER_V7_DESCRIPTOR_ID}" | grep -Eq '^[0-9a-f]{64}$' || \
+      error "NATIVE_BEARER_V7_DESCRIPTOR_ID must be 64 lowercase hexadecimal characters when set"
+  fi
   printf '%s' "${NATIVE_BEARER_V7_TOKEN_KEY_ID:-}" | grep -Eq '^[0-9a-f]{64}$' || \
     error "NATIVE_BEARER_V7_TOKEN_KEY_ID must be 64 lowercase hexadecimal characters"
 fi

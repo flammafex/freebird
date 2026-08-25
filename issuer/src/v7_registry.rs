@@ -238,10 +238,25 @@ mod tests {
             2,
         )
         .unwrap();
+        let exchange_descriptor = freebird_common::api::derive_native_exchange_v3_descriptor_id(
+            freebird_common::api::NATIVE_EXCHANGE_V3_PROFILE_ID,
+            exchange_binding.issuer_id(),
+            &hex::encode(exchange_binding.token_key_id().as_bytes()),
+            policy.asset_id(),
+            policy.amount_minor(),
+            freebird_common::api::NATIVE_EXCHANGE_V3_SUITE,
+            3_072,
+            65_537,
+            exchange_binding.public_key_spki(),
+            &hex::encode(exchange_binding.spki_fingerprint()),
+            1,
+            2,
+        )
+        .unwrap();
         let exchange = NativeBearerV7KeyInfo::from_binding(
             &exchange_binding,
-            "freebird/native-exchange/v3",
-            &"13".repeat(32),
+            freebird_common::api::NATIVE_EXCHANGE_V3_PROFILE_ID,
+            &exchange_descriptor,
             &policy,
             1,
             2,
@@ -253,6 +268,47 @@ mod tests {
         )?;
 
         assert!(retained_discovery(&registry, &direct)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn direct_rotation_retains_original_canonical_descriptor_for_discovery() -> Result<()> {
+        let root = tempdir()?;
+        let path = root.path().join("registry.json");
+        let policy = freebird_crypto::V7BodyPolicy::new("USD", 42)
+            .map_err(|error| anyhow::anyhow!("invalid policy: {error:?}"))?;
+        let old_binding = binding(45);
+        let active_binding = binding(46);
+        let old = NativeBearerV7KeyInfo::from_binding(
+            &old_binding,
+            freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID,
+            &"14".repeat(32),
+            &policy,
+            1,
+            2,
+        )
+        .map_err(anyhow::Error::msg)?;
+        let active = NativeBearerV7KeyInfo::from_binding(
+            &active_binding,
+            freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID,
+            &"15".repeat(32),
+            &policy,
+            3,
+            10,
+        )
+        .map_err(anyhow::Error::msg)?;
+        let original_descriptor = old.descriptor_id.clone();
+        let registry =
+            load_and_reserve_all(&path, &[(&old, &old_binding), (&active, &active_binding)])?;
+        let retained = retained_discovery(&registry, &active)?;
+        assert_eq!(retained.len(), 1);
+        assert_eq!(retained[0].descriptor_id, original_descriptor);
+        freebird_common::api::validate_native_bearer_v7_discovery(
+            "issuer:test",
+            &active,
+            &retained,
+        )
+        .map_err(anyhow::Error::msg)?;
         Ok(())
     }
 }

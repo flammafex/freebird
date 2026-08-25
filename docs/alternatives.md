@@ -20,6 +20,9 @@ RFC 9497 interoperable. No single other project fills all four of those slots.
 - **Anonymous-credentials** stack (AnonCreds, Idemix, BBS+) is richer but
   heavier, multi-use, and lacks built-in Sybil gating.
 
+Freebird's current compatibility set is V4 and V7 native bearer tokens. V5 and
+V2 have been removed and are rejected; V6 is reserved and rejected.
+
 ```
                  Sybil-resistant
                        │
@@ -310,8 +313,8 @@ Freebird is the only project in the upper-right quadrant of the landscape:
 **lightweight single-use tokens with Privacy-Pass-related primitives + built-in
 composable Sybil resistance + self-hostable service layer + open source.**
 
-1. **A bespoke V4 P-256 VOPRF-like construction plus V5 Blind RSA tokens** —
-   V4 is not RFC 9497 or Privacy Pass interoperable; V5 uses a separate public
+1. **A bespoke V4 P-256 VOPRF-like construction plus V7 native bearer tokens** —
+   V4 is not RFC 9497 or Privacy Pass interoperable; V7 uses a separate native
    bearer path. Both are provided with a complete service layer (issuer +
    verifier HTTP services, key rotation, admin UI, nullifier storage).
 2. **Built-in Sybil resistance** with multiple composable gates (`invitation`,

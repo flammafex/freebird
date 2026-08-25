@@ -35,6 +35,7 @@ pub const NATIVE_EXCHANGE_V3_DOMAIN_MERKLE_NODE: &[u8] =
 pub const NATIVE_EXCHANGE_V3_DOMAIN_REQUEST: &[u8] = b"freebird native exchange request v3\0";
 pub const NATIVE_EXCHANGE_V3_DOMAIN_RESULT: &[u8] = b"freebird native exchange result v3\0";
 pub const NATIVE_EXCHANGE_V3_DOMAIN_RECEIPT: &[u8] = b"freebird native exchange receipt v3\0";
+pub const NATIVE_EXCHANGE_V3_DOMAIN_DESCRIPTOR: &[u8] = b"freebird native exchange descriptor v3\0";
 
 /// Hash one ordered source leaf using the closed V3 transcript.
 pub fn native_exchange_v3_source_leaf(
@@ -94,7 +95,7 @@ pub fn native_exchange_v3_ordered_root(
     let mut width = level.len();
     while width > 1 {
         let mut next = Vec::with_capacity(width / 2);
-        for pair in level[..width].chunks_exact(2) {
+        for pair in level[..width].as_chunks::<2>().0 {
             let mut transcript = Vec::with_capacity(64);
             transcript.extend_from_slice(&pair[0]);
             transcript.extend_from_slice(&pair[1]);
@@ -412,11 +413,11 @@ impl NativeExchangeV3Profile {
 impl NativeExchangeV3Descriptor {
     pub fn validate(&self) -> Result<(), NativeExchangeV3Error> {
         hex32(&self.descriptor_id, "invalid descriptor id")?;
-        text(&self.profile_id, "invalid profile id")?;
-        text(&self.issuer_id, "invalid issuer id")?;
+        ascii_text(&self.profile_id, "invalid profile id")?;
+        ascii_text(&self.issuer_id, "invalid issuer id")?;
         hex32(&self.token_key_id, "invalid V7 token key id")?;
-        let _ = amount(&self.amount_minor)?;
-        text(&self.asset_id, "invalid asset id")?;
+        let amount_minor = amount(&self.amount_minor)?;
+        ascii_text(&self.asset_id, "invalid asset id")?;
         profile_fields(
             3,
             &self.profile_id,
@@ -436,6 +437,28 @@ impl NativeExchangeV3Descriptor {
         if computed_fingerprint != fingerprint {
             return Err(NativeExchangeV3Error("SPKI fingerprint mismatch"));
         }
+        if self.valid_until > EXCHANGE_MAX_VALID_UNTIL as u64 {
+            return Err(NativeExchangeV3Error("invalid descriptor validity"));
+        }
+        let expected_descriptor_id = derive_native_exchange_v3_descriptor_id(
+            &self.profile_id,
+            &self.issuer_id,
+            &self.token_key_id,
+            &self.asset_id,
+            amount_minor,
+            &self.suite,
+            self.modulus_bits,
+            self.exponent,
+            &spki,
+            &self.spki_fingerprint,
+            self.valid_from,
+            self.valid_until,
+        )?;
+        if self.descriptor_id != expected_descriptor_id {
+            return Err(NativeExchangeV3Error(
+                "non-canonical V7 exchange descriptor id",
+            ));
+        }
         let identity = freebird_crypto::V7KeyIdentity::new(
             self.issuer_id.clone(),
             freebird_crypto::V7TokenKeyId::new(hex32(
@@ -451,6 +474,49 @@ impl NativeExchangeV3Descriptor {
         }
         Ok(())
     }
+}
+
+/// Derive the canonical V7 exchange descriptor ID.
+///
+/// This framing is also implemented by the SDK's strict discovery parser. In
+/// particular, amount is a fixed-width unsigned integer, not its JSON string
+/// representation, and the suite follows the amount in the transcript.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_native_exchange_v3_descriptor_id(
+    profile_id: &str,
+    issuer_id: &str,
+    token_key_id: &str,
+    asset_id: &str,
+    amount_minor: u64,
+    suite: &str,
+    modulus_bits: u16,
+    exponent: u32,
+    canonical_spki: &[u8],
+    spki_fingerprint: &str,
+    valid_from: u64,
+    valid_until: u64,
+) -> Result<String, NativeExchangeV3Error> {
+    let mut transcript = Vec::new();
+    put_ascii_text(&mut transcript, profile_id, "invalid profile id")?;
+    put_ascii_text(&mut transcript, issuer_id, "invalid issuer id")?;
+    put_ascii_text(&mut transcript, token_key_id, "invalid V7 token key id")?;
+    put_ascii_text(&mut transcript, asset_id, "invalid asset id")?;
+    transcript.extend_from_slice(&amount_minor.to_be_bytes());
+    put_ascii_text(&mut transcript, suite, "invalid suite")?;
+    transcript.extend_from_slice(&modulus_bits.to_be_bytes());
+    transcript.extend_from_slice(&exponent.to_be_bytes());
+    put_lp32(&mut transcript, canonical_spki)?;
+    put_ascii_text(
+        &mut transcript,
+        spki_fingerprint,
+        "invalid SPKI fingerprint",
+    )?;
+    transcript.extend_from_slice(&valid_from.to_be_bytes());
+    transcript.extend_from_slice(&valid_until.to_be_bytes());
+    Ok(hex::encode(hash(
+        NATIVE_EXCHANGE_V3_DOMAIN_DESCRIPTOR,
+        &transcript,
+    )))
 }
 
 impl NativeExchangeV3Slot {
@@ -506,22 +572,39 @@ impl NativeExchangeV3Discovery {
             return Err(NativeExchangeV3Error("unsupported V7 exchange version"));
         }
         self.profile.validate()?;
+        let mut descriptor_ids = std::collections::BTreeSet::new();
+        let mut token_key_ids = std::collections::BTreeSet::new();
         for descriptor in self
             .active_descriptors
             .iter()
             .chain(self.retained_descriptors.iter())
         {
             descriptor.validate()?;
+            if !descriptor_ids.insert(&descriptor.descriptor_id)
+                || !token_key_ids.insert(&descriptor.token_key_id)
+            {
+                return Err(NativeExchangeV3Error(
+                    "duplicate V7 exchange descriptor identity",
+                ));
+            }
         }
+        let mut keyset_ids = std::collections::BTreeSet::new();
         for keyset in self
             .active_keysets
             .iter()
             .chain(self.retained_keysets.iter())
         {
             keyset.validate()?;
+            if !keyset_ids.insert(&keyset.keyset_id) {
+                return Err(NativeExchangeV3Error("duplicate V7 exchange keyset"));
+            }
         }
+        let mut transition_ids = std::collections::BTreeSet::new();
         for transition in &self.transitions {
             transition.validate()?;
+            if !transition_ids.insert(&transition.transition_id) {
+                return Err(NativeExchangeV3Error("duplicate V7 exchange transition"));
+            }
         }
         Ok(())
     }
@@ -697,6 +780,17 @@ fn put_text(
     error: &'static str,
 ) -> Result<(), NativeExchangeV3Error> {
     text(value, error)?;
+    out.extend_from_slice(&(value.len() as u32).to_be_bytes());
+    out.extend_from_slice(value.as_bytes());
+    Ok(())
+}
+
+fn put_ascii_text(
+    out: &mut Vec<u8>,
+    value: &str,
+    error: &'static str,
+) -> Result<(), NativeExchangeV3Error> {
+    ascii_text(value, error)?;
     out.extend_from_slice(&(value.len() as u32).to_be_bytes());
     out.extend_from_slice(value.as_bytes());
     Ok(())
@@ -1045,5 +1139,60 @@ mod tests {
         assert!(slot.validate().is_err());
         assert!(exact_b64::<384>(&raw::<384>(), "raw384").is_ok());
         assert!(exact_b64::<384>(&raw::<32>(), "raw384").is_err());
+    }
+
+    #[test]
+    fn v7_exchange_descriptor_id_matches_cross_language_vector() {
+        let descriptor_id = derive_native_exchange_v3_descriptor_id(
+            NATIVE_EXCHANGE_V3_PROFILE_ID,
+            "issuer:test",
+            &"11".repeat(32),
+            "USD",
+            42,
+            NATIVE_EXCHANGE_V3_SUITE,
+            3072,
+            65_537,
+            &[1, 2, 3],
+            &"22".repeat(32),
+            1,
+            2,
+        )
+        .unwrap();
+        assert_eq!(
+            descriptor_id,
+            "9a657cc791f6f42d624e4a11da7ddf3d81b066ab57fd25b5e05f8d2cdbf48d0b"
+        );
+
+        let tampered = derive_native_exchange_v3_descriptor_id(
+            NATIVE_EXCHANGE_V3_PROFILE_ID,
+            "issuer:test",
+            &"11".repeat(32),
+            "USD",
+            43,
+            NATIVE_EXCHANGE_V3_SUITE,
+            3072,
+            65_537,
+            &[1, 2, 3],
+            &"22".repeat(32),
+            1,
+            2,
+        )
+        .unwrap();
+        assert_ne!(descriptor_id, tampered);
+        assert!(derive_native_exchange_v3_descriptor_id(
+            NATIVE_EXCHANGE_V3_PROFILE_ID,
+            "issuer:é",
+            &"11".repeat(32),
+            "USD",
+            42,
+            NATIVE_EXCHANGE_V3_SUITE,
+            3072,
+            65_537,
+            &[1, 2, 3],
+            &"22".repeat(32),
+            1,
+            2,
+        )
+        .is_err());
     }
 }

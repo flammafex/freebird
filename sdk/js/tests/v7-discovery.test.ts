@@ -9,6 +9,7 @@ import {
   canonicalV7GraphPolicyId,
   canonicalV7KeysetId,
   canonicalV7TransitionId,
+  getV7KeyDiscoveryMetadata,
   materializeV7Registry,
   parseV7KeyDiscovery,
   refreshV7KeyDiscoveryMetadata,
@@ -79,6 +80,28 @@ function exchangeDescriptor(spki: Uint8Array, issuerId: string, tokenKeyId: stri
   return record;
 }
 
+it('uses the cross-language V7 exchange descriptor transcript', () => {
+  const record: Record<string, unknown> = {
+    profile_id: 'freebird/native-exchange/v3', issuer_id: 'issuer:test',
+    token_key_id: '11'.repeat(32), asset_id: 'USD', amount_minor: 42n,
+    suite: 'RSABSSA-SHA384-PSS-Randomized-V7', modulus_bits: 3072, exponent: 65537,
+    spki_fingerprint: '22'.repeat(32), valid_from: 1n, valid_until: 2n,
+  };
+  expect(canonicalV7ExchangeDescriptorId(record, Uint8Array.from([1, 2, 3])))
+    .toBe('9a657cc791f6f42d624e4a11da7ddf3d81b066ab57fd25b5e05f8d2cdbf48d0b');
+});
+
+it('uses the cross-language V7 direct descriptor transcript', () => {
+  const record: Record<string, unknown> = {
+    profile_id: 'scarcity/native-bearer/v7', issuer_id: 'issuer:test',
+    token_key_id: '07'.repeat(32), asset_id: 'USD', amount_minor: 42n,
+    suite: 'RSABSSA-SHA384-PSS-Randomized-V7', modulus_bits: 3072, exponent: 65537,
+    spki_fingerprint: 'ab'.repeat(32), valid_from: 1n, valid_until: 2n,
+  };
+  expect(canonicalV7DirectDescriptorId(record, Uint8Array.from([1, 2, 3])))
+    .toBe('c293e13a215ac4ffcc1ac0683212aca1b3a693f4417dc2e11733c696e3ab07b2');
+});
+
 type TestRecord = Record<string, unknown>;
 type TestSlot = TestRecord & { descriptor_id: string; keyset_id: string; slot_id: string; quantity: number };
 type TestTransition = TestRecord & { source_slots: TestSlot[]; output_slots: TestSlot[] };
@@ -139,6 +162,16 @@ function fullDocument(issuerId = 'issuer:test'): TestDocument {
 }
 
 describe('strict V7 discovery', () => {
+  it('reuses cached discovery without overflowing the millisecond TTL conversion', async () => {
+    const document = documentFor();
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(document)));
+    const state = createClientState({ issuerUrl: 'https://issuer.example', fetch });
+
+    await refreshV7KeyDiscoveryMetadata(state);
+    await expect(getV7KeyDiscoveryMetadata(state)).resolves.toBeDefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it('parses u64 values losslessly as bigint and accepts normalized PSS SPKI', async () => {
     const document = documentFor();
     document.native_bearer_v7.amount_minor = 18446744073709551615n;

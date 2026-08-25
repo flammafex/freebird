@@ -16,8 +16,8 @@ pub use issuance::{
 };
 pub use key_discovery::{KeyDiscoveryResp, V7KeyDiscoveryResp, V7VoprfKeyInfo, VoprfKeyInfo};
 pub use native_bearer_v7::{
-    validate_native_bearer_v7_discovery, validate_v7_canonical_id,
-    validate_v7_identifier_namespace, NativeBearerV7KeyInfo,
+    derive_native_bearer_v7_descriptor_id, validate_native_bearer_v7_discovery,
+    validate_v7_canonical_id, validate_v7_identifier_namespace, NativeBearerV7KeyInfo,
     NATIVE_BEARER_V7_BLINDED_MESSAGE_B64_LEN, NATIVE_BEARER_V7_BLINDED_MESSAGE_LEN,
     NATIVE_BEARER_V7_DESCRIPTOR_ID_HEX_LEN, NATIVE_BEARER_V7_EXPONENT,
     NATIVE_BEARER_V7_FINGERPRINT_HEX_LEN, NATIVE_BEARER_V7_MAX_SPKI_BYTES,
@@ -25,13 +25,14 @@ pub use native_bearer_v7::{
     NATIVE_BEARER_V7_SUITE, NATIVE_BEARER_V7_TOKEN_KEY_ID_HEX_LEN,
 };
 pub use native_exchange_v3::{
-    native_exchange_v3_ordered_root, native_exchange_v3_output_leaf,
-    native_exchange_v3_source_leaf, NativeExchangeV3Descriptor, NativeExchangeV3Discovery,
-    NativeExchangeV3Error, NativeExchangeV3Keyset, NativeExchangeV3Output, NativeExchangeV3Profile,
-    NativeExchangeV3Receipt, NativeExchangeV3Request, NativeExchangeV3Result,
-    NativeExchangeV3ResultOutput, NativeExchangeV3Slot, NativeExchangeV3Source,
-    NativeExchangeV3Transition, EXCHANGE_LUA_MAX_EXACT_INTEGER, EXCHANGE_MAX_BUDGET_LIMIT,
-    EXCHANGE_MAX_VALID_UNTIL, NATIVE_EXCHANGE_V3_DOMAIN_EMPTY_LEAF,
+    derive_native_exchange_v3_descriptor_id, native_exchange_v3_ordered_root,
+    native_exchange_v3_output_leaf, native_exchange_v3_source_leaf, NativeExchangeV3Descriptor,
+    NativeExchangeV3Discovery, NativeExchangeV3Error, NativeExchangeV3Keyset,
+    NativeExchangeV3Output, NativeExchangeV3Profile, NativeExchangeV3Receipt,
+    NativeExchangeV3Request, NativeExchangeV3Result, NativeExchangeV3ResultOutput,
+    NativeExchangeV3Slot, NativeExchangeV3Source, NativeExchangeV3Transition,
+    EXCHANGE_LUA_MAX_EXACT_INTEGER, EXCHANGE_MAX_BUDGET_LIMIT, EXCHANGE_MAX_VALID_UNTIL,
+    NATIVE_EXCHANGE_V3_DOMAIN_DESCRIPTOR, NATIVE_EXCHANGE_V3_DOMAIN_EMPTY_LEAF,
     NATIVE_EXCHANGE_V3_DOMAIN_MERKLE_NODE, NATIVE_EXCHANGE_V3_DOMAIN_RECEIPT,
     NATIVE_EXCHANGE_V3_DOMAIN_REQUEST, NATIVE_EXCHANGE_V3_DOMAIN_REQUEST_OUTPUT_LEAF,
     NATIVE_EXCHANGE_V3_DOMAIN_RESULT, NATIVE_EXCHANGE_V3_DOMAIN_RESULT_OUTPUT_LEAF,

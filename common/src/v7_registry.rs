@@ -189,6 +189,8 @@ impl BearerKeyReservation {
             || self.profile_id.len() > 128
             || !self.profile_id.is_ascii()
             || self.issuer_id.is_empty()
+            || !self.issuer_id.is_ascii()
+            || !self.asset_id.is_ascii()
             || self.valid_from > self.valid_until
         {
             return Err(BearerKeyRegistryError::Invalid(
@@ -242,6 +244,69 @@ impl BearerKeyReservation {
             return Err(BearerKeyRegistryError::Invalid(
                 "V7 binding issuer does not match reservation".into(),
             ));
+        }
+        if self.profile_id == NATIVE_BEARER_V7_PROFILE_ID {
+            if self.valid_from <= 0
+                || self.valid_from >= self.valid_until
+                || self.valid_until > crate::api::NATIVE_BEARER_V7_MAX_VALID_UNTIL
+            {
+                return Err(BearerKeyRegistryError::Invalid(
+                    "invalid native V7 direct validity window".into(),
+                ));
+            }
+            let expected = crate::api::derive_native_bearer_v7_descriptor_id(
+                &self.profile_id,
+                &self.issuer_id,
+                &self.token_key_id,
+                &self.asset_id,
+                &self.suite,
+                crate::api::NATIVE_BEARER_V7_MODULUS_BITS,
+                crate::api::NATIVE_BEARER_V7_EXPONENT,
+                &spki,
+                &self.spki_fingerprint,
+                self.amount_minor,
+                self.valid_from,
+                self.valid_until,
+            )
+            .map_err(BearerKeyRegistryError::Invalid)?;
+            if self.descriptor_id != expected {
+                return Err(BearerKeyRegistryError::Invalid(
+                    "non-canonical native V7 direct descriptor ID".into(),
+                ));
+            }
+        } else if self.profile_id == NATIVE_EXCHANGE_V3_PROFILE_ID {
+            if self.valid_from <= 0
+                || self.valid_from >= self.valid_until
+                || self.valid_until > crate::api::EXCHANGE_MAX_VALID_UNTIL
+            {
+                return Err(BearerKeyRegistryError::Invalid(
+                    "invalid native V7 exchange validity window".into(),
+                ));
+            }
+            let expected = crate::api::derive_native_exchange_v3_descriptor_id(
+                &self.profile_id,
+                &self.issuer_id,
+                &self.token_key_id,
+                &self.asset_id,
+                self.amount_minor,
+                &self.suite,
+                3_072,
+                65_537,
+                &spki,
+                &self.spki_fingerprint,
+                u64::try_from(self.valid_from).map_err(|_| {
+                    BearerKeyRegistryError::Invalid("invalid V7 exchange start".into())
+                })?,
+                u64::try_from(self.valid_until).map_err(|_| {
+                    BearerKeyRegistryError::Invalid("invalid V7 exchange end".into())
+                })?,
+            )
+            .map_err(|error| BearerKeyRegistryError::Invalid(error.to_string()))?;
+            if self.descriptor_id != expected {
+                return Err(BearerKeyRegistryError::Invalid(
+                    "non-canonical native V7 exchange descriptor ID".into(),
+                ));
+            }
         }
         // Keep the policy validation explicit at this boundary.  The value is
         // intentionally not included in the key fingerprint or wire digest.
@@ -479,6 +544,7 @@ fn decode_raw32(value: &str, field: &str) -> Result<[u8; 32], BearerKeyRegistryE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64ct::Encoding;
     use freebird_crypto::{V7KeyIdentity, V7TokenKeyId};
 
     fn binding(id: u8) -> freebird_crypto::V7PublicKeyBinding {
@@ -494,15 +560,51 @@ mod tests {
     }
 
     fn v7_entry(binding: &freebird_crypto::V7PublicKeyBinding) -> BearerKeyReservation {
+        v7_entry_with_validity(binding, 2)
+    }
+
+    fn v7_entry_with_validity(
+        binding: &freebird_crypto::V7PublicKeyBinding,
+        valid_until: i64,
+    ) -> BearerKeyReservation {
+        let policy = policy();
+        let descriptor_id = crate::api::derive_native_exchange_v3_descriptor_id(
+            NATIVE_EXCHANGE_V3_PROFILE_ID,
+            binding.issuer_id(),
+            &hex::encode(binding.token_key_id().as_bytes()),
+            policy.asset_id(),
+            policy.amount_minor(),
+            crate::api::NATIVE_EXCHANGE_V3_SUITE,
+            3_072,
+            65_537,
+            binding.public_key_spki(),
+            &hex::encode(binding.spki_fingerprint()),
+            1,
+            u64::try_from(valid_until).unwrap(),
+        )
+        .unwrap();
         BearerKeyReservation::from_v7_binding(
             binding,
-            "freebird/native-exchange/v3",
-            &format!("{:064x}", binding.token_key_id().as_bytes()[0] as u128 + 1),
+            NATIVE_EXCHANGE_V3_PROFILE_ID,
+            &descriptor_id,
+            &policy,
+            1,
+            valid_until,
+        )
+        .unwrap()
+    }
+
+    fn direct_entry(binding: &freebird_crypto::V7PublicKeyBinding) -> BearerKeyReservation {
+        let metadata = crate::api::NativeBearerV7KeyInfo::from_binding(
+            binding,
+            NATIVE_BEARER_V7_PROFILE_ID,
+            &"00".repeat(32),
             &policy(),
             1,
             2,
         )
-        .unwrap()
+        .unwrap();
+        BearerKeyReservation::from_v7_discovery(&metadata, binding).unwrap()
     }
 
     #[test]
@@ -547,6 +649,21 @@ mod tests {
 
         let mut changed = v7_entry(&first);
         changed.asset_id = "EUR".into();
+        changed.descriptor_id = crate::api::derive_native_exchange_v3_descriptor_id(
+            NATIVE_EXCHANGE_V3_PROFILE_ID,
+            &changed.issuer_id,
+            &changed.token_key_id,
+            &changed.asset_id,
+            changed.amount_minor,
+            &changed.suite,
+            3_072,
+            65_537,
+            &base64ct::Base64UrlUnpadded::decode_vec(&changed.pubkey_spki_b64).unwrap(),
+            &changed.spki_fingerprint,
+            1,
+            2,
+        )
+        .unwrap();
         assert!(matches!(
             registry.register(changed),
             Err(BearerKeyRegistryError::Conflict(_))
@@ -554,32 +671,61 @@ mod tests {
 
         let mut descriptor_collision = v7_entry(&binding(9));
         descriptor_collision.descriptor_id = registry.entries()[0].descriptor_id.clone();
-        assert!(matches!(
-            registry.register(descriptor_collision),
-            Err(BearerKeyRegistryError::Conflict(_))
-        ));
+        assert!(registry.register(descriptor_collision).is_err());
+    }
+
+    #[test]
+    fn direct_registry_serialization_rejects_tampered_descriptor() {
+        let mut registry = BearerKeyRegistry::new();
+        registry.register(direct_entry(&binding(10))).unwrap();
+        let value = serde_json::to_value(&registry).unwrap();
+        assert!(serde_json::from_value::<BearerKeyRegistry>(value.clone()).is_ok());
+
+        let mut tampered = value;
+        let descriptor = tampered["entries"][0]["descriptor_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let replacement = if descriptor.starts_with('f') {
+            '0'
+        } else {
+            'f'
+        };
+        let mut changed = descriptor.clone();
+        changed.replace_range(0..1, &replacement.to_string());
+        assert_ne!(changed, descriptor);
+        tampered["entries"][0]["descriptor_id"] = changed.into();
+        assert!(serde_json::from_value::<BearerKeyRegistry>(tampered).is_err());
+    }
+
+    #[test]
+    fn exchange_registry_serialization_rejects_tampered_descriptor() {
+        let mut registry = BearerKeyRegistry::new();
+        registry.register(v7_entry(&binding(11))).unwrap();
+        let value = serde_json::to_value(&registry).unwrap();
+        assert!(serde_json::from_value::<BearerKeyRegistry>(value.clone()).is_ok());
+
+        let mut tampered = value;
+        let descriptor = tampered["entries"][0]["descriptor_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let replacement = if descriptor.starts_with('f') {
+            '0'
+        } else {
+            'f'
+        };
+        let mut changed = descriptor.clone();
+        changed.replace_range(0..1, &replacement.to_string());
+        assert_ne!(changed, descriptor);
+        tampered["entries"][0]["descriptor_id"] = changed.into();
+        assert!(serde_json::from_value::<BearerKeyRegistry>(tampered).is_err());
     }
 
     #[test]
     fn active_and_retained_projections_preserve_tombstones() {
-        let active = BearerKeyReservation::from_v7_binding(
-            &binding(6),
-            "freebird/native-exchange/v3",
-            &format!("{:064x}", 6u128 + 1),
-            &policy(),
-            1,
-            10,
-        )
-        .unwrap();
-        let retained = BearerKeyReservation::from_v7_binding(
-            &binding(7),
-            "freebird/native-exchange/v3",
-            &format!("{:064x}", 7u128 + 1),
-            &policy(),
-            1,
-            2,
-        )
-        .unwrap();
+        let active = v7_entry_with_validity(&binding(6), 10);
+        let retained = v7_entry_with_validity(&binding(7), 2);
         let mut registry = BearerKeyRegistry::new();
         registry.register(active).unwrap();
         registry.register(retained).unwrap();

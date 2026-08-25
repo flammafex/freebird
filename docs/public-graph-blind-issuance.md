@@ -5,9 +5,14 @@ an explicitly authorized descriptor in the active V7 graph. It is separate from
 exchange: it consumes no source artifact, creates no exchange receipt, and does
 not charge an exchange transition budget.
 
-V5 graph issuance is retired and not accepted. V6 is reserved. There is no
+V5 and V2 graph issuance are removed and rejected. V6 is reserved and rejected.
+There is no
 legacy policy, request format, or replay-URL migration path; configure the V7
 contract below on a fresh V7 authority database.
+
+The current compatibility set is V4 and V7. V4 private tokens remain supported
+independently; V5 and V2 are removed and rejected, and V6 is reserved and
+rejected.
 
 ## Configuration
 
