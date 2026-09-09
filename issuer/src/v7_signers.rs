@@ -132,7 +132,27 @@ pub struct V7Signer {
     provider: SoftwareV7BlindRsaProvider,
     metadata: NativeBearerV7KeyInfo,
     policy: V7BodyPolicy,
+    #[cfg(test)]
+    sign_attempts: std::sync::atomic::AtomicUsize,
 }
+
+/// Bounded pre-admission failures, without provider or storage details.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum V7PreflightError {
+    Unavailable,
+    InvalidRepresentative,
+}
+
+impl std::fmt::Display for V7PreflightError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Unavailable => "V7 signer unavailable",
+            Self::InvalidRepresentative => "invalid V7 blinded representative",
+        })
+    }
+}
+
+impl std::error::Error for V7PreflightError {}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum V7SignerRole {
@@ -270,7 +290,24 @@ impl V7Signer {
             provider,
             metadata,
             policy,
+            #[cfg(test)]
+            sign_attempts: std::sync::atomic::AtomicUsize::new(0),
         })
+    }
+
+    /// Check availability and the existing modulus rules without signing or mutation.
+    pub fn preflight_at(&self, message: &V7BlindMessage, now: i64) -> Result<(), V7PreflightError> {
+        if !self.is_valid_at(now) {
+            return Err(V7PreflightError::Unavailable);
+        }
+        validate_blind_representative(self.binding(), message)
+            .map_err(|_| V7PreflightError::InvalidRepresentative)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sign_attempts(&self) -> usize {
+        self.sign_attempts
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Sign a validated raw384 blind representative.
@@ -281,10 +318,11 @@ impl V7Signer {
 
     /// Sign only when the signer is valid at the supplied Unix timestamp.
     pub async fn sign_at(&self, message: &V7BlindMessage, now: i64) -> Result<V7BlindSignature> {
-        if !self.is_valid_at(now) {
-            bail!("V7 signer is expired or not yet valid");
-        }
-        validate_blind_representative(self.binding(), message)?;
+        #[cfg(test)]
+        self.sign_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        // Recheck at signing time: preflight does not reserve a validity window.
+        self.preflight_at(message, now)?;
         self.provider
             .blind_sign(&self.identity.crypto_identity()?, message)
             .await
@@ -323,6 +361,13 @@ pub struct V7SignerInventory {
 }
 
 impl V7SignerInventory {
+    #[cfg(test)]
+    pub(crate) fn set_test_validity(&mut self, from: i64, until: i64) {
+        let signer = Arc::get_mut(self.signers.get_mut(&self.active).unwrap()).unwrap();
+        signer.metadata.valid_from = from;
+        signer.metadata.valid_until = until;
+    }
+
     /// Load the active signer, optional retained signers, and reserve all of
     /// their immutable bindings in the pure V7 registry.
     pub fn load_or_generate(
@@ -825,6 +870,41 @@ mod tests {
         let key =
             PublicKeySha384PSSRandomized::from_spki(signer.binding().public_key_spki()).unwrap();
         let modulus = key.components().n().clone();
+        let mut one = [0; 384];
+        one[383] = 1;
+        let one = V7BlindMessage::from_bytes(&one).unwrap();
+        for now in [signer.metadata().valid_from, signer.metadata().valid_until] {
+            assert_eq!(signer.preflight_at(&one, now), Ok(()));
+        }
+        for now in [
+            signer.metadata().valid_from - 1,
+            signer.metadata().valid_until + 1,
+        ] {
+            assert_eq!(
+                signer.preflight_at(&one, now),
+                Err(V7PreflightError::Unavailable)
+            );
+            assert!(signer.sign_at(&one, now).await.is_err());
+        }
+        for bytes in [vec![0; 384], modulus.clone(), vec![0xff; 384]] {
+            assert_eq!(
+                signer.preflight_at(
+                    &V7BlindMessage::from_bytes(&bytes).unwrap(),
+                    signer.metadata().valid_from
+                ),
+                Err(V7PreflightError::InvalidRepresentative)
+            );
+        }
+        let mut below = modulus.clone();
+        // An RSA modulus is odd, so subtracting one cannot borrow here.
+        *below.last_mut().unwrap() -= 1;
+        assert_eq!(
+            signer.preflight_at(
+                &V7BlindMessage::from_bytes(&below).unwrap(),
+                signer.metadata().valid_from
+            ),
+            Ok(())
+        );
         assert!(signer
             .sign(&V7BlindMessage::from_bytes(&modulus).unwrap())
             .await

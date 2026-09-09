@@ -62,6 +62,9 @@ fn encode_point_compressed(p: &ProjectivePoint) -> [u8; COMPRESSED_POINT_LEN] {
 }
 
 fn decode_point_compressed(bytes: &[u8]) -> Option<ProjectivePoint> {
+    if bytes.len() != COMPRESSED_POINT_LEN || !matches!(bytes.first(), Some(2 | 3)) {
+        return None;
+    }
     let ep = EncodedPoint::from_bytes(bytes).ok()?;
     let ap_opt = AffinePoint::from_encoded_point(&ep);
     let ap: Option<AffinePoint> = ap_opt.into();
@@ -78,6 +81,12 @@ fn encode_point(p: &ProjectivePoint) -> [u8; COMPRESSED_POINT_LEN] {
 
 fn decode_point(bytes: &[u8]) -> Result<ProjectivePoint, Error> {
     decode_point_compressed(bytes).ok_or(Error::InvalidPoint)
+}
+
+/// Pure preflight for a nonidentity, compressed SEC1 P-256 blinded element.
+/// Performs no evaluation, signing, or state mutation.
+pub fn validate_blinded_element(bytes: &[u8]) -> Result<(), Error> {
+    decode_point(bytes).map(|_| ())
 }
 
 fn generator() -> ProjectivePoint {
@@ -301,6 +310,33 @@ impl Verifier {
 mod tests {
     use super::*;
     use rand_core::{CryptoRng, Error as RngError, RngCore};
+
+    #[test]
+    fn blinded_element_preflight_requires_nonidentity_compressed_p256() {
+        let valid = encode_point(&generator());
+        assert!(validate_blinded_element(&valid).is_ok());
+        let mut invalid_x = [0xff; 33];
+        invalid_x[0] = 2;
+        let mut invalid_prefix = valid;
+        invalid_prefix[0] = 4;
+        let uncompressed = generator().to_affine().to_encoded_point(false);
+        let server = Server::from_secret_key([1; 32], b"test").unwrap();
+        for bytes in [
+            &[][..],
+            &valid[..32],
+            &[0][..],
+            &[0; 33][..],
+            &invalid_x[..],
+            &invalid_prefix[..],
+            uncompressed.as_bytes(),
+        ] {
+            assert!(validate_blinded_element(bytes).is_err());
+            assert!(
+                server.evaluate(bytes).is_err(),
+                "evaluation must remain defensive"
+            );
+        }
+    }
 
     struct FixedScalarRng([u8; 32]);
 

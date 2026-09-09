@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::{
     config::NativeBearerV7Config,
-    v7_signers::{V7SignerIdentity, V7SignerInventory, V7SignerSpec},
+    v7_signers::{V7PreflightError, V7SignerIdentity, V7SignerInventory, V7SignerSpec},
 };
 
 /// Direct V7 issuance facade backed by the shared signer inventory.
@@ -86,13 +86,40 @@ impl NativeBearerV7Issuer {
         identity: &V7KeyIdentity,
         message: &V7BlindMessage,
     ) -> Result<V7BlindSignature> {
-        let identity = V7SignerIdentity::new(
-            identity.issuer_id(),
-            self.active().identity().profile_id().to_owned(),
-            self.active().identity().descriptor_id().to_owned(),
-            *identity.token_key_id(),
-        )?;
+        let identity = self.signer_identity(identity)?;
         self.inventory.sign(&identity, message).await
+    }
+
+    fn signer_identity(&self, identity: &V7KeyIdentity) -> Result<V7SignerIdentity> {
+        V7SignerIdentity::new(
+            identity.issuer_id(),
+            self.active_identity.profile_id().to_owned(),
+            self.active_identity.descriptor_id().to_owned(),
+            *identity.token_key_id(),
+        )
+    }
+
+    /// Resolve exactly the direct signing identity and preflight without signing.
+    pub fn preflight_at(
+        &self,
+        identity: &V7KeyIdentity,
+        message: &V7BlindMessage,
+        now: i64,
+    ) -> Result<(), V7PreflightError> {
+        let identity = self
+            .signer_identity(identity)
+            .map_err(|_| V7PreflightError::Unavailable)?;
+        self.inventory
+            .lookup(&identity)
+            .map_err(|_| V7PreflightError::Unavailable)?
+            .preflight_at(message, now)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_validity(&mut self, from: i64, until: i64) {
+        Arc::get_mut(&mut self.inventory)
+            .unwrap()
+            .set_test_validity(from, until);
     }
 
     pub fn metadata(&self) -> &NativeBearerV7KeyInfo {
@@ -147,6 +174,24 @@ mod tests {
         let issuer = NativeBearerV7Issuer::load_or_generate(&config, "issuer:test").unwrap();
         assert_eq!(issuer.inventory().len(), 1);
         assert_eq!(issuer.metadata().token_key_id, "11".repeat(32));
+        let mut bytes = [0; 384];
+        bytes[383] = 1;
+        let message = V7BlindMessage::from_bytes(&bytes).unwrap();
+        let now = issuer.metadata().valid_from;
+        assert_eq!(
+            issuer.preflight_at(issuer.identity(), &message, now),
+            Ok(())
+        );
+        let missing = V7KeyIdentity::new(
+            "issuer:test",
+            freebird_crypto::V7TokenKeyId::new([0x22; 32]),
+        )
+        .unwrap();
+        assert_eq!(
+            issuer.preflight_at(&missing, &message, now),
+            Err(V7PreflightError::Unavailable)
+        );
+        assert_eq!(issuer.inventory().active().sign_attempts(), 0);
     }
 
     #[test]

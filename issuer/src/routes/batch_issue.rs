@@ -197,7 +197,10 @@ async fn evaluate_token(
 // /       ↓
 // / Results aggregation
 // / ```
-#[instrument(skip(state, voprf, headers), fields(batch_size = req.blinded_elements.len()))]
+#[instrument(
+    skip(state, voprf, headers, connect_info, validated_ip, req),
+    fields(batch_size = req.blinded_elements.len())
+)]
 pub async fn handle_batch(
     // Change: Extract tuple from State
     State((state, voprf)): State<(Arc<AppStateWithSybil>, Arc<MultiKeyVoprfCore>)>,
@@ -235,12 +238,18 @@ pub async fn handle_batch(
         ));
     }
 
-    // Validate optional context
-    if let Some(ctx_b64) = &req.ctx_b64 {
-        Base64UrlUnpadded::decode_vec(ctx_b64).map_err(|e| {
-            error!("ctx_b64 decode failed: {e:?}");
-            (StatusCode::BAD_REQUEST, "invalid ctx_b64 encoding".into())
-        })?;
+    crate::routes::issue::validate_context(req.ctx_b64.as_deref())?;
+    // Preflight without consuming admission or filtering the original batch:
+    // mixed batches retain their per-element errors, ordering, and proof binding.
+    if !req
+        .blinded_elements
+        .iter()
+        .any(|value| crate::routes::issue::validate_blinded_input(value).is_ok())
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "batch contains no valid blinded elements".into(),
+        ));
     }
 
     let validation_time_ms = validation_start.elapsed().as_millis() as u64;
@@ -275,10 +284,7 @@ pub async fn handle_batch(
                 }
                 Err(e) => {
                     warn!("❌ Sybil resistance check failed: {}", e);
-                    return Err((
-                        StatusCode::FORBIDDEN,
-                        "Sybil resistance verification failed".to_string(),
-                    ));
+                    return Err(crate::routes::issue::sybil_verification_error(&e));
                 }
             }
         }

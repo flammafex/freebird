@@ -23,6 +23,35 @@ use crate::AppStateWithSybil;
 use freebird_common::api::{IssueReq, IssueResp, SybilInfo, SybilProof};
 use freebird_common::tls_enforcement::ValidatedClientIp;
 
+#[cfg(test)]
+#[path = "issuance_tracing_tests.rs"]
+mod issuance_tracing_tests;
+
+#[cfg(test)]
+#[path = "v4_admission_tests.rs"]
+mod v4_admission_tests;
+
+pub(crate) fn validate_blinded_input(value: &str) -> Result<(), (StatusCode, String)> {
+    let bytes = Base64UrlUnpadded::decode_vec(value)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid base64 encoding".into()))?;
+    if bytes.len() != 33 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "blinded_element must be 33 bytes (SEC1 compressed point)".into(),
+        ));
+    }
+    freebird_crypto::voprf::core::validate_blinded_element(&bytes)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "invalid blinded element".into()))
+}
+
+pub(crate) fn validate_context(value: Option<&str>) -> Result<(), (StatusCode, String)> {
+    if let Some(value) = value {
+        Base64UrlUnpadded::decode_vec(value)
+            .map_err(|_| (StatusCode::BAD_REQUEST, "invalid ctx_b64 encoding".into()))?;
+    }
+    Ok(())
+}
+
 // / Extract client information from HTTP request
 // /
 // / This attempts to get the real client IP address, accounting for proxies.
@@ -77,6 +106,22 @@ pub fn extract_client_data(
     }
 }
 
+/// Storage failures are availability failures, not invalid proofs. Never expose
+/// the storage error chain (which may contain local paths) to the client.
+pub(crate) fn sybil_verification_error(error: &anyhow::Error) -> (StatusCode, String) {
+    if error.is::<crate::sybil_resistance::invitation::InvitationRedemptionPersistenceError>() {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Sybil resistance temporarily unavailable".to_string(),
+        )
+    } else {
+        (
+            StatusCode::FORBIDDEN,
+            "Sybil resistance verification failed".to_string(),
+        )
+    }
+}
+
 // / Unified handler supporting both protected and unprotected issuance
 // /
 // / # Behavior Matrix
@@ -97,7 +142,7 @@ pub fn extract_client_data(
 // / and resistant to pre-computation attacks.
 #[instrument(
     name = "issue_token",
-    skip(state, voprf, connect_info, headers),
+    skip(state, voprf, connect_info, validated_ip, headers, req),
     fields(
         kid = tracing::field::Empty,
         sybil_configured = tracing::field::Empty,
@@ -123,6 +168,9 @@ pub async fn handle(
         req.sybil_proof.is_some(),
         state.sybil_checker.is_some()
     );
+
+    validate_blinded_input(&req.blinded_element_b64)?;
+    validate_context(req.ctx_b64.as_deref())?;
 
     // Extract client data for invitation-based Sybil resistance
     // This is only used if invitation system is configured
@@ -162,10 +210,7 @@ pub async fn handle(
                 }
                 Err(e) => {
                     warn!("❌ Sybil resistance check failed: {}", e);
-                    return Err((
-                        StatusCode::FORBIDDEN,
-                        "Sybil resistance verification failed".to_string(),
-                    ));
+                    return Err(sybil_verification_error(&e));
                 }
             }
         }
@@ -193,31 +238,6 @@ pub async fn handle(
     };
 
     // --- VOPRF EVALUATION (common for all cases) ---
-
-    // Decode and validate blinded element
-    let blinded_bytes = Base64UrlUnpadded::decode_vec(&req.blinded_element_b64).map_err(|e| {
-        error!("invalid base64 for blinded_element_b64: {e:?}");
-        (StatusCode::BAD_REQUEST, "invalid base64 encoding".into())
-    })?;
-
-    if blinded_bytes.len() != 33 {
-        error!(
-            "blinded_element wrong length: got {} bytes, expected 33",
-            blinded_bytes.len()
-        );
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "blinded_element must be 33 bytes (SEC1 compressed point)".into(),
-        ));
-    }
-
-    // Optional context validation (decode-only, not currently used)
-    if let Some(ctx_b64) = &req.ctx_b64 {
-        Base64UrlUnpadded::decode_vec(ctx_b64).map_err(|e| {
-            error!("ctx_b64 decode failed: {e:?}");
-            (StatusCode::BAD_REQUEST, "invalid ctx_b64 encoding".into())
-        })?;
-    }
 
     // Perform VOPRF evaluation with multi-key support
     debug!("calling voprf.evaluate_b64()");
@@ -291,7 +311,7 @@ fn constant_time_key_verify(expected: &str, provided: &str) -> bool {
 /// - `RegisteredUser` proof (invalid) → 403
 #[instrument(
     name = "renew_token",
-    skip(state, voprf, connect_info, headers),
+    skip(state, voprf, connect_info, validated_ip, headers, req),
     fields(
         kid = tracing::field::Empty,
         sybil_configured = tracing::field::Empty,
@@ -341,6 +361,9 @@ pub async fn renew(
         return Err((StatusCode::UNAUTHORIZED, "invalid admin key".to_string()));
     }
 
+    validate_blinded_input(&req.blinded_element_b64)?;
+    validate_context(req.ctx_b64.as_deref())?;
+
     // --- SYBIL RESISTANCE CHECK ---
     // The renewal endpoint ONLY accepts RegisteredUser proofs. Invitations must
     // go through the public /v1/oprf/issue route.
@@ -388,10 +411,7 @@ pub async fn renew(
                 }
                 Err(e) => {
                     warn!("❌ Sybil resistance check failed (renewal): {}", e);
-                    return Err((
-                        StatusCode::FORBIDDEN,
-                        "Sybil resistance verification failed".to_string(),
-                    ));
+                    return Err(sybil_verification_error(&e));
                 }
             }
         }
@@ -417,29 +437,6 @@ pub async fn renew(
     };
 
     // --- VOPRF EVALUATION (same as `handle`) ---
-    let blinded_bytes = Base64UrlUnpadded::decode_vec(&req.blinded_element_b64).map_err(|e| {
-        error!("invalid base64 for blinded_element_b64: {e:?}");
-        (StatusCode::BAD_REQUEST, "invalid base64 encoding".into())
-    })?;
-
-    if blinded_bytes.len() != 33 {
-        error!(
-            "blinded_element wrong length: got {} bytes, expected 33",
-            blinded_bytes.len()
-        );
-        return Err((
-            StatusCode::BAD_REQUEST,
-            "blinded_element must be 33 bytes (SEC1 compressed point)".into(),
-        ));
-    }
-
-    if let Some(ctx_b64) = &req.ctx_b64 {
-        Base64UrlUnpadded::decode_vec(ctx_b64).map_err(|e| {
-            error!("ctx_b64 decode failed: {e:?}");
-            (StatusCode::BAD_REQUEST, "invalid ctx_b64 encoding".into())
-        })?;
-    }
-
     debug!("calling voprf.evaluate_b64() (renewal)");
     let eval_result = voprf
         .evaluate_b64(&req.blinded_element_b64)

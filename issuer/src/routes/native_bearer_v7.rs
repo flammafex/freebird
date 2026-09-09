@@ -25,6 +25,10 @@ use std::sync::Arc;
 use std::time::Instant;
 use tracing::{error, instrument, warn};
 
+#[cfg(test)]
+#[path = "v7_preflight_tests.rs"]
+mod v7_preflight_tests;
+
 type StateTuple = (
     Arc<AppStateWithSybil>,
     Arc<crate::multi_key_voprf::MultiKeyVoprfCore>,
@@ -35,7 +39,7 @@ const BATCH_BINDING_DOMAIN: &str = "freebird:native-bearer-v7:issue-batch:v1";
 
 #[instrument(
     name = "issue_native_bearer_v7",
-    skip(state, _voprf, headers, connect_info)
+    skip(state, _voprf, headers, connect_info, validated_ip, req)
 )]
 pub async fn handle(
     State((state, _voprf)): State<StateTuple>,
@@ -44,10 +48,17 @@ pub async fn handle(
     headers: HeaderMap,
     Json(req): Json<NativeBearerV7IssueReq>,
 ) -> Result<Response, (StatusCode, String)> {
-    req.validate()
-        .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
+    req.validate().map_err(|_| invalid_message())?;
     let issuer = state.native_bearer_v7.clone();
     let identity = resolve_identity(&issuer, &req.token_key_id)?;
+    let message = decode_message(&req.blinded_msg_b64)?;
+    issuer
+        .preflight_at(
+            &identity,
+            &message,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+        )
+        .map_err(preflight_error)?;
     let client_data = extract_client_data(connect_info, state.behind_proxy, &headers, validated_ip);
     let sybil_info = verify_sybil(
         &state,
@@ -62,10 +73,9 @@ pub async fn handle(
             allow_registered_user: false,
         },
     )?;
-    let message = decode_message(&req.blinded_msg_b64)?;
     let signature = issuer.sign(&identity, &message).await.map_err(|error| {
         error!(error = ?error, "V7 native bearer blind signing failed");
-        (StatusCode::BAD_REQUEST, "blind signing failed".to_string())
+        signing_error(&error)
     })?;
 
     Ok(Json(NativeBearerV7IssueResp {
@@ -79,7 +89,7 @@ pub async fn handle(
 
 #[instrument(
     name = "issue_native_bearer_v7_batch",
-    skip(state, _voprf, headers, connect_info)
+    skip(state, _voprf, headers, connect_info, validated_ip, req)
 )]
 pub async fn handle_batch(
     State((state, _voprf)): State<StateTuple>,
@@ -88,8 +98,7 @@ pub async fn handle_batch(
     headers: HeaderMap,
     Json(req): Json<NativeBearerV7BatchIssueReq>,
 ) -> Result<Response, (StatusCode, String)> {
-    req.validate()
-        .map_err(|error| (StatusCode::BAD_REQUEST, error))?;
+    req.validate().map_err(|_| invalid_message())?;
     let batch_size = req.blinded_msgs_b64.len();
     if batch_size > MAX_BATCH_SIZE {
         return Err((
@@ -99,6 +108,18 @@ pub async fn handle_batch(
     }
     let issuer = state.native_bearer_v7.clone();
     let identity = resolve_identity(&issuer, &req.token_key_id)?;
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    let messages = req
+        .blinded_msgs_b64
+        .iter()
+        .map(|value| {
+            let message = decode_message(value)?;
+            issuer
+                .preflight_at(&identity, &message, now)
+                .map_err(preflight_error)?;
+            Ok(message)
+        })
+        .collect::<Result<Vec<_>, (StatusCode, String)>>()?;
     let client_data = extract_client_data(connect_info, state.behind_proxy, &headers, validated_ip);
     let sybil_info = verify_sybil(
         &state,
@@ -116,11 +137,10 @@ pub async fn handle_batch(
 
     let start = Instant::now();
     let mut signatures = Vec::with_capacity(batch_size);
-    for blinded_msg in &req.blinded_msgs_b64 {
-        let message = decode_message(blinded_msg)?;
-        let signature = issuer.sign(&identity, &message).await.map_err(|error| {
+    for message in &messages {
+        let signature = issuer.sign(&identity, message).await.map_err(|error| {
             error!(error = ?error, "V7 native bearer batch blind signing failed");
-            (StatusCode::BAD_REQUEST, "blind signing failed".to_string())
+            signing_error(&error)
         })?;
         signatures.push(Base64UrlUnpadded::encode_string(signature.as_bytes()));
     }
@@ -171,6 +191,28 @@ fn decode_message(value: &str) -> Result<V7BlindMessage, (StatusCode, String)> {
         .map_err(|_| (StatusCode::BAD_REQUEST, "invalid blinded message".into()))
 }
 
+fn invalid_message() -> (StatusCode, String) {
+    (StatusCode::BAD_REQUEST, "invalid blinded message".into())
+}
+
+fn preflight_error(error: crate::v7_signers::V7PreflightError) -> (StatusCode, String) {
+    match error {
+        crate::v7_signers::V7PreflightError::Unavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "V7 signer temporarily unavailable".into(),
+        ),
+        crate::v7_signers::V7PreflightError::InvalidRepresentative => invalid_message(),
+    }
+}
+
+fn signing_error(error: &anyhow::Error) -> (StatusCode, String) {
+    if let Some(error) = error.downcast_ref::<crate::v7_signers::V7PreflightError>() {
+        preflight_error(*error)
+    } else {
+        (StatusCode::BAD_REQUEST, "blind signing failed".into())
+    }
+}
+
 fn verify_sybil(
     state: &AppStateWithSybil,
     proof: Option<&SybilProof>,
@@ -180,10 +222,7 @@ fn verify_sybil(
         (Some(checker), Some(proof)) => {
             checker.verify_with_context(proof, &ctx).map_err(|error| {
                 warn!(error = ?error, "V7 Sybil resistance check failed");
-                (
-                    StatusCode::FORBIDDEN,
-                    "Sybil resistance verification failed".into(),
-                )
+                crate::routes::issue::sybil_verification_error(&error)
             })?;
             Ok(Some(SybilInfo {
                 required: true,

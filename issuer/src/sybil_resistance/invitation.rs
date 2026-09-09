@@ -1181,6 +1181,19 @@ pub struct InvitationStats {
 // SybilResistance Trait Implementation
 // ============================================================================
 
+/// Distinguishes a consumed invitation whose redemption could not be made durable
+/// from an invalid proof. The underlying storage error remains in the anyhow chain.
+#[derive(Debug)]
+pub(crate) struct InvitationRedemptionPersistenceError;
+
+impl std::fmt::Display for InvitationRedemptionPersistenceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("invitation redemption persistence unavailable")
+    }
+}
+
+impl std::error::Error for InvitationRedemptionPersistenceError {}
+
 impl SybilResistance for InvitationSystem {
     fn verify(&self, proof: &SybilProof) -> Result<()> {
         // Use block_in_place to allow blocking from within an async context
@@ -1206,13 +1219,12 @@ impl SybilResistance for InvitationSystem {
 
                         // Persist the redemption immediately to prevent replay attacks
                         // if the server restarts before the autosave runs
-                        if let Err(e) = self.save().await {
-                            // Log error but don't fail the request - state is still in memory
-                            // and will be persisted by the autosave task
-                            error!("Failed to persist invitation redemption: {:?}", e);
-                        } else {
-                            info!(code = %code, "invitation redeemed and persisted to disk");
-                        }
+                        // Keep the in-memory redemption consumed on failure; never issue
+                        // a token until its replay protection is durable.
+                        self.save()
+                            .await
+                            .context(InvitationRedemptionPersistenceError)?;
+                        info!(code = %code, "invitation redeemed and persisted to disk");
 
                         debug!(code = %code, "invitation verified and redeemed");
                         Ok(())
@@ -1257,11 +1269,11 @@ impl SybilResistance for InvitationSystem {
                             .redeem_invitation(code, ctx.client_data.clone())
                             .await?;
 
-                        if let Err(e) = self.save().await {
-                            error!("Failed to persist invitation redemption: {:?}", e);
-                        } else {
-                            info!(code = %code, "invitation redeemed and persisted to disk");
-                        }
+                        // Do not roll back the consumed invitation if persistence fails.
+                        self.save()
+                            .await
+                            .context(InvitationRedemptionPersistenceError)?;
+                        info!(code = %code, "invitation redeemed and persisted to disk");
 
                         Ok(())
                     }
@@ -1297,6 +1309,10 @@ impl SybilResistance for InvitationSystem {
         self.config.invite_cooldown_secs
     }
 }
+
+#[cfg(test)]
+#[path = "invitation_persistence_tests.rs"]
+mod invitation_persistence_tests;
 
 #[cfg(test)]
 mod tests {
