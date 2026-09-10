@@ -273,7 +273,11 @@ pub async fn handle_batch(
                 )),
                 allow_registered_user: false,
             };
-            match checker.verify_with_context(proof, &sybil_ctx) {
+            match state
+                .admission
+                .verify(checker.clone(), proof.clone(), sybil_ctx)
+                .await
+            {
                 Ok(()) => {
                     info!("✅ Sybil resistance check passed for batch");
                     Some(SybilInfo {

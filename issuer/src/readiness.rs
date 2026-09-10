@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 use crate::multi_key_voprf::MultiKeyVoprfCore;
-use crate::sybil_resistance::ReplayStore;
+use crate::sybil_resistance::{admission::AdmissionExecutor, ReplayStore};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -157,6 +157,7 @@ impl ReadinessState {
 
     pub(crate) fn spawn_checks(
         &self,
+        admission: AdmissionExecutor,
         replay_store: Arc<dyn ReplayStore>,
         storage_paths: Vec<(String, PathBuf)>,
         voprf: Arc<MultiKeyVoprfCore>,
@@ -170,6 +171,7 @@ impl ReadinessState {
             loop {
                 ticker.tick().await;
                 let mut report = check_once_with_replay_authority(
+                    &admission,
                     &replay_store,
                     &storage_paths,
                     &voprf,
@@ -198,26 +200,26 @@ impl ReadinessState {
 }
 
 pub async fn check_once(
+    admission: &AdmissionExecutor,
     replay_store: &Arc<dyn ReplayStore>,
     storage_paths: &[(String, PathBuf)],
     voprf: &Arc<MultiKeyVoprfCore>,
 ) -> ReadinessReport {
-    check_once_with_replay_authority(replay_store, storage_paths, voprf, None).await
+    check_once_with_replay_authority(admission, replay_store, storage_paths, voprf, None).await
 }
 
 pub(crate) async fn check_once_with_replay_authority(
+    admission: &AdmissionExecutor,
     replay_store: &Arc<dyn ReplayStore>,
     storage_paths: &[(String, PathBuf)],
     voprf: &Arc<MultiKeyVoprfCore>,
     replay_authority: Option<&Arc<crate::replay_authority::ReplayAuthority>>,
 ) -> ReadinessReport {
     let store = Arc::clone(replay_store);
-    let redis = tokio::time::timeout(
-        Duration::from_secs(2),
-        tokio::task::spawn_blocking(move || store.health_check()),
-    )
-    .await
-    .is_ok_and(|result| result.is_ok_and(|result| result.is_ok()));
+    // The shared admission executor owns the blocking job and its permit.
+    // Redis health_check bounds its own connection/command lifetime; abandoning
+    // this caller cannot release capacity before the actual job completes.
+    let redis = admission.run(move || store.health_check()).await.is_ok();
     let paths = storage_paths.to_vec();
     let storage = tokio::time::timeout(
         Duration::from_secs(2),
@@ -329,10 +331,160 @@ mod tests {
         )
     }
 
+    #[derive(Default)]
+    struct BlockingReplayStore {
+        calls: std::sync::atomic::AtomicUsize,
+        started: tokio::sync::Notify,
+        released: std::sync::Mutex<bool>,
+        wake: std::sync::Condvar,
+    }
+
+    impl BlockingReplayStore {
+        fn release(&self) {
+            *self.released.lock().unwrap() = true;
+            self.wake.notify_all();
+        }
+    }
+
+    impl ReplayStore for BlockingReplayStore {
+        fn mark_once(&self, _: &str, _: &str, _: Duration) -> anyhow::Result<()> {
+            unreachable!("readiness must only check health")
+        }
+        fn health_check(&self) -> anyhow::Result<()> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.started.notify_one();
+            let released = self.released.lock().unwrap();
+            drop(
+                self.wake
+                    .wait_while(released, |released| !*released)
+                    .unwrap(),
+            );
+            Ok(())
+        }
+    }
+
+    // Always unblock the fake, including when an assertion fails, so runtime
+    // shutdown cannot hang waiting for a deliberately blocked test closure.
+    struct ReleaseOnDrop(Arc<BlockingReplayStore>);
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            self.0.release();
+        }
+    }
+
+    #[tokio::test]
+    async fn abandoned_readiness_holds_shared_capacity_and_recovers() {
+        use std::sync::atomic::Ordering;
+        let admission = AdmissionExecutor::new(1);
+        let fake = Arc::new(BlockingReplayStore::default());
+        let release = ReleaseOnDrop(fake.clone());
+        let store: Arc<dyn ReplayStore> = fake.clone();
+        let core = core().await;
+        let dir = tempdir().unwrap();
+        let paths = vec![("audit".into(), dir.path().join("audit.json"))];
+        let caller = {
+            let (admission, store, core, paths) = (
+                admission.clone(),
+                store.clone(),
+                core.clone(),
+                paths.clone(),
+            );
+            tokio::spawn(async move { check_once(&admission, &store, &paths, &core).await })
+        };
+        tokio::time::timeout(Duration::from_secs(2), fake.started.notified())
+            .await
+            .unwrap();
+        caller.abort();
+        assert!(caller.await.unwrap_err().is_cancelled());
+
+        for _ in 0..5 {
+            let report = tokio::time::timeout(
+                Duration::from_secs(2),
+                check_once(&admission, &store, &paths, &core),
+            )
+            .await
+            .unwrap();
+            assert!(!report.redis && !report.ready);
+            assert!(report.storage && report.issuance_key);
+            assert_eq!(
+                fake.calls.load(Ordering::SeqCst),
+                1,
+                "no queued health jobs"
+            );
+        }
+        // Issuance shares that exact cap, not a separate readiness semaphore.
+        assert!(admission
+            .run::<(), _>(|| panic!("must not queue admission"))
+            .await
+            .unwrap_err()
+            .is::<crate::sybil_resistance::admission::AdmissionUnavailable>());
+
+        drop(release);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let report = check_once(&admission, &store, &paths, &core).await;
+                if report.ready {
+                    assert!(report.redis);
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("completed work must restore capacity");
+        assert!(fake.calls.load(Ordering::SeqCst) >= 2);
+    }
+
+    #[tokio::test]
+    async fn admission_saturation_prevents_readiness_health_work() {
+        let admission = AdmissionExecutor::new(1);
+        let fake = Arc::new(BlockingReplayStore::default());
+        let release = ReleaseOnDrop(fake.clone());
+        let task = {
+            let (admission, fake) = (admission.clone(), fake.clone());
+            tokio::spawn(async move { admission.run(move || fake.health_check()).await })
+        };
+        tokio::time::timeout(Duration::from_secs(2), fake.started.notified())
+            .await
+            .unwrap();
+        let store: Arc<dyn ReplayStore> = fake.clone();
+        for _ in 0..5 {
+            let report = check_once(&admission, &store, &[], &core().await).await;
+            assert!(!report.redis && !report.ready);
+        }
+        assert_eq!(fake.calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        drop(release);
+        task.await.unwrap().unwrap();
+        assert!(
+            check_once(&admission, &store, &[], &core().await)
+                .await
+                .redis
+        );
+    }
+
+    #[tokio::test]
+    async fn replay_health_task_failure_is_not_ready() {
+        struct PanickingStore;
+        impl ReplayStore for PanickingStore {
+            fn mark_once(&self, _: &str, _: &str, _: Duration) -> anyhow::Result<()> {
+                unreachable!()
+            }
+            fn health_check(&self) -> anyhow::Result<()> {
+                panic!("private backend details")
+            }
+        }
+        let store: Arc<dyn ReplayStore> = Arc::new(PanickingStore);
+        let admission = AdmissionExecutor::new(1);
+        let report = check_once(&admission, &store, &[], &core().await).await;
+        assert!(!report.redis && !report.ready);
+        admission.run(|| Ok(())).await.unwrap();
+    }
+
     #[tokio::test]
     async fn in_memory_replay_never_reports_ready() {
         let dir = tempdir().unwrap();
         let report = check_once(
+            &AdmissionExecutor::default(),
             &memory_replay_store(),
             &[
                 ("audit".into(), dir.path().join("audit.json")),
@@ -354,6 +506,7 @@ mod tests {
         let report = tokio::time::timeout(
             Duration::from_secs(3),
             check_once_with_replay_authority(
+                &AdmissionExecutor::default(),
                 &memory_replay_store(),
                 &[("audit".into(), dir.path().join("audit.json"))],
                 &core().await,
@@ -372,11 +525,19 @@ mod tests {
         let missing_parent = dir.path().join("new");
         let missing = missing_parent.join("audit.json");
         let store = memory_replay_store();
-        let report = check_once(&store, &[("audit".into(), missing)], &core().await).await;
+        let admission = AdmissionExecutor::default();
+        let report = check_once(
+            &admission,
+            &store,
+            &[("audit".into(), missing)],
+            &core().await,
+        )
+        .await;
         assert!(!report.ready);
         assert!(!report.storage);
         std::fs::create_dir(&missing_parent).unwrap();
         let report = check_once(
+            &admission,
             &store,
             &[("audit".into(), missing_parent.join("audit.json"))],
             &core().await,
@@ -399,7 +560,13 @@ mod tests {
         .into_iter()
         .map(|name| (name.to_string(), dir.path().join(format!("{name}.json"))))
         .collect::<Vec<_>>();
-        let report = check_once(&memory_replay_store(), &stores, &core().await).await;
+        let report = check_once(
+            &AdmissionExecutor::default(),
+            &memory_replay_store(),
+            &stores,
+            &core().await,
+        )
+        .await;
         assert_eq!(report.stores.len(), 6);
         assert!(report.stores.values().all(|ready| *ready));
     }

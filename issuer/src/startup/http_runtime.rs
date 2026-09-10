@@ -50,6 +50,7 @@ pub(super) struct HttpRuntimeInputs {
 }
 
 pub(super) struct HttpRuntime {
+    pub(super) admission: crate::sybil_resistance::admission::AdmissionExecutor,
     pub(super) app: Router,
     pub(super) readiness: ReadinessState,
     pub(super) sybil_replay_store: Arc<dyn ReplayStore>,
@@ -202,6 +203,7 @@ impl HttpRuntime {
             require_tls: config.require_tls,
             behind_proxy: config.behind_proxy,
             sybil_checker: sybil_checker.clone(),
+            admission: Default::default(),
             invitation_system: invitation_system.clone(),
             native_bearer_v7: native_bearer_v7.clone(),
             native_bearer_v7_retained,
@@ -327,6 +329,7 @@ impl HttpRuntime {
         let app = apply_public_layers(app)?;
 
         Ok(Self {
+            admission: state.admission.clone(),
             app,
             readiness,
             sybil_replay_store,

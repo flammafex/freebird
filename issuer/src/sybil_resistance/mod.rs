@@ -23,6 +23,7 @@ use anyhow::{anyhow, Result};
 use freebird_common::api::SybilProof;
 use std::sync::Arc;
 
+pub mod admission;
 pub mod invitation;
 pub mod multi_party_vouching;
 pub mod progressive_trust;
@@ -307,6 +308,7 @@ impl SybilResistance for CombinedThreshold {
             SybilProof::Multi { proofs } => {
                 let mut mechanism_passed = vec![false; self.mechanisms.len()];
                 let mut errors = Vec::new();
+                let mut unavailable = None;
 
                 // Count at most one success per mechanism, even if multiple proofs match.
                 for (idx, mechanism) in self.mechanisms.iter().enumerate() {
@@ -318,7 +320,13 @@ impl SybilResistance for CombinedThreshold {
                                     break;
                                 }
                                 Err(e) => {
-                                    errors.push(format!("{}", e));
+                                    if e.is::<admission::AdmissionUnavailable>() {
+                                        if unavailable.is_none() {
+                                            unavailable = Some(e);
+                                        }
+                                    } else {
+                                        errors.push(format!("{}", e));
+                                    }
                                 }
                             }
                         }
@@ -331,6 +339,8 @@ impl SybilResistance for CombinedThreshold {
                 let passed = mechanism_passed.iter().filter(|&&ok| ok).count();
                 if passed >= self.threshold {
                     Ok(())
+                } else if let Some(error) = unavailable {
+                    Err(error)
                 } else {
                     Err(anyhow!(
                         "threshold not met: passed {}/{}, need {} (errors: {})",
@@ -350,6 +360,7 @@ impl SybilResistance for CombinedThreshold {
             SybilProof::Multi { proofs } => {
                 let mut mechanism_passed = vec![false; self.mechanisms.len()];
                 let mut errors = Vec::new();
+                let mut unavailable = None;
 
                 for (idx, mechanism) in self.mechanisms.iter().enumerate() {
                     for proof in proofs {
@@ -360,7 +371,13 @@ impl SybilResistance for CombinedThreshold {
                                     break;
                                 }
                                 Err(e) => {
-                                    errors.push(format!("{}", e));
+                                    if e.is::<admission::AdmissionUnavailable>() {
+                                        if unavailable.is_none() {
+                                            unavailable = Some(e);
+                                        }
+                                    } else {
+                                        errors.push(format!("{}", e));
+                                    }
                                 }
                             }
                         }
@@ -370,6 +387,8 @@ impl SybilResistance for CombinedThreshold {
                 let passed = mechanism_passed.iter().filter(|&&ok| ok).count();
                 if passed >= self.threshold {
                     Ok(())
+                } else if let Some(error) = unavailable {
+                    Err(error)
                 } else {
                     Err(anyhow!(
                         "threshold not met: passed {}/{}, need {} (errors: {})",
@@ -405,21 +424,156 @@ pub fn current_timestamp() -> u64 {
         .as_secs()
 }
 
-pub fn verify_timestamp_recent(timestamp: u64, window_secs: u64) -> Result<()> {
-    let now = current_timestamp();
-    let age = now.saturating_sub(timestamp);
-    if age > window_secs {
+pub(crate) const POW_FUTURE_SKEW_SECS: u64 = 300;
+pub(crate) const WEBAUTHN_FUTURE_SKEW_SECS: u64 = 60;
+pub(crate) const REPLAY_INCLUSIVE_MARGIN_SECS: u64 = 1;
+
+/// Retain from first admission through the last inclusive timestamp second,
+/// including proofs first admitted at the maximum allowed future skew.
+pub(crate) fn replay_ttl(max_age: u64, future_skew: u64) -> Result<std::time::Duration> {
+    let secs = max_age
+        .checked_add(future_skew)
+        .and_then(|secs| secs.checked_add(REPLAY_INCLUSIVE_MARGIN_SECS))
+        .ok_or_else(|| anyhow!("replay retention overflow"))?;
+    // Both supported stores must be able to represent the duration: Redis uses
+    // signed millisecond deadlines and the memory store uses Instant deadlines.
+    let _ = usize::try_from(secs).map_err(|_| anyhow!("replay retention too large"))?;
+    let ttl = std::time::Duration::from_secs(secs);
+    i64::try_from(ttl.as_millis()).map_err(|_| anyhow!("replay retention too large"))?;
+    std::time::Instant::now()
+        .checked_add(ttl)
+        .ok_or_else(|| anyhow!("replay retention too large"))?;
+    Ok(ttl)
+}
+
+pub(crate) fn verify_timestamp_at(
+    timestamp: i128,
+    now: i128,
+    window_secs: u64,
+    future_skew: u64,
+) -> Result<()> {
+    let age = now
+        .checked_sub(timestamp)
+        .ok_or_else(|| anyhow!("timestamp out of range"))?;
+    if age > i128::from(window_secs) {
         return Err(anyhow!("timestamp too old"));
     }
-    if timestamp > now + 300 {
+    if age < -i128::from(future_skew) {
         return Err(anyhow!("timestamp in future"));
     }
     Ok(())
 }
 
+pub fn verify_timestamp_recent(timestamp: u64, window_secs: u64) -> Result<()> {
+    verify_timestamp_at(
+        timestamp.into(),
+        current_timestamp().into(),
+        window_secs,
+        POW_FUTURE_SKEW_SECS,
+    )
+}
+
+#[cfg(test)]
+#[path = "replay_retention_tests.rs"]
+pub(crate) mod replay_retention_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn threshold_availability_preserves_success_in_both_orders_and_trait_paths() {
+        use std::sync::Mutex;
+        #[derive(Clone, Copy)]
+        enum Outcome {
+            Success,
+            Unavailable,
+            Rejected,
+        }
+        struct Checker {
+            outcome: Outcome,
+            index: usize,
+            calls: Arc<Mutex<Vec<(usize, bool)>>>,
+        }
+        impl Checker {
+            fn check(&self, context: bool) -> Result<()> {
+                self.calls.lock().unwrap().push((self.index, context));
+                match self.outcome {
+                    Outcome::Success => Ok(()),
+                    Outcome::Unavailable => Err(anyhow!("backend {} unavailable", self.index)
+                        .context(admission::AdmissionUnavailable)),
+                    Outcome::Rejected => Err(anyhow!("ordinary invalid proof")),
+                }
+            }
+        }
+        impl SybilResistance for Checker {
+            fn verify(&self, _: &SybilProof) -> Result<()> {
+                self.check(false)
+            }
+            fn verify_with_context(&self, _: &SybilProof, _: &SybilRequestContext) -> Result<()> {
+                self.check(true)
+            }
+            fn supports(&self, _: &SybilProof) -> bool {
+                true
+            }
+            fn cost(&self) -> u64 {
+                0
+            }
+        }
+        use Outcome::*;
+        let proof = SybilProof::Multi {
+            proofs: vec![SybilProof::RegisteredUser {
+                user_id: "test".into(),
+            }],
+        };
+        for context in [false, true] {
+            for (outcomes, threshold, expected) in [
+                ([Success, Unavailable], 1, "success"),
+                ([Unavailable, Success], 1, "success"),
+                ([Success, Unavailable], 2, "unavailable"),
+                ([Unavailable, Success], 2, "unavailable"),
+                ([Success, Rejected], 2, "rejected"),
+                ([Rejected, Success], 2, "rejected"),
+                ([Rejected, Rejected], 1, "rejected"),
+                ([Unavailable, Unavailable], 2, "first unavailable"),
+            ] {
+                let calls = Arc::new(Mutex::new(Vec::new()));
+                let mechanisms = outcomes
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, outcome)| {
+                        Arc::new(Checker {
+                            outcome,
+                            index,
+                            calls: calls.clone(),
+                        }) as Arc<dyn SybilResistance>
+                    })
+                    .collect();
+                let checker = CombinedThreshold::new(mechanisms, threshold).unwrap();
+                let result = if context {
+                    checker.verify_with_context(&proof, &SybilRequestContext::default())
+                } else {
+                    checker.verify(&proof)
+                };
+                assert_eq!(*calls.lock().unwrap(), vec![(0, context), (1, context)]);
+                if expected == "success" {
+                    result.unwrap();
+                } else {
+                    let error = result.unwrap_err();
+                    assert_eq!(
+                        error.is::<admission::AdmissionUnavailable>(),
+                        expected != "rejected"
+                    );
+                    if expected == "rejected" {
+                        assert!(error.to_string().contains("threshold not met"));
+                    }
+                    if expected == "first unavailable" {
+                        assert!(format!("{error:#}").contains("backend 0 unavailable"));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_no_sybil_resistance() {

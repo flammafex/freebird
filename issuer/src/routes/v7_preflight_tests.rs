@@ -36,6 +36,7 @@ fn fixture(window: Option<(i64, i64)>) -> (StateTuple, Arc<CountingChecker>) {
         require_tls: false,
         behind_proxy: false,
         sybil_checker: Some(checker.clone()),
+        admission: Default::default(),
         invitation_system: None,
         native_bearer_v7: issuer,
         native_bearer_v7_retained: vec![],
@@ -65,6 +66,32 @@ fn one() -> String {
     let mut bytes = [0; 384];
     bytes[383] = 1;
     Base64UrlUnpadded::encode_string(&bytes)
+}
+
+#[tokio::test]
+async fn saturated_admission_returns_503_for_v7_routes() {
+    let (mut state, checker) = fixture(None);
+    Arc::get_mut(&mut state.0).unwrap().admission =
+        crate::sybil_resistance::admission::AdmissionExecutor::new(0);
+    for batch in [false, true] {
+        assert_eq!(
+            invoke(&state, vec![one()], batch).await.unwrap_err(),
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Sybil resistance temporarily unavailable".into()
+            )
+        );
+        assert!(checker.0.lock().unwrap().is_empty());
+        assert_eq!(
+            state
+                .0
+                .native_bearer_v7
+                .inventory()
+                .active()
+                .sign_attempts(),
+            0
+        );
+    }
 }
 
 async fn invoke(

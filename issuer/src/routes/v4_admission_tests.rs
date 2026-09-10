@@ -36,6 +36,7 @@ fn fixture() -> (
         require_tls: false,
         behind_proxy: false,
         sybil_checker: Some(checker.clone()),
+        admission: Default::default(),
         invitation_system: None,
         native_bearer_v7: crate::main_state::test_native_bearer_v7(),
         native_bearer_v7_retained: vec![],
@@ -64,6 +65,63 @@ fn proof() -> Option<SybilProof> {
     Some(SybilProof::RegisteredUser {
         user_id: "test-user".into(),
     })
+}
+
+#[tokio::test]
+async fn saturated_admission_returns_503_for_v4_routes() {
+    let (mut state, voprf, checker, valid) = fixture();
+    Arc::get_mut(&mut state).unwrap().admission =
+        crate::sybil_resistance::admission::AdmissionExecutor::new(0);
+    for route in 0..3 {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-admin-key", "admin-key".parse().unwrap());
+        let req = Json(IssueReq {
+            blinded_element_b64: valid.clone(),
+            ctx_b64: None,
+            sybil_proof: proof(),
+        });
+        let error = match route {
+            0 => handle(
+                State((state.clone(), voprf.clone())),
+                None,
+                None,
+                headers,
+                req,
+            )
+            .await
+            .unwrap_err(),
+            1 => renew(
+                State((state.clone(), voprf.clone())),
+                None,
+                None,
+                headers,
+                req,
+            )
+            .await
+            .unwrap_err(),
+            _ => crate::routes::batch_issue::handle_batch(
+                State((state.clone(), voprf.clone())),
+                None,
+                None,
+                headers,
+                Json(BatchIssueReq {
+                    blinded_elements: vec![valid.clone()],
+                    ctx_b64: None,
+                    sybil_proof: proof(),
+                }),
+            )
+            .await
+            .unwrap_err(),
+        };
+        assert_eq!(
+            error,
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Sybil resistance temporarily unavailable".into()
+            )
+        );
+        assert!(checker.0.lock().unwrap().is_empty());
+    }
 }
 
 fn malformed_inputs() -> Vec<String> {

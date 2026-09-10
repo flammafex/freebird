@@ -50,6 +50,7 @@ async fn issuance_handler_spans_exclude_private_inputs() {
         require_tls: false,
         behind_proxy: false,
         sybil_checker: None,
+        admission: Default::default(),
         invitation_system: None,
         native_bearer_v7: crate::main_state::test_native_bearer_v7(),
         native_bearer_v7_retained: vec![],

@@ -46,7 +46,8 @@ services:
       - EPOCH_RETENTION=${EPOCH_RETENTION:-2}
       - SYBIL_RESISTANCE=${SYBIL_RESISTANCE:-invitation}
       - SYBIL_REPLAY_STORE=${SYBIL_REPLAY_STORE:-redis}
-      - SYBIL_REPLAY_REDIS_URL=${SYBIL_REPLAY_REDIS_URL:-redis://redis:6379}
+      # Replay admission forbids DNS; use the same address assigned to Redis below.
+      - SYBIL_REPLAY_REDIS_URL=redis://${REDIS_IPV4:-172.30.84.10}:6379
       - SYBIL_INVITE_PER_USER=${SYBIL_INVITE_PER_USER:-5}
       - SYBIL_INVITE_COOLDOWN=${SYBIL_INVITE_COOLDOWN:-1h}
       - SYBIL_INVITE_EXPIRES=${SYBIL_INVITE_EXPIRES:-30d}
@@ -231,7 +232,8 @@ services:
 
     # Networking - internal only
     networks:
-      - freebird-net
+      freebird-net:
+        ipv4_address: ${REDIS_IPV4:-172.30.84.10}
     expose:
       - "6379"
 
@@ -285,5 +287,8 @@ volumes:
 networks:
   freebird-net:
     driver: bridge
+    ipam:
+      config:
+        - subnet: ${FREEBIRD_SUBNET:-172.30.84.0/24}
     driver_opts:
       com.docker.network.bridge.name: br-freebird

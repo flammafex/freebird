@@ -47,6 +47,8 @@ cosign verify \
 k8s/validate-overlays.sh
 # This complete overlay apply is for an availability-preserving production
 # rollout only; use the clean bootstrap waves below for a new installation.
+# If Redis still has clusterIP: None, complete the Service-only migration below
+# before applying the full overlay.
 kubectl apply -k k8s/overlays/production
 ```
 
@@ -168,8 +170,9 @@ checks the generated nginx configuration has exactly one upstream
 For a clean production bootstrap, use these waves without taking an already
 serving verifier deployment offline:
 
-1. Establish prerequisites and durable secrets, then deploy and verify the
-   issuer and its Redis dependency.
+1. Establish prerequisites and durable secrets. Create the IPv4 Redis Service
+   **before any issuer Pods**, using the ordering in the Redis section below.
+   Then deploy and verify Redis and the issuer.
 2. From the verifier's actual trusted HTTPS ingress boundary, verify issuer
    discovery and metadata before starting verifier replicas.
 3. Start the verifier replicas with the normal availability-preserving rollout
@@ -274,6 +277,89 @@ The verifier receives:
   contract.
 
 Network policies allow Redis access only from issuer and verifier pods.
+
+### Numeric replay endpoint and fresh installation ordering
+
+Only `SYBIL_REPLAY_REDIS_URL` must avoid DNS. The Redis Service is an ordinary
+IPv4 SingleStack ClusterIP Service (`ipFamilies: [IPv4]`,
+`ipFamilyPolicy: SingleStack`); Kubernetes allocates its address. Do not pin a
+cluster-specific IP or restore `clusterIP: None`. IPv6-only clusters are not
+supported by this deployment configuration.
+
+The issuer explicitly uses `enableServiceLinks: true` and constructs
+`redis://:$(REDIS_PASSWORD)@$(REDIS_SERVICE_HOST):$(REDIS_SERVICE_PORT)`.
+`REDIS_PASSWORD` remains earlier in its environment list so Kubernetes expands
+the reference. Keep existing credentials URL-safe/percent-encoded as required
+by the Redis URL format. Other URLs (`REDIS_URL`, `WEBAUTHN_REDIS_URL`,
+`NATIVE_EXCHANGE_V7_REDIS_URL`, and verifier Redis access) still use `redis:6379`.
+The Service selector, TCP port, authentication, Deployment, and persistent data
+configuration are unchanged.
+
+Service-link variables are supplied to new Pods, not dynamically refreshed in
+running Pods. Create the Redis Service before creating/restarting issuer Pods;
+after any future Service recreation, restart issuer Pods again to pick up the
+new address. Do not override the injected `REDIS_SERVICE_HOST` or
+`REDIS_SERVICE_PORT` in a ConfigMap or environment list.
+
+For a **fresh installation**, first fill the selected overlay's required values
+and provision its external secrets. Render the same overlay used for the rest
+of the rollout (commands below require Mike Farah `yq` v4):
+
+```bash
+kubectl kustomize k8s/overlays/production > freebird-rendered.yaml
+yq 'select(.kind == "Namespace")' freebird-rendered.yaml | kubectl apply -f -
+yq 'select(.kind == "Service" and .metadata.name == "redis")' freebird-rendered.yaml > redis-service.yaml
+kubectl apply -f redis-service.yaml
+kubectl -n freebird get service redis -o wide
+```
+
+Confirm it has an allocated IPv4 ClusterIP, then continue the clean bootstrap
+waves above: provision Redis/issuer dependencies and start the issuer before
+the initial verifier rollout. The Service must exist even if Redis Pods are
+not yet ready. For kind, select `k8s/overlays/kind`; the reviewed smoke script
+restarts issuer Pods after applying the overlay, so those Pods receive the
+Service links.
+
+### Existing headless Redis Service: Service-only migration
+
+Use this procedure **only** when `kubectl -n freebird get service redis
+-o jsonpath='{.spec.clusterIP}'` reports `None`. The headless-to-ClusterIP change
+cannot be applied in place. Schedule a maintenance window: deleting/recreating
+the Service temporarily disrupts **all** Redis consumers, including verifier,
+exchange, WebAuthn, and issuer replay traffic. Some consumers may require
+reconnection or a controlled restart after DNS caches refresh.
+
+1. Keep the existing Redis Deployment, `redis-data` PVC, `redis-credentials`
+   Secret, and their contents. Do not delete/recreate the namespace, workload,
+   PVC, or secret, and do not use a full-stack delete or force-replace.
+2. Render your updated, configured overlay as above. Extract **only** its Redis
+   Service into `redis-service.yaml`. Compare its selector and port against the
+   existing Service; retain the existing `app: freebird`, `component: redis`
+   selector and TCP 6379 targeting named port `redis`, including any intentional
+   operator customizations. The replacement must request IPv4 SingleStack and
+   omit `clusterIP` so Kubernetes allocates it.
+3. Recreate only the Service, then confirm allocation before touching issuer Pods:
+
+   ```bash
+   kubectl -n freebird delete service redis
+   kubectl apply -f redis-service.yaml
+   kubectl -n freebird get service redis -o wide
+   kubectl -n freebird get endpointslices -l kubernetes.io/service-name=redis
+   ```
+
+4. Once the Service exists, apply the updated issuer Deployment from the same
+   render, then restart issuer Pods to refresh their Service-link environment:
+
+   ```bash
+   yq 'select(.kind == "Deployment" and .metadata.name == "issuer")' freebird-rendered.yaml | kubectl apply -f -
+   kubectl -n freebird rollout restart deployment/issuer
+   kubectl -n freebird rollout status deployment/issuer
+   ```
+
+5. Verify issuer readiness through its normal HTTPS boundary and verify recovery
+   of the other Redis consumers. Resume the normal overlay rollout only after
+   recovery. Service recreation does not erase Redis data; never delete volumes
+   or credentials as a remedy for readiness failures.
 
 When V7 graph issuance is enabled, set the verifier graph URL to the issuer's
 public HTTPS host (for example, `https://issuer.example.com`) and expose the

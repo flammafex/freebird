@@ -72,7 +72,8 @@ pub async fn handle(
             )),
             allow_registered_user: false,
         },
-    )?;
+    )
+    .await?;
     let signature = issuer.sign(&identity, &message).await.map_err(|error| {
         error!(error = ?error, "V7 native bearer blind signing failed");
         signing_error(&error)
@@ -133,7 +134,8 @@ pub async fn handle_batch(
             )),
             allow_registered_user: false,
         },
-    )?;
+    )
+    .await?;
 
     let start = Instant::now();
     let mut signatures = Vec::with_capacity(batch_size);
@@ -213,17 +215,21 @@ fn signing_error(error: &anyhow::Error) -> (StatusCode, String) {
     }
 }
 
-fn verify_sybil(
+async fn verify_sybil(
     state: &AppStateWithSybil,
     proof: Option<&SybilProof>,
     ctx: SybilRequestContext,
 ) -> Result<Option<SybilInfo>, (StatusCode, String)> {
     match (&state.sybil_checker, proof) {
         (Some(checker), Some(proof)) => {
-            checker.verify_with_context(proof, &ctx).map_err(|error| {
-                warn!(error = ?error, "V7 Sybil resistance check failed");
-                crate::routes::issue::sybil_verification_error(&error)
-            })?;
+            state
+                .admission
+                .verify(checker.clone(), proof.clone(), ctx)
+                .await
+                .map_err(|error| {
+                    warn!(error = ?error, "V7 Sybil resistance check failed");
+                    crate::routes::issue::sybil_verification_error(&error)
+                })?;
             Ok(Some(SybilInfo {
                 required: true,
                 passed: true,

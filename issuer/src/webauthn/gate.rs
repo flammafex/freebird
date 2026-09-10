@@ -2,11 +2,13 @@
 use anyhow::{anyhow, Context, Result};
 use base64ct::Encoding;
 use std::sync::Arc;
-use std::time::Duration;
 use tracing::{debug, info, warn};
 
 use super::handlers::WebAuthnState;
-use crate::sybil_resistance::{memory_replay_store, ReplayStore, SybilResistance};
+use crate::sybil_resistance::{
+    memory_replay_store, replay_ttl, verify_timestamp_at, ReplayStore, SybilResistance,
+    WEBAUTHN_FUTURE_SKEW_SECS,
+};
 use freebird_common::api::SybilProof;
 
 pub struct WebAuthnGate {
@@ -109,33 +111,29 @@ impl WebAuthnGate {
         self.replay_store.mark_once(
             "webauthn",
             proof,
-            Duration::from_secs(self.max_proof_age.max(1) as u64),
+            replay_ttl(
+                u64::try_from(self.max_proof_age).context("invalid maximum proof age")?,
+                WEBAUTHN_FUTURE_SKEW_SECS,
+            )?,
         )
     }
 }
 
-impl SybilResistance for WebAuthnGate {
-    fn verify(&self, proof: &SybilProof) -> Result<()> {
+impl WebAuthnGate {
+    fn verify_at(&self, proof: &SybilProof, now: i64) -> Result<()> {
         match proof {
             SybilProof::WebAuthn {
                 subject_hash,
                 auth_proof,
                 timestamp,
             } => {
-                let now = chrono::Utc::now().timestamp();
-                let age = now - timestamp;
-
-                // Validate timestamp
-                if age > self.max_proof_age {
-                    return Err(anyhow!(
-                        "Authentication proof expired (age: {}s, max: {}s)",
-                        age,
-                        self.max_proof_age
-                    ));
-                }
-                if age < -60 {
-                    return Err(anyhow!("Timestamp in future"));
-                }
+                let age = i128::from(now) - i128::from(*timestamp);
+                verify_timestamp_at(
+                    (*timestamp).into(),
+                    now.into(),
+                    u64::try_from(self.max_proof_age).context("invalid maximum proof age")?,
+                    WEBAUTHN_FUTURE_SKEW_SECS,
+                )?;
 
                 // Validate proof format
                 let proof_bytes = base64ct::Base64UrlUnpadded::decode_vec(auth_proof)
@@ -166,7 +164,7 @@ impl SybilResistance for WebAuthnGate {
                 debug!(
                     subject_hash = %subject_hash,
                     timestamp = timestamp,
-                    age_secs = age,
+                    age_secs = %age,
                     "WebAuthn proof verified successfully"
                 );
 
@@ -175,6 +173,12 @@ impl SybilResistance for WebAuthnGate {
             _ => Err(anyhow!("Expected WebAuthn proof")),
         }
     }
+}
+
+impl SybilResistance for WebAuthnGate {
+    fn verify(&self, proof: &SybilProof) -> Result<()> {
+        self.verify_at(proof, chrono::Utc::now().timestamp())
+    }
 
     fn supports(&self, proof: &SybilProof) -> bool {
         matches!(proof, SybilProof::WebAuthn { .. })
@@ -182,5 +186,78 @@ impl SybilResistance for WebAuthnGate {
 
     fn cost(&self) -> u64 {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sybil_resistance::replay_retention_tests::ClockStore;
+
+    #[test]
+    fn replay_retention_covers_future_skew_and_inclusive_endpoint() {
+        for max_age in [0, 300] {
+            let store = Arc::new(ClockStore::default());
+            let gate = WebAuthnGate {
+                max_proof_age: max_age,
+                proof_key: [7; 32],
+                replay_store: store.clone(),
+            };
+            let now = 10_000;
+            let timestamp = now + WEBAUTHN_FUTURE_SKEW_SECS as i64;
+            let proof = SybilProof::WebAuthn {
+                subject_hash: "subject".into(),
+                auth_proof: gate.compute_proof("subject", timestamp),
+                timestamp,
+            };
+            assert!(gate.verify_at(&proof, now - 1).is_err());
+            gate.verify_at(&proof, now).unwrap();
+            let last = max_age as u64 + WEBAUTHN_FUTURE_SKEW_SECS;
+            assert_eq!(store.ttls()[0].as_secs(), last + 1);
+            store.advance_to(last);
+            assert!(gate
+                .verify_at(&proof, now + last as i64)
+                .unwrap_err()
+                .to_string()
+                .contains("already used"));
+            store.advance_to(last + 1);
+            assert!(gate
+                .verify_at(&proof, now + last as i64 + 1)
+                .unwrap_err()
+                .to_string()
+                .contains("too old"));
+        }
+    }
+
+    #[test]
+    fn invalid_retention_and_extreme_timestamps_return_errors() {
+        for max_proof_age in [-1, i64::MAX] {
+            let store = Arc::new(ClockStore::default());
+            let gate = WebAuthnGate {
+                max_proof_age,
+                proof_key: [7; 32],
+                replay_store: store.clone(),
+            };
+            let proof = SybilProof::WebAuthn {
+                subject_hash: "s".into(),
+                auth_proof: gate.compute_proof("s", 1000),
+                timestamp: 1000,
+            };
+            assert!(gate.verify_at(&proof, 1000).is_err());
+            assert!(store.ttls().is_empty());
+        }
+        let gate = WebAuthnGate {
+            max_proof_age: 300,
+            proof_key: [7; 32],
+            replay_store: memory_replay_store(),
+        };
+        for timestamp in [i64::MIN, i64::MAX] {
+            let proof = SybilProof::WebAuthn {
+                subject_hash: "s".into(),
+                auth_proof: gate.compute_proof("s", timestamp),
+                timestamp,
+            };
+            assert!(gate.verify_at(&proof, 1000).is_err());
+        }
     }
 }

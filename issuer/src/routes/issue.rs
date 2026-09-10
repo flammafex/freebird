@@ -109,7 +109,9 @@ pub fn extract_client_data(
 /// Storage failures are availability failures, not invalid proofs. Never expose
 /// the storage error chain (which may contain local paths) to the client.
 pub(crate) fn sybil_verification_error(error: &anyhow::Error) -> (StatusCode, String) {
-    if error.is::<crate::sybil_resistance::invitation::InvitationRedemptionPersistenceError>() {
+    if error.is::<crate::sybil_resistance::invitation::InvitationRedemptionPersistenceError>()
+        || error.is::<crate::sybil_resistance::admission::AdmissionUnavailable>()
+    {
         (
             StatusCode::SERVICE_UNAVAILABLE,
             "Sybil resistance temporarily unavailable".to_string(),
@@ -199,7 +201,11 @@ pub async fn handle(
                 )),
                 allow_registered_user: false,
             };
-            match checker.verify_with_context(proof, &sybil_ctx) {
+            match state
+                .admission
+                .verify(checker.clone(), proof.clone(), sybil_ctx)
+                .await
+            {
                 Ok(()) => {
                     info!("✅ Sybil resistance check passed");
                     Some(SybilInfo {
@@ -400,7 +406,11 @@ pub async fn renew(
                 )),
                 allow_registered_user: true,
             };
-            match checker.verify_with_context(proof, &sybil_ctx) {
+            match state
+                .admission
+                .verify(checker.clone(), proof.clone(), sybil_ctx)
+                .await
+            {
                 Ok(()) => {
                     info!("✅ Sybil resistance check passed (renewal)");
                     Some(SybilInfo {

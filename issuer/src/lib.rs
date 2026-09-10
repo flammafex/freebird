@@ -33,6 +33,7 @@ pub mod main_state {
         pub require_tls: bool,
         pub behind_proxy: bool,
         pub sybil_checker: Option<Arc<dyn SybilResistance>>,
+        pub admission: crate::sybil_resistance::admission::AdmissionExecutor,
         pub invitation_system: Option<Arc<InvitationSystem>>,
         /// The mandatory active V7 native bearer signer. Startup initializes
         /// this field before the HTTP listener is bound.

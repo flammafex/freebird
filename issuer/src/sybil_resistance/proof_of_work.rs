@@ -26,13 +26,13 @@
 //! ```
 
 use super::{
-    memory_replay_store, verify_timestamp_recent, ReplayStore, SybilRequestContext, SybilResistance,
+    memory_replay_store, replay_ttl, verify_timestamp_at, ReplayStore, SybilRequestContext,
+    SybilResistance, POW_FUTURE_SKEW_SECS,
 };
 use anyhow::{anyhow, Result};
 use freebird_common::api::SybilProof; // Use shared type
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
-use std::time::Duration;
 
 /// Proof-of-Work Sybil resistance mechanism
 ///
@@ -174,13 +174,13 @@ impl ProofOfWork {
         self.replay_store.mark_once(
             "pow",
             &hex::encode(key),
-            Duration::from_secs(self.max_timestamp_age_secs),
+            replay_ttl(self.max_timestamp_age_secs, POW_FUTURE_SKEW_SECS)?,
         )
     }
 }
 
-impl SybilResistance for ProofOfWork {
-    fn verify(&self, proof: &SybilProof) -> Result<()> {
+impl ProofOfWork {
+    fn verify_at(&self, proof: &SybilProof, now: u64) -> Result<()> {
         let (nonce, input, timestamp) = match proof {
             SybilProof::ProofOfWork {
                 nonce,
@@ -191,7 +191,12 @@ impl SybilResistance for ProofOfWork {
         };
 
         // Check timestamp is recent (prevents pre-computation)
-        verify_timestamp_recent(timestamp, self.max_timestamp_age_secs)?;
+        verify_timestamp_at(
+            timestamp.into(),
+            now.into(),
+            self.max_timestamp_age_secs,
+            POW_FUTURE_SKEW_SECS,
+        )?;
 
         // Recompute hash
         let hash = Self::hash_pow(input, nonce, timestamp);
@@ -203,6 +208,12 @@ impl SybilResistance for ProofOfWork {
         self.reject_replay_or_record(&hash)?;
 
         Ok(())
+    }
+}
+
+impl SybilResistance for ProofOfWork {
+    fn verify(&self, proof: &SybilProof) -> Result<()> {
+        self.verify_at(proof, super::current_timestamp())
     }
 
     fn verify_with_context(&self, proof: &SybilProof, ctx: &SybilRequestContext) -> Result<()> {
@@ -234,6 +245,60 @@ impl SybilResistance for ProofOfWork {
 mod tests {
     use super::*;
     use crate::sybil_resistance::current_timestamp;
+
+    #[test]
+    fn replay_retention_covers_future_skew_and_inclusive_endpoint() {
+        use crate::sybil_resistance::replay_retention_tests::ClockStore;
+        for max_age in [0, 300] {
+            let store = Arc::new(ClockStore::default());
+            let checker =
+                ProofOfWork::with_replay_store(1, store.clone()).with_timestamp_window(max_age);
+            let now = 10_000;
+            let timestamp = now + POW_FUTURE_SKEW_SECS;
+            let (nonce, _) = ProofOfWork::compute(1, "retention", timestamp).unwrap();
+            let proof = SybilProof::ProofOfWork {
+                nonce,
+                input: "retention".into(),
+                timestamp,
+            };
+            assert!(checker.verify_at(&proof, now - 1).is_err());
+            checker.verify_at(&proof, now).unwrap();
+            let last = max_age + POW_FUTURE_SKEW_SECS;
+            assert_eq!(store.ttls()[0].as_secs(), last + 1);
+            store.advance_to(last);
+            assert!(checker
+                .verify_at(&proof, now + last)
+                .unwrap_err()
+                .to_string()
+                .contains("already used"));
+            store.advance_to(last + 1);
+            assert!(checker
+                .verify_at(&proof, now + last + 1)
+                .unwrap_err()
+                .to_string()
+                .contains("too old"));
+        }
+    }
+
+    #[test]
+    fn unrepresentable_retention_is_an_error_before_store_use() {
+        let store =
+            Arc::new(crate::sybil_resistance::replay_retention_tests::ClockStore::default());
+        let checker =
+            ProofOfWork::with_replay_store(1, store.clone()).with_timestamp_window(u64::MAX);
+        let (nonce, _) = ProofOfWork::compute(1, "overflow", 1000).unwrap();
+        assert!(checker
+            .verify_at(
+                &SybilProof::ProofOfWork {
+                    nonce,
+                    input: "overflow".into(),
+                    timestamp: 1000
+                },
+                1000
+            )
+            .is_err());
+        assert!(store.ttls().is_empty());
+    }
 
     #[test]
     fn test_pow_difficulty_16() {

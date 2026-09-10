@@ -159,7 +159,8 @@ metadata:
     component: redis
 spec:
   type: ClusterIP
-  clusterIP: None  # Headless service for StatefulSet compatibility
+  ipFamilies: [IPv4]
+  ipFamilyPolicy: SingleStack
   ports:
     - port: 6379
       targetPort: redis

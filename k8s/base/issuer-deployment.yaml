@@ -88,6 +88,8 @@ spec:
         prometheus.io/port: "8081"
         prometheus.io/path: "/admin/metrics"
     spec:
+      # Redis Service must exist before Pod creation to inject its numeric endpoint.
+      enableServiceLinks: true
       # Security context
       securityContext:
         runAsNonRoot: true
@@ -108,7 +110,7 @@ spec:
           command:
             - sh
             - -c
-             - mkdir -p /data/keys /data/state /data/config && chmod 750 /data/*
+            - mkdir -p /data/keys /data/state /data/config && chmod 750 /data/*
           volumeMounts:
             - name: data
               mountPath: /data
@@ -141,7 +143,7 @@ spec:
             - name: REDIS_URL
               value: redis://:$(REDIS_PASSWORD)@redis:6379
             - name: SYBIL_REPLAY_REDIS_URL
-              value: redis://:$(REDIS_PASSWORD)@redis:6379
+              value: redis://:$(REDIS_PASSWORD)@$(REDIS_SERVICE_HOST):$(REDIS_SERVICE_PORT)
             - name: WEBAUTHN_REDIS_URL
               value: redis://:$(REDIS_PASSWORD)@redis:6379
             - name: ISSUER_SK_PATH

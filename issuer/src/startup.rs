@@ -111,6 +111,7 @@ impl Application {
             webauthn_state: webauthn_state.clone(),
         })?;
         let HttpRuntime {
+            admission,
             app,
             readiness,
             sybil_replay_store,
@@ -126,6 +127,7 @@ impl Application {
         let port = listener.local_addr()?.port();
 
         readiness.spawn_checks(
+            admission,
             sybil_replay_store.clone(),
             storage_paths,
             voprf.clone(),

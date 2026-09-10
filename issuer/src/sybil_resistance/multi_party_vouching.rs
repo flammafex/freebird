@@ -24,7 +24,10 @@ use subtle::ConstantTimeEq;
 use tokio::fs as tokio_fs;
 use tokio::sync::{Mutex, RwLock};
 
-use super::{memory_replay_store, ReplayStore, SybilResistance};
+use super::{memory_replay_store, replay_ttl, verify_timestamp_at, ReplayStore, SybilResistance};
+
+const PROOF_MAX_AGE_SECS: u64 = 300;
+const PROOF_FUTURE_SKEW_SECS: u64 = 0;
 
 /// Configuration for Multi-Party Vouching system
 #[derive(Debug, Clone)]
@@ -520,16 +523,21 @@ impl MultiPartyVouchingSystem {
 
     /// Verify that a proof timestamp is recent (within 0–300 s of `now`).
     fn verify_proof_timestamp(now: i64, timestamp: i64) -> Result<()> {
-        let age = now - timestamp;
-        if !(0..=300).contains(&age) {
-            return Err(anyhow!("Proof timestamp is outside allowed window"));
-        }
-        Ok(())
+        verify_timestamp_at(
+            timestamp.into(),
+            now.into(),
+            PROOF_MAX_AGE_SECS,
+            PROOF_FUTURE_SKEW_SECS,
+        )
+        .map_err(|_| anyhow!("Proof timestamp is outside allowed window"))
     }
 
     fn reject_replay_or_record(&self, proof_id: &str) -> Result<()> {
-        self.replay_store
-            .mark_once("multi_party_vouching", proof_id, Duration::from_secs(300))
+        self.replay_store.mark_once(
+            "multi_party_vouching",
+            proof_id,
+            replay_ttl(PROOF_MAX_AGE_SECS, PROOF_FUTURE_SKEW_SECS)?,
+        )
     }
 
     /// Validate a single vouch entry in isolation:
@@ -719,6 +727,30 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    #[tokio::test]
+    async fn replay_retention_covers_inclusive_proof_endpoint() {
+        let store = Arc::new(super::super::replay_retention_tests::ClockStore::default());
+        let config = test_config("retention");
+        let system = MultiPartyVouchingSystem::new_with_replay_store(config.clone(), store.clone())
+            .await
+            .unwrap();
+        let now = 10_000;
+        MultiPartyVouchingSystem::verify_proof_timestamp(now, now).unwrap();
+        system.reject_replay_or_record("proof").unwrap();
+        assert_eq!(store.ttls()[0].as_secs(), 301);
+        store.advance_to(300);
+        MultiPartyVouchingSystem::verify_proof_timestamp(now + 300, now).unwrap();
+        assert!(system
+            .reject_replay_or_record("proof")
+            .unwrap_err()
+            .to_string()
+            .contains("already used"));
+        store.advance_to(301);
+        assert!(MultiPartyVouchingSystem::verify_proof_timestamp(now + 301, now).is_err());
+        assert!(MultiPartyVouchingSystem::verify_proof_timestamp(i64::MAX, i64::MIN).is_err());
+        cleanup(&config);
+    }
 
     fn test_config(extra: &str) -> MultiPartyVouchingConfig {
         let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);

@@ -55,7 +55,7 @@ url = { version = "2" }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4" }
 async-trait = "0.1"  # For async trait implementations
-redis = { version = "0.24", features = ["aio", "tokio-comp"] }
+redis = { version = "0.24", features = ["aio", "tokio-comp", "tokio-native-tls-comp"] }
 reqwest = { version = "0.12.24", features = ["json"] }
 clap = { version = "4", features = ["derive", "env"] }
 colored = "2"
