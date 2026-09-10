@@ -1,8 +1,10 @@
 // issuer/src/sybil_resistance/rate_limit.rs
 //! Rate-limiting Sybil resistance
 //!
-//! Limits token issuance by client identifier (IP hash, fingerprint, etc.).
+//! Context-aware issuance always shares a primary budget per validated IP.
 //! This is weak Sybil resistance (bypassable with VPNs) but simple to implement.
+//! Clients behind the same NAT share this budget, even with different browsers
+//! or User-Agent values; fingerprints cannot grant additional allowances.
 //!
 //! # Properties
 //!
@@ -45,7 +47,8 @@ use std::time::Duration;
 /// Rate-limiting Sybil resistance
 ///
 /// Tracks last issuance time per client_id and enforces minimum interval.
-/// Client IDs should be derived from IP address, browser fingerprint, or both.
+/// Context-aware verification anchors the budget to the server-observed IP;
+/// fingerprint-derived proof IDs are accepted for compatibility only.
 pub struct RateLimit {
     /// Minimum time between token requests from same client
     min_interval: Duration,
@@ -160,15 +163,16 @@ impl SybilResistance for RateLimit {
             .client_data
             .as_ref()
             .ok_or_else(|| anyhow!("server-observed client data required for rate limiting"))?;
-        let expected_client_id = match (&observed.ip_addr, &observed.fingerprint) {
-            (Some(ip), Some(fingerprint)) => client_id_from_fingerprint(ip, fingerprint),
-            (Some(ip), None) => client_id_from_ip(ip),
-            (None, Some(fingerprint)) => client_id_from_fingerprint("", fingerprint),
-            (None, None) => {
-                return Err(anyhow!(
-                    "server-observed IP or fingerprint required for rate limiting"
-                ))
-            }
+        let ip = observed
+            .ip_addr
+            .as_deref()
+            .ok_or_else(|| anyhow!("server-observed IP required for rate limiting"))?;
+        let primary_client_id = client_id_from_ip(ip);
+        // Preserve existing proof IDs, but never use a client-controlled
+        // fingerprint to partition the mandatory IP budget.
+        let expected_client_id = match &observed.fingerprint {
+            Some(fingerprint) => client_id_from_fingerprint(ip, fingerprint),
+            None => primary_client_id.clone(),
         };
 
         if !client_id.is_empty() && client_id != expected_client_id {
@@ -177,7 +181,7 @@ impl SybilResistance for RateLimit {
             ));
         }
 
-        self.check_rate_limit(&expected_client_id, server_timestamp)?;
+        self.check_rate_limit(&primary_client_id, server_timestamp)?;
         Ok(())
     }
 
@@ -391,6 +395,87 @@ mod tests {
             timestamp: timestamp + 61,
         };
         assert!(limiter.verify_with_context(&forged, &ctx).is_err());
+    }
+
+    #[test]
+    fn test_rate_limit_user_agent_rotation_shares_validated_ip_budget() {
+        use axum::{http::HeaderMap, Extension};
+        use freebird_common::tls_enforcement::ValidatedClientIp;
+
+        let limiter = RateLimit::new(Duration::from_secs(60));
+        // Exercise both server-derived (empty) and legacy fingerprint proof IDs.
+        for explicit_id in [false, true] {
+            limiter.clear();
+            for (index, user_agent) in
+                [Some("browser-a"), Some("browser-b"), None, Some("")]
+                    .into_iter()
+                    .enumerate()
+            {
+                let mut headers = HeaderMap::new();
+                if let Some(user_agent) = user_agent {
+                    headers.insert("user-agent", user_agent.parse().unwrap());
+                }
+                for ip in ["203.0.113.10", "203.0.113.11"] {
+                    let observed = crate::routes::issue::extract_client_data(
+                        None,
+                        false,
+                        &headers,
+                        Some(Extension(ValidatedClientIp(ip.parse().unwrap()))),
+                    );
+                    let client_id = if explicit_id {
+                        match &observed.fingerprint {
+                            Some(fp) => client_id_from_fingerprint(ip, fp),
+                            None => client_id_from_ip(ip),
+                        }
+                    } else {
+                        String::new()
+                    };
+                    let proof = SybilProof::RateLimit {
+                        client_id,
+                        timestamp: current_timestamp(),
+                    };
+                    let ctx = SybilRequestContext {
+                        client_data: Some(observed),
+                        ..Default::default()
+                    };
+                    let result = limiter.verify_with_context(&proof, &ctx);
+                    if index == 0 {
+                        result.unwrap();
+                    } else {
+                        assert!(result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("rate limit exceeded"));
+                    }
+                }
+            }
+            assert_eq!(limiter.tracked_clients(), 2);
+        }
+    }
+
+    #[test]
+    fn test_rate_limit_requires_ip_even_with_user_agent() {
+        use axum::http::HeaderMap;
+
+        let limiter = RateLimit::new(Duration::from_secs(60));
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "browser-a".parse().unwrap());
+        let ctx = SybilRequestContext {
+            client_data: Some(crate::routes::issue::extract_client_data(
+                None, false, &headers, None,
+            )),
+            ..Default::default()
+        };
+        let proof = SybilProof::RateLimit {
+            client_id: String::new(),
+            timestamp: current_timestamp(),
+        };
+        assert!(limiter
+            .verify_with_context(&proof, &ctx)
+            .unwrap_err()
+            .to_string()
+            .contains("server-observed IP required"));
+        assert_eq!(limiter.tracked_clients(), 0);
     }
 
     #[test]

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 //! Shutdown coordination for the issuer's mutable, file-backed state.
 
+use crate::sybil_resistance::admission::AdmissionExecutor;
 use anyhow::{anyhow, Result};
 use std::{
     future::Future,
@@ -92,6 +93,23 @@ pub async fn flush_or_report(coordinator: ShutdownCoordinator, deadline: Instant
             Err(error)
         }
     }
+}
+
+/// Never start final persistence while detached admission work can still mutate it.
+pub async fn drain_admission_and_flush(
+    admission: &AdmissionExecutor,
+    coordinator: ShutdownCoordinator,
+    deadline: Instant,
+) -> Result<()> {
+    let drained = tokio::time::timeout_at(deadline.into(), admission.drain())
+        .await
+        .map_err(|_| anyhow!("admission drain timed out"))
+        .and_then(|result| result);
+    if let Err(error) = drained {
+        error!(critical_state = %error, "CRITICAL: issuer admission drain failed; final persistence skipped");
+        return Err(error);
+    }
+    flush_or_report(coordinator, deadline).await
 }
 
 #[cfg(test)]

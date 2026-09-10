@@ -76,8 +76,8 @@ pub fn extract_client_data(
     let _ = (connect_info, _behind_proxy);
     let ip_addr = validated_ip.map(|Extension(ip)| ip.0.to_string());
 
-    // Extract User-Agent as fingerprint
-    // In production, you might want to hash this or combine multiple headers
+    // User-Agent is client-controlled metadata, not a primary quota identity.
+    // Rate limiting must share a budget across all fingerprints of a validated IP.
     let fingerprint = headers
         .get("user-agent")
         .and_then(|h| h.to_str().ok())

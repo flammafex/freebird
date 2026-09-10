@@ -3,7 +3,8 @@
 // Copyright 2025 The Carpocratian Church of Commonality and Equality, Inc.
 
 use crate::config::Config;
-use crate::shutdown::{flush_or_report, wait_for_signal, ShutdownCoordinator};
+use crate::shutdown::{drain_admission_and_flush, wait_for_signal, ShutdownCoordinator};
+use crate::sybil_resistance::admission::AdmissionExecutor;
 
 use anyhow::{Context, Result};
 use axum::Router;
@@ -38,6 +39,7 @@ pub struct Application {
     listener: TcpListener,
     app: Router,
     shutdown: ShutdownCoordinator,
+    admission: AdmissionExecutor,
 }
 
 impl Application {
@@ -127,7 +129,7 @@ impl Application {
         let port = listener.local_addr()?.port();
 
         readiness.spawn_checks(
-            admission,
+            admission.clone(),
             sybil_replay_store.clone(),
             storage_paths,
             voprf.clone(),
@@ -143,6 +145,7 @@ impl Application {
             listener,
             app,
             shutdown,
+            admission,
         })
     }
 
@@ -170,10 +173,14 @@ impl Application {
         );
         tokio::pin!(signal);
         let drain_result = tokio::select! {
-            result = &mut server => return result.context("Server error"),
+            result = &mut server => {
+                self.admission.close();
+                (Ok(result), Instant::now() + shutdown_timeout)
+            },
             _ = &mut signal => {
-                let _ = signal_tx.send(());
                 let deadline = Instant::now() + shutdown_timeout;
+                self.admission.close();
+                let _ = signal_tx.send(());
                 let result = tokio::time::timeout_at(deadline.into(), &mut server).await;
                 (result, deadline)
             }
@@ -192,10 +199,10 @@ impl Application {
             Ok(Err(error)) => Some(anyhow::anyhow!("server drain error: {error}")),
             Ok(Ok(())) => None,
         };
-        // Ensure the listener/server future and all request resources are
-        // terminated before any persistence writer is entered.
+        // Stop the server, then account for blocking jobs independently of
+        // their request futures before entering any final persistence writer.
         drop(server);
-        let flush_result = flush_or_report(shutdown, deadline).await;
+        let flush_result = drain_admission_and_flush(&self.admission, shutdown, deadline).await;
         match (drain_error, flush_result) {
             (Some(error), Ok(())) => Err(error).context("Server error"),
             (Some(error), Err(flush_error)) => Err(anyhow::anyhow!(

@@ -1,4 +1,127 @@
 use super::*;
+use crate::shutdown::{drain_admission_and_flush, ShutdownCoordinator};
+use std::{
+    future::Future,
+    sync::atomic::{AtomicBool, Ordering},
+    time::{Duration, Instant},
+};
+
+#[tokio::test]
+async fn closed_executor_rejects_all_clones() {
+    let executor = AdmissionExecutor::new(2);
+    let clone = executor.clone();
+    executor.close();
+    for executor in [executor, clone] {
+        let error = executor
+            .run::<(), _>(|| panic!("closed work ran"))
+            .await
+            .unwrap_err();
+        assert!(error.is::<AdmissionUnavailable>());
+        executor.drain().await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn cancelled_mutation_must_finish_before_shutdown_flush() {
+    let executor = AdmissionExecutor::new(1);
+    let mutated = Arc::new(AtomicBool::new(false));
+    let flushed = Arc::new(AtomicBool::new(false));
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let work = executor.clone();
+    let mutation = mutated.clone();
+    let request = tokio::spawn(async move {
+        work.run(move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            mutation.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await
+    });
+    started_rx.await.unwrap();
+    request.abort();
+    assert!(request.await.unwrap_err().is_cancelled());
+    let mut coordinator = ShutdownCoordinator::new();
+    let flushed_store = flushed.clone();
+    coordinator.add("mutation", move || {
+        let mutated = mutated.clone();
+        let flushed = flushed_store.clone();
+        async move {
+            assert!(mutated.load(Ordering::SeqCst));
+            flushed.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    });
+    let shutdown = drain_admission_and_flush(
+        &executor,
+        coordinator,
+        Instant::now() + Duration::from_secs(5),
+    );
+    tokio::pin!(shutdown);
+    std::future::poll_fn(|cx| {
+        assert!(shutdown.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    assert!(!flushed.load(Ordering::SeqCst));
+    assert!(executor.run(|| Ok(())).await.is_err());
+    release_tx.send(()).unwrap();
+    shutdown.await.unwrap();
+    assert!(flushed.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn admission_drain_timeout_skips_final_flush() {
+    let executor = AdmissionExecutor::new(1);
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let work = executor.clone();
+    let request = tokio::spawn(async move {
+        work.run(move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            Ok(())
+        })
+        .await
+    });
+    started_rx.await.unwrap();
+    let mut coordinator = ShutdownCoordinator::new();
+    coordinator.add("must not flush", || async {
+        panic!("flush raced active job")
+    });
+    let error = drain_admission_and_flush(&executor, coordinator, Instant::now())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("admission drain timed out"));
+    assert!(executor.run(|| Ok(())).await.is_err());
+    release_tx.send(()).unwrap();
+    request.await.unwrap().unwrap();
+    executor.drain().await.unwrap();
+}
+
+#[tokio::test]
+async fn admission_job_panic_is_not_clean_shutdown() {
+    let executor = AdmissionExecutor::new(1);
+    assert!(executor
+        .run::<(), _>(|| panic!("job failed"))
+        .await
+        .is_err());
+    let mut coordinator = ShutdownCoordinator::new();
+    coordinator.add("must not flush", || async {
+        panic!("failed drain flushed")
+    });
+    let error = drain_admission_and_flush(
+        &executor,
+        coordinator,
+        Instant::now() + Duration::from_secs(1),
+    )
+    .await
+    .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("admission blocking job panicked"));
+}
 
 #[test]
 fn threshold_preserves_typed_replay_unavailability() {
