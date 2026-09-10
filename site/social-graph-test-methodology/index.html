@@ -1,0 +1,3026 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Self-hostable privacy-preserving token issuance and verification for civil-society web services">
+      
+      
+      
+        <link rel="canonical" href="https://freebird.bot/social-graph-test-methodology/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Social Graph Gate Test Methodology - 🕊️ Freebird</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#social-graph-gate-test-methodology" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="🕊️ Freebird" class="md-header__button md-logo" aria-label="🕊️ Freebird" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            🕊️ Freebird
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Social Graph Gate Test Methodology
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Use dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Use dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Use light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Use light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="🕊️ Freebird" class="md-nav__button md-logo" aria-label="🕊️ Freebird" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    🕊️ Freebird
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/issuers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Issuers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/verifiers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Verifiers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/tokens/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/one-time-redemption/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    One-Time Redemption
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/replay-protection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Replay Protection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/webauthn-issuance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WebAuthn Issuance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/blind-issuance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blind Issuance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../architecture/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/protocol-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Protocol Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/trust-boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust Boundaries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/data-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/storage-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/deployment-modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../security/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/threat-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/privacy-properties/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Privacy Properties
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/non-goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Non-Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/cryptographic-assumptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cryptographic Assumptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/audit-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audit Status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/http-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/typescript-sdk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TypeScript SDK
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../guides/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/anonymous-feedback/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Anonymous Feedback
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/token-gated-community/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Token-Gated Community
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/public-wifi-pass/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Public Wi-Fi Pass
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/witness-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    🙌 Witness Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../grant-work-packages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grant Work Packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../license/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    License
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-purpose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Purpose
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-scoring-model-for-tests" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Scoring model for tests
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Scoring model for tests">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#constants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Constants
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edge-eligibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edge eligibility
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fanout-discount" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fanout discount
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#weighted-score" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Weighted score
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#seed-rooted-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Seed-rooted path
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-sample-graph-structures" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Sample graph structures
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Sample graph structures">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#31-healthy-community-should-pass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.1 Healthy community — should PASS
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.1 Healthy community — should PASS">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nodes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nodes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-result" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected result
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#32-new-user-cold-start-should-fail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.2 New user, cold start — should FAIL
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.2 New user, cold start — should FAIL">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nodes_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nodes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edges_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-result_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected result
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#33-new-user-minimum-viable-should-pass-barely" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.3 New user, minimum viable — should PASS barely
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.3 New user, minimum viable — should PASS barely">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nodes_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nodes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edges_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-result_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected result
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#34-collusion-ring-should-fail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.4 Collusion ring — should FAIL
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.4 Collusion ring — should FAIL">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nodes_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nodes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edges_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-result_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected result
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#35-bridge-farming-should-fail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.5 Bridge farming — should FAIL
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.5 Bridge farming — should FAIL">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nodes_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nodes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edges_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-result_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected result
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#36-aged-farmer-should-pass-known-false-negative" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.6 Aged farmer — should PASS, known false negative
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.6 Aged farmer — should PASS, known false negative">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nodes_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nodes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edges_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-result_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected result
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security-interpretation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security interpretation
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#37-whaling-victim-should-fail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3.7 Whaling victim — should FAIL
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3.7 Whaling victim — should FAIL">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#nodes_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Nodes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#edges_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Edges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#expected-result_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Expected result
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-scoring-algorithm-pseudocode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Scoring algorithm pseudocode
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-false-positive-false-negative-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. False positive / false negative analysis
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. False positive / false negative analysis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#healthy-community" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Healthy community
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#new-user-cold-start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        New user, cold start
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#new-user-minimum-viable" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        New user, minimum viable
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#collusion-ring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Collusion ring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#bridge-farming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bridge farming
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#aged-farmer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Aged farmer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#whaling-victim" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Whaling victim
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-json-test-data-format" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. JSON test data format
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. JSON test data format">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#field-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Field notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-minimum-automated-test-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Minimum automated test suite
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="social-graph-gate-test-methodology">Social Graph Gate Test Methodology<a class="headerlink" href="#social-graph-gate-test-methodology" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>Status: Pre-Phase 1 test-design document.</p>
+<p>Scope: attester-side scoring tests for the Phase 1 <code>social_graph</code>
+heuristic. The Freebird issuer must still receive only signed Cred
+presentations and social-graph attestations, never raw graph evidence.</p>
+</blockquote>
+<h2 id="1-purpose">1. Purpose<a class="headerlink" href="#1-purpose" title="Permanent link">&para;</a></h2>
+<p>This document defines sample Clout trust graphs and a scoring-test
+methodology for validating the Phase 1 <code>social_graph</code> Sybil gate heuristic.</p>
+<p>The heuristic under test:</p>
+<ul>
+<li>At least 2 independent trust edges from distinct Clout identities</li>
+<li>Edge age &gt; 7 days</li>
+<li>Minimum weighted trust score of 0.3 on Clout's 0.1-1.0 scale</li>
+<li>At least 1 seed-rooted path connected to the invitation tree root</li>
+<li>Fanout cap: endorsers with &gt;20 outbound trust edges are discounted</li>
+</ul>
+<p>Clout trust edges are assumed to be Ed25519-signed over canonical payloads:</p>
+<div class="highlight"><pre><span></span><code>truster, trustee, weight, timestamp, revoked
+</code></pre></div>
+<p>These tests validate the attester's graph scoring policy. They do not replace
+issuer-side tests for attestation signature verification, request binding,
+expiry, replay, or Cred presentation verification.</p>
+<hr />
+<h2 id="2-scoring-model-for-tests">2. Scoring model for tests<a class="headerlink" href="#2-scoring-model-for-tests" title="Permanent link">&para;</a></h2>
+<p>For deterministic Phase 1 tests, use this concrete interpretation.</p>
+<h3 id="constants">Constants<a class="headerlink" href="#constants" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>MIN_INDEPENDENT_EDGES = 2
+MIN_EDGE_AGE_DAYS = 7       # strict: age must be &gt; 7
+MIN_WEIGHTED_SCORE = 0.3
+FANOUT_CAP = 20
+</code></pre></div>
+<h3 id="edge-eligibility">Edge eligibility<a class="headerlink" href="#edge-eligibility" title="Permanent link">&para;</a></h3>
+<p>A trust edge is eligible for scoring if:</p>
+<ol>
+<li>The Ed25519 signature verifies.</li>
+<li><code>revoked == false</code>.</li>
+<li><code>0.1 &lt;= weight &lt;= 1.0</code>.</li>
+<li><code>trustee == subject</code>.</li>
+<li><code>age_days &gt; 7</code>.</li>
+</ol>
+<h3 id="fanout-discount">Fanout discount<a class="headerlink" href="#fanout-discount" title="Permanent link">&para;</a></h3>
+<p>For each eligible inbound edge:</p>
+<div class="highlight"><pre><span></span><code>fanout_factor = min(1.0, FANOUT_CAP / active_out_degree(truster))
+effective_weight = raw_weight * fanout_factor
+</code></pre></div>
+<p>Where <code>active_out_degree(truster)</code> is the number of non-revoked outbound trust
+edges known to the attester for that truster.</p>
+<p>Important: fanout cannot be safely computed from only user-submitted inbound
+edges. Tests that exercise fanout must include the endorser's outbound inventory
+or an attester-known outdegree source. Otherwise a client could omit edges and
+evade the cap.</p>
+<h3 id="weighted-score">Weighted score<a class="headerlink" href="#weighted-score" title="Permanent link">&para;</a></h3>
+<p>Use the average effective weight across the subject's independent eligible
+endorsers:</p>
+<div class="highlight"><pre><span></span><code>weighted_score = mean(best_effective_weight_per_distinct_truster)
+</code></pre></div>
+<p>The "minimum viable" case with weights <code>0.4</code> and <code>0.3</code> therefore scores <code>0.35</code>
+and passes barely.</p>
+<h3 id="seed-rooted-path">Seed-rooted path<a class="headerlink" href="#seed-rooted-path" title="Permanent link">&para;</a></h3>
+<p>A subject is seed-rooted if there is at least one directed path:</p>
+<div class="highlight"><pre><span></span><code>trusted_seed_root -&gt; ... -&gt; subject
+</code></pre></div>
+<p>using valid, non-revoked, age-qualified edges.</p>
+<p>For Phase 1 tests, no SybilRank/PageRank is used. The root check is only a
+reachability check over the supplied/known signed graph evidence.</p>
+<hr />
+<h2 id="3-sample-graph-structures">3. Sample graph structures<a class="headerlink" href="#3-sample-graph-structures" title="Permanent link">&para;</a></h2>
+<p>Public keys are placeholders. <code>R0</code> is the trusted invitation-tree seed root.</p>
+<h3 id="31-healthy-community-should-pass">3.1 Healthy community — should PASS<a class="headerlink" href="#31-healthy-community-should-pass" title="Permanent link">&para;</a></h3>
+<p>A realistic small community with organic trust relationships.</p>
+<h4 id="nodes">Nodes<a class="headerlink" href="#nodes" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>R0                  seed root
+A_alice             established member
+B_bob               established member
+C_carol             established member
+D_dana              established member
+T_healthy           candidate
+</code></pre></div>
+<h4 id="edges">Edges<a class="headerlink" href="#edges" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>R0       -&gt; A_alice     weight 0.9 age 365d
+R0       -&gt; B_bob       weight 0.8 age 300d
+A_alice  -&gt; C_carol     weight 0.7 age 180d
+B_bob    -&gt; D_dana      weight 0.6 age 120d
+
+A_alice  -&gt; T_healthy   weight 0.8 age 90d
+B_bob    -&gt; T_healthy   weight 0.6 age 45d
+C_carol  -&gt; T_healthy   weight 0.4 age 20d
+</code></pre></div>
+<h4 id="expected-result">Expected result<a class="headerlink" href="#expected-result" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>PASS
+</code></pre></div>
+<h4 id="why">Why<a class="headerlink" href="#why" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Independent endorsers: 3</li>
+<li>All candidate inbound edges are older than 7 days</li>
+<li>Weighted score: <code>(0.8 + 0.6 + 0.4) / 3 = 0.6</code></li>
+<li>Seed-rooted path exists: <code>R0 -&gt; A_alice -&gt; T_healthy</code></li>
+</ul>
+<hr />
+<h3 id="32-new-user-cold-start-should-fail">3.2 New user, cold start — should FAIL<a class="headerlink" href="#32-new-user-cold-start-should-fail" title="Permanent link">&para;</a></h3>
+<p>A legitimate-looking new user with insufficient trust history.</p>
+<h4 id="nodes_1">Nodes<a class="headerlink" href="#nodes_1" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>R0
+E_erin
+T_cold_start
+</code></pre></div>
+<h4 id="edges_1">Edges<a class="headerlink" href="#edges_1" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>R0      -&gt; E_erin         weight 0.8 age 100d
+E_erin  -&gt; T_cold_start   weight 0.7 age 2d
+</code></pre></div>
+<h4 id="expected-result_1">Expected result<a class="headerlink" href="#expected-result_1" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>FAIL
+primary reason: insufficient_independent_edges
+additional reason: edge_too_young
+</code></pre></div>
+<h4 id="why_1">Why<a class="headerlink" href="#why_1" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Only 1 inbound trust edge</li>
+<li>Candidate edge age is only 2 days</li>
+<li>This is a deliberate false negative risk for legitimate new users</li>
+</ul>
+<hr />
+<h3 id="33-new-user-minimum-viable-should-pass-barely">3.3 New user, minimum viable — should PASS barely<a class="headerlink" href="#33-new-user-minimum-viable-should-pass-barely" title="Permanent link">&para;</a></h3>
+<p>A user with exactly the minimum acceptable trust evidence.</p>
+<h4 id="nodes_2">Nodes<a class="headerlink" href="#nodes_2" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>R0
+M_mia
+N_noah
+T_minimum_viable
+</code></pre></div>
+<h4 id="edges_2">Edges<a class="headerlink" href="#edges_2" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>R0      -&gt; M_mia              weight 0.8 age 120d
+R0      -&gt; N_noah             weight 0.8 age 120d
+
+M_mia   -&gt; T_minimum_viable   weight 0.4 age 8d
+N_noah  -&gt; T_minimum_viable   weight 0.3 age 8d
+</code></pre></div>
+<h4 id="expected-result_2">Expected result<a class="headerlink" href="#expected-result_2" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>PASS
+</code></pre></div>
+<h4 id="why_2">Why<a class="headerlink" href="#why_2" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Independent endorsers: 2</li>
+<li>Candidate edges are older than 7 days</li>
+<li>Weighted score: <code>(0.4 + 0.3) / 2 = 0.35</code></li>
+<li>Seed-rooted path exists</li>
+</ul>
+<p>This case should remain close to the threshold and is useful for catching
+off-by-one age bugs and score-computation drift.</p>
+<hr />
+<h3 id="34-collusion-ring-should-fail">3.4 Collusion ring — should FAIL<a class="headerlink" href="#34-collusion-ring-should-fail" title="Permanent link">&para;</a></h3>
+<p>Ten fake identities mutually trust each other with high weights, but the cluster
+is new and disconnected from the seed root.</p>
+<h4 id="nodes_3">Nodes<a class="headerlink" href="#nodes_3" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>F_fake_01
+F_fake_02
+F_fake_03
+F_fake_04
+F_fake_05
+F_fake_06
+F_fake_07
+F_fake_08
+F_fake_09
+F_fake_10
+</code></pre></div>
+<p>Subject under test:</p>
+<div class="highlight"><pre><span></span><code>F_fake_01
+</code></pre></div>
+<h4 id="edges_3">Edges<a class="headerlink" href="#edges_3" title="Permanent link">&para;</a></h4>
+<p>For every ordered pair <code>i != j</code>:</p>
+<div class="highlight"><pre><span></span><code>F_fake_i -&gt; F_fake_j weight 0.9 age 1d
+</code></pre></div>
+<p>No edge from <code>R0</code> or any rooted honest member reaches the fake cluster.</p>
+<h4 id="expected-result_3">Expected result<a class="headerlink" href="#expected-result_3" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>FAIL
+primary reason: no_seed_rooted_path
+additional reason: edge_too_young
+</code></pre></div>
+<h4 id="why_3">Why<a class="headerlink" href="#why_3" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Dense trust is not enough</li>
+<li>All edges are too young</li>
+<li>No seed-rooted path exists</li>
+</ul>
+<p>This should catch implementations that only count inbound endorsements and
+ignore graph rootedness.</p>
+<hr />
+<h3 id="35-bridge-farming-should-fail">3.5 Bridge farming — should FAIL<a class="headerlink" href="#35-bridge-farming-should-fail" title="Permanent link">&para;</a></h3>
+<p>A farmer bought three endorsements from honest users, but the edges are fresh.</p>
+<h4 id="nodes_4">Nodes<a class="headerlink" href="#nodes_4" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>R0
+H_honest_01
+H_honest_02
+H_honest_03
+T_bridge_farmer
+</code></pre></div>
+<h4 id="edges_4">Edges<a class="headerlink" href="#edges_4" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>R0           -&gt; H_honest_01       weight 0.9 age 300d
+R0           -&gt; H_honest_02       weight 0.9 age 300d
+R0           -&gt; H_honest_03       weight 0.9 age 300d
+
+H_honest_01  -&gt; T_bridge_farmer   weight 0.8 age 2d
+H_honest_02  -&gt; T_bridge_farmer   weight 0.7 age 2d
+H_honest_03  -&gt; T_bridge_farmer   weight 0.6 age 2d
+</code></pre></div>
+<h4 id="expected-result_4">Expected result<a class="headerlink" href="#expected-result_4" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>FAIL
+primary reason: edge_too_young
+</code></pre></div>
+<h4 id="why_4">Why<a class="headerlink" href="#why_4" title="Permanent link">&para;</a></h4>
+<ul>
+<li>3 independent endorsers exist</li>
+<li>Seed-rooted paths exist</li>
+<li>Raw score would be high</li>
+<li>But all candidate endorsements are only 2 days old</li>
+</ul>
+<p>This validates the anti-instant-farming delay.</p>
+<hr />
+<h3 id="36-aged-farmer-should-pass-known-false-negative">3.6 Aged farmer — should PASS, known false negative<a class="headerlink" href="#36-aged-farmer-should-pass-known-false-negative" title="Permanent link">&para;</a></h3>
+<p>A patient farmer cultivated or bought trust edges and waited 30 days.</p>
+<h4 id="nodes_5">Nodes<a class="headerlink" href="#nodes_5" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>R0
+H_honest_04
+H_honest_05
+H_honest_06
+T_aged_farmer
+</code></pre></div>
+<h4 id="edges_5">Edges<a class="headerlink" href="#edges_5" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>R0           -&gt; H_honest_04     weight 0.9 age 300d
+R0           -&gt; H_honest_05     weight 0.9 age 300d
+R0           -&gt; H_honest_06     weight 0.9 age 300d
+
+H_honest_04  -&gt; T_aged_farmer   weight 0.5 age 30d
+H_honest_05  -&gt; T_aged_farmer   weight 0.4 age 30d
+H_honest_06  -&gt; T_aged_farmer   weight 0.4 age 30d
+</code></pre></div>
+<h4 id="expected-result_5">Expected result<a class="headerlink" href="#expected-result_5" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>PASS
+</code></pre></div>
+<h4 id="why_5">Why<a class="headerlink" href="#why_5" title="Permanent link">&para;</a></h4>
+<ul>
+<li>Independent endorsers: 3</li>
+<li>Edges are older than 7 days</li>
+<li>Weighted score: <code>(0.5 + 0.4 + 0.4) / 3 = 0.433</code></li>
+<li>Seed-rooted paths exist</li>
+</ul>
+<h4 id="security-interpretation">Security interpretation<a class="headerlink" href="#security-interpretation" title="Permanent link">&para;</a></h4>
+<p>This is a known false negative: the Phase 1 heuristic cannot reliably detect
+patient bridge farming. Mitigations require Phase 2 signals such as abuse
+feedback, voucher reputation, community diversity, per-voucher quotas, or
+SybilRank-like propagation.</p>
+<hr />
+<h3 id="37-whaling-victim-should-fail">3.7 Whaling victim — should FAIL<a class="headerlink" href="#37-whaling-victim-should-fail" title="Permanent link">&para;</a></h3>
+<p>A high-trust account suddenly endorses many new identities. The test isolates
+the fanout cap by giving each new identity two independent edges that would pass
+without discounting.</p>
+<h4 id="nodes_6">Nodes<a class="headerlink" href="#nodes_6" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>R0
+W_whale
+L_low_weight_helper
+S_whale_01
+S_whale_02
+...
+S_whale_15
+Legacy_01
+...
+Legacy_35
+</code></pre></div>
+<h4 id="edges_6">Edges<a class="headerlink" href="#edges_6" title="Permanent link">&para;</a></h4>
+<p>Rooting edges:</p>
+<div class="highlight"><pre><span></span><code>R0 -&gt; W_whale             weight 1.0 age 365d
+R0 -&gt; L_low_weight_helper weight 0.8 age 365d
+</code></pre></div>
+<p>Whale's existing outbound inventory:</p>
+<div class="highlight"><pre><span></span><code>W_whale -&gt; Legacy_01  weight 0.6 age 100d
+...
+W_whale -&gt; Legacy_35  weight 0.6 age 100d
+</code></pre></div>
+<p>New burst:</p>
+<div class="highlight"><pre><span></span><code>W_whale             -&gt; S_whale_01 weight 1.0 age 10d
+L_low_weight_helper -&gt; S_whale_01 weight 0.1 age 10d
+
+W_whale             -&gt; S_whale_02 weight 1.0 age 10d
+L_low_weight_helper -&gt; S_whale_02 weight 0.1 age 10d
+
+...
+
+W_whale             -&gt; S_whale_15 weight 1.0 age 10d
+L_low_weight_helper -&gt; S_whale_15 weight 0.1 age 10d
+</code></pre></div>
+<p>Each <code>S_whale_N</code> is evaluated independently as the subject.</p>
+<h4 id="expected-result_6">Expected result<a class="headerlink" href="#expected-result_6" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code>FAIL
+primary reason: weighted_score_below_threshold_after_fanout
+</code></pre></div>
+<h4 id="why_6">Why<a class="headerlink" href="#why_6" title="Permanent link">&para;</a></h4>
+<p>For each new identity:</p>
+<div class="highlight"><pre><span></span><code>active_out_degree(W_whale) = 35 legacy + 15 new = 50
+fanout_factor(W_whale) = 20 / 50 = 0.4
+effective whale edge = 1.0 * 0.4 = 0.4
+helper edge = 0.1
+weighted_score = (0.4 + 0.1) / 2 = 0.25
+</code></pre></div>
+<p>Without fanout discounting:</p>
+<div class="highlight"><pre><span></span><code>score = (1.0 + 0.1) / 2 = 0.55
+</code></pre></div>
+<p>So this case specifically validates that high-fanout endorsers do not retain
+unbounded endorsement power.</p>
+<hr />
+<h2 id="4-scoring-algorithm-pseudocode">4. Scoring algorithm pseudocode<a class="headerlink" href="#4-scoring-algorithm-pseudocode" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>function evaluate_social_graph(subject, signed_edges, trusted_roots, now):
+    reasons = []
+
+    valid_edges = []
+
+    for edge in signed_edges:
+        payload = canonical_json({
+            "truster": edge.truster,
+            "trustee": edge.trustee,
+            "weight": edge.weight,
+            "timestamp": edge.timestamp,
+            "revoked": edge.revoked
+        })
+
+        if !ed25519_verify(edge.truster, payload, edge.signature):
+            return Fail(["bad_signature"])
+
+        if edge.weight &lt; 0.1 or edge.weight &gt; 1.0:
+            return Fail(["invalid_weight"])
+
+        if edge.revoked:
+            continue
+
+        valid_edges.append(edge)
+
+    active_out_degree = map default 0
+
+    for edge in valid_edges:
+        active_out_degree[edge.truster] += 1
+
+    age_qualified_edges = []
+
+    for edge in valid_edges:
+        if age_days(edge.timestamp, now) &gt; 7:
+            age_qualified_edges.append(edge)
+
+    # Seed-rooted reachability over age-qualified active graph.
+    if !has_path_from_any_root(trusted_roots, subject, age_qualified_edges):
+        reasons.append("no_seed_rooted_path")
+
+    inbound_to_subject = []
+
+    for edge in valid_edges:
+        if edge.trustee == subject:
+            inbound_to_subject.append(edge)
+
+    if inbound_to_subject.length == 0:
+        reasons.append("no_inbound_trust_edges")
+
+    eligible_by_age = []
+
+    for edge in inbound_to_subject:
+        if age_days(edge.timestamp, now) &gt; 7:
+            eligible_by_age.append(edge)
+
+    if eligible_by_age.length &lt; inbound_to_subject.length:
+        reasons.append("edge_too_young")
+
+    # Deduplicate by truster. If multiple edges exist from same truster to
+    # subject, keep only the highest effective contribution.
+    best_by_truster = map truster -&gt; effective_weight
+
+    for edge in eligible_by_age:
+        out_degree = active_out_degree[edge.truster]
+
+        if out_degree == 0:
+            continue
+
+        fanout_factor = min(1.0, FANOUT_CAP / out_degree)
+        effective_weight = edge.weight * fanout_factor
+
+        current = best_by_truster.get(edge.truster)
+        if current is missing or effective_weight &gt; current:
+            best_by_truster[edge.truster] = effective_weight
+
+    independent_count = best_by_truster.length
+
+    if independent_count &lt; MIN_INDEPENDENT_EDGES:
+        reasons.append("insufficient_independent_edges")
+
+    if independent_count &gt; 0:
+        weighted_score = mean(best_by_truster.values)
+    else:
+        weighted_score = 0.0
+
+    if weighted_score &lt; MIN_WEIGHTED_SCORE:
+        reasons.append("weighted_score_below_threshold")
+
+    if reasons is empty:
+        return Pass({
+            "weighted_score": weighted_score,
+            "independent_edges": independent_count
+        })
+    else:
+        return Fail(reasons)
+
+
+function has_path_from_any_root(roots, subject, edges):
+    adjacency = map truster -&gt; list trustee
+
+    for edge in edges:
+        adjacency[edge.truster].push(edge.trustee)
+
+    visited = set()
+    queue = roots
+
+    while queue not empty:
+        node = queue.pop_front()
+
+        if node == subject:
+            return true
+
+        if node in visited:
+            continue
+
+        visited.add(node)
+
+        for next in adjacency[node]:
+            if next not in visited:
+                queue.push(next)
+
+    return false
+</code></pre></div>
+<p>Implementation note: return all failure reasons, not only the first. Tests can
+assert that the expected primary reason is present without making reason order
+brittle.</p>
+<hr />
+<h2 id="5-false-positive-false-negative-analysis">5. False positive / false negative analysis<a class="headerlink" href="#5-false-positive-false-negative-analysis" title="Permanent link">&para;</a></h2>
+<h3 id="healthy-community">Healthy community<a class="headerlink" href="#healthy-community" title="Permanent link">&para;</a></h3>
+<p>Expected heuristic result: pass.</p>
+<p>False positives:</p>
+<ul>
+<li>None in this fixture.</li>
+</ul>
+<p>False negatives:</p>
+<ul>
+<li>Possible if organic communities have naturally high-fanout organizers and
+  the fanout cap discounts them too aggressively.</li>
+</ul>
+<p>Tuning:</p>
+<ul>
+<li>Track score distribution on real data before raising thresholds.</li>
+<li>Consider community-specific seed roots in Phase 2.</li>
+</ul>
+<hr />
+<h3 id="new-user-cold-start">New user, cold start<a class="headerlink" href="#new-user-cold-start" title="Permanent link">&para;</a></h3>
+<p>Expected heuristic result: fail.</p>
+<p>False positives:</p>
+<ul>
+<li>None.</li>
+</ul>
+<p>False negatives:</p>
+<ul>
+<li>Legitimate new users fail until they accumulate a second aged trust edge.</li>
+</ul>
+<p>Tuning:</p>
+<ul>
+<li>Use invitation or progressive-trust gates for bootstrapping.</li>
+<li>Keep social graph eligibility for promotion, not first contact.</li>
+</ul>
+<hr />
+<h3 id="new-user-minimum-viable">New user, minimum viable<a class="headerlink" href="#new-user-minimum-viable" title="Permanent link">&para;</a></h3>
+<p>Expected heuristic result: pass.</p>
+<p>False positives:</p>
+<ul>
+<li>A minimally coordinated attacker with two aged rooted endorsements can pass.</li>
+</ul>
+<p>False negatives:</p>
+<ul>
+<li>Legitimate users with one strong endorsement still fail.</li>
+</ul>
+<p>Tuning:</p>
+<ul>
+<li>If abuse is high, increase <code>MIN_INDEPENDENT_EDGES</code> to 3.</li>
+<li>If onboarding is too strict, allow <code>social_graph AND invitation</code> threshold
+  combinations for lower privilege.</li>
+</ul>
+<hr />
+<h3 id="collusion-ring">Collusion ring<a class="headerlink" href="#collusion-ring" title="Permanent link">&para;</a></h3>
+<p>Expected heuristic result: fail.</p>
+<p>False positives:</p>
+<ul>
+<li>A collusion ring that obtains one or more aged rooted bridge edges can pass
+  this simple test.</li>
+</ul>
+<p>False negatives:</p>
+<ul>
+<li>A real new subcommunity disconnected from the configured seed root also fails.</li>
+</ul>
+<p>Tuning:</p>
+<ul>
+<li>Add independent-root requirements.</li>
+<li>Add community diversity scoring.</li>
+<li>Add dense-new-cluster anomaly detection in Phase 2.</li>
+</ul>
+<hr />
+<h3 id="bridge-farming">Bridge farming<a class="headerlink" href="#bridge-farming" title="Permanent link">&para;</a></h3>
+<p>Expected heuristic result: fail.</p>
+<p>False positives:</p>
+<ul>
+<li>Farmers who wait past the age threshold can pass.</li>
+</ul>
+<p>False negatives:</p>
+<ul>
+<li>Legitimate users receiving several recent endorsements fail for at least
+  7 days.</li>
+</ul>
+<p>Tuning:</p>
+<ul>
+<li>Increase the edge age threshold for higher-value issuance.</li>
+<li>Apply probation instead of outright rejection for fresh but otherwise strong
+  evidence.</li>
+</ul>
+<hr />
+<h3 id="aged-farmer">Aged farmer<a class="headerlink" href="#aged-farmer" title="Permanent link">&para;</a></h3>
+<p>Expected heuristic result: pass.</p>
+<p>False positives:</p>
+<ul>
+<li>This is the main known false negative: patient attackers can farm trust over
+  time and pass.</li>
+</ul>
+<p>False negatives:</p>
+<ul>
+<li>None in this fixture.</li>
+</ul>
+<p>Tuning:</p>
+<ul>
+<li>Voucher reputation.</li>
+<li>Per-voucher issuance caps.</li>
+<li>Abuse-linked downgrades.</li>
+<li>Community diversity.</li>
+<li>Longer edge age for higher issuance levels.</li>
+<li>Phase 2 SybilRank/PageRank-style propagation.</li>
+</ul>
+<hr />
+<h3 id="whaling-victim">Whaling victim<a class="headerlink" href="#whaling-victim" title="Permanent link">&para;</a></h3>
+<p>Expected heuristic result: fail.</p>
+<p>False positives:</p>
+<ul>
+<li>If the attester cannot see the whale's full outbound inventory, the attacker
+  may evade fanout discounting by submitting only the target endorsements.</li>
+</ul>
+<p>False negatives:</p>
+<ul>
+<li>Legitimate high-trust organizers who endorse many real users may be
+  over-discounted.</li>
+</ul>
+<p>Tuning:</p>
+<ul>
+<li>Require attester-known outbound inventory for fanout enforcement.</li>
+<li>Add per-voucher burst detection.</li>
+<li>Use time-windowed fanout, not only total outdegree.</li>
+<li>Consider different caps for verified high-trust institutional accounts, but
+  only with explicit governance.</li>
+</ul>
+<hr />
+<h2 id="6-json-test-data-format">6. JSON test data format<a class="headerlink" href="#6-json-test-data-format" title="Permanent link">&para;</a></h2>
+<p>Automated tests should use a fixture format like:</p>
+<div class="highlight"><pre><span></span><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">"schema_version"</span><span class="p">:</span><span class="w"> </span><span class="s2">"social_graph_test/v1"</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">"policy"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"policy_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"clout-trust-v1"</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"now_unix"</span><span class="p">:</span><span class="w"> </span><span class="mi">1760000000</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"min_independent_edges"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"min_edge_age_days_exclusive"</span><span class="p">:</span><span class="w"> </span><span class="mi">7</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"min_weighted_score"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"fanout_cap"</span><span class="p">:</span><span class="w"> </span><span class="mi">20</span><span class="p">,</span>
+<span class="w">    </span><span class="nt">"trusted_seed_roots"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">"R0"</span><span class="p">]</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">"cases"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"case_id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"minimum_viable"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"description"</span><span class="p">:</span><span class="w"> </span><span class="s2">"Two independent aged edges, score 0.35."</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"subject"</span><span class="p">:</span><span class="w"> </span><span class="s2">"T_minimum_viable"</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"nodes"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"R0"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"seed"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"M_mia"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"honest"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"N_noah"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"honest"</span><span class="w"> </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span><span class="w"> </span><span class="nt">"id"</span><span class="p">:</span><span class="w"> </span><span class="s2">"T_minimum_viable"</span><span class="p">,</span><span class="w"> </span><span class="nt">"kind"</span><span class="p">:</span><span class="w"> </span><span class="s2">"candidate"</span><span class="w"> </span><span class="p">}</span>
+<span class="w">      </span><span class="p">],</span>
+<span class="w">      </span><span class="nt">"edges"</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">"truster"</span><span class="p">:</span><span class="w"> </span><span class="s2">"R0"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"trustee"</span><span class="p">:</span><span class="w"> </span><span class="s2">"M_mia"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"weight"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.8</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"age_days"</span><span class="p">:</span><span class="w"> </span><span class="mi">120</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"revoked"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"signature"</span><span class="p">:</span><span class="w"> </span><span class="s2">"fake-ed25519:minimum_viable:edge:1"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"signature_valid"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">"truster"</span><span class="p">:</span><span class="w"> </span><span class="s2">"R0"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"trustee"</span><span class="p">:</span><span class="w"> </span><span class="s2">"N_noah"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"weight"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.8</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"age_days"</span><span class="p">:</span><span class="w"> </span><span class="mi">120</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"revoked"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"signature"</span><span class="p">:</span><span class="w"> </span><span class="s2">"fake-ed25519:minimum_viable:edge:2"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"signature_valid"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">"truster"</span><span class="p">:</span><span class="w"> </span><span class="s2">"M_mia"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"trustee"</span><span class="p">:</span><span class="w"> </span><span class="s2">"T_minimum_viable"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"weight"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.4</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"age_days"</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"revoked"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"signature"</span><span class="p">:</span><span class="w"> </span><span class="s2">"fake-ed25519:minimum_viable:edge:3"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"signature_valid"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">        </span><span class="p">},</span>
+<span class="w">        </span><span class="p">{</span>
+<span class="w">          </span><span class="nt">"truster"</span><span class="p">:</span><span class="w"> </span><span class="s2">"N_noah"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"trustee"</span><span class="p">:</span><span class="w"> </span><span class="s2">"T_minimum_viable"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"weight"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.3</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"age_days"</span><span class="p">:</span><span class="w"> </span><span class="mi">8</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"revoked"</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"signature"</span><span class="p">:</span><span class="w"> </span><span class="s2">"fake-ed25519:minimum_viable:edge:3"</span><span class="p">,</span>
+<span class="w">          </span><span class="nt">"signature_valid"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span>
+<span class="w">        </span><span class="p">}</span>
+<span class="w">      </span><span class="p">],</span>
+<span class="w">      </span><span class="nt">"expected"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">"pass"</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"weighted_score"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.35</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"independent_edges"</span><span class="p">:</span><span class="w"> </span><span class="mi">2</span><span class="p">,</span>
+<span class="w">        </span><span class="nt">"failure_reasons"</span><span class="p">:</span><span class="w"> </span><span class="p">[]</span>
+<span class="w">      </span><span class="p">}</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">]</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="field-notes">Field notes<a class="headerlink" href="#field-notes" title="Permanent link">&para;</a></h3>
+<ul>
+<li><code>age_days</code> is fixture sugar. Test loaders should convert it to a deterministic
+  <code>timestamp = now_unix - age_days * 86400</code>.</li>
+<li><code>signature</code> may be fake for pure scoring tests if the signature verifier is
+  mocked.</li>
+<li>Separate signature-verification tests should use real generated Ed25519 test
+  vectors.</li>
+<li><code>signature_valid</code> is test-only metadata and must not exist in production
+  evidence.</li>
+<li>Fanout tests must include enough outbound edges for endorsers to compute
+  <code>active_out_degree</code>.</li>
+<li>Expected failures should assert that <code>failure_reasons</code> contains the intended
+  reason, not that it is the only reason, unless the test is designed to isolate
+  a single rule.</li>
+</ul>
+<p>Recommended failure reason strings:</p>
+<div class="highlight"><pre><span></span><code>bad_signature
+invalid_weight
+no_inbound_trust_edges
+insufficient_independent_edges
+edge_too_young
+weighted_score_below_threshold
+no_seed_rooted_path
+</code></pre></div>
+<hr />
+<h2 id="7-minimum-automated-test-suite">7. Minimum automated test suite<a class="headerlink" href="#7-minimum-automated-test-suite" title="Permanent link">&para;</a></h2>
+<p>The Phase 1 prototype should include at least these tests:</p>
+<ol>
+<li><code>healthy_community_passes</code></li>
+<li><code>cold_start_fails</code></li>
+<li><code>minimum_viable_passes</code></li>
+<li><code>collusion_ring_fails_without_seed_root</code></li>
+<li><code>bridge_farming_fails_when_edges_too_young</code></li>
+<li><code>aged_farmer_passes_known_false_negative</code></li>
+<li><code>whaling_fails_due_to_fanout_discount</code></li>
+<li><code>revoked_edges_are_ignored</code></li>
+<li><code>bad_signature_rejects_evidence</code></li>
+<li><code>duplicate_edges_from_same_truster_count_once</code></li>
+</ol>
+<p>The last three are not sample graph scenarios, but they are essential for
+security regression coverage.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.top", "toc.follow", "content.code.copy", "search.highlight", "search.suggest", "search.share", "content.code.annotate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,7 +1,6 @@
 # Federation and Discovery
 
-Freebird currently implements issuer-to-verifier metadata discovery, not a
-general federation protocol.
+Freebird currently implements issuer-to-verifier metadata discovery.
 
 ## Implemented trust relationships
 
@@ -25,8 +24,7 @@ protected like other service traffic.
 
 There is no claim of cross-operator issuer discovery, common federation
 membership, standardized policy exchange, or RFC-level protocol
-interoperability. Such federation is future/maintainer-review material. Do not
-describe the current metadata endpoints as a federation protocol.
+interoperability. Such federation is future/maintainer-review material.
 
 See [trust boundaries](../architecture/trust-boundaries.md), the [threat
 model](../threat-model.md), and [production deployment](../production-deployment.md).

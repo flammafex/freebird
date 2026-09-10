@@ -1,0 +1,2046 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Self-hostable privacy-preserving token issuance and verification for civil-society web services">
+      
+      
+      
+        <link rel="canonical" href="https://freebird.bot/deployment-kubernetes/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Kubernetes Deployment - 🕊️ Freebird</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#kubernetes-deployment" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="🕊️ Freebird" class="md-header__button md-logo" aria-label="🕊️ Freebird" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            🕊️ Freebird
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Kubernetes Deployment
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Use dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Use dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Use light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Use light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="🕊️ Freebird" class="md-nav__button md-logo" aria-label="🕊️ Freebird" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    🕊️ Freebird
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/issuers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Issuers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/verifiers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Verifiers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/tokens/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/one-time-redemption/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    One-Time Redemption
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/replay-protection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Replay Protection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/webauthn-issuance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WebAuthn Issuance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/blind-issuance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blind Issuance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../architecture/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/protocol-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Protocol Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/trust-boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust Boundaries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/data-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/storage-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/deployment-modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../security/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/threat-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/privacy-properties/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Privacy Properties
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/non-goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Non-Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/cryptographic-assumptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cryptographic Assumptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/audit-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audit Status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/http-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/typescript-sdk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TypeScript SDK
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../guides/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/anonymous-feedback/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Anonymous Feedback
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/token-gated-community/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Token-Gated Community
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/public-wifi-pass/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Public Wi-Fi Pass
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/witness-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    🙌 Witness Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../grant-work-packages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grant Work Packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../license/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    License
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#image-pinning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Image Pinning
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#validate-and-apply" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Validate and apply
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ingress-controller-forwarding-and-tls-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ingress controller forwarding and TLS boundary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#kind-smoke-deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kind smoke deployment
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Kind smoke deployment">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#clean-bootstrap-waves" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clean bootstrap waves
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#probe-alignment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Probe alignment
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#public-and-admin-surfaces" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Public And Admin Surfaces
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#redis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Redis
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#issuer-scaling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Issuer Scaling
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#webauthn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WebAuthn
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="kubernetes-deployment">Kubernetes Deployment<a class="headerlink" href="#kubernetes-deployment" title="Permanent link">&para;</a></h1>
+<p>The base in <code>k8s/</code> is not directly deployable. Select an overlay; the
+production overlay intentionally contains required-value markers rather than
+publishing example hosts or CIDRs.</p>
+<p>They assume:</p>
+<ul>
+<li>an ingress controller that terminates HTTPS</li>
+<li>cert-manager or equivalent TLS provisioning</li>
+<li>Redis with persistence enabled</li>
+<li>secret management outside Git</li>
+<li>one issuer replica and one or more verifier replicas</li>
+</ul>
+<p>The current release supports V4 and V7. V5 and V2 have been removed and are
+rejected; V6 is reserved and rejected.</p>
+<h2 id="image-pinning">Image Pinning<a class="headerlink" href="#image-pinning" title="Permanent link">&para;</a></h2>
+<p>Every registry image in the raw and base manifests is a
+<code>@sha256:REQUIRED_*_IMAGE_DIGEST</code> sentinel. Replace both sentinels with
+operator-provided, signature-verified immutable <code>@sha256:</code> references from the
+feature-bearing release artifact before applying. No v0.10.0 GHCR digest is
+invented or checked in here because those release digests are not publicly
+discoverable in this lane. Historical v0.7.0 images are not graph-capable and
+must not be used for graph issuance.</p>
+<p>The kind overlay deliberately substitutes <code>freebird-issuer:kind-smoke</code> and
+<code>freebird-verifier:kind-smoke</code>; <code>scripts/release-kind-smoke.sh</code> retags and
+loads the operator-provided smoke images before rollout. Those local names are
+not production image references.</p>
+<p>After obtaining the release digests, verify each pinned image:</p>
+<div class="highlight"><pre><span></span><code>cosign<span class="w"> </span>verify<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'https://github.com/.*/.github/workflows/docker.yml@refs/tags/&lt;feature-release-tag&gt;'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>ghcr.io/flammafex/freebird-issuer@sha256:&lt;operator-provided-digest&gt;
+</code></pre></div>
+<h2 id="validate-and-apply">Validate and apply<a class="headerlink" href="#validate-and-apply" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="c1"># First replace REQUIRED_* values in the production overlay, including both</span>
+<span class="c1"># image digest markers and graph coupling choices.</span>
+k8s/validate-overlays.sh
+<span class="c1"># This complete overlay apply is for an availability-preserving production</span>
+<span class="c1"># rollout only; use the clean bootstrap waves below for a new installation.</span>
+kubectl<span class="w"> </span>apply<span class="w"> </span>-k<span class="w"> </span>k8s/overlays/production
+</code></pre></div>
+<p>Do not apply <code>secrets-template.yaml</code> unchanged. Replace it with sealed secrets,
+External Secrets, Vault, or manually created Kubernetes secrets.</p>
+<p>Production values include the public issuer, issuer-admin, and verifier hosts;
+the ingress source CIDR; and the proxy service name, namespace, controller
+label, and DNS wiring. <code>TRUSTED_PROXY_CIDRS</code> must identify only the actual
+trusted ingress source, never a pod CIDR. The proxy-policy patch supplies the
+matching namespace and controller label. Probe and health egress use HTTPS
+port 443 in both overlays.</p>
+<p>The base manifests use the native V7 exchange names. Do not restore retired V5
+or legacy <code>PUBLIC_BEARER_EXCHANGE_*</code> profile settings. Exchange and graph
+issuance remain disabled in the base; enabling them requires setting
+<code>NATIVE_EXCHANGE_V7_ENABLE</code> and
+<code>NATIVE_GRAPH_ISSUANCE_V7_ENABLE</code> to <code>true</code> in the issuer ConfigMap,
+setting the same V7 graph marker and a non-empty
+<code>VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS</code> in the verifier ConfigMap, mounting the
+V7 discovery/history/acknowledgement/policy files and signer material at the paths
+in the issuer ConfigMap, and creating the referenced
+<code>graph-issuance-credentials</code> secret with exactly one production authorizer
+secret. Run <code>freebird-validate-config</code> against the same Redis database used by
+the verifiers. The overlay validator rejects an issuer-only graph
+configuration or a non-HTTPS authority URL.</p>
+<h2 id="ingress-controller-forwarding-and-tls-boundary">Ingress controller forwarding and TLS boundary<a class="headerlink" href="#ingress-controller-forwarding-and-tls-boundary" title="Permanent link">&para;</a></h2>
+<p>The overlays use ingress-nginx's built-in forwarding behavior; they do not
+install a custom forwarded-header ConfigMap or rely on snippet annotations.
+Configure the ingress-nginx controller ConfigMap with the exact built-in
+settings below:</p>
+<div class="highlight"><pre><span></span><code><span class="nb">export</span><span class="w"> </span><span class="nv">REQUIRED_PROXY_NAMESPACE</span><span class="o">=</span>ingress-nginx<span class="w">  </span><span class="c1"># production ingress controller namespace</span>
+kubectl<span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$REQUIRED_PROXY_NAMESPACE</span><span class="s2">"</span><span class="w"> </span>patch<span class="w"> </span>configmap<span class="w"> </span>ingress-nginx-controller<span class="w"> </span>--type<span class="w"> </span>merge<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-p<span class="w"> </span><span class="s1">'{"data":{"proxy-set-headers":"","use-forwarded-headers":"false","compute-full-forwarded-for":"false"}}'</span>
+kubectl<span class="w"> </span>-n<span class="w"> </span><span class="s2">"</span><span class="nv">$REQUIRED_PROXY_NAMESPACE</span><span class="s2">"</span><span class="w"> </span>rollout<span class="w"> </span>restart<span class="w"> </span>deployment<span class="w"> </span>ingress-nginx-controller
+</code></pre></div>
+<p>With <code>use-forwarded-headers=false</code> and
+<code>compute-full-forwarded-for=false</code>, ingress-nginx derives one forwarding chain
+from the immediate controller peer and overwrites client-supplied duplicate or
+spoofed <code>X-Forwarded-For</code> and <code>X-Forwarded-Proto</code> values. Confirm the effective
+controller ConfigMap before applying workloads. The production overlay uses
+<code>REQUIRED_PROXY_NAMESPACE</code> for the controller Service/network-policy wiring;
+set it to the namespace where ingress-nginx is installed. Do not widen the
+trusted source CIDR or enable <code>configuration-snippet</code> or <code>server-snippet</code> as a
+workaround.</p>
+<p>Every public and status route crosses the HTTPS ingress boundary. The Kind
+smoke script creates one temporary CA and one temporary leaf certificate with
+exactly these SANs: <code>issuer.freebird.test</code> and <code>verifier.freebird.test</code>. The
+same temporary <code>issuer-tls-cert</code> Secret terminates TLS for both Kind hosts;
+client checks use the generated CA and separately verify that an unrelated CA
+is rejected for both hosts. The trusted controller pod IP is observed after
+restart and supplied as the exact <code>/32</code> value; no pod or node CIDR is trusted.</p>
+<p>An upstream TLS-termination design is a separately reviewed deployment choice.
+Do not combine it with this controller-termination contract without a separate
+security review.</p>
+<h2 id="kind-smoke-deployment">Kind smoke deployment<a class="headerlink" href="#kind-smoke-deployment" title="Permanent link">&para;</a></h2>
+<p>Install the pinned ingress-nginx kind provider first. The smoke script uses
+release <code>v1.15.1</code> at commit
+<code>0a5901f3c64f11e92e487799b8da3f00cca37515</code>:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Illustrative commands only. This is not the reviewed smoke path: it does not</span>
+<span class="c1"># perform CRI image preloading or transform imagePullPolicy to Never before</span>
+<span class="c1"># admission. It is not the reviewed CRI-preload/`Never` no-admission-pull path;</span>
+<span class="c1"># use scripts/release-kind-smoke.sh for that reviewed path.</span>
+kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>https://raw.githubusercontent.com/kubernetes/ingress-nginx/0a5901f3c64f11e92e487799b8da3f00cca37515/deploy/static/provider/kind/deploy.yaml
+kubectl<span class="w"> </span>-n<span class="w"> </span>ingress-nginx<span class="w"> </span><span class="nb">wait</span><span class="w"> </span>--for<span class="o">=</span><span class="nv">condition</span><span class="o">=</span>ready<span class="w"> </span>pod<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-l<span class="w"> </span>app.kubernetes.io/component<span class="o">=</span>controller<span class="w"> </span>--timeout<span class="o">=</span>180s
+kubectl<span class="w"> </span>apply<span class="w"> </span>-k<span class="w"> </span>k8s/overlays/kind
+</code></pre></div>
+<p>The kind overlay uses the provider's <code>ingress-nginx-controller</code> Service in the
+<code>ingress-nginx</code> namespace, its <code>app.kubernetes.io/component=controller</code> label,
+and HTTPS port 443. The smoke script clears custom forwarding configuration,
+verifies the built-in settings, discovers the controller pod IP after restart,
+and configures that address as a temporary <code>/32</code> trusted source. It does not
+assume a kind node or pod CIDR. Add <code>issuer.freebird.test</code>,
+<code>issuer-admin.freebird.test</code>, and
+<code>verifier.freebird.test</code> to the client <code>/etc/hosts</code> pointing at the kind
+ingress address (or use the provider's documented port mapping).</p>
+<p>Kind smoke retains <code>BEHIND_PROXY=true</code> and <code>REQUIRE_TLS=true</code>; public and status
+requests use HTTPS and the controller's built-in forwarding behavior. Before
+workloads are applied, the smoke script generates one
+ephemeral 32-byte V4 issuer key, seeds it into the issuer PVC, and supplies
+the identical base64url key to the verifier. The overlay explicitly accepts
+V4 tokens, so readiness can complete after issuer metadata and matching key
+material are available.</p>
+<p>The kind issuer and verifier ingresses are HTTPS with a test-only ephemeral CA
+and the exact two-host SAN leaf. The verifier mounts the CA Secret and uses
+<code>SSL_CERT_FILE</code>; both hostnames are routed to the ingress controller Service
+with pod host aliases. No insecure TLS flag, certificate bypass, synthetic
+HTTPS header, or direct-Service acceptance path is used. The CA, leaf key, TLS
+Secret, and seeded key are temporary and are removed with the kind cluster and
+smoke temporary directory.</p>
+<p>The smoke health pod is labeled separately and receives only TCP 443 egress to
+the ingress controller through a dedicated NetworkPolicy. It resolves both
+test hosts to the controller Service while retaining those names in the HTTPS
+URLs, so SNI and certificate verification use the SAN hostnames. It asserts
+that the unrelated CA is rejected for both hosts, then checks both status paths
+with the provisioned CA while sending duplicate/spoofed forwarding headers;
+the controller's built-in settings must overwrite them. The smoke script also
+checks the generated nginx configuration has exactly one upstream
+<code>X-Forwarded-For</code> and <code>X-Forwarded-Proto</code> directive per status location.</p>
+<h3 id="clean-bootstrap-waves">Clean bootstrap waves<a class="headerlink" href="#clean-bootstrap-waves" title="Permanent link">&para;</a></h3>
+<p>For a clean production bootstrap, use these waves without taking an already
+serving verifier deployment offline:</p>
+<ol>
+<li>Establish prerequisites and durable secrets, then deploy and verify the
+   issuer and its Redis dependency.</li>
+<li>From the verifier's actual trusted HTTPS ingress boundary, verify issuer
+   discovery and metadata before starting verifier replicas.</li>
+<li>Start the verifier replicas with the normal availability-preserving rollout
+   and verify readiness, endpoints, and metadata convergence.</li>
+</ol>
+<p>Do not scale a live production verifier deployment to zero. The Kind smoke's
+scale-to-zero step is disposable test initialization only, not a production
+bootstrap or rollout procedure.</p>
+<p>Kind smoke uses a disposable bootstrap order to establish the issuer discovery
+boundary before starting verifier replicas: it applies the unchanged overlay,
+scales verifier to zero, patches the temporary host aliases, trusted
+controller <code>/32</code>, and local images, restarts and waits for issuer, confirms the
+issuer primary Service endpoint, fetches <code>/.well-known/issuer</code> through verified
+HTTPS ingress from an in-cluster health-labeled curl pod, and only then scales
+verifier directly to three and verifies issuer-metadata refresh in every
+verifier log. This scale-to-zero sequence is only smoke initialization
+behavior; it is not production rollout guidance.</p>
+<p>Production must make the issuer discovery route reachable from the verifier's
+trusted HTTPS boundary before initial verifier replicas start. Production
+rollouts must use the normal availability-preserving deployment procedure,
+not the disposable Kind scale-to-zero sequence.</p>
+<p>Run the complete smoke test with immutable local images:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">ISSUER_IMAGE</span><span class="o">=</span>issuer:test@sha256:&lt;digest&gt;<span class="w"> </span><span class="se">\</span>
+<span class="nv">VERIFIER_IMAGE</span><span class="o">=</span>verifier:test@sha256:&lt;digest&gt;<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>scripts/release-kind-smoke.sh
+</code></pre></div>
+<p>It tests both services through the ingress controller and deliberately does
+not probe their ClusterIP Services directly. On failure, inspect the printed
+all-namespace pod and event diagnostics; the EXIT trap then deletes the kind
+cluster and temporary files.</p>
+<p>The verifier has no public <code>LoadBalancer</code> Service; ingress is the sole public
+entry point. Production deployments must provide the required external
+secrets before applying the overlay.</p>
+<h2 id="probe-alignment">Probe alignment<a class="headerlink" href="#probe-alignment" title="Permanent link">&para;</a></h2>
+<p>Both deployments use process-local TCP liveness and startup probes. Readiness
+crosses the trusted HTTPS ingress boundary: issuer uses <code>GET /readyz</code>, while
+verifier uses <code>GET /ready</code>. The corresponding diagnostic endpoints are
+<code>/healthz</code> and <code>/health</code>; they are routed through the public ingress only for
+safe status diagnosis. Probe failures therefore indicate ingress, forwarded
+header, dependency, or application readiness problems without allowing a
+direct application-port bypass.</p>
+<h2 id="public-and-admin-surfaces">Public And Admin Surfaces<a class="headerlink" href="#public-and-admin-surfaces" title="Permanent link">&para;</a></h2>
+<p><code>issuer-ingress</code> exposes only public issuer routes (including the non-admin
+probe status endpoints):</p>
+<ul>
+<li><code>/.well-known/issuer</code></li>
+<li><code>/.well-known/replay-authority</code> (V4 authority-only metadata for verifier health refresh)</li>
+<li><code>/.well-known/keys</code></li>
+<li><code>/v1/oprf</code></li>
+<li><code>/v7/native-bearer</code></li>
+<li><code>/v7/public</code></li>
+<li><code>/v1/public/graph/replay-authority/probe</code> (V4 authority probe for V7 graph participants)</li>
+<li><code>/webauthn</code></li>
+<li><code>/healthz</code></li>
+<li><code>/readyz</code></li>
+</ul>
+<p><code>issuer-admin-ingress</code> exposes <code>/admin</code> on a separate hostname and includes an
+nginx source allowlist. Replace the example CIDRs with your VPN or operator
+network ranges.</p>
+<p>The verifier ingress exposes only <code>/health</code>, <code>/ready</code>, <code>/.well-known/verifier</code>,
+<code>/v1/verify</code>, <code>/v1/verify/batch</code>, and <code>/v1/check</code>. Verifier <code>/admin</code> is not
+included in the public ingress. Expose it separately on a private hostname
+with an operator CIDR allowlist only if required.</p>
+<h2 id="redis">Redis<a class="headerlink" href="#redis" title="Permanent link">&para;</a></h2>
+<p>Redis is used for verifier nullifier storage and issuer Sybil replay storage.
+The examples enable a standalone writable master, append-only persistence with
+<code>appendfsync always</code>, <code>maxmemory-policy noeviction</code>, and password
+authentication. These settings are required for V7 exchange/graph issuance;
+RDB-only or <code>everysec</code> durability is not a fallback.</p>
+<p>The issuer receives:</p>
+<ul>
+<li><code>REDIS_URL</code></li>
+<li><code>SYBIL_REPLAY_REDIS_URL</code></li>
+<li><code>WEBAUTHN_REDIS_URL</code></li>
+</ul>
+<p>The verifier receives:</p>
+<ul>
+<li><code>REDIS_URL</code></li>
+<li><code>VERIFIER_ACCEPTED_TOKEN_VERSIONS</code> (<code>v4,v7</code>; V5 and V2 are removed and
+  rejected; V6 is reserved and rejected)</li>
+<li><code>VERIFIER_ENV=production</code></li>
+<li><code>IN_MEMORY_REPLAY_STORE=false</code></li>
+<li><code>VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS</code> when participating in V7 graph
+  issuance;</li>
+<li><code>VERIFIER_REPLAY_AUTHORITY_PROBE_INTERVAL=30s</code> and
+  <code>VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS=60s</code> for the authority health
+  contract.</li>
+</ul>
+<p>Network policies allow Redis access only from issuer and verifier pods.</p>
+<p>When V7 graph issuance is enabled, set the verifier graph URL to the issuer's
+public HTTPS host (for example, <code>https://issuer.example.com</code>) and expose the
+distinct V4 <code>GET /.well-known/replay-authority</code> metadata route, strict V7
+<code>GET /.well-known/keys</code> discovery route, and exact
+<code>POST /v1/public/graph/replay-authority/probe</code> path on the issuer ingress. The
+verifier health refresh consumes the V4 metadata route; it must not use V7 keys
+or the POST probe as a metadata substitute. The fixed V4 probe is retained for
+V7 graph participants and proves that the verifier's <code>REDIS_URL</code> and issuer
+exchange Redis reach the same logical database; URL string equality is not used
+as proof. The verifier readiness probe must use the HTTPS ingress boundary, not
+the issuer ClusterIP.</p>
+<h2 id="issuer-scaling">Issuer Scaling<a class="headerlink" href="#issuer-scaling" title="Permanent link">&para;</a></h2>
+<p>The issuer deployment is intentionally a singleton because it owns issuer key
+material and local persisted Sybil state. Before scaling issuer replicas beyond
+one, move all mutable state to shared stores and review key-generation and
+rotation behavior.</p>
+<p>The verifier deployment can scale horizontally because token nullifiers are
+stored in Redis.</p>
+<h2 id="webauthn">WebAuthn<a class="headerlink" href="#webauthn" title="Permanent link">&para;</a></h2>
+<p>For WebAuthn as a recommended Sybil gate:</p>
+<ul>
+<li>build and publish issuer images</li>
+<li>set <code>WEBAUTHN_RP_ID</code> to the issuer host</li>
+<li>set <code>WEBAUTHN_RP_ORIGIN</code> to <code>https://issuer.example.com</code></li>
+<li>keep <code>/webauthn</code> on the public issuer ingress</li>
+<li>store <code>WEBAUTHN_PROOF_SECRET</code> in <code>webauthn-credentials</code></li>
+<li>use <code>SYBIL_REPLAY_STORE=redis</code></li>
+</ul>
+<p>The browser flow is available at:</p>
+<div class="highlight"><pre><span></span><code>https://issuer.example.com/webauthn/
+</code></pre></div>
+<p>Registration and authentication are separate pages:</p>
+<div class="highlight"><pre><span></span><code>https://issuer.example.com/webauthn/register
+https://issuer.example.com/webauthn/authenticate
+</code></pre></div>
+<p>The authenticate page hands WebAuthn Sybil proof material directly to the
+requesting client when a callback or opener window is present. It shows proof
+JSON only as a developer fallback.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.top", "toc.follow", "content.code.copy", "search.highlight", "search.suggest", "search.share", "content.code.annotate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

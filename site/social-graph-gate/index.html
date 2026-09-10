@@ -1,0 +1,3185 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Self-hostable privacy-preserving token issuance and verification for civil-society web services">
+      
+      
+      
+        <link rel="canonical" href="https://freebird.bot/social-graph-gate/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Social Graph Sybil Gate — Status and Design Blueprint - 🕊️ Freebird</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#social-graph-sybil-gate-status-and-design-blueprint" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="🕊️ Freebird" class="md-header__button md-logo" aria-label="🕊️ Freebird" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            🕊️ Freebird
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Social Graph Sybil Gate — Status and Design Blueprint
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Use dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Use dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Use light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Use light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="🕊️ Freebird" class="md-nav__button md-logo" aria-label="🕊️ Freebird" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    🕊️ Freebird
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/issuers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Issuers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/verifiers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Verifiers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/tokens/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/one-time-redemption/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    One-Time Redemption
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/replay-protection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Replay Protection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/webauthn-issuance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WebAuthn Issuance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/blind-issuance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blind Issuance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../architecture/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/protocol-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Protocol Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/trust-boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust Boundaries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/data-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/storage-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/deployment-modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../security/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/threat-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/privacy-properties/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Privacy Properties
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/non-goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Non-Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/cryptographic-assumptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cryptographic Assumptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/audit-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audit Status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/http-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/typescript-sdk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TypeScript SDK
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../guides/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/anonymous-feedback/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Anonymous Feedback
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/token-gated-community/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Token-Gated Community
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/public-wifi-pass/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Public Wi-Fi Pass
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/witness-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    🙌 Witness Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../grant-work-packages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grant Work Packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../license/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    License
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#current-implementation-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Current implementation boundary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#1-overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Overview
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="1. Overview">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#what-problems-this-addresses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What problems this addresses
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#core-principle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Core principle
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-it-is-not" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What it is not
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Architecture
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Architecture">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cred-mediated-attestation-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cred-mediated attestation flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-cred-in-the-middle" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why Cred in the middle?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#why-not-issuer-side-graph-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why not issuer-side graph analysis?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-clout-browser-local-graph-problem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The Clout browser-local graph problem
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-trait-integration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Trait Integration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="3. Trait Integration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#new-sybilproof-variant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        New SybilProof variant
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#signed-attestation-payload" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signed attestation payload
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cred-presentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cred presentation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#config-struct" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Config struct
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#state-struct" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        State struct
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verify_with_context-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        verify_with_context flow
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#combined-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Combined mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#replay-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Replay store
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-signal-sources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Signal Sources
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Signal Sources">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#clout-primary-signal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clout (primary signal)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#scarcity-weak-secondary-signal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Scarcity (weak secondary signal)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#prestige-excluded" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prestige (excluded)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#rendezvous-excluded" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Rendezvous (excluded)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-privacy-analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Privacy Analysis
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. Privacy Analysis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#does-this-preserve-issuance-redemption-unlinkability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Does this preserve issuance-redemption unlinkability?
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-issuer-learns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the issuer learns
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#what-the-issuer-must-not-learn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the issuer must not learn
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#attester-trust-boundary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attester trust boundary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-threat-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Threat Model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="6. Threat Model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#fake-trust-edges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Fake trust edges
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#collusion-rings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Collusion rings
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#purchased-invitations-bridge-farming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Purchased invitations / bridge farming
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#eclipse-attacks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Eclipse attacks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#whaling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Whaling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#temporal-decay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Temporal decay
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operator-warning-signs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator warning signs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#comparison-to-existing-invitation-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Comparison to existing invitation gate
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-bootstrapping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Bootstrapping
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="7. Bootstrapping">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recommended-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Recommended model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#minimum-viable-admission" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Minimum viable admission
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cold-start-resolution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cold-start resolution
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-implementation-phases" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Implementation Phases
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Implementation Phases">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#remaining-pre-phase-1-integration-work" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remaining Pre-Phase 1 integration work
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-1-mvp-core-implemented-experimental" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 1: MVP (core implemented; experimental)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-2-stronger-graph-scoring" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 2: Stronger graph scoring
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#phase-3-full-vision" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Phase 3: Full vision
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-open-questions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Open Questions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#research-basis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Research basis
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="social-graph-sybil-gate-status-and-design-blueprint">Social Graph Sybil Gate — Status and Design Blueprint<a class="headerlink" href="#social-graph-sybil-gate-status-and-design-blueprint" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>Status: <strong>Phase 1 core implemented, experimental.</strong> The issuer validates
+<code>SybilProof::SocialGraph</code>, and the <code>attester/</code> crate provides signed-edge
+scoring, attestation issuance, and JWKS publication. The implementation is
+not proof-of-personhood or a production-complete trust system; this document
+records both the shipped core and the remaining design work. It was produced
+by parallel research
+(Freebird architecture, app signal survey, Sybil detection literature)
+followed by architectural design review.</p>
+</blockquote>
+<h3 id="current-implementation-boundary">Current implementation boundary<a class="headerlink" href="#current-implementation-boundary" title="Permanent link">&para;</a></h3>
+<p>The issuer-side gate currently implements Cred-shaped presentation parsing and
+verification, trusted local attester keys, Ed25519 signature checks, policy and
+eligibility checks, time and request-binding checks, and replay protection. The
+standalone attester implements <code>POST /v1/attest</code>,
+<code>GET /.well-known/jwks.json</code>, and <code>GET /health</code>; it verifies signed Clout trust
+edges and issues short-lived signed attestations.</p>
+<p>The repository does not include the Cred proof agent or a Clout client. A
+client/integration must obtain the attestation and construct the presentation
+shape accepted by the issuer. <code>SOCIAL_GRAPH_JWKS_URL</code> refresh and persistent
+revocation state are configured surfaces but are not implemented yet: local
+attester keys remain authoritative and <code>SOCIAL_GRAPH_STATE_PATH</code> is not a
+persistent revocation store. The current reference attester also does not emit
+<code>quota_nullifier</code>; requiring one therefore needs an attester that supplies it.</p>
+<h2 id="1-overview">1. Overview<a class="headerlink" href="#1-overview" title="Permanent link">&para;</a></h2>
+<p>The <code>social_graph</code> Sybil gate admits users based on reputation in an
+external social/trust graph, primarily <a href="https://git.carpocratian.org/sibyl/clout">Clout</a>.
+Its purpose is to raise the cost of fake-account farming beyond what a
+single invitation code, proof-of-work nonce, or rate-limit identity can
+provide.</p>
+<h3 id="what-problems-this-addresses">What problems this addresses<a class="headerlink" href="#what-problems-this-addresses" title="Permanent link">&para;</a></h3>
+<p>Freebird's current Sybil gates (<code>invitation</code>, <code>pow</code>, <code>rate_limit</code>,
+<code>webauthn</code>, <code>multi_party_vouching</code>, <code>progressive_trust</code>) are all
+point-in-time admission checks. None establish that a participant has
+sustained, real-world social trust. A farmer who obtains one invitation
+or solves one PoW challenge can request a token.</p>
+<p>The <code>social_graph</code> gate consumes <strong>organic trust signals</strong> —
+relationships that emerge from real social interaction, economic
+activity, and civic participation over time. These signals are harder
+to farm because they require sustained participation that decays if
+neglected.</p>
+<h3 id="core-principle">Core principle<a class="headerlink" href="#core-principle" title="Permanent link">&para;</a></h3>
+<blockquote>
+<p>Freebird's issuer verifies "this requester has a valid Cred
+presentation containing a social-graph eligibility attestation," not
+"this Clout identity has these graph edges."</p>
+</blockquote>
+<p>The issuer must not ingest raw trust edges, invitation chains, wallet
+histories, ballot histories, or rendezvous participation data. Graph
+analysis happens in a separate Social Graph Attester service, and the
+attestation is held and presented by <a href="https://git.carpocratian.org/sibyl/cred">Cred</a>
+(the user-owned proof agent). The issuer receives only a Cred
+presentation containing a signed attestation.</p>
+<h3 id="what-it-is-not">What it is not<a class="headerlink" href="#what-it-is-not" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Not proof-of-personhood (graph reputation is gameable with patience)</li>
+<li>Not universal bot detection (no continuous behavioral analysis)</li>
+<li>Not a replacement for existing gates (it composes with them via
+  <code>combined</code> mode)</li>
+</ul>
+<p>It is a <strong>higher-cost admission layer</strong> that raises the farming bar by
+requiring real, aged, multi-signal social participation.</p>
+<hr />
+<h2 id="2-architecture">2. Architecture<a class="headerlink" href="#2-architecture" title="Permanent link">&para;</a></h2>
+<h3 id="cred-mediated-attestation-flow">Cred-mediated attestation flow<a class="headerlink" href="#cred-mediated-attestation-flow" title="Permanent link">&para;</a></h3>
+<p>Graph analysis happens in a <strong>separate Social Graph Attester service</strong>,
+and the attestation is held and presented by <strong>Cred</strong> (the user-owned
+proof agent). This creates two privacy boundaries: attester → Cred, and
+Cred → Freebird issuer.</p>
+<div class="highlight"><pre><span></span><code>Client      Cred (user agent)    Social Graph Attester    Freebird Issuer
+  │               │                       │                      │
+  │── 1. request ─→│                       │                      │
+  │   issuance     │                       │                      │
+  │               │── 2. get request binding ──────────────────→│
+  │               │←── request_binding ─────────────────────────│
+  │               │                       │                      │
+  │── 3. ask Cred │                       │                      │
+  │   for social  │                       │                      │
+  │   graph proof │                       │                      │
+  │               │── 4. request attestation ─────────────────→│
+  │               │    (Cred controller key,                     │
+  │               │     Clout trust evidence)                     │
+  │               │                       │                      │
+  │               │                  5. evaluate graph           │
+  │               │                  (SybilRank/heuristic)       │
+  │               │                       │                      │
+  │               │←── 6. signed attestation ──────────────────│
+  │               │    (NOT request-bound;                      │
+  │               │     bound to Cred controller key)            │
+  │               │                       │                      │
+  │               │── 7. store as cred.artifact_record           │
+  │               │                       │                      │
+  │               │── 8. create cred.presentation                │
+  │               │    bound to Freebird app_id + request_id     │
+  │               │    (request_binding_hash embedded here)     │
+  │               │                       │                      │
+  │←── 9. Cred presentation ─│             │                      │
+  │               │                       │                      │
+  │── 10. submit as SybilProof::SocialGraph ─────────────────→│
+  │               │                       │                      │
+  │               │                  11. issuer verifies:       │
+  │               │                     - attester signature     │
+  │               │                     - policy/version         │
+  │               │                     - expiry                 │
+  │               │                     - Cred presentation sig │
+  │               │                     - request binding match  │
+  │               │                     - eligibility threshold  │
+  │               │                     - replay store (jti)     │
+  │               │                       │                      │
+  │←── 12. VOPRF evaluation (token issued) ──────────────────│
+</code></pre></div>
+<h3 id="why-cred-in-the-middle">Why Cred in the middle?<a class="headerlink" href="#why-cred-in-the-middle" title="Permanent link">&para;</a></h3>
+<p>Cred is the <a href="https://git.carpocratian.org/sibyl/cred">user-owned proof agent</a>
+that holds keys, credentials, attestations, and app permissions locally.
+It already has adapters for Freebird (check/verify), Witness
+(attestations), and Matchlock (commitments/nullifiers), following a
+canonical <code>sophia/v1</code> contract with <code>cred.permission_grant</code>,
+<code>cred.action_request</code>, and <code>cred.presentation</code> artifacts.</p>
+<p>Routing the social graph attestation through Cred provides three
+privacy properties that direct client → attester → issuer does not:</p>
+<ol>
+<li>
+<p><strong>The attester doesn't know which Freebird instance the user is
+   targeting.</strong> The attester issues a general-purpose eligibility
+   attestation bound to Cred's controller key. Cred later binds the
+   presentation to a specific Freebird issuer's <code>request_id</code> at
+   presentation time. The attester never sees the request binding.</p>
+</li>
+<li>
+<p><strong>Permission grants enforce the presentation boundary.</strong> Cred's
+   <code>cred.permission_grant</code> system constrains which apps can request
+   which artifacts, with <code>allowed_audiences</code>, <code>max_uses</code>, <code>expires_at</code>,
+   and <code>human_approval: "per_use"</code>. A social graph grant would
+   constrain presentation to specific Freebird issuers with single-use
+   enforcement.</p>
+</li>
+<li>
+<p><strong>The attestation is a canonical Sophia artifact.</strong> It follows the
+   <code>sophia/v1</code> contract with <code>contract_version</code>, <code>artifact_type</code>, and
+   canonical JSON serialization. This makes it testable via SophiaDOS
+   conformance checks and smoke harnesses.</p>
+</li>
+</ol>
+<h3 id="why-not-issuer-side-graph-analysis">Why not issuer-side graph analysis?<a class="headerlink" href="#why-not-issuer-side-graph-analysis" title="Permanent link">&para;</a></h3>
+<p>Issuer-side analysis would require the issuer to see Clout public
+keys, trust edges, invitation chains, or browser-local graph snapshots.
+This breaks Clout's "Dark Social Graph" property and creates a strong
+issuance-time identity record that could later be correlated.</p>
+<h3 id="the-clout-browser-local-graph-problem">The Clout browser-local graph problem<a class="headerlink" href="#the-clout-browser-local-graph-problem" title="Permanent link">&para;</a></h3>
+<p>Clout's strongest trust graph lives in the browser (IndexedDB), not on
+a server. The attester cannot simply query a Clout API for a user's
+full graph. Options considered:</p>
+<table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Approach</th>
+<th>Verdict</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A. Client submits graph snapshot to Freebird issuer</td>
+<td>Client sends trust edges directly</td>
+<td><strong>Rejected</strong> — breaks Dark Social Graph, issuer sees raw graph</td>
+</tr>
+<tr>
+<td>B. Clout exposes server-side attestation API</td>
+<td>Clout server computes score, issues attestation</td>
+<td><strong>Preferred long-term</strong> — requires Clout API work</td>
+</tr>
+<tr>
+<td>C. Separate graph indexer service</td>
+<td>Indexer aggregates Clout signals, computes scores</td>
+<td><strong>Preferred Phase 2</strong> — sensitive infrastructure</td>
+</tr>
+<tr>
+<td>D. Cred submits verifiable evidence to attester</td>
+<td>Cred presents signed trust edges to attester on behalf of user</td>
+<td><strong>Phase 1 approach</strong> — requires Clout edges to be signed</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Phase 1 approach (Option D):</strong> Cred submits cryptographically signed
+Clout trust evidence (signed trust edges, signed invitation chain,
+timestamps) to the attester on behalf of the user. The attester
+validates the evidence, runs the scoring heuristic, and issues an
+attestation to Cred's controller key. Cred stores it as a
+<code>cred.artifact_record</code> and later presents it to Freebird.</p>
+<p><strong>Prerequisite:</strong> Clout trust records must be cryptographically
+self-authenticating (signed edges, signed invitations, verifiable
+timestamps). If they are not currently signed, that is a prerequisite
+before Phase 1 can ship.</p>
+<hr />
+<h2 id="3-trait-integration">3. Trait Integration<a class="headerlink" href="#3-trait-integration" title="Permanent link">&para;</a></h2>
+<h3 id="new-sybilproof-variant">New <code>SybilProof</code> variant<a class="headerlink" href="#new-sybilproof-variant" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="k">pub</span><span class="w"> </span><span class="k">enum</span><span class="w"> </span><span class="nc">SybilProof</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="c1">// ... existing variants ...</span>
+<span class="w">    </span><span class="n">SocialGraph</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="sd">/// Compact signed attestation from a trusted Social Graph Attester</span>
+<span class="w">        </span><span class="n">attestation</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">        </span><span class="sd">/// Proof that the requester controls the holder secret/key</span>
+<span class="w">        </span><span class="sd">/// bound to the attestation</span>
+<span class="w">        </span><span class="n">presentation</span><span class="p">:</span><span class="w"> </span><span class="nb">String</span><span class="p">,</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="c1">// ...</span>
+<span class="p">}</span>
+</code></pre></div>
+<h3 id="signed-attestation-payload">Signed attestation payload<a class="headerlink" href="#signed-attestation-payload" title="Permanent link">&para;</a></h3>
+<p>The attestation is a signed payload issued to Cred's controller key.
+It is <strong>not request-bound</strong> at issuance time — Cred binds it to a
+specific Freebird request at presentation time.</p>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>contract_version</code></td>
+<td><code>"sophia/v1"</code> (canonical Sophia artifact)</td>
+</tr>
+<tr>
+<td><code>artifact_type</code></td>
+<td><code>"social_graph.attestation"</code></td>
+</tr>
+<tr>
+<td><code>version</code></td>
+<td>Attestation schema version</td>
+</tr>
+<tr>
+<td><code>attester_id</code></td>
+<td>Which attester issued this</td>
+</tr>
+<tr>
+<td><code>kid</code></td>
+<td>Key ID used to sign</td>
+</tr>
+<tr>
+<td><code>policy_id</code></td>
+<td>Which scoring policy was applied</td>
+</tr>
+<tr>
+<td><code>issued_at</code></td>
+<td>When the attestation was created</td>
+</tr>
+<tr>
+<td><code>expires_at</code></td>
+<td>When it expires (short-lived)</td>
+</tr>
+<tr>
+<td><code>eligibility_level</code></td>
+<td>Coarse score bucket (not exact score)</td>
+</tr>
+<tr>
+<td><code>quota_nullifier</code></td>
+<td>Optional epoch-scoped nullifier for quota</td>
+</tr>
+<tr>
+<td><code>jti</code></td>
+<td>Unique attestation ID (for replay prevention)</td>
+</tr>
+<tr>
+<td><code>holder_commitment</code></td>
+<td>Commitment to Cred controller's public key</td>
+</tr>
+<tr>
+<td><code>signature</code></td>
+<td>Attester's Ed25519 signature over all fields</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Must not contain:</strong> Clout public key, raw trust edges, invitation
+path, exact SybilRank score, wallet address, ballot/rendezvous
+identifiers, any stable user identifier, or any Freebird-specific
+request binding. The attestation is general-purpose; Cred makes it
+request-bound at presentation time.</p>
+<h3 id="cred-presentation">Cred presentation<a class="headerlink" href="#cred-presentation" title="Permanent link">&para;</a></h3>
+<p>When presenting to Freebird, Cred creates a <code>cred.presentation</code>
+artifact containing:</p>
+<ul>
+<li>The signed attestation (embedded or referenced)</li>
+<li><code>app_id</code>: the Freebird issuer identifier</li>
+<li><code>request_id</code>: the Freebird issuance request ID</li>
+<li><code>request_binding_hash</code>: hash of the Freebird request binding</li>
+<li>Cred controller's signature over the presentation</li>
+</ul>
+<p>This presentation is what the client submits as
+<code>SybilProof::SocialGraph.attestation</code>. The <code>presentation</code> field of
+the proof contains the Cred presentation signature.</p>
+<h3 id="config-struct">Config struct<a class="headerlink" href="#config-struct" title="Permanent link">&para;</a></h3>
+<p>Environment variables:</p>
+<table>
+<thead>
+<tr>
+<th>Variable</th>
+<th>Purpose</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SOCIAL_GRAPH_ATTESTERS_PATH</code></td>
+<td>Path to trusted attester key config</td>
+<td>none (required)</td>
+</tr>
+<tr>
+<td><code>SOCIAL_GRAPH_JWKS_URL</code></td>
+<td>Reserved JWKS URL; refresh is not implemented</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>SOCIAL_GRAPH_KEY_REFRESH_INTERVAL</code></td>
+<td>Reserved refresh interval; currently unused</td>
+<td><code>1h</code></td>
+</tr>
+<tr>
+<td><code>SOCIAL_GRAPH_MIN_LEVEL</code></td>
+<td>Minimum eligibility level to accept</td>
+<td><code>1</code></td>
+</tr>
+<tr>
+<td><code>SOCIAL_GRAPH_ACCEPTED_POLICY_IDS</code></td>
+<td>Comma-separated accepted policy IDs</td>
+<td>none (required)</td>
+</tr>
+<tr>
+<td><code>SOCIAL_GRAPH_ATTESTATION_MAX_AGE</code></td>
+<td>Maximum age of accepted attestations</td>
+<td><code>5m</code></td>
+</tr>
+<tr>
+<td><code>SOCIAL_GRAPH_CLOCK_SKEW_SECS</code></td>
+<td>Allowed clock skew</td>
+<td><code>30</code></td>
+</tr>
+<tr>
+<td><code>SOCIAL_GRAPH_REQUIRE_REQUEST_BINDING</code></td>
+<td>Require request binding match</td>
+<td><code>true</code></td>
+</tr>
+<tr>
+<td><code>SOCIAL_GRAPH_REQUIRE_QUOTA_NULLIFIER</code></td>
+<td>Require epoch-scoped quota</td>
+<td><code>false</code></td>
+</tr>
+<tr>
+<td><code>SOCIAL_GRAPH_REPLAY_TTL</code></td>
+<td>Replay store TTL</td>
+<td><code>10m</code></td>
+</tr>
+<tr>
+<td><code>SOCIAL_GRAPH_STATE_PATH</code></td>
+<td>Reserved revocation-state path; persistence is not implemented</td>
+<td><code>social_graph_state.json</code></td>
+</tr>
+<tr>
+<td><code>SOCIAL_GRAPH_FAIL_CLOSED</code></td>
+<td>Reject if attester keys unavailable</td>
+<td><code>true</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="state-struct">State struct<a class="headerlink" href="#state-struct" title="Permanent link">&para;</a></h3>
+<p>The current issuer gate keeps the following in memory:</p>
+<ul>
+<li>Trusted attester public keys loaded from <code>SOCIAL_GRAPH_ATTESTERS_PATH</code></li>
+<li>Accepted policy IDs</li>
+<li>Key-load timestamp</li>
+<li>An in-memory revoked-key set (not persisted)</li>
+</ul>
+<p>The configured state path is not currently read or written. Persistent key
+rotation/revocation state is planned. The implementation does not persist graph
+records, Clout identities, score histories, or edge snapshots.</p>
+<h3 id="verify_with_context-flow"><code>verify_with_context</code> flow<a class="headerlink" href="#verify_with_context-flow" title="Permanent link">&para;</a></h3>
+<ol>
+<li>Require <code>SybilProof::SocialGraph</code></li>
+<li>Parse the Cred presentation (contains the signed attestation +
+   presentation metadata)</li>
+<li>Verify Cred controller's signature over the presentation</li>
+<li>Verify attester identity and key ID</li>
+<li>Verify attester's Ed25519 signature over the attestation</li>
+<li>Check <code>policy_id</code> is in accepted list</li>
+<li>Check <code>issued_at</code>, <code>expires_at</code>, and max age</li>
+<li>Check eligibility level &gt;= <code>SOCIAL_GRAPH_MIN_LEVEL</code></li>
+<li>Require <code>ctx.request_binding</code> when configured</li>
+<li>Compare <code>hash(ctx.request_binding)</code> to the presentation's
+    <code>request_binding_hash</code></li>
+<li>Verify <code>holder_commitment</code> matches the Cred controller key that
+    signed the presentation</li>
+<li>Use replay store: <code>mark_once("social_graph:jti", jti, ttl)</code></li>
+</ol>
+<h3 id="combined-mode">Combined mode<a class="headerlink" href="#combined-mode" title="Permanent link">&para;</a></h3>
+<p>The gate composes with existing gates via <code>combined</code> mode:</p>
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Use case</th>
+<th>Security note</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>combined_or</code></td>
+<td><code>social_graph OR invitation</code></td>
+<td>Only as strong as easiest mechanism</td>
+</tr>
+<tr>
+<td><code>combined_and</code></td>
+<td><code>social_graph AND pow</code></td>
+<td>Both must pass — stronger</td>
+</tr>
+<tr>
+<td><code>combined_threshold</code></td>
+<td>2 of 3 mechanisms</td>
+<td>Flexible middle ground</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Recommended production posture:</strong></p>
+<ul>
+<li>Low-value onboarding: <code>invitation OR social_graph</code></li>
+<li>Higher-value issuance: <code>social_graph AND pow</code> or threshold mode</li>
+<li>Never treat <code>invitation</code> alone as equivalent to a strong social graph pass</li>
+</ul>
+<h3 id="replay-store">Replay store<a class="headerlink" href="#replay-store" title="Permanent link">&para;</a></h3>
+<p>Replay keys:
+- <code>social_graph:jti:&lt;attester_id&gt;:&lt;jti&gt;</code> (always)
+- <code>social_graph:quota:&lt;attester_id&gt;:&lt;quota_nullifier&gt;</code> (if quota enabled)</p>
+<p>TTL should not exceed the attestation expiry. Redis-backed replay store
+is required for clustered deployments.</p>
+<hr />
+<h2 id="4-signal-sources">4. Signal Sources<a class="headerlink" href="#4-signal-sources" title="Permanent link">&para;</a></h2>
+<h3 id="clout-primary-signal">Clout (primary signal)<a class="headerlink" href="#clout-primary-signal" title="Permanent link">&para;</a></h3>
+<p>Clout's trust graph is the strongest available signal. It is
+structurally similar to BrightID's social graph, but emerges from real
+social interaction rather than dedicated verification rituals.</p>
+<p><strong>Usable signals:</strong>
+- Signed trust edges (who trusts whom, weight, timestamp)
+- Signed invitation chain (inviter → invitee)
+- Edge age and temporal decay
+- Edge weight (0.1–1.0)
+- Independent endorsers
+- Seed-rooted paths
+- Fanout behavior (how many people does each node trust?)
+- Day Pass delegation history</p>
+<p><strong>Privacy cost:</strong> High if raw edges leave the browser. Raw Clout graph
+data goes only to the dedicated attester, never to the Freebird issuer.</p>
+<h3 id="scarcity-weak-secondary-signal">Scarcity (weak secondary signal)<a class="headerlink" href="#scarcity-weak-secondary-signal" title="Permanent link">&para;</a></h3>
+<p><strong>Usable signals (coarse attestations only):</strong>
+- Wallet age bucket (e.g., "exists for &gt;30 days")
+- Activity count bucket (e.g., "participated in &gt;5 transfers")
+- "Has ongoing economic activity" boolean</p>
+<p><strong>Must not expose:</strong> Raw transfer history, token graph, nullifier
+gossip, balances, or wallet addresses to Freebird.</p>
+<h3 id="prestige-excluded">Prestige (excluded)<a class="headerlink" href="#prestige-excluded" title="Permanent link">&para;</a></h3>
+<p>Per-person ballot participation breaks coercion resistance and
+unlinkability. <strong>Do not consume.</strong></p>
+<h3 id="rendezvous-excluded">Rendezvous (excluded)<a class="headerlink" href="#rendezvous-excluded" title="Permanent link">&para;</a></h3>
+<p>Cross-pool correlation breaks the core privacy model. Pseudonym
+rotation makes cross-pool linkage intentionally impossible. <strong>Do not
+consume.</strong></p>
+<hr />
+<h2 id="5-privacy-analysis">5. Privacy Analysis<a class="headerlink" href="#5-privacy-analysis" title="Permanent link">&para;</a></h2>
+<h3 id="does-this-preserve-issuance-redemption-unlinkability">Does this preserve issuance-redemption unlinkability?<a class="headerlink" href="#does-this-preserve-issuance-redemption-unlinkability" title="Permanent link">&para;</a></h3>
+<p><strong>The core flow preserves this property when used as designed.</strong></p>
+<p>The issuer learns that a requester had a valid social-graph attestation
+at issuance time. Redemption remains unlinkable because the redemption
+token carries no graph identity or attestation metadata.</p>
+<h3 id="what-the-issuer-learns">What the issuer learns<a class="headerlink" href="#what-the-issuer-learns" title="Permanent link">&para;</a></h3>
+<ul>
+<li>A trusted attester approved this request</li>
+<li>Coarse eligibility level (bucket, not exact score)</li>
+<li>Policy version</li>
+<li>Attestation expiry</li>
+<li>Request binding match</li>
+<li>Optional epoch-scoped quota nullifier</li>
+</ul>
+<h3 id="what-the-issuer-must-not-learn">What the issuer must not learn<a class="headerlink" href="#what-the-issuer-must-not-learn" title="Permanent link">&para;</a></h3>
+<ul>
+<li>Clout public key</li>
+<li>Browser-local graph contents</li>
+<li>Trust edges or invitation path</li>
+<li>Exact graph score</li>
+<li>Wallet address or transfer history</li>
+<li>Ballot or rendezvous participation</li>
+<li>Stable cross-epoch social identity</li>
+</ul>
+<h3 id="attester-trust-boundary">Attester trust boundary<a class="headerlink" href="#attester-trust-boundary" title="Permanent link">&para;</a></h3>
+<p>With Cred in the middle, the attester's knowledge is significantly
+reduced compared to direct client → attester → issuer flow:</p>
+<p><strong>What the attester learns (Phase 1):</strong>
+- Cred controller public key (not Clout identity directly, though
+  Clout evidence is submitted on the user's behalf)
+- That the user is seeking social-graph eligibility
+- The graph evidence submitted (signed Clout trust edges)</p>
+<p><strong>What the attester does NOT learn:</strong>
+- Which Freebird issuer the user will present to
+- When the attestation will be used
+- The Freebird request binding
+- Whether the attestation was ever used at all</p>
+<p>This is a stronger privacy property than direct attester → issuer flow.
+The attester issues a general-purpose eligibility attestation; Cred
+makes it request-bound at presentation time.</p>
+<p><strong>Stronger long-term design (Phase 3):</strong>
+- Blind signatures or BBS+ anonymous credentials (attester cannot link
+  issuance to presentation even with Cred)
+- Privacy Pass-style issuance
+- Per-issuer/per-epoch unlinkable nullifiers
+- Multiple independent attesters</p>
+<p>Full privacy-preserving graph analytics remains an open research
+problem. The practical design is <strong>separation of duties plus anonymous
+attestations</strong>, not ZK proof of global graph position.</p>
+<hr />
+<h2 id="6-threat-model">6. Threat Model<a class="headerlink" href="#6-threat-model" title="Permanent link">&para;</a></h2>
+<h3 id="fake-trust-edges">Fake trust edges<a class="headerlink" href="#fake-trust-edges" title="Permanent link">&para;</a></h3>
+<p>Attackers create many fake Clout identities and mutually endorse them.</p>
+<p><strong>Countermeasures:</strong>
+- Require seed-rooted paths
+- Cap edge weight
+- Apply fanout penalties (high-outdegree nodes are less trustworthy)
+- Require minimum edge age
+- Require independent roots
+- Ignore fresh dense subgraphs</p>
+<h3 id="collusion-rings">Collusion rings<a class="headerlink" href="#collusion-rings" title="Permanent link">&para;</a></h3>
+<p>A group of real or fake users create a dense endorsement cluster.</p>
+<p><strong>Countermeasures:</strong>
+- SybilRank-style propagation from trusted seeds
+- Community diversity requirements
+- Outbound trust budget per node
+- Anomaly detection for dense new clusters</p>
+<h3 id="purchased-invitations-bridge-farming">Purchased invitations / bridge farming<a class="headerlink" href="#purchased-invitations-bridge-farming" title="Permanent link">&para;</a></h3>
+<p>Attackers buy endorsements from honest users or compromise weak bridges
+into the honest region.</p>
+<p><strong>Countermeasures:</strong>
+- Require multiple independent paths
+- Decay or penalize high-fanout endorsers
+- Delay the effect of new trust edges
+- Slash or downgrade endorsers linked to abuse
+- Cap blast radius per trusted node</p>
+<h3 id="eclipse-attacks">Eclipse attacks<a class="headerlink" href="#eclipse-attacks" title="Permanent link">&para;</a></h3>
+<p>An attacker surrounds a victim or feeds the attester only
+attacker-controlled graph evidence.</p>
+<p><strong>Countermeasures:</strong>
+- Cross-check against known roots/indexes where possible
+- Reject isolated client-only snapshots
+- Require independent corroboration
+- Use key transparency or append-only logs for trust records</p>
+<h3 id="whaling">Whaling<a class="headerlink" href="#whaling" title="Permanent link">&para;</a></h3>
+<p>Attackers compromise high-trust Clout nodes and use them to vouch many
+Sybils.</p>
+<p><strong>Countermeasures:</strong>
+- Per-voucher issuance caps
+- Anomaly detection on endorsement spikes
+- Delayed trust activation
+- Revocation
+- Hardware-backed protection for high-trust accounts
+- Blast-radius limits</p>
+<h3 id="temporal-decay">Temporal decay<a class="headerlink" href="#temporal-decay" title="Permanent link">&para;</a></h3>
+<p>Decay helps because instant farming is less valuable. Older, stable
+relationships carry more weight.</p>
+<p><strong>Limits:</strong>
+- Patient attackers can farm aged accounts
+- Compromised aged accounts remain dangerous
+- Purchased aged accounts bypass freshness checks</p>
+<h3 id="operator-warning-signs">Operator warning signs<a class="headerlink" href="#operator-warning-signs" title="Permanent link">&para;</a></h3>
+<p>Operators should monitor for:
+- Sudden increase in accepted social-graph attestations
+- One attester dominating eligibility
+- One seed or voucher creating many accepted users
+- Sharp score distribution shifts
+- High rejection due to stale keys or replay failures
+- Attestation API outages
+- Repeated quota-nullifier collisions
+- Privacy-sensitive fields appearing in logs</p>
+<h3 id="comparison-to-existing-invitation-gate">Comparison to existing <code>invitation</code> gate<a class="headerlink" href="#comparison-to-existing-invitation-gate" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>Property</th>
+<th><code>invitation</code></th>
+<th><code>social_graph</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Farming cost</td>
+<td>Low (one invite code)</td>
+<td>Higher (requires aged, diverse trust)</td>
+</tr>
+<tr>
+<td>Complexity</td>
+<td>Simple</td>
+<td>Complex (external attester, graph analysis)</td>
+</tr>
+<tr>
+<td>Privacy risk</td>
+<td>Low (issuer sees invite code)</td>
+<td>Medium (attester sees graph evidence)</td>
+</tr>
+<tr>
+<td>Bootstrapping</td>
+<td>Built-in</td>
+<td>Requires invitation fallback</td>
+</tr>
+<tr>
+<td>Operational burden</td>
+<td>Low</td>
+<td>Higher (attester service, key management)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="7-bootstrapping">7. Bootstrapping<a class="headerlink" href="#7-bootstrapping" title="Permanent link">&para;</a></h2>
+<p>New users with no Clout trust history need a path in.</p>
+<h3 id="recommended-model">Recommended model<a class="headerlink" href="#recommended-model" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Entry:</strong> Use existing <code>invitation</code> gate as the bootstrap mechanism</li>
+<li><strong>Probation:</strong> New users get low initial privileges</li>
+<li><strong>Accumulation:</strong> Users build Clout trust history over time</li>
+<li><strong>Promotion:</strong> After enough aged, independent signals exist,
+   promote to social-graph eligibility</li>
+</ol>
+<p>A single invitation should <strong>not</strong> equal high-trust social-graph
+eligibility.</p>
+<h3 id="minimum-viable-admission">Minimum viable admission<a class="headerlink" href="#minimum-viable-admission" title="Permanent link">&para;</a></h3>
+<p>One of:
+- Trusted invitation plus waiting period
+- Two independent aged trust edges
+- Seed-rooted path within limited depth
+- Low-risk progressive-trust history
+- Threshold combination of invitation + proof-of-work + time</p>
+<h3 id="cold-start-resolution">Cold-start resolution<a class="headerlink" href="#cold-start-resolution" title="Permanent link">&para;</a></h3>
+<p>The cold-start problem is solved by separating concerns:</p>
+<table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Mechanism</th>
+<th>Privilege level</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Entry</td>
+<td>Invitation or community bootstrap</td>
+<td>Minimal</td>
+</tr>
+<tr>
+<td>Promotion</td>
+<td>Social graph reputation accumulated</td>
+<td>Standard</td>
+</tr>
+<tr>
+<td>High-value</td>
+<td>Stronger threshold requiring graph maturity</td>
+<td>Elevated</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="8-implementation-phases">8. Implementation Phases<a class="headerlink" href="#8-implementation-phases" title="Permanent link">&para;</a></h2>
+<h3 id="remaining-pre-phase-1-integration-work">Remaining Pre-Phase 1 integration work<a class="headerlink" href="#remaining-pre-phase-1-integration-work" title="Permanent link">&para;</a></h3>
+<p>The following design and external-integration work remains:</p>
+<ul class="task-list">
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Define attestation schema (fields, encoding, signature format)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Define Cred <code>social_graph</code> adapter contract (import + present)</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Define SophiaDOS <code>schemas/social-graph-attestation.schema.json</code></li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Decide signing format: canonical JSON with Ed25519 signature</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Confirm Clout trust records are signed and independently verifiable</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Prototype Cred presentation with request binding</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Prototype replay handling</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Complete attester-side quota/nullifier handling</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Choose initial thresholds</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Test false positives/false negatives on sample graphs</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled/><span class="task-list-indicator"></span></label> Define attester key rotation and revocation</li>
+<li class="task-list-item"><label class="task-list-control"><input type="checkbox" disabled checked/><span class="task-list-indicator"></span></label> Document privacy boundary and logging rules</li>
+</ul>
+<p><strong>If a deployment's Clout source cannot produce verifiable trust evidence, it
+must not use the gate.</strong></p>
+<blockquote>
+<p><strong>Update:</strong> Investigation confirmed Clout trust edges ARE signed with
+Ed25519 and are independently verifiable by a third party. The Phase 1
+prerequisite is met. See resolved open question #1 below.</p>
+</blockquote>
+<h3 id="phase-1-mvp-core-implemented-experimental">Phase 1: MVP (core implemented; experimental)<a class="headerlink" href="#phase-1-mvp-core-implemented-experimental" title="Permanent link">&para;</a></h3>
+<p><strong>Implemented (Freebird):</strong>
+- <code>SybilProof::SocialGraph</code> variant
+- Issuer-side verifier gate (verifies Cred presentation + attester sig)
+- Trusted attester key config from local JSON
+- Replay-store integration
+- Coarse eligibility levels</p>
+<p><strong>Implemented (Social Graph Attester):</strong>
+- Signed Clout-edge verification
+- Seed-rooted path and threshold scoring with temporal age and fanout limits
+- Signed short-lived attestation issuance
+- JWKS publication endpoint</p>
+<p><strong>External or deferred integration:</strong>
+- <code>social_graph</code> adapter: <code>import-attestation</code> + <code>present-attestation</code>
+- Permission grant type: <code>social_graph.present</code>
+- Presentation binding to Freebird <code>app_id</code> + <code>request_id</code> +
+  <code>request_binding_hash</code></p>
+<p>The issuer accepts the resulting presentation shape and enforces its request
+binding, but the Cred adapter and user-agent custody model are outside this
+repository.</p>
+<p><strong>Deferred SophiaDOS integration:</strong>
+- <code>schemas/social-graph-attestation.schema.json</code>
+- <code>scripts/run-social-graph-live-seam.sh</code> smoke test</p>
+<p><strong>Signals:</strong>
+- Clout signed trust edges
+- Edge age
+- Edge weight
+- Independent endorsers</p>
+<p><strong>Algorithm:</strong>
+- Simple heuristic, not full SybilRank
+- Seed-rooted trust score
+- Temporal decay
+- Fanout caps
+- Minimum independent endorsements</p>
+<p><strong>Privacy:</strong>
+- Freebird issuer sees only Cred presentation + eligibility level
+- Attester sees the holder commitment + Clout evidence, but NOT which
+  Freebird instance the user will present to
+- Cred enforces per-use human approval before presentation</p>
+<p><strong>Limitations:</strong>
+- Attester is trusted (sees graph evidence)
+- No full privacy-preserving graph analytics
+- Issuer JWKS URL refresh and persistent revocation state are not implemented
+- The reference attester does not enforce identity quotas or emit quota nullifiers
+- Collusion and bridge farming remain possible
+- Heuristic thresholds require tuning</p>
+<h3 id="phase-2-stronger-graph-scoring">Phase 2: Stronger graph scoring<a class="headerlink" href="#phase-2-stronger-graph-scoring" title="Permanent link">&para;</a></h3>
+<p><strong>Build:</strong>
+- Opt-in graph indexer or Clout-hosted attestation API
+- Periodic SybilRank / personalized PageRank computation
+- Community diversity scoring
+- Abuse feedback loop
+- Attester revocation and policy versioning
+- Optional coarse Scarcity participation attestations</p>
+<p><strong>Signals:</strong>
+- Larger Clout graph
+- Signed trust edges
+- Invitation roots
+- Edge age/decay
+- Coarse wallet activity attestations</p>
+<p><strong>Privacy:</strong>
+- Issuer still sees only attestations
+- Attester/indexer sees more graph data (preferably opt-in and minimized)</p>
+<p><strong>Limitations:</strong>
+- Seed bias
+- Governance complexity
+- Graph indexer becomes sensitive infrastructure</p>
+<h3 id="phase-3-full-vision">Phase 3: Full vision<a class="headerlink" href="#phase-3-full-vision" title="Permanent link">&para;</a></h3>
+<p><strong>Build:</strong>
+- Anonymous credential issuance (BBS+ or similar)
+- Blind attestations
+- Per-issuer/per-epoch unlinkable nullifiers
+- Multiple independent attesters
+- Audited policy engine
+- Robust revocation
+- Community-local scoring
+- Optional stake/time/activity hybrid model</p>
+<p><strong>Signals:</strong>
+- Clout primary
+- Scarcity only as coarse privacy-preserving attestations
+- No raw Prestige or Rendezvous signals</p>
+<p><strong>Privacy:</strong>
+- Issuer cannot identify graph participant
+- Attester ideally cannot link credential issuance to Freebird presentation
+- Redemption remains unlinkable</p>
+<p><strong>Limitations:</strong>
+- Fully private global Sybil detection is still an open research problem
+- Practical system still depends on trusted seeds, governance, and monitoring</p>
+<hr />
+<h2 id="9-open-questions">9. Open Questions<a class="headerlink" href="#9-open-questions" title="Permanent link">&para;</a></h2>
+<ol>
+<li>~~Are Clout trust edges currently signed and independently verifiable?~~
+   <strong>Resolved: Yes.</strong> Clout trust edges are signed with Ed25519 over a
+   canonical payload hash (truster, trustee, weight, timestamp, revoked).
+   Both plaintext and encrypted trust signals carry signatures. Timestamps
+   are bound into the signature and backed by Witness attestations. A
+   third-party attester can independently verify trust edges without Clout
+   being present. Invitation codes are NOT currently signed by the inviter
+   — this is a non-blocking gap that could be addressed in a future Clout
+   change to strengthen the invitation chain signal. See
+   <code>clout/src/trust/plaintext-signal.ts:18-52</code> and
+   <code>clout/src/crypto.ts:614-744</code>.</li>
+<li>~~Who operates the Social Graph Attester?~~
+   <strong>Confirmed: Same operator as the Freebird issuer for Phase 1.</strong> This
+   is simplest, keeps trust concentrated in one party the deployer
+   already trusts, and avoids multi-party attester governance complexity.
+   Phase 3 targets multiple independent attesters for stronger trust
+   distribution.</li>
+<li>~~Is the attester allowed to know the user is requesting Freebird
+   eligibility?~~
+   <strong>Resolved for the shipped protocol: the attester is not given the
+   Freebird request binding.</strong> The reference attester receives a holder
+   commitment, subject, and signed graph evidence; it does not receive a
+   Freebird request ID or binding hash. The Cred-shaped presentation binds
+   the attestation to the Freebird request, and the issuer checks that
+   binding. The attester can still know that its attestation may be used for
+   Freebird eligibility from deployment context. Phase 3 targets blind
+   attestations to reduce that knowledge further.</li>
+<li>~~Should quota be enforced by the attester only, or also via
+   issuer-visible epoch nullifiers?~~
+   <strong>Partially resolved in the shipped implementation.</strong> The issuer can
+   optionally check <code>quota_nullifier</code> through the replay store, controlled by
+   <code>SOCIAL_GRAPH_REQUIRE_QUOTA_NULLIFIER</code>. The reference attester currently
+   emits no quota nullifier and does not enforce a per-identity epoch quota,
+   so a deployment requiring that defense must provide an attester that does.</li>
+<li>~~What is the minimum acceptable eligibility threshold for Phase 1?~~
+   <strong>Confirmed: Conservative starting values:</strong></li>
+<li>At least 2 independent trust edges from distinct Clout identities</li>
+<li>Edge age &gt; 7 days (prevents instant farming)</li>
+<li>Minimum weighted trust score of 0.3 (on Clout's 0.1–1.0 scale)</li>
+<li>At least 1 seed-rooted path (connected to the invitation tree root)</li>
+<li>Fanout cap: endorsers with &gt;20 outbound trust edges get discounted</li>
+</ol>
+<p>These are deliberately conservative — they'll reject most farmers
+   while accepting genuine community members. They'll need tuning with
+   real graph data during Pre-Phase 1 prototyping.
+6. ~~How are attester keys rotated and revoked?~~
+   <strong>Partially implemented.</strong> The reference attester publishes its current
+   Ed25519 public key at a JWKS endpoint, but the issuer currently loads
+   trusted keys from <code>SOCIAL_GRAPH_ATTESTERS_PATH</code>;
+   <code>SOCIAL_GRAPH_JWKS_URL</code> refresh, durable revocation, and automated
+   rotation are not implemented. Operators must change the local trusted-key
+   configuration and coordinate key retirement manually until that lifecycle
+   is added.
+7. ~~What abuse feedback can Freebird safely send back without
+   deanonymizing redeemers?~~
+   <strong>Resolved (technical): Very little, by design.</strong>
+   - The issuer can publish <strong>aggregate</strong> statistics: attestation
+     acceptance/rejection counts, attester ID distribution, policy ID
+     distribution. These are safe because they don't link to individual
+     users.
+   - The issuer must NOT send per-user feedback to the attester. Any
+     feedback channel from issuer to attester about specific
+     attestations (jti, holder commitment, request binding) would
+     create a correlation path between Freebird issuance and the
+     attester's Clout identity records.
+   - The attester should detect abuse through its own graph analysis
+     (dense new clusters, endorsement spikes, etc.), not through issuer
+     feedback.
+   - If abuse is detected (e.g., a farmed cluster), the attester
+     revokes eligibility for those Clout identities at the attester
+     level. The issuer doesn't need to know why.
+8. ~~What fields are safe to log?~~
+   <strong>Resolved (technical): Different rules for issuer vs. attester.</strong></p>
+<p><strong>Issuer-side (safe at INFO level):</strong>
+   - <code>attester_id</code>, <code>policy_id</code>, <code>eligibility_level</code> (bucket)
+   - <code>jti</code> (for replay debugging — rotate logs frequently)
+   - <code>request_binding_hash</code> (not the binding itself)
+   - timestamp, accept/reject decision
+   - reject reason (generic: "expired", "bad signature", "replay",
+     "below threshold")</p>
+<p><strong>Issuer-side (must NOT log):</strong>
+   - Clout public key
+   - Graph data (edges, scores, invitation chains)
+   - Exact SybilRank score
+   - Holder commitment (unless DEBUG level with short retention)
+   - Full attestation payload</p>
+<p><strong>Attester-side (safe to log, but more sensitive):</strong>
+   - Clout identity, evidence submitted, score computed, attestation
+     issued (jti, expiry)
+   - These logs need their own retention policy and access controls.
+9. ~~Should different Freebird issuance classes require different
+   social-graph levels?~~
+   <strong>Confirmed: Yes.</strong> The gate supports this via <code>SOCIAL_GRAPH_MIN_LEVEL</code>
+   config. Starting classes:
+   - Low-value onboarding (e.g., basic Clout posting): level &gt;= 1
+   - Standard issuance (e.g., Scarcity transfers): level &gt;= 2
+   - High-value issuance (e.g., Prestige ballot creation): level &gt;= 3</p>
+<p>Different Freebird instances can be configured with different
+   thresholds. The specific classes and levels are the operator's
+   policy decision.
+10. ~~What is the governance process for trusted seeds and policy
+    changes?~~
+    <strong>Confirmed: Phased approach.</strong>
+    - Phase 1: Single operator decides. The operator configures trusted
+      seeds and policy IDs via environment variables. Changes require
+      restarting the issuer with new config.
+    - Phase 2: Community vote via Prestige (uses existing infrastructure
+      in the ecosystem).
+    - Phase 3: Multi-party threshold approval (most robust, most
+      complex).</p>
+<hr />
+<h2 id="research-basis">Research basis<a class="headerlink" href="#research-basis" title="Permanent link">&para;</a></h2>
+<p>This blueprint was produced by three parallel research lanes, followed
+by architectural design review, followed by Cred/SophiaDOS integration:</p>
+<ol>
+<li><strong>Freebird architecture review</strong> — <code>SybilResistance</code> trait, existing
+   gates, combiners, replay store, persistence patterns, startup wiring</li>
+<li><strong>App signal survey</strong> — Clout, Scarcity, Prestige, Rendezvous trust
+   signals, data structures, queryability, privacy costs</li>
+<li><strong>Sybil detection literature</strong> — SybilGuard, SybilLimit, SumUp,
+   SybilInfer, SybilRank, BrightID/Aura, privacy-preserving graph
+   analysis, attack taxonomy, bootstrapping strategies</li>
+<li><strong>Cred + SophiaDOS review</strong> — user agent custody/presentation model,
+   <code>sophia/v1</code> canonical contract, permission grants, existing adapter
+   pattern (Freebird/Witness/Matchlock), smoke harness integration</li>
+</ol>
+<p>Key findings that shaped the design:</p>
+<ul>
+<li><strong>SybilRank</strong> is the practical baseline for seed-based trust
+  propagation, but pure graph topology is insufficient. Multi-signal
+  scoring (graph + temporal + economic) is stronger.</li>
+<li><strong>Privacy-preserving full-graph Sybil detection is an open research
+  problem.</strong> The practical resolution is separation of duties: graph
+  analysis at a dedicated attester, anonymous attestation to the issuer,
+  unlinkable redemption.</li>
+<li><strong>Clout is the only viable primary signal source.</strong> Its trust graph
+  is structurally similar to BrightID's, but emerges from real social
+  interaction. Scarcity can contribute weak secondary signals.
+  Prestige and Rendezvous cannot be consumed without breaking their
+  own privacy models.</li>
+<li><strong>The attester pattern</strong> follows Freebird's existing architecture:
+  the issuer verifies a proof, it does not perform the underlying
+  computation. Just as the issuer verifies a PoW nonce without mining
+  it, the issuer verifies a social-graph attestation without computing
+  the graph score.</li>
+<li><strong>Cred mediation</strong> strengthens the privacy boundary: the attester
+  issues a general-purpose eligibility attestation to Cred's controller
+  key without knowing which Freebird instance the user will present to.
+  Cred binds the presentation to a specific Freebird request at
+  presentation time, enforcing per-use human approval and permission
+  grant constraints.</li>
+<li><strong>SophiaDOS</strong> provides the canonical contract layer: the attestation
+  is a <code>sophia/v1</code> artifact with a JSON Schema, conformance checks, and
+  a smoke harness seam that validates the full attester → Cred →
+  Freebird flow end-to-end.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.top", "toc.follow", "content.code.copy", "search.highlight", "search.suggest", "search.share", "content.code.annotate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

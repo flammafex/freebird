@@ -1,4 +1,4 @@
-# Freebird
+# 🕊️ Freebird
 
 **Self-hostable privacy-preserving token issuance and verification for civil-society web services**
 
@@ -56,8 +56,7 @@ commands.
 
 ## Current status
 
-Freebird is **pre-1.0** and should be treated as experimental. V4 and V7 are
-supported; retired V5 and V2 protocols are not accepted, and V6 is reserved.
+Freebird is **pre-1.0** and should be treated as experimental.
 The project has not received an external security audit. Review the
 [Security documentation](security/index.md) before making deployment or privacy
 claims.

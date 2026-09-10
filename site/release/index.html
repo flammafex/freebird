@@ -1,0 +1,1996 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Self-hostable privacy-preserving token issuance and verification for civil-society web services">
+      
+      
+      
+        <link rel="canonical" href="https://freebird.bot/release/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Release Packaging - 🕊️ Freebird</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#release-packaging" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="🕊️ Freebird" class="md-header__button md-logo" aria-label="🕊️ Freebird" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            🕊️ Freebird
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Release Packaging
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Use dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Use dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Use light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Use light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="🕊️ Freebird" class="md-nav__button md-logo" aria-label="🕊️ Freebird" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    🕊️ Freebird
+  </label>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../quick-start/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../concepts/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/issuers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Issuers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/verifiers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Verifiers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/tokens/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tokens
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/one-time-redemption/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    One-Time Redemption
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/replay-protection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Replay Protection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/federation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Federation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/webauthn-issuance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WebAuthn Issuance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../concepts/blind-issuance/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Blind Issuance
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../architecture/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_4" id="__nav_4_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/protocol-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Protocol Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/trust-boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust Boundaries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/data-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Data Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/storage-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Storage Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../architecture/deployment-modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../security/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/threat-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Threat Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/privacy-properties/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Privacy Properties
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/non-goals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Non-Goals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/cryptographic-assumptions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cryptographic Assumptions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../security/audit-status/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Audit Status
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../api/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_6" id="__nav_6_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/http-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/typescript-sdk/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TypeScript SDK
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+          
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <div class="md-nav__link md-nav__container">
+            <a href="../guides/" class="md-nav__link ">
+              
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            </a>
+            
+              
+              <label class="md-nav__link " for="__nav_7" id="__nav_7_label" tabindex="">
+                <span class="md-nav__icon md-icon"></span>
+              </label>
+            
+          </div>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/anonymous-feedback/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Anonymous Feedback
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/token-gated-community/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Token-Gated Community
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/public-wifi-pass/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Public Wi-Fi Pass
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../guides/witness-integration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    🙌 Witness Integration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../grant-work-packages/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Grant Work Packages
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../contributing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../license/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    License
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#v0100-v7-canonical-descriptor-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.10.0 V7 canonical-descriptor migration
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#npm-sdk-publishing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        npm SDK publishing
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="npm SDK publishing">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#maintainer-setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Maintainer setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#required-github-protections" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Required GitHub protections
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#sdk-release-flammafexfreebird0100" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SDK release (@flammafex/freebird@0.10.0)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verify-a-published-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verify a published SDK
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#release-gate-and-immutable-deployment-inputs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Release gate and immutable deployment inputs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#release-archive" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Release Archive
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#container-images" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Container Images
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signature-verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signature Verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pre-tag-checklist" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-Tag Checklist
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+
+<h1 id="release-packaging">Release Packaging<a class="headerlink" href="#release-packaging" title="Permanent link">&para;</a></h1>
+<p>Freebird releases are tag-driven. CI runs on <code>main</code> (and pull requests targeting
+<code>main</code>), so push or merge the intended commit to <code>origin/main</code> and wait for its
+eight required checks before creating the tag. Do not tag a commit that has not
+first landed on <code>main</code>:</p>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>tag<span class="w"> </span>-a<span class="w"> </span>v0.10.0<span class="w"> </span>-m<span class="w"> </span><span class="s2">"Freebird 0.10.0"</span>
+git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </span>v0.10.0
+</code></pre></div>
+<p>Pushing a <code>v*</code> tag starts two workflows:</p>
+<ul>
+<li><code>Release</code>: builds Linux x86_64 binaries, creates a tarball, publishes
+  SHA-256 checksums, and creates a GitHub release.</li>
+<li><code>Build &amp; Push Docker Images</code>: publishes issuer and verifier images to GHCR
+  and signs each pushed image digest with keyless cosign. For version tags, its
+  publisher first passes the exact-SHA CI gate and main-lineage check; it does
+  not log in to GHCR or build/push tag images until that gate succeeds. Main
+  branch builds skip the tag-only gate and remain functional.</li>
+</ul>
+<p>Pushing a dedicated <code>sdk-v*</code> tag starts the <code>Publish @flammafex/freebird</code> workflow.
+It validates, packs, consumer-tests, and publishes the <code>@flammafex/freebird</code> npm
+package. It uses the protected <code>npm-publish</code> GitHub Environment and a granular
+npm automation token; it does not use OIDC or npm provenance.</p>
+<h2 id="v0100-v7-canonical-descriptor-migration">v0.10.0 V7 canonical-descriptor migration<a class="headerlink" href="#v0100-v7-canonical-descriptor-migration" title="Permanent link">&para;</a></h2>
+<p>v0.10.0 derives canonical direct and exchange descriptor IDs from finalized
+signer metadata and the canonical exchange descriptor transcript. Old arbitrary
+descriptor IDs are rejected. The corrected exchange transcript therefore
+invalidates prior exchange, keyset, transition, and graph-policy derived IDs.</p>
+<p>Before releasing or upgrading an affected V7 deployment, operators must
+regenerate and rotate the affected signer metadata, then regenerate the V7
+registry and discovery/history from the canonical material. Do not reuse old V7
+signer metadata, registry, discovery, keyset, transition, graph-policy, or other
+derived data. For direct bootstrap, start once without
+<code>NATIVE_BEARER_V7_DESCRIPTOR_ID</code>, persist the derived canonical output, and only
+then optionally pin that public expected value for subsequent starts.</p>
+<h2 id="npm-sdk-publishing">npm SDK publishing<a class="headerlink" href="#npm-sdk-publishing" title="Permanent link">&para;</a></h2>
+<p>The npm package is published from the exact release tag. The workflow runs
+credential-free <code>--ignore-scripts</code> install, lint, tests, build, and pack steps,
+checks <code>package.json</code>/<code>package-lock.json</code> name and version parity, and inspects
+the exact packed manifest and file list. It rejects the extracted packed version
+if it is already present in the npm registry. That same tarball is installed
+into a fresh temporary project and type-checked and executed through both its
+ESM and CommonJS entry points before it can be published. The publish step is
+the only step that receives <code>NPM_TOKEN</code>, and publishes only the inspected
+tarball with <code>--ignore-scripts</code>.</p>
+<h3 id="maintainer-setup">Maintainer setup<a class="headerlink" href="#maintainer-setup" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Create the npm scope and package ownership.</strong> An npm maintainer must create
+   or control the <code>flammafex</code> npm organization/account at <a href="https://www.npmjs.com/org">https://www.npmjs.com/org</a>
+   and ensure the maintainer account is an owner (or has publish access) for the
+   <code>@flammafex</code> scope. The first publication is public and uses the package name
+   <code>@flammafex/freebird</code>; do not rename the scope or package after publishing.</li>
+<li><strong>Create a granular automation token.</strong> In npm, open the maintainer account's
+   <strong>Access Tokens</strong> page and create a <strong>Granular Access Token</strong> with the
+   <strong>Automation</strong> token type. Grant publish access only to the <code>@flammafex</code> scope
+   (or, after the first package exists, only to <code>@flammafex/freebird</code>), choose an
+   explicit expiration, and use the npm organization's required 2FA/automation
+   policy. Copy the token when npm shows it; it cannot be recovered later.
+   Do not use an npm classic token, a developer token, or a GitHub OIDC token.</li>
+<li><strong>Protect the GitHub secret.</strong> In the repository, open <strong>Settings →
+   Environments → New environment</strong>, name it exactly <code>npm-publish</code>, add required
+   reviewers. If using selected branch/tag rules, allow <code>main</code> for the documented
+   first-release dispatch and <code>sdk-v*.*.*</code> for future tag-triggered releases. Add
+   an environment secret named exactly <code>NPM_TOKEN</code> and paste the granular
+   automation token into it. Do not put this value in the repository's ordinary
+   secrets, source files, <code>.npmrc</code>, or workflow text. The workflow requests only
+   <code>contents: read</code>; it intentionally has no <code>id-token</code> permission and sets npm
+   provenance to <code>false</code>.</li>
+</ol>
+<h3 id="required-github-protections">Required GitHub protections<a class="headerlink" href="#required-github-protections" title="Permanent link">&para;</a></h3>
+<p>Before creating an SDK release tag, configure all of the following:</p>
+<ul>
+<li>Protect <code>main</code>: require pull requests, prevent direct and force pushes, and
+  require the exact CI checks <code>build</code>, <code>test</code>, <code>feature-tests</code>, <code>lint</code>,
+  <code>security</code>, <code>javascript-sdk</code>, <code>repository-hygiene</code>, and <code>compose-smoke</code>.</li>
+<li>Create a GitHub repository ruleset targeting <code>sdk-v*.*.*</code>. Restrict tag
+  creation to release maintainers, block tag updates and deletions, and block
+  force pushes. Once <code>sdk-v0.10.0</code> is created, do not retarget or recreate it.</li>
+<li>Require the <code>npm-publish</code> Environment for the publishing job, with required
+  reviewers and the <code>NPM_TOKEN</code> environment secret. Allow <code>main</code> only because
+  manual dispatch is constrained to protected <code>main</code>; tag pushes use
+  <code>sdk-v*.*.*</code>. Do not grant <code>id-token</code> permissions or enable npm provenance.</li>
+</ul>
+<p>The workflow resolves the tag to one commit SHA, verifies that it is ancestral
+to <code>origin/main</code>, runs <code>scripts/release-gate.py</code> for the exact SHA, and checks
+out that SHA for packaging. Neither a moving branch nor a manually supplied
+SHA can bypass the gate.</p>
+<h3 id="sdk-release-flammafexfreebird0100">SDK release (<code>@flammafex/freebird@0.10.0</code>)<a class="headerlink" href="#sdk-release-flammafexfreebird0100" title="Permanent link">&para;</a></h3>
+<p>SDK npm releases use dedicated immutable <code>sdk-vMAJOR.MINOR.PATCH</code> tags rather
+than the Rust/container <code>v*</code> tags. After the npm organization, token, and
+Environment are configured:</p>
+<p>The SDK release requires Node.js 24 or newer.</p>
+<ol>
+<li>In the reviewed release commit, update <code>sdk/js/package.json</code> and the root
+   <code>sdk/js/package-lock.json</code> entry to <code>0.10.0</code>. Confirm that their names and
+   versions match exactly, merge that commit to protected <code>main</code>, and wait for
+   all required CI checks to pass.</li>
+<li>Create and push the dedicated tag only after that review and gate:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>tag<span class="w"> </span>-a<span class="w"> </span>sdk-v0.10.0<span class="w"> </span>&lt;reviewed-commit&gt;<span class="w"> </span>-m<span class="w"> </span><span class="s2">"Publish @flammafex/freebird 0.10.0"</span>
+git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </span>sdk-v0.10.0
+</code></pre></div>
+<ol>
+<li>The tag push starts the workflow. Alternatively, start it manually from
+   protected <code>main</code> with the exact existing tag; manual dispatch still resolves
+   and gates that tag commit and cannot select a branch or SHA:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>npm-publish.yml<span class="w"> </span>--ref<span class="w"> </span>main<span class="w"> </span>-f<span class="w"> </span><span class="nv">tag</span><span class="o">=</span>sdk-v0.10.0
+</code></pre></div>
+<ol>
+<li>Approve the <code>npm-publish</code> Environment deployment and wait for the workflow's
+   pack, clean ESM/CJS consumer checks, and publish step to complete. The
+   workflow rejects any package or lockfile metadata mismatch and any npm
+   version that already exists; npm versions are immutable.</li>
+</ol>
+<p>For every later release, update <code>sdk/js/package.json</code> and the root package entry
+in <code>sdk/js/package-lock.json</code> to the release version in the release commit,
+create and push the matching <code>sdk-vMAJOR.MINOR.PATCH</code> tag, and let the tag
+trigger the workflow. Future tag-triggered runs do not rewrite package metadata.</p>
+<h3 id="verify-a-published-sdk">Verify a published SDK<a class="headerlink" href="#verify-a-published-sdk" title="Permanent link">&para;</a></h3>
+<p>The workflow run is the first verification. A maintainer should also confirm
+the public registry record and both consumer forms after publication:</p>
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span>view<span class="w"> </span>@flammafex/freebird@0.10.0<span class="w"> </span>version<span class="w"> </span>dist.tarball<span class="w"> </span>--registry<span class="o">=</span>https://registry.npmjs.org
+<span class="nv">tmp</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>mktemp<span class="w"> </span>-d<span class="k">)</span><span class="s2">"</span>
+<span class="nb">trap</span><span class="w"> </span><span class="s1">'rm -rf "$tmp"'</span><span class="w"> </span>EXIT
+<span class="nb">cd</span><span class="w"> </span><span class="s2">"</span><span class="nv">$tmp</span><span class="s2">"</span>
+npm<span class="w"> </span>init<span class="w"> </span>--yes<span class="w"> </span>&gt;/dev/null
+npm<span class="w"> </span>install<span class="w"> </span>--ignore-scripts<span class="w"> </span>--no-audit<span class="w"> </span>--no-fund<span class="w"> </span>@flammafex/freebird@0.10.0<span class="w"> </span>typescript@^5
+node<span class="w"> </span>--input-type<span class="o">=</span>module<span class="w"> </span>--eval<span class="w"> </span><span class="s2">"import('@flammafex/freebird').then(({FreebirdClient, crypto}) =&gt; { if (typeof FreebirdClient !== 'function' || typeof crypto.blind !== 'function') process.exit(1); })"</span>
+node<span class="w"> </span>--eval<span class="w"> </span><span class="s2">"const {FreebirdClient, crypto} = require('@flammafex/freebird'); if (typeof FreebirdClient !== 'function' || typeof crypto.blind !== 'function') process.exit(1)"</span>
+</code></pre></div>
+<p>Record the npm package URL and workflow run in the release notes. Never paste
+the token into an issue, log, or verification command.</p>
+<h2 id="release-gate-and-immutable-deployment-inputs">Release gate and immutable deployment inputs<a class="headerlink" href="#release-gate-and-immutable-deployment-inputs" title="Permanent link">&para;</a></h2>
+<p>The release workflow resolves the dereferenced tag to its commit SHA, verifies
+that the SHA is an ancestor of freshly fetched <code>origin/main</code>, and polls the
+GitHub Checks API (with pagination) for that exact SHA. Missing, queued, and
+in-progress checks wait; the gate polls every 15 seconds by default for a
+bounded 45 minutes (the safe limits are 15–30 seconds and 45–60 minutes).
+The <code>RELEASE_GATE_POLL_INTERVAL_SECONDS</code> and <code>RELEASE_GATE_TIMEOUT_SECONDS</code>
+environment variables may adjust those values only within those safe limits.
+It fails closed on API/malformed responses, terminal failures, missing checks
+at timeout, or anything other than <code>completed</code>/<code>success</code> for the exact SHA. The
+required check names are: <code>build</code>, <code>test</code>, <code>feature-tests</code>, <code>lint</code>, <code>security</code>,
+<code>javascript-sdk</code>, <code>repository-hygiene</code>, and <code>compose-smoke</code>. Publishing checks
+out that SHA and creates the release with <code>gh release create --target SHA</code>, so
+mutable branch/tag movement cannot change the packaged source.</p>
+<p>Tag image publishing uses version tags only as aliases. Deployment operators
+must obtain the registry-returned multi-architecture manifest digest from the
+release artifact and supply an immutable <code>image@sha256:...</code> reference; do not
+use <code>latest</code> or a floating version tag in production. This repository does not
+invent or check in GHCR digests when the release artifact is unavailable.
+Images are keylessly signed with GitHub OIDC and must be verified by digest.</p>
+<p>Tagged image builds run a bounded <code>kind</code> smoke test using unique local image
+tags, checked-in manifests plus ephemeral smoke secrets/configuration, rollout
+and health checks, diagnostics, and cleanup. The smoke is not a production
+configuration test and no manifest is rewritten or published.</p>
+<p>Forgejo parity is unsupported: this release gate depends on GitHub Checks,
+GitHub Actions artifacts, GHCR, and GitHub OIDC until a separate implementation
+is approved.</p>
+<p>Repository configuration prerequisite: branch protection/rulesets must require
+the eight exact CI check names above on the release source branch, and GitHub
+Actions must permit release gates <code>checks: read</code>/<code>contents: read</code>, the release
+publisher <code>contents: write</code>, and (for Docker) the publisher's <code>packages: write</code>
+and <code>id-token: write</code> permissions. No release may be considered gated unless
+those checks are actually reported for the tag SHA.</p>
+<h2 id="release-archive">Release Archive<a class="headerlink" href="#release-archive" title="Permanent link">&para;</a></h2>
+<p>The archive contains:</p>
+<ul>
+<li><code>freebird-issuer</code></li>
+<li><code>freebird-cli</code></li>
+<li><code>freebird-validate-config</code></li>
+<li><code>freebird-verifier</code></li>
+<li><code>freebird-interface</code></li>
+<li>README, changelog, license, security policy, docs, Kubernetes manifests,
+  systemd examples, and reverse-proxy examples</li>
+</ul>
+<p>Verify the archive checksum before installing:</p>
+<div class="highlight"><pre><span></span><code>sha256sum<span class="w"> </span>-c<span class="w"> </span>freebird-0.10.0-linux-x86_64.tar.gz.sha256
+</code></pre></div>
+<h2 id="container-images">Container Images<a class="headerlink" href="#container-images" title="Permanent link">&para;</a></h2>
+<p>Tag releases publish:</p>
+<div class="highlight"><pre><span></span><code>ghcr.io/flammafex/freebird-issuer:0.10.0
+ghcr.io/flammafex/freebird-issuer:0.10
+ghcr.io/flammafex/freebird-verifier:0.10.0
+ghcr.io/flammafex/freebird-verifier:0.10
+</code></pre></div>
+<p>The default branch also publishes <code>latest</code>. Production deployments must replace
+the deployment example's required image markers with operator-provided verified
+image digests. A version tag is not an acceptable substitute for the immutable
+production prerequisite.</p>
+<h2 id="signature-verification">Signature Verification<a class="headerlink" href="#signature-verification" title="Permanent link">&para;</a></h2>
+<p>The container workflow signs image digests with GitHub OIDC keyless signing.
+After installing <code>cosign</code>, verify a pinned image digest with:</p>
+<div class="highlight"><pre><span></span><code>cosign<span class="w"> </span>verify<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'https://github.com/.*/.github/workflows/docker.yml@refs/tags/v0.10.0'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>ghcr.io/flammafex/freebird-issuer@sha256:&lt;digest&gt;
+</code></pre></div>
+<p>Use the verifier image digest for the verifier command.</p>
+<h2 id="pre-tag-checklist">Pre-Tag Checklist<a class="headerlink" href="#pre-tag-checklist" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Update all workspace crate versions in Cargo manifests.</li>
+<li>Update <code>CHANGELOG.md</code>.</li>
+<li>Run <code>cargo test --workspace</code>.</li>
+<li>Run <code>cargo clippy --workspace --all-targets -- -D warnings</code>.</li>
+<li>Build and smoke-test the Docker images if deployment assets changed.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.instant", "navigation.sections", "navigation.expand", "navigation.indexes", "navigation.top", "toc.follow", "content.code.copy", "search.highlight", "search.suggest", "search.share", "content.code.annotate"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

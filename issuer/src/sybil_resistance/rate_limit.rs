@@ -34,7 +34,7 @@
 //! # }
 //! ```
 
-use super::{current_timestamp, verify_timestamp_recent, SybilRequestContext, SybilResistance}; // Remove SybilProof from here if unused in module logic
+use super::{current_timestamp, SybilRequestContext, SybilResistance};
 use anyhow::{anyhow, Result};
 use base64ct::Encoding;
 use freebird_common::api::SybilProof; // Use shared type
@@ -76,17 +76,29 @@ impl RateLimit {
         }
     }
 
-    /// Check if client has requested recently
-    fn check_rate_limit(&self, client_id: &str, timestamp: u64) -> Result<()> {
+    /// Validate the client timestamp and return the server timestamp to use for
+    /// rate-limit accounting.
+    fn server_timestamp_for(&self, client_timestamp: u64) -> Result<u64> {
+        let server_timestamp = current_timestamp();
+        if client_timestamp.abs_diff(server_timestamp) > self.max_timestamp_age_secs {
+            return Err(anyhow!("timestamp outside allowed clock-skew window"));
+        }
+
+        Ok(server_timestamp)
+    }
+
+    /// Check if client has requested recently, using only server time.
+    fn check_rate_limit(&self, client_id: &str, server_timestamp: u64) -> Result<()> {
         let mut state = self.state.write().unwrap();
 
         // Cleanup old entries (simple approach)
-        let now = current_timestamp();
-        state.retain(|_, &mut last_time| now - last_time < self.cleanup_after_secs);
+        state.retain(|_, &mut last_time| {
+            server_timestamp.saturating_sub(last_time) < self.cleanup_after_secs
+        });
 
         // Check if client exists
         if let Some(&last_time) = state.get(client_id) {
-            let elapsed = timestamp.saturating_sub(last_time);
+            let elapsed = server_timestamp.saturating_sub(last_time);
 
             if elapsed < self.min_interval.as_secs() {
                 let remaining = self.min_interval.as_secs() - elapsed;
@@ -98,7 +110,7 @@ impl RateLimit {
         }
 
         // Update last issuance time
-        state.insert(client_id.to_string(), timestamp);
+        state.insert(client_id.to_string(), server_timestamp);
         Ok(())
     }
 
@@ -125,11 +137,10 @@ impl SybilResistance for RateLimit {
             _ => return Err(anyhow!("expected RateLimit proof")),
         };
 
-        // Validate timestamp is recent
-        verify_timestamp_recent(timestamp, self.max_timestamp_age_secs)?;
+        let server_timestamp = self.server_timestamp_for(timestamp)?;
 
         // Check rate limit
-        self.check_rate_limit(client_id, timestamp)?;
+        self.check_rate_limit(client_id, server_timestamp)?;
 
         Ok(())
     }
@@ -143,7 +154,7 @@ impl SybilResistance for RateLimit {
             _ => return Err(anyhow!("expected RateLimit proof")),
         };
 
-        verify_timestamp_recent(timestamp, self.max_timestamp_age_secs)?;
+        let server_timestamp = self.server_timestamp_for(timestamp)?;
 
         let observed = ctx
             .client_data
@@ -166,7 +177,7 @@ impl SybilResistance for RateLimit {
             ));
         }
 
-        self.check_rate_limit(&expected_client_id, timestamp)?;
+        self.check_rate_limit(&expected_client_id, server_timestamp)?;
         Ok(())
     }
 
@@ -250,6 +261,45 @@ mod tests {
     }
 
     #[test]
+    fn test_rate_limit_rejects_stale_and_future_timestamps() {
+        let limiter = RateLimit::new(Duration::from_secs(60));
+        let now = current_timestamp();
+        let outside_window = limiter.max_timestamp_age_secs + 2;
+
+        let stale = SybilProof::RateLimit {
+            client_id: "stale-client".to_string(),
+            timestamp: now.saturating_sub(outside_window),
+        };
+        assert!(limiter.verify(&stale).is_err());
+
+        let future = SybilProof::RateLimit {
+            client_id: "future-client".to_string(),
+            timestamp: now.saturating_add(outside_window),
+        };
+        assert!(limiter.verify(&future).is_err());
+    }
+
+    #[test]
+    fn test_rate_limit_interval_uses_server_time_not_proof_timestamp() {
+        let limiter = RateLimit::new(Duration::from_secs(60));
+        let timestamp = current_timestamp();
+
+        let first = SybilProof::RateLimit {
+            client_id: "client1".to_string(),
+            timestamp,
+        };
+        assert!(limiter.verify(&first).is_ok());
+
+        // A client-controlled timestamp that claims the full interval has
+        // elapsed must not bypass the server-side interval check.
+        let forged_elapsed = SybilProof::RateLimit {
+            client_id: "client1".to_string(),
+            timestamp: timestamp + limiter.min_interval.as_secs(),
+        };
+        assert!(limiter.verify(&forged_elapsed).is_err());
+    }
+
+    #[test]
     fn test_rate_limit_allows_after_interval() {
         let limiter = RateLimit::new(Duration::from_secs(2));
         let timestamp = current_timestamp();
@@ -291,6 +341,28 @@ mod tests {
         // Both should succeed (different clients)
         assert!(limiter.verify(&proof1).is_ok());
         assert!(limiter.verify(&proof2).is_ok());
+    }
+
+    #[test]
+    fn test_rate_limit_cleanup_handles_stale_and_future_entries() {
+        let limiter = RateLimit::new(Duration::from_secs(60));
+        let now = current_timestamp();
+        let stale_timestamp = now.saturating_sub(limiter.cleanup_after_secs + 1);
+        let future_timestamp = now.saturating_add(1);
+
+        {
+            let mut state = limiter.state.write().unwrap();
+            state.insert("stale-client".to_string(), stale_timestamp);
+            state.insert("future-client".to_string(), future_timestamp);
+        }
+
+        // Cleanup must not underflow when an entry is ahead of server time.
+        limiter.check_rate_limit("new-client", now).unwrap();
+
+        let state = limiter.state.read().unwrap();
+        assert!(!state.contains_key("stale-client"));
+        assert!(state.contains_key("future-client"));
+        assert_eq!(state.get("new-client"), Some(&now));
     }
 
     #[test]

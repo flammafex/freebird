@@ -1,0 +1,8 @@
+{
+  "key_id": "120de2505dc65986b38d4396c17548627ff56979151bae64f8e992317034c0f7",
+  "algorithm": "Ed25519",
+  "purpose": "exchange_receipt_active",
+  "public_key_b64": "1OXQdndTslKAC7s1DF5A_c6MSewqiSnPGcv6Pst6yQo",
+  "valid_from": 1700000000,
+  "valid_until": 4102444800
+}

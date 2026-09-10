@@ -29,11 +29,5 @@ V7 direct issuance is exposed at `/v7/native-bearer/issue`; optional durable
 exchange and graph issuance are separate V7 operations. See
 [blind issuance](blind-issuance.md).
 
-## Version status
-
-V4 and V7 are implemented. V5 public bearer passes and V2 exchange/issuance
-are removed and rejected. V6 is reserved and rejected. No compatibility or
-interoperability claim should be inferred from a version number.
-
 For security goals, non-goals, and metadata leakage limits, read the [threat
 model](../threat-model.md).

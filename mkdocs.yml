@@ -1,4 +1,4 @@
-site_name: Freebird
+site_name: 🕊️ Freebird
 site_description: Self-hostable privacy-preserving token issuance and verification for civil-society web services
 site_url: https://freebird.bot
 
@@ -88,7 +88,7 @@ nav:
       - Anonymous Feedback: guides/anonymous-feedback.md
       - Token-Gated Community: guides/token-gated-community.md
       - Public Wi-Fi Pass: guides/public-wifi-pass.md
-      - Witness Integration: guides/witness-integration.md
+      - 🙌 Witness Integration: guides/witness-integration.md
   - Roadmap: roadmap.md
   - Grant Work Packages: grant-work-packages.md
   - Contributing: contributing.md
