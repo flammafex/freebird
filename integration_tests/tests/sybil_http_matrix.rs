@@ -10,6 +10,7 @@ use axum::{
 };
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::SybilProof;
+use freebird_common::tls_enforcement::ValidatedClientIp;
 use freebird_crypto::{Client, Server, VOPRF_CONTEXT_V4};
 use freebird_issuer::{
     multi_key_voprf::MultiKeyVoprfCore,
@@ -83,6 +84,7 @@ async fn build_app(sybil_checker: Option<Arc<dyn SybilResistance>>) -> Result<Te
         require_tls: false,
         behind_proxy: false,
         sybil_checker,
+        admission: Default::default(),
         invitation_system: None,
         native_bearer_v7,
         native_bearer_v7_retained: vec![],
@@ -119,6 +121,7 @@ async fn post_json_response(
         .uri(path)
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::USER_AGENT, USER_AGENT)
+        .extension(ValidatedClientIp("203.0.113.10".parse().unwrap()))
         .body(Body::from(serde_json::to_vec(&body)?))?;
     Ok(router.clone().oneshot(req).await?)
 }

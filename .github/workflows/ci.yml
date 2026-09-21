@@ -26,6 +26,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test --workspace
+      - name: Run ignored live Redis replay-store test
+        env:
+          FREEBIRD_REDIS_LIVE_URL: redis://127.0.0.1:6379
+        run: cargo test -p freebird-issuer --lib sybil_resistance::replay_store::redis_deadline_tests::live_redis_health_and_confirmed_duplicate -- --ignored --exact
+      - name: Run ignored verifier V7 Redis TIME spend test
+        env:
+          FREEBIRD_REDIS_LIVE_URL: redis://127.0.0.1:6379
+        run: cargo test -p freebird-verifier --lib store::tests::live_redis_v7_spend_time_delay_and_concurrency -- --ignored --exact
       - run: cargo test -p integration_tests --test sybil_http_matrix
       - run: cargo test -p integration_tests --test admin_operator_workflows
 

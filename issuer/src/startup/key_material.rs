@@ -2,7 +2,6 @@
 
 use anyhow::Context;
 use std::{sync::Arc, time::Duration};
-use time::OffsetDateTime;
 use tracing::warn;
 
 pub(super) struct KeyMaterial {
@@ -21,19 +20,7 @@ impl KeyMaterial {
             crate::keys::load_or_generate_keypair_b64_at(&config.key_config.sk_path)
                 .context("Failed to load or generate issuer keypair")?;
 
-        let kid = config
-            .key_config
-            .kid_override
-            .as_ref()
-            .map(|k| {
-                if !k.starts_with(&kid_from_key) {
-                    warn!(provided=%k, derived=%kid_from_key, "KID mismatch; using derived prefix");
-                    format!("{}-{}", kid_from_key, OffsetDateTime::now_utc().date())
-                } else {
-                    k.clone()
-                }
-            })
-            .unwrap_or_else(|| format!("{}-{}", kid_from_key, OffsetDateTime::now_utc().date()));
+        let kid = resolve_kid(&kid_from_key, config.key_config.kid_override.as_deref());
 
         let ctx = freebird_crypto::VOPRF_CONTEXT_V4;
         let voprf = Arc::new(
@@ -98,5 +85,54 @@ impl KeyMaterial {
             native_bearer_v7_retained,
             v7_signer_inventory,
         })
+    }
+}
+
+/// Resolve the V4 KID from the persisted key identity.
+///
+/// The derived key KID is deliberately date-independent: a restart must not
+/// change the issuer identity merely because UTC crossed a date boundary. An
+/// explicit KID remains a compatibility escape hatch only when it retains the
+/// derived KID prefix; an incompatible value cannot replace the key-backed
+/// identity.
+fn resolve_kid(derived: &str, override_kid: Option<&str>) -> String {
+    match override_kid {
+        Some(provided) if provided.starts_with(derived) => provided.to_owned(),
+        Some(provided) => {
+            warn!(provided=%provided, derived=%derived, "KID mismatch; using derived KID");
+            derived.to_owned()
+        }
+        None => derived.to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_kid;
+    use crate::keys::load_or_generate_keypair_b64_at;
+
+    #[test]
+    fn persisted_key_has_stable_default_kid() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("issuer_sk.bin");
+
+        let (_, _, first_kid) = load_or_generate_keypair_b64_at(&path).unwrap();
+        let (_, _, second_kid) = load_or_generate_keypair_b64_at(&path).unwrap();
+
+        assert_eq!(first_kid, second_kid);
+        assert_eq!(resolve_kid(&first_kid, None), first_kid);
+    }
+
+    #[test]
+    fn compatible_override_is_preserved() {
+        assert_eq!(
+            resolve_kid("derived-kid", Some("derived-kid-legacy")),
+            "derived-kid-legacy"
+        );
+    }
+
+    #[test]
+    fn mismatched_override_falls_back_to_derived_kid() {
+        assert_eq!(resolve_kid("derived-kid", Some("other-kid")), "derived-kid");
     }
 }

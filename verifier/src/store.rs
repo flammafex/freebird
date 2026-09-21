@@ -48,6 +48,22 @@ const LUA_MARK_SPENT: &str = r#"
   end
 "#;
 
+const LUA_MARK_SPENT_THROUGH: &str = r#"
+  -- KEYS[1] = token_key, ARGV[1] = inclusive valid_until
+  local now = tonumber(redis.call('TIME')[1])
+  local valid_until = tonumber(ARGV[1])
+  if now > valid_until then
+    return 2
+  end
+
+  local result = redis.call('SET', KEYS[1], '1', 'NX', 'EXAT', valid_until + 1)
+  if result then
+    return 1
+  else
+    return 0
+  end
+"#;
+
 //
 // ─── LOW-LEVEL REDIS UTILITIES ───────────────────────────────────────
 //
@@ -86,21 +102,31 @@ pub fn replay_expires_at(valid_until: i64) -> Result<u64> {
         .context("replay expiry overflow")
 }
 
-pub async fn mark_spent_exat_atomic<C: ConnectionLike + Send>(
+pub async fn mark_spent_through_atomic<C: ConnectionLike + Send>(
     conn: &mut C,
     token_key: &str,
-    expires_at: u64,
-) -> Result<bool> {
-    let result: Option<String> = redis::cmd("SET")
-        .arg(token_key)
-        .arg("1")
-        .arg("NX")
-        .arg("EXAT")
-        .arg(expires_at)
-        .query_async(conn)
+    valid_until: i64,
+) -> Result<SpendOutcome> {
+    let result: i32 = Script::new(LUA_MARK_SPENT_THROUGH)
+        .key(token_key)
+        .arg(valid_until)
+        .invoke_async(conn)
         .await
-        .context("invoke redis SET NX EXAT")?;
-    Ok(result.is_some())
+        .context("invoke redis absolute spend lua")?;
+    match result {
+        0 => Ok(SpendOutcome::Replay),
+        1 => Ok(SpendOutcome::Fresh),
+        2 => Ok(SpendOutcome::Expired),
+        other => anyhow::bail!("unexpected absolute spend result: {other}"),
+    }
+}
+
+/// Result of an absolute-expiry V7 spend attempt.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SpendOutcome {
+    Fresh,
+    Replay,
+    Expired,
 }
 
 //
@@ -123,7 +149,7 @@ pub trait SpendStore: Send + Sync {
     /// Mark a spend through the inclusive `valid_until` second. Persistent
     /// implementations must use the absolute expiry `valid_until + 1` rather
     /// than deriving a relative TTL from the verifier's local clock.
-    async fn mark_spent_through(&self, _key: &str, valid_until: i64) -> Result<bool> {
+    async fn mark_spent_through(&self, _key: &str, valid_until: i64) -> Result<SpendOutcome> {
         replay_expires_at(valid_until)?;
         anyhow::bail!("absolute replay expiry is unsupported by this store")
     }
@@ -232,10 +258,31 @@ impl SpendStore for InMemoryStore {
         .await
     }
 
-    async fn mark_spent_through(&self, key: &str, valid_until: i64) -> Result<bool> {
+    async fn mark_spent_through(&self, key: &str, valid_until: i64) -> Result<SpendOutcome> {
         let expires_at = replay_expires_at(valid_until)?;
-        self.mark_spent_with_expiry(key, Some(MemoryExpiry::Absolute(expires_at)))
-            .await
+        let mut map = self.map.write().await;
+        let now = (self.clock)();
+
+        // Match Redis's atomic decision: expiry is checked before replay, and
+        // the inclusive endpoint is still valid at `now == valid_until`.
+        if now.unix_seconds > valid_until as u64 {
+            return Ok(SpendOutcome::Expired);
+        }
+
+        map.retain(|_, expiry| match expiry {
+            Some(MemoryExpiry::Relative(expires_at)) => *expires_at > now.monotonic,
+            Some(MemoryExpiry::Absolute(expires_at)) => *expires_at > now.unix_seconds,
+            None => true,
+        });
+
+        if map.contains_key(key) {
+            debug!("replay detected (in-memory)");
+            Ok(SpendOutcome::Replay)
+        } else {
+            map.insert(key.to_owned(), Some(MemoryExpiry::Absolute(expires_at)));
+            debug!("marked spend with absolute expiry (in-memory)");
+            Ok(SpendOutcome::Fresh)
+        }
     }
 }
 
@@ -277,17 +324,19 @@ impl SpendStore for RedisStore {
         Ok(fresh)
     }
 
-    async fn mark_spent_through(&self, key: &str, valid_until: i64) -> Result<bool> {
-        let expires_at = replay_expires_at(valid_until)?;
+    async fn mark_spent_through(&self, key: &str, valid_until: i64) -> Result<SpendOutcome> {
+        replay_expires_at(valid_until)?;
         let mut conn = self.pool.get().await?;
-        let fresh = mark_spent_exat_atomic(&mut *conn, key, expires_at).await?;
+        let outcome = mark_spent_through_atomic(&mut *conn, key, valid_until).await?;
 
-        if fresh {
-            info!(expires_at, "marked spend with absolute expiry (redis)");
-        } else {
-            warn!("replay detected (redis)");
+        match outcome {
+            SpendOutcome::Fresh => {
+                info!(valid_until, "marked spend with absolute expiry (redis)");
+            }
+            SpendOutcome::Replay => warn!("replay detected (redis)"),
+            SpendOutcome::Expired => debug!("absolute spend expired (redis)"),
         }
-        Ok(fresh)
+        Ok(outcome)
     }
 
     async fn put_replay_probe(
@@ -367,11 +416,8 @@ mod tests {
         store: &InMemoryStore,
         key: &str,
         valid_until: i64,
-    ) -> Result<bool> {
-        let expires_at = replay_expires_at(valid_until)?;
-        store
-            .mark_spent_with_expiry(key, Some(MemoryExpiry::Absolute(expires_at)))
-            .await
+    ) -> Result<SpendOutcome> {
+        store.mark_spent_through(key, valid_until).await
     }
 
     #[tokio::test]
@@ -438,11 +484,154 @@ mod tests {
         let now = Arc::new(AtomicU64::new(100));
         let store = store_at(now.clone());
 
-        assert!(store.mark_spent_through("inclusive", 100).await.unwrap());
-        assert!(!store.mark_spent_through("inclusive", 100).await.unwrap());
+        assert_eq!(
+            store.mark_spent_through("inclusive", 100).await.unwrap(),
+            SpendOutcome::Fresh
+        );
+        assert_eq!(
+            store.mark_spent_through("inclusive", 100).await.unwrap(),
+            SpendOutcome::Replay
+        );
 
         now.store(101, Ordering::Relaxed);
-        assert!(store.mark_spent_through("inclusive", 101).await.unwrap());
+        assert_eq!(
+            store.mark_spent_through("inclusive", 101).await.unwrap(),
+            SpendOutcome::Fresh
+        );
+    }
+
+    #[tokio::test]
+    async fn absolute_spend_reports_expired_before_replay_or_write() {
+        let now = Arc::new(AtomicU64::new(100));
+        let store = store_at(now.clone());
+
+        assert_eq!(
+            store
+                .mark_spent_through("expired-before-write", 99)
+                .await
+                .unwrap(),
+            SpendOutcome::Expired
+        );
+        assert_eq!(
+            store
+                .mark_spent_through("expired-before-write", 100)
+                .await
+                .unwrap(),
+            SpendOutcome::Fresh
+        );
+        assert_eq!(
+            store.mark_spent_through("boundary", 100).await.unwrap(),
+            SpendOutcome::Fresh
+        );
+
+        now.store(101, Ordering::Relaxed);
+        assert_eq!(
+            store.mark_spent_through("boundary", 100).await.unwrap(),
+            SpendOutcome::Expired
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_absolute_spends_have_one_fresh_and_one_replay() {
+        let now = Arc::new(AtomicU64::new(100));
+        let store = Arc::new(store_at(now));
+
+        let (first, second) = tokio::join!(
+            store.mark_spent_through("concurrent", 100),
+            store.mark_spent_through("concurrent", 100),
+        );
+        let outcomes = [first.unwrap(), second.unwrap()];
+        assert!(outcomes.contains(&SpendOutcome::Fresh));
+        assert!(outcomes.contains(&SpendOutcome::Replay));
+    }
+
+    async fn redis_time(store: &RedisStore) -> i64 {
+        let mut conn = store.pool.get().await.expect("Redis connection");
+        let (seconds, _micros): (i64, i64) = redis::cmd("TIME")
+            .query_async(&mut *conn)
+            .await
+            .expect("Redis TIME");
+        seconds
+    }
+
+    #[tokio::test]
+    #[ignore = "requires FREEBIRD_REDIS_LIVE_URL pointing to a disposable Redis instance"]
+    async fn live_redis_v7_spend_time_delay_and_concurrency() {
+        let url = std::env::var("FREEBIRD_REDIS_LIVE_URL").expect("live Redis URL");
+        let store = Arc::new(RedisStore::new(&url).expect("create Redis store"));
+        store.health_check().await.expect("Redis health check");
+
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let fresh_key = format!("freebird:test:v7:absolute:fresh:{suffix}");
+        let delayed_key = format!("freebird:test:v7:absolute:delayed:{suffix}");
+        let concurrent_key = format!("freebird:test:v7:absolute:concurrent:{suffix}");
+
+        // Derive the deadline from Redis TIME, then wait until that same
+        // Redis clock has crossed it before attempting the spend. This models
+        // verifier validation followed by pool/network delay without relying
+        // on the verifier host clock.
+        let delayed_deadline = redis_time(&store).await;
+        while redis_time(&store).await <= delayed_deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            store
+                .mark_spent_through(&delayed_key, delayed_deadline)
+                .await
+                .expect("delayed spend"),
+            SpendOutcome::Expired
+        );
+        assert_eq!(
+            store
+                .mark_spent_through(&delayed_key, redis_time(&store).await + 2)
+                .await
+                .expect("post-expiry spend"),
+            SpendOutcome::Fresh
+        );
+
+        assert_eq!(
+            store
+                .mark_spent_through(&fresh_key, redis_time(&store).await + 2)
+                .await
+                .expect("fresh spend"),
+            SpendOutcome::Fresh
+        );
+        assert_eq!(
+            store
+                .mark_spent_through(&fresh_key, redis_time(&store).await + 2)
+                .await
+                .expect("replay spend"),
+            SpendOutcome::Replay
+        );
+
+        let concurrent_deadline = redis_time(&store).await + 5;
+        let mut attempts = Vec::new();
+        for _ in 0..32 {
+            let store = store.clone();
+            let key = concurrent_key.clone();
+            attempts.push(tokio::spawn(async move {
+                store.mark_spent_through(&key, concurrent_deadline).await
+            }));
+        }
+
+        let mut fresh = 0;
+        let mut replay = 0;
+        for attempt in attempts {
+            match attempt
+                .await
+                .expect("concurrent Redis task")
+                .expect("concurrent spend")
+            {
+                SpendOutcome::Fresh => fresh += 1,
+                SpendOutcome::Replay => replay += 1,
+                SpendOutcome::Expired => panic!("concurrent deadline unexpectedly expired"),
+            }
+        }
+        assert_eq!(fresh, 1);
+        assert_eq!(replay, 31);
     }
 
     #[tokio::test]
@@ -453,29 +642,37 @@ mod tests {
         let graph_valid_until = 200;
 
         let verifier_first = store_at(now.clone());
-        assert!(verifier_first
-            .mark_spent_through(key, graph_valid_until)
-            .await
-            .unwrap());
-        now.store(direct_valid_until as u64 + 1, Ordering::Relaxed);
-        assert!(now.load(Ordering::Relaxed) < graph_valid_until as u64);
-        assert!(
-            !emulate_exchange_reservation(&verifier_first, key, graph_valid_until)
+        assert_eq!(
+            verifier_first
+                .mark_spent_through(key, graph_valid_until)
                 .await
                 .unwrap(),
+            SpendOutcome::Fresh
+        );
+        now.store(direct_valid_until as u64 + 1, Ordering::Relaxed);
+        assert!(now.load(Ordering::Relaxed) < graph_valid_until as u64);
+        assert_eq!(
+            emulate_exchange_reservation(&verifier_first, key, graph_valid_until)
+                .await
+                .unwrap(),
+            SpendOutcome::Replay,
             "exchange must reject a verifier-first spend after the shorter direct window"
         );
 
         let exchange_first = store_at(now);
-        assert!(
+        assert_eq!(
             emulate_exchange_reservation(&exchange_first, key, graph_valid_until)
                 .await
-                .unwrap()
+                .unwrap(),
+            SpendOutcome::Fresh
         );
-        assert!(!exchange_first
-            .mark_spent_through(key, graph_valid_until)
-            .await
-            .unwrap());
+        assert_eq!(
+            exchange_first
+                .mark_spent_through(key, graph_valid_until)
+                .await
+                .unwrap(),
+            SpendOutcome::Replay
+        );
     }
 
     #[test]

@@ -25,6 +25,7 @@ reverse proxy. Compose's direct local HTTP mode does not satisfy this baseline.
 | `ISSUER_ID` | Issuer namespace embedded in metadata and issued material. |
 | `ISSUER_SK_PATH` | Persistent V4 issuer secret-key path. |
 | `KEY_ROTATION_STATE_PATH` | V4 key-rotation state path. |
+| `KID` | Optional V4 KID compatibility override. The default is derived only from the persisted issuer key and is stable across restarts and UTC date changes; an override is preserved only when it begins with that derived KID, otherwise startup falls back to the derived KID. Rotation metadata must contain the same active KID and supported state version or startup fails; retain a legacy override while retaining matching legacy rotation state. |
 | `SYBIL_RESISTANCE` | Admission mode; use an explicit mode, and do not use `none` for a public issuer. |
 | `SYBIL_REPLAY_STORE` | Replay backend for applicable Sybil proofs; use `redis` for restart-safe/public multi-instance operation. |
 | `SYBIL_REPLAY_REDIS_URL` | Redis URL for that Sybil replay backend; it can fall back to `REDIS_URL`. |
@@ -34,6 +35,13 @@ reverse proxy. Compose's direct local HTTP mode does not satisfy this baseline.
 | `NATIVE_BEARER_V7_TOKEN_KEY_ID` | Mandatory 64-character lowercase hexadecimal V7 token key ID. |
 | `NATIVE_BEARER_V7_ASSET_ID` | Mandatory V7 fixed-body asset identifier. |
 | `NATIVE_BEARER_V7_AMOUNT_MINOR` | Mandatory V7 fixed-body amount in minor units; it must be an integer. |
+
+V4 verification continues to use strict exact-KID lookup. The intentional
+legacy migration path is to set `KID` to the former date-suffixed value when it
+begins with the persisted key's derived KID and retain that override while the
+matching legacy rotation-state file is retained. To omit `KID`, explicitly
+reset/delete the rotation-state file first; this accepts an identity transition
+to the stable key-derived identity.
 
 WebAuthn additionally requires `WEBAUTHN_RP_ID`, `WEBAUTHN_RP_ORIGIN`, and a
 high-entropy `WEBAUTHN_PROOF_SECRET`. The origin must match the browser origin;

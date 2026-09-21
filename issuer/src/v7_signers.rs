@@ -378,13 +378,18 @@ impl V7SignerInventory {
         let active_signer = Arc::new(V7Signer::load_or_generate(&active)?);
         let mut loaded = vec![active_signer.clone()];
         for spec in retained {
-            loaded.push(Arc::new(
-                if spec.sk_path.exists() && spec.metadata_path.exists() {
-                    V7Signer::load_existing(&spec, true)?
-                } else {
-                    V7Signer::load_or_generate(&spec)?
-                },
-            ));
+            // Additional signer configuration is also used to describe old
+            // public-only records. Missing private material is therefore not
+            // itself a startup error; exchange validation below requires it
+            // only when the descriptor is an output of a retained/current
+            // transition.
+            if !spec.sk_path.exists() && !spec.metadata_path.exists() {
+                continue;
+            }
+            if !spec.sk_path.is_file() || !spec.metadata_path.is_file() {
+                continue;
+            }
+            loaded.push(Arc::new(V7Signer::load_existing(&spec, true)?));
         }
         Self::from_signers(active_signer, loaded, Some(registry_path))
     }
@@ -712,10 +717,12 @@ mod tests {
             .metadata()
             .descriptor_id
             .clone();
+        let duplicate_descriptor_bootstrap = spec(root.path(), 2, "");
+        V7Signer::load_or_generate(&duplicate_descriptor_bootstrap).unwrap();
         let duplicate_descriptor = spec_with_profile(
             root.path(),
             2,
-            "freebird/native-exchange/v3",
+            "scarcity/native-bearer/v7",
             &first_descriptor,
         );
         assert!(V7SignerInventory::load_or_generate(
@@ -728,6 +735,7 @@ mod tests {
         let second = spec(root.path(), 3, &"04".repeat(32));
         let duplicate_spki = V7Signer::load_or_generate(&first).unwrap();
         std::fs::write(&second.sk_path, std::fs::read(&first.sk_path).unwrap()).unwrap();
+        V7Signer::load_or_generate(&second).unwrap();
         assert!(V7SignerInventory::load_or_generate(
             first,
             vec![second],

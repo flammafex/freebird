@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   MemoryTokenStore,
   StorageTokenStore,
 } from '../src/index.js';
+import { StorageCorruptionError } from '../src/client/token_store.js';
 import type { FreebirdToken } from '../src/index.js';
 
 function token(value: string, validUntil?: number): FreebirdToken {
@@ -116,5 +117,80 @@ describe('StorageTokenStore (Node filesystem)', () => {
     await store.save(token('a'));
     await store.clear();
     await expect(fs.promises.stat(path)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('serializes same-key saves and clear mutations across store instances', async () => {
+    const fs = await import('node:fs');
+    await fs.promises.mkdir(dir, { recursive: true });
+    const first = new StorageTokenStore({ key: path });
+    const second = new StorageTokenStore({ key: path });
+
+    await Promise.all([first.save(token('a')), second.save(token('b'))]);
+    expect((await first.list()).map((value) => value.tokenValue).sort()).toEqual(['a', 'b']);
+
+    const clear = first.clear();
+    const save = second.save(token('after-clear'));
+    await Promise.all([clear, save]);
+    expect((await first.list()).map((value) => value.tokenValue)).toEqual(['after-clear']);
+  });
+
+  it('fails closed on corruption and permits explicit clear recovery', async () => {
+    const fs = await import('node:fs');
+    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.writeFile(path, '{not-json', 'utf8');
+    const store = new StorageTokenStore({ key: path });
+
+    await expect(store.list()).rejects.toBeInstanceOf(StorageCorruptionError);
+    await expect(store.save(token('must-not-overwrite'))).rejects.toBeInstanceOf(StorageCorruptionError);
+    expect(await fs.promises.readFile(path, 'utf8')).toBe('{not-json');
+
+    await store.clear();
+    await store.save(token('recovered'));
+    expect((await store.list()).map((value) => value.tokenValue)).toEqual(['recovered']);
+  });
+
+  it('does not leave a shared fixed temporary sibling after a write', async () => {
+    const fs = await import('node:fs');
+    await fs.promises.mkdir(dir, { recursive: true });
+    await new StorageTokenStore({ key: path }).save(token('a'));
+    const entries = await fs.promises.readdir(dir);
+    expect(entries).not.toContain('tokens.json.tmp');
+    expect(entries.filter((entry) => entry.startsWith('tokens.json.tmp-'))).toHaveLength(0);
+  });
+
+  it('uses distinct temporary siblings for independent writes', async () => {
+    const fs = await import('node:fs');
+    const otherPath = `${dir}/other.json`;
+    await fs.promises.mkdir(dir, { recursive: true });
+    const openSpy = vi.spyOn(fs.promises, 'open');
+    try {
+      await Promise.all([
+        new StorageTokenStore({ key: path }).save(token('a')),
+        new StorageTokenStore({ key: otherPath }).save(token('b')),
+      ]);
+      const tempPaths = openSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((value) => value.includes('.tmp-'));
+      expect(tempPaths).toHaveLength(2);
+      expect(new Set(tempPaths).size).toBe(2);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  it('cleans up a uniquely named temp file when rename fails', async () => {
+    const fs = await import('node:fs');
+    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.writeFile(path, JSON.stringify([token('old')]), 'utf8');
+    const renameSpy = vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(new Error('forced rename failure'));
+    try {
+      await expect(new StorageTokenStore({ key: path }).save(token('new')))
+        .rejects.toThrow('forced rename failure');
+    } finally {
+      renameSpy.mockRestore();
+    }
+    expect(await fs.promises.readFile(path, 'utf8')).toBe(JSON.stringify([token('old')]));
+    const entries = await fs.promises.readdir(dir);
+    expect(entries.filter((entry) => entry.startsWith('tokens.json.tmp-'))).toHaveLength(0);
   });
 });

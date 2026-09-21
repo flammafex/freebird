@@ -112,12 +112,14 @@ struct KeyRotationState {
     pub version: u32,
 }
 
+const KEY_ROTATION_STATE_VERSION: u32 = 1;
+
 impl Default for KeyRotationState {
     fn default() -> Self {
         Self {
             active_kid: String::new(),
             deprecated_keys: Vec::new(),
-            version: 1,
+            version: KEY_ROTATION_STATE_VERSION,
         }
     }
 }
@@ -531,7 +533,7 @@ impl MultiKeyVoprfCore {
             KeyRotationState {
                 active_kid: active.kid.clone(),
                 deprecated_keys: deprecated.values().map(|dk| dk.metadata.clone()).collect(),
-                version: 1,
+                version: KEY_ROTATION_STATE_VERSION,
             }
         };
 
@@ -576,15 +578,30 @@ impl MultiKeyVoprfCore {
         let state: KeyRotationState =
             serde_json::from_str(&json).context("failed to parse key rotation state")?;
 
-        // Note: We don't actually load the keys themselves from disk
-        // because we don't persist secret keys. This just loads metadata.
-        // In a real implementation, you'd need to handle key loading separately
-        // or use this metadata to validate against expected keys.
+        if state.version != KEY_ROTATION_STATE_VERSION {
+            bail!(
+                "unsupported key rotation state version: {} (expected {})",
+                state.version,
+                KEY_ROTATION_STATE_VERSION
+            );
+        }
+
+        // Rotation metadata is not key material and cannot restore a rotated
+        // active key after restart. It must agree with the key-backed core
+        // that startup just constructed.
+        let configured_active_kid = self.active_key.read().await.kid.clone();
+        if !constant_time_str_eq(&state.active_kid, &configured_active_kid) {
+            bail!(
+                "key rotation state active KID mismatch: state={} configured={}",
+                state.active_kid,
+                configured_active_kid
+            );
+        }
 
         info!(
             active_kid = %state.active_kid,
             deprecated_count = state.deprecated_keys.len(),
-            "Loaded key rotation state"
+            "Validated key rotation state; deprecated metadata is not restored"
         );
 
         Ok(())
@@ -845,5 +862,137 @@ mod tests {
         // Verify both keys work
         assert!(core.verify_with_kid("token", "key-2024-01").await.is_ok());
         assert!(core.verify_with_kid("token", "key-2024-02").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn persisted_rotation_state_requires_supported_version_and_active_kid() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rotation.json");
+
+        tokio::fs::write(
+            &path,
+            serde_json::json!({
+                "active_kid": "key-2024-01",
+                "deprecated_keys": [],
+                "version": 2
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        let error = match MultiKeyVoprfCore::load_or_create(
+            [1u8; 32],
+            "pubkey1".to_string(),
+            "key-2024-01".to_string(),
+            b"test",
+            Some(path.clone()),
+        )
+        .await
+        {
+            Ok(_) => panic!("unsupported rotation state was accepted"),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("unsupported key rotation state version"));
+
+        tokio::fs::write(
+            &path,
+            serde_json::json!({
+                "active_kid": "different-key",
+                "deprecated_keys": [],
+                "version": 1
+            })
+            .to_string(),
+        )
+        .await
+        .unwrap();
+        let error = match MultiKeyVoprfCore::load_or_create(
+            [1u8; 32],
+            "pubkey1".to_string(),
+            "key-2024-01".to_string(),
+            b"test",
+            Some(path),
+        )
+        .await
+        {
+            Ok(_) => panic!("mismatched rotation state was accepted"),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("key rotation state active KID mismatch"));
+    }
+
+    #[tokio::test]
+    async fn matching_rotation_state_restart_preserves_active_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rotation.json");
+
+        let first = MultiKeyVoprfCore::load_or_create(
+            [1u8; 32],
+            "pubkey1".to_string(),
+            "key-2024-01".to_string(),
+            b"test",
+            Some(path.clone()),
+        )
+        .await
+        .unwrap();
+        let first_kid = first.active_kid().await;
+        let first_pubkey = first.active_pubkey_b64().await;
+        drop(first);
+
+        let second = MultiKeyVoprfCore::load_or_create(
+            [1u8; 32],
+            "pubkey1".to_string(),
+            "key-2024-01".to_string(),
+            b"test",
+            Some(path),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(second.active_kid().await, first_kid);
+        assert_eq!(second.active_pubkey_b64().await, first_pubkey);
+    }
+
+    #[tokio::test]
+    async fn rotated_state_cannot_claim_restoration_after_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rotation.json");
+
+        let core = MultiKeyVoprfCore::load_or_create(
+            [1u8; 32],
+            "pubkey1".to_string(),
+            "key-2024-01".to_string(),
+            b"test",
+            Some(path.clone()),
+        )
+        .await
+        .unwrap();
+        core.rotate_key(
+            [2u8; 32],
+            "pubkey2".to_string(),
+            "key-2024-02".to_string(),
+            Some(3600),
+        )
+        .await
+        .unwrap();
+
+        let error = match MultiKeyVoprfCore::load_or_create(
+            [1u8; 32],
+            "pubkey1".to_string(),
+            "key-2024-01".to_string(),
+            b"test",
+            Some(path),
+        )
+        .await
+        {
+            Ok(_) => panic!("rotated state was accepted after restart"),
+            Err(error) => error,
+        };
+        assert!(error
+            .to_string()
+            .contains("key rotation state active KID mismatch"));
     }
 }

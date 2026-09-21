@@ -42,12 +42,15 @@ impl ExchangeRuntime {
             .context("V7 exchange Redis URL missing")?;
 
         let (discovery, engine_discovery) = load_v7_discovery_pair(config)?;
+        let registry =
+            crate::v7_registry::load_read_only(&config.native_bearer_v7_config.registry_path)?;
+        crate::v7_registry::validate_issuer_compatibility(&registry, &config.issuer_id)?;
         discovery
             .validate()
             .map_err(|error| anyhow::anyhow!(error.0))?;
         let receipt_keys = load_v7_receipt_keys(config)?;
         let store = crate::exchange::v7_store::V7ExchangeStore::new(redis_url)?;
-        validate_v7_exchange_inventory(&discovery, &inventory)?;
+        validate_v7_exchange_inventory_with_registry(&discovery, &inventory, &registry)?;
         let graph_id = discovery.profile.graph_id.clone();
         let exchange = Arc::new(
             crate::exchange::v7::V7ExchangeEngine::new(
@@ -140,6 +143,9 @@ pub fn validate_v7_runtime_config(config: &crate::config::Config) -> Result<()> 
         return Ok(());
     }
     let discovery = load_v7_discovery(config)?;
+    let registry =
+        crate::v7_registry::load_read_only(&config.native_bearer_v7_config.registry_path)?;
+    crate::v7_registry::validate_issuer_compatibility(&registry, &config.issuer_id)?;
     discovery
         .validate()
         .map_err(|error| anyhow::anyhow!(error.0))?;
@@ -147,9 +153,12 @@ pub fn validate_v7_runtime_config(config: &crate::config::Config) -> Result<()> 
         .chain(crate::config::load_v7_additional_signer_configs()?)
         .collect::<Vec<_>>();
     let mut signers = Vec::with_capacity(signer_configs.len());
-    for signer_config in &signer_configs {
+    for (index, signer_config) in signer_configs.iter().enumerate() {
         let spec =
             crate::v7_signers::V7SignerSpec::from_native_config(signer_config, &config.issuer_id)?;
+        if index != 0 && (!spec.sk_path.is_file() || !spec.metadata_path.is_file()) {
+            continue;
+        }
         signers.push(Arc::new(crate::v7_signers::V7Signer::load_existing(
             &spec, true,
         )?));
@@ -162,7 +171,7 @@ pub fn validate_v7_runtime_config(config: &crate::config::Config) -> Result<()> 
         signers,
         None,
     )?);
-    validate_v7_exchange_inventory(&discovery, &inventory)?;
+    validate_v7_exchange_inventory_with_registry(&discovery, &inventory, &registry)?;
     let _receipt_keys = load_v7_receipt_keys(config)?;
 
     if config.exchange_config.graph_issuance.enabled {
@@ -291,6 +300,18 @@ pub(crate) fn validate_v7_exchange_inventory(
     discovery: &freebird_common::api::NativeExchangeV3Discovery,
     inventory: &crate::v7_signers::V7SignerInventory,
 ) -> Result<()> {
+    validate_v7_exchange_inventory_with_registry(discovery, inventory, inventory.registry())
+}
+
+pub(crate) fn validate_v7_exchange_inventory_with_registry(
+    discovery: &freebird_common::api::NativeExchangeV3Discovery,
+    inventory: &crate::v7_signers::V7SignerInventory,
+    registry: &freebird_common::v7_registry::BearerKeyRegistry,
+) -> Result<()> {
+    crate::v7_registry::validate_issuer_compatibility(
+        registry,
+        inventory.active().identity().issuer_id(),
+    )?;
     let descriptors = discovery
         .active_descriptors
         .iter()
@@ -314,6 +335,15 @@ pub(crate) fn validate_v7_exchange_inventory(
         descriptor
             .validate()
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        registry
+            .validate_exchange_descriptor(descriptor)
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    }
+    for descriptor_id in required {
+        if !descriptors.contains_key(descriptor_id) {
+            bail!("V7 exchange output references unknown descriptor")
+        }
+        let descriptor = descriptors[descriptor_id];
         let token_key_id: [u8; 32] = hex::decode(&descriptor.token_key_id)?
             .try_into()
             .map_err(|_| anyhow::anyhow!("invalid V7 exchange token key ID"))?;
@@ -323,14 +353,14 @@ pub(crate) fn validate_v7_exchange_inventory(
             descriptor.descriptor_id.clone(),
             freebird_crypto::V7TokenKeyId::new(token_key_id),
         )?;
-        let signer = inventory.lookup(&identity)?;
+        let signer = inventory.lookup(&identity).map_err(|_| {
+            anyhow::anyhow!(
+                "V7 exchange output descriptor {} requires private signer material",
+                descriptor_id
+            )
+        })?;
         if !exchange_descriptor_matches_signer(descriptor, signer) {
-            bail!("V7 exchange descriptor does not match shared signer inventory")
-        }
-    }
-    for descriptor_id in required {
-        if !descriptors.contains_key(descriptor_id) {
-            bail!("V7 exchange output references unknown descriptor")
+            bail!("V7 exchange output descriptor does not match private signer inventory")
         }
     }
     Ok(())
@@ -421,4 +451,247 @@ fn v7_authorization_policy(
                 .collect(),
         }),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{config::NativeBearerV7Config, v7_signers::V7SignerInventory};
+    use base64ct::Encoding;
+    use freebird_common::api::{
+        NativeExchangeV3Descriptor, NativeExchangeV3Discovery, NativeExchangeV3Slot,
+        NativeExchangeV3Transition, NATIVE_EXCHANGE_V3_PROFILE_ID,
+    };
+    use std::{path::Path, sync::Arc};
+    use tempfile::{tempdir, TempDir};
+
+    fn signer_config(root: &Path, byte: u8) -> NativeBearerV7Config {
+        NativeBearerV7Config {
+            sk_path: root.join(format!("{byte}.der")),
+            metadata_path: root.join(format!("{byte}.json")),
+            registry_path: root.join("registry.json"),
+            profile_id: NATIVE_EXCHANGE_V3_PROFILE_ID.into(),
+            descriptor_id: String::new(),
+            token_key_id: format!("{byte:02x}").repeat(32),
+            asset_id: "USD".into(),
+            amount_minor: 1,
+            validity_secs: 86_400,
+        }
+    }
+
+    fn descriptor(signer: &crate::v7_signers::V7Signer) -> NativeExchangeV3Descriptor {
+        let metadata = signer.metadata();
+        NativeExchangeV3Descriptor {
+            descriptor_id: metadata.descriptor_id.clone(),
+            profile_id: metadata.profile_id.clone(),
+            issuer_id: metadata.issuer_id.clone(),
+            token_key_id: metadata.token_key_id.clone(),
+            asset_id: metadata.asset_id.clone(),
+            amount_minor: metadata.amount_minor.to_string(),
+            suite: metadata.suite.clone(),
+            modulus_bits: metadata.modulus_bits,
+            exponent: metadata.exponent,
+            pubkey_spki_b64: metadata.pubkey_spki_b64.clone(),
+            spki_fingerprint: metadata.spki_fingerprint.clone(),
+            valid_from: metadata.valid_from as u64,
+            valid_until: metadata.valid_until as u64,
+        }
+    }
+
+    struct Fixture {
+        _directory: TempDir,
+        source: NativeExchangeV3Descriptor,
+        output: NativeExchangeV3Descriptor,
+        source_inventory: Arc<V7SignerInventory>,
+        output_inventory: Arc<V7SignerInventory>,
+        registry: freebird_common::v7_registry::BearerKeyRegistry,
+        registry_path: std::path::PathBuf,
+    }
+
+    fn fixture() -> Fixture {
+        let directory = tempdir().unwrap();
+        let registry_path = directory.path().join("registry.json");
+        let source_inventory = Arc::new(
+            V7SignerInventory::load_or_generate(
+                crate::v7_signers::V7SignerSpec::from_native_config(
+                    &signer_config(directory.path(), 0x11),
+                    "issuer:test",
+                )
+                .unwrap(),
+                Vec::new(),
+                &registry_path,
+            )
+            .unwrap(),
+        );
+        let source = descriptor(source_inventory.active());
+        std::fs::remove_file(&signer_config(directory.path(), 0x11).sk_path).unwrap();
+        std::fs::remove_file(&signer_config(directory.path(), 0x11).metadata_path).unwrap();
+        let output_inventory = Arc::new(
+            V7SignerInventory::load_or_generate(
+                crate::v7_signers::V7SignerSpec::from_native_config(
+                    &signer_config(directory.path(), 0x22),
+                    "issuer:test",
+                )
+                .unwrap(),
+                Vec::new(),
+                &registry_path,
+            )
+            .unwrap(),
+        );
+        let output = descriptor(output_inventory.active());
+        Fixture {
+            _directory: directory,
+            source,
+            output,
+            source_inventory,
+            registry: output_inventory.registry().clone(),
+            output_inventory,
+            registry_path,
+        }
+    }
+
+    fn discovery(
+        source: &NativeExchangeV3Descriptor,
+        output: &NativeExchangeV3Descriptor,
+    ) -> NativeExchangeV3Discovery {
+        NativeExchangeV3Discovery {
+            version: 3,
+            profile: freebird_common::api::NativeExchangeV3Profile {
+                version: 3,
+                profile_id: NATIVE_EXCHANGE_V3_PROFILE_ID.into(),
+                graph_id: "00".repeat(32),
+                suite: freebird_common::api::NATIVE_EXCHANGE_V3_SUITE.into(),
+                modulus_bits: 3_072,
+                exponent: 65_537,
+            },
+            active_descriptors: vec![output.clone()],
+            retained_descriptors: vec![source.clone()],
+            active_keysets: Vec::new(),
+            retained_keysets: Vec::new(),
+            transitions: vec![NativeExchangeV3Transition {
+                transition_id: "11".repeat(32),
+                profile_id: NATIVE_EXCHANGE_V3_PROFILE_ID.into(),
+                source_keyset_id: "22".repeat(32),
+                target_keyset_id: "33".repeat(32),
+                source_slots: vec![NativeExchangeV3Slot {
+                    descriptor_id: source.descriptor_id.clone(),
+                    keyset_id: "22".repeat(32),
+                    slot_id: "source".into(),
+                    quantity: 1,
+                }],
+                output_slots: vec![NativeExchangeV3Slot {
+                    descriptor_id: output.descriptor_id.clone(),
+                    keyset_id: "33".repeat(32),
+                    slot_id: "output".into(),
+                    quantity: 1,
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn retained_source_descriptor_needs_registry_history_not_private_key() {
+        let fixture = fixture();
+        validate_v7_exchange_inventory_with_registry(
+            &discovery(&fixture.source, &fixture.output),
+            &fixture.output_inventory,
+            &fixture.registry,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn public_only_retained_source_validation_is_read_only() {
+        let fixture = fixture();
+        let before = std::fs::read(&fixture.registry_path).unwrap();
+        let registry = crate::v7_registry::load_read_only(&fixture.registry_path).unwrap();
+        crate::v7_registry::validate_issuer_compatibility(&registry, "issuer:test").unwrap();
+        validate_v7_exchange_inventory_with_registry(
+            &discovery(&fixture.source, &fixture.output),
+            &fixture.output_inventory,
+            &registry,
+        )
+        .unwrap();
+        assert_eq!(before, std::fs::read(&fixture.registry_path).unwrap());
+        assert!(
+            !std::path::PathBuf::from(format!("{}.lock", fixture.registry_path.display())).exists()
+        );
+        let temporary_prefix = format!(
+            ".{}.tmp.",
+            fixture
+                .registry_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap()
+        );
+        assert!(std::fs::read_dir(fixture.registry_path.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .all(|entry| {
+                !entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(&temporary_prefix)
+            }));
+    }
+
+    #[test]
+    fn missing_output_signer_is_rejected() {
+        let fixture = fixture();
+        let error = validate_v7_exchange_inventory_with_registry(
+            &discovery(&fixture.source, &fixture.output),
+            &fixture.source_inventory,
+            &fixture.registry,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("requires private signer material"));
+    }
+
+    #[test]
+    fn missing_retained_transition_output_signer_is_rejected() {
+        let fixture = fixture();
+        let mut discovery = discovery(&fixture.source, &fixture.output);
+        discovery.active_descriptors.clear();
+        discovery.retained_descriptors = vec![fixture.source.clone(), fixture.output.clone()];
+        let error = validate_v7_exchange_inventory_with_registry(
+            &discovery,
+            &fixture.source_inventory,
+            &fixture.registry,
+        )
+        .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("requires private signer material"));
+    }
+
+    #[test]
+    fn descriptor_must_match_durable_registry_history() {
+        let fixture = fixture();
+        let mut mismatch = fixture.source.clone();
+        mismatch.asset_id = "EUR".into();
+        mismatch.descriptor_id = freebird_common::api::derive_native_exchange_v3_descriptor_id(
+            &mismatch.profile_id,
+            &mismatch.issuer_id,
+            &mismatch.token_key_id,
+            &mismatch.asset_id,
+            mismatch.amount_minor.parse().unwrap(),
+            &mismatch.suite,
+            mismatch.modulus_bits,
+            mismatch.exponent,
+            &base64ct::Base64UrlUnpadded::decode_vec(&mismatch.pubkey_spki_b64).unwrap(),
+            &mismatch.spki_fingerprint,
+            mismatch.valid_from,
+            mismatch.valid_until,
+        )
+        .unwrap();
+        let error = validate_v7_exchange_inventory_with_registry(
+            &discovery(&mismatch, &fixture.output),
+            &fixture.output_inventory,
+            &fixture.registry,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("durable registry history"));
+    }
 }

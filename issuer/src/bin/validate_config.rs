@@ -292,7 +292,15 @@ fn validate_key_config(config: &Config) -> ValidationSection {
 
     // KID override
     if let Some(kid) = &config.key_config.kid_override {
-        section.add(CheckResult::Ok(format!("KID = {} (override)", kid)));
+        section.add(CheckResult::Ok(format!(
+            "KID = {} (compatibility override; startup preserves it only when it matches the persisted key's derived KID prefix)",
+            kid
+        )));
+    } else {
+        section.add(CheckResult::Ok(
+            "KID = derived from persisted issuer key (stable across restarts and UTC date changes)"
+                .to_string(),
+        ));
     }
 
     section
@@ -346,26 +354,27 @@ fn validate_native_bearer_v7_config(config: &Config) -> ValidationSection {
     }
 
     if v7.registry_path.is_file() {
-        match fs::read(&v7.registry_path)
-            .map_err(anyhow::Error::from)
-            .and_then(|bytes| {
-                serde_json::from_slice::<freebird_common::v7_registry::BearerKeyRegistry>(&bytes)
-                    .map_err(anyhow::Error::from)
-            }) {
+        match freebird_issuer::v7_registry::load_read_only(&v7.registry_path) {
             Ok(registry) => {
-                let result = if v7.sk_path.is_file() && v7.metadata_path.is_file() {
-                    freebird_issuer::native_bearer_v7::NativeBearerV7Issuer::load_existing(
-                        v7,
-                        &config.issuer_id,
-                    )
-                    .and_then(|issuer| {
-                        registry
-                            .validate_v7_discovery(issuer.metadata(), issuer.binding())
-                            .map_err(anyhow::Error::msg)
-                    })
-                } else {
-                    registry.validate().map_err(anyhow::Error::msg)
-                };
+                let result = freebird_issuer::v7_registry::validate_issuer_compatibility(
+                    &registry,
+                    &config.issuer_id,
+                )
+                .and_then(|()| {
+                    if v7.sk_path.is_file() && v7.metadata_path.is_file() {
+                        freebird_issuer::native_bearer_v7::NativeBearerV7Issuer::load_existing(
+                            v7,
+                            &config.issuer_id,
+                        )
+                        .and_then(|issuer| {
+                            registry
+                                .validate_v7_discovery(issuer.metadata(), issuer.binding())
+                                .map_err(anyhow::Error::msg)
+                        })
+                    } else {
+                        registry.validate().map_err(anyhow::Error::msg)
+                    }
+                });
                 match result {
                     Ok(()) => section.add(CheckResult::Ok(format!(
                         "V7 registry {} is valid and compatible with the configured binding",

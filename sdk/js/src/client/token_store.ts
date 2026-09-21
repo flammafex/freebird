@@ -17,13 +17,42 @@ function isExpired(token: FreebirdToken, nowMs: number): boolean {
 }
 
 function isToken(value: unknown): value is FreebirdToken {
-  const version = typeof value === 'object' && value !== null
-    ? (value as { version?: unknown }).version
-    : undefined;
-  return typeof value === 'object' && value !== null &&
-    typeof (value as FreebirdToken).tokenValue === 'string' &&
-    typeof (value as FreebirdToken).issuerId === 'string' &&
-    (version === undefined || version === 4 || version === 7);
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const token = value as FreebirdToken;
+  return typeof token.tokenValue === 'string' &&
+    typeof token.issuerId === 'string' &&
+    (token.version === undefined || token.version === 4 || token.version === 7) &&
+    (token.kid === undefined || typeof token.kid === 'string') &&
+    (token.tokenKeyId === undefined || typeof token.tokenKeyId === 'string') &&
+    (token.valid_until === undefined ||
+      (typeof token.valid_until === 'number' && Number.isSafeInteger(token.valid_until)));
+}
+
+/** Raised when persisted token data exists but is not a valid token store. */
+export class StorageCorruptionError extends Error {
+  constructor() {
+    super('Token storage is corrupt');
+    this.name = 'StorageCorruptionError';
+  }
+}
+
+// This queue is deliberately process-local. It coordinates stores sharing a
+// browser key or filesystem path in this JavaScript process, not other
+// processes or browser tabs.
+const mutationQueues = new Map<string, Promise<void>>();
+
+function enqueueMutation<T>(queueKey: string, mutation: () => Promise<T>): Promise<T> {
+  const previous = mutationQueues.get(queueKey) ?? Promise.resolve();
+  const next = previous.then(mutation, mutation);
+  const settled = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  mutationQueues.set(queueKey, settled);
+  void settled.then(() => {
+    if (mutationQueues.get(queueKey) === settled) mutationQueues.delete(queueKey);
+  });
+  return next;
 }
 
 /**
@@ -91,11 +120,13 @@ export class StorageTokenStore implements TokenStore {
   }
 
   async save(token: FreebirdToken): Promise<void> {
-    const tokens = await this.readAll();
-    const index = tokens.findIndex((candidate) => tokenId(candidate) === tokenId(token));
-    if (index >= 0) tokens[index] = token;
-    else tokens.push(token);
-    await this.writeAll(tokens);
+    return enqueueMutation(this.queueKey(), async () => {
+      const tokens = await this.readAll();
+      const index = tokens.findIndex((candidate) => tokenId(candidate) === tokenId(token));
+      if (index >= 0) tokens[index] = { ...token };
+      else tokens.push({ ...token });
+      await this.writeAll(tokens);
+    });
   }
 
   async load(id?: string): Promise<FreebirdToken | null> {
@@ -112,12 +143,18 @@ export class StorageTokenStore implements TokenStore {
   }
 
   async clear(): Promise<void> {
-    if (this.useBrowser) {
-      window.localStorage.removeItem(this.key);
-      return;
-    }
-    const fs = await getFs();
-    await fs.promises.rm(this.key, { force: true });
+    return enqueueMutation(this.queueKey(), async () => {
+      if (this.useBrowser) {
+        window.localStorage.removeItem(this.key);
+        return;
+      }
+      const fs = await getFs();
+      await fs.promises.rm(this.key, { force: true });
+    });
+  }
+
+  private queueKey(): string {
+    return `${this.useBrowser ? 'browser' : 'node'}\u0000${this.key}`;
   }
 
   private async readAll(): Promise<FreebirdToken[]> {
@@ -133,16 +170,16 @@ export class StorageTokenStore implements TokenStore {
         throw error;
       }
     }
-    if (!raw) return [];
+    if (raw === null) return [];
     try {
       const parsed: unknown = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return [];
+      if (!Array.isArray(parsed) || !parsed.every(isToken)) throw new StorageCorruptionError();
       const now = Date.now();
       return parsed.filter((value): value is FreebirdToken =>
         isToken(value) && !isExpired(value, now));
-    } catch {
-      // Corrupt or unreadable storage is treated as empty rather than fatal.
-      return [];
+    } catch (error) {
+      if (error instanceof StorageCorruptionError) throw error;
+      throw new StorageCorruptionError();
     }
   }
 
@@ -176,15 +213,29 @@ function getFs(): Promise<typeof import('node:fs')> {
  */
 async function atomicWrite(path: string, data: string): Promise<void> {
   const fs = await getFs();
-  const tmp = `${path}.tmp`;
+  const crypto = await getCrypto();
+  const tmp = `${path}.tmp-${crypto.randomBytes(16).toString('hex')}`;
   const isUnix = typeof process !== 'undefined' && process.platform !== 'win32';
   const mode = isUnix ? 0o600 : undefined;
-  const handle = await fs.promises.open(tmp, 'w', mode);
+  let created = false;
   try {
-    await handle.writeFile(data, 'utf8');
-    await handle.sync();
+    const handle = await fs.promises.open(tmp, 'wx', mode);
+    created = true;
+    try {
+      await handle.writeFile(data, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await fs.promises.rename(tmp, path);
+    created = false;
   } finally {
-    await handle.close();
+    if (created) await fs.promises.rm(tmp, { force: true }).catch(() => undefined);
   }
-  await fs.promises.rename(tmp, path);
+}
+
+let cryptoPromise: Promise<typeof import('node:crypto')> | null = null;
+function getCrypto(): Promise<typeof import('node:crypto')> {
+  if (!cryptoPromise) cryptoPromise = import('node:crypto');
+  return cryptoPromise;
 }

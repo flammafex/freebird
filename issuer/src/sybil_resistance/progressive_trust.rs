@@ -526,6 +526,7 @@ impl ProgressiveTrustSystem {
     async fn autosave_loop(&self) {
         let interval = tokio::time::Duration::from_secs(self.config.autosave_interval_secs);
         let mut ticker = tokio::time::interval(interval);
+        ticker.tick().await;
 
         loop {
             ticker.tick().await;

@@ -5,6 +5,7 @@ import type { V7DirectBinding, V7KeyDiscoveryResp } from '../src/types.js';
 import { createClientState } from '../src/client/state.js';
 import { MemoryTokenStore } from '../src/client/token_store.js';
 import { BatchIssuanceInterruptedError, DiscoveryError } from '../src/errors.js';
+import { buildNativeBearerV7BatchBinding } from '../src/client/sybil.js';
 
 let currentBinding: V7DirectBinding;
 let blindCount = 0;
@@ -51,8 +52,12 @@ function signature(): string {
   return Buffer.alloc(384).toString('base64url');
 }
 
-function state(fetch: typeof globalThis.fetch, tokenStore = new MemoryTokenStore()) {
-  return createClientState({ issuerUrl: 'https://issuer.example', fetch, tokenStore });
+function state(
+  fetch: typeof globalThis.fetch,
+  tokenStore = new MemoryTokenStore(),
+  options: { batchBodyLimitBytes?: number } = {},
+) {
+  return createClientState({ issuerUrl: 'https://issuer.example', fetch, tokenStore, ...options });
 }
 
 describe('direct V7 native bearer client orchestration', () => {
@@ -151,5 +156,130 @@ describe('direct V7 native bearer client orchestration', () => {
     } catch (error) {
       expect(error).not.toBeInstanceOf(BatchIssuanceInterruptedError);
     }
+  });
+
+  it('splits V7 requests by exact serialized UTF-8 body size and binds each chunk', async () => {
+    currentBinding = binding('d'.repeat(64));
+    blindCount = 0;
+    const requests: Record<string, unknown>[] = [];
+    const bindings: string[] = [];
+    const sdk = state(async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      requests.push(body);
+      const count = (body.blinded_msgs_b64 as string[]).length;
+      return new Response(JSON.stringify({
+        issuer_id: 'issuer:v7', token_key_id: currentBinding.identity.token_key_id,
+        blind_signatures_b64: Array.from({ length: count }, () => signature()),
+        successful: count, failed: 0,
+      }), { status: 200 });
+    });
+    const ownerCommitments = Array.from({ length: 130 }, (_, index) => new Uint8Array(32).fill(index));
+    const factory = ({ binding: requestBinding }: { binding: string }) => {
+      bindings.push(requestBinding);
+      return { type: 'proof_of_work' as const, nonce: 1, input: requestBinding, timestamp: 1 };
+    };
+
+    const issued = await issueNativeBearerV7Batch(sdk, { owner_commitments: ownerCommitments, proofFactory: factory }, metadata, metadata);
+
+    expect(issued).toHaveLength(ownerCommitments.length);
+    expect(requests.length).toBeGreaterThan(1);
+    for (const request of requests) {
+      expect(new TextEncoder().encode(JSON.stringify(request)).byteLength).toBeLessThanOrEqual(60 * 1024);
+    }
+    expect(requests.map((request) => (request.blinded_msgs_b64 as string[]).length).reduce((a, b) => a + b, 0))
+      .toBe(ownerCommitments.length);
+    expect(requests.every((request) => {
+      const blinded = request.blinded_msgs_b64 as string[];
+      const expected = buildNativeBearerV7BatchBinding(currentBinding.identity.issuer_id, currentBinding.identity.token_key_id, blinded);
+      return (request.sybil_proof as { input: string }).input === expected;
+    })).toBe(true);
+    expect(bindings.length).toBeGreaterThanOrEqual(requests.length);
+  });
+
+  it('rejects a fixed proof before V7 batch blinding when chunking is required', async () => {
+    currentBinding = binding('e'.repeat(64));
+    blindCount = 0;
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    const sdk = state(fetchMock);
+    const proof = {
+      type: 'proof_of_work' as const,
+      nonce: 1,
+      input: 'not-the-batch-binding',
+      timestamp: 1,
+    };
+
+    await expect(issueNativeBearerV7Batch(sdk, {
+      owner_commitments: Array.from({ length: 130 }, () => new Uint8Array(32)),
+      sybilProof: proof,
+    }, metadata, metadata)).rejects.toThrow(/chunking is required/);
+    expect(blindCount).toBe(0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('validates a fixed proof against the exact single-chunk binding', async () => {
+    currentBinding = binding('f'.repeat(64));
+    blindCount = 0;
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+    const sdk = state(fetchMock);
+    const proof = {
+      type: 'proof_of_work' as const,
+      nonce: 1,
+      input: 'wrong-binding',
+      timestamp: 1,
+    };
+
+    await expect(issueNativeBearerV7Batch(sdk, {
+      owner_commitments: [new Uint8Array(32)],
+      sybilProof: proof,
+    }, metadata, metadata)).rejects.toThrow(/bound to a different request/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts an exact body limit and rejects one byte below it', async () => {
+    currentBinding = binding('6'.repeat(64));
+    const blinded = Buffer.alloc(384).toString('base64url');
+    const exactLimit = new TextEncoder().encode(JSON.stringify({
+      token_key_id: currentBinding.identity.token_key_id,
+      blinded_msgs_b64: [blinded],
+    })).byteLength;
+    const response = JSON.stringify({
+      issuer_id: 'issuer:v7', token_key_id: currentBinding.identity.token_key_id,
+      blind_signatures_b64: [signature()], successful: 1, failed: 0,
+    });
+    const exactFetch = vi.fn(async () => new Response(response, { status: 200 }));
+    await expect(issueNativeBearerV7Batch(state(exactFetch, undefined, { batchBodyLimitBytes: exactLimit }), {
+      owner_commitments: [new Uint8Array(32)],
+    }, metadata, metadata)).resolves.toHaveLength(1);
+
+    blindCount = 0;
+    const overFetch = vi.fn(async () => new Response(response, { status: 200 }));
+    await expect(issueNativeBearerV7Batch(state(overFetch, undefined, { batchBodyLimitBytes: exactLimit - 1 }), {
+      owner_commitments: [new Uint8Array(32)],
+    }, metadata, metadata)).rejects.toThrow(/exceeds the configured JSON body limit/);
+    expect(overFetch).not.toHaveBeenCalled();
+  });
+
+  it('wraps a later chunk transport failure with a copy of completed tokens', async () => {
+    currentBinding = binding('7'.repeat(64));
+    blindCount = 0;
+    let requests = 0;
+    const sdk = state(async (_input, init) => {
+      requests += 1;
+      const body = JSON.parse(String(init?.body)) as { blinded_msgs_b64: string[] };
+      if (requests > 1) return new Response('transport failed', { status: 503 });
+      const count = body.blinded_msgs_b64.length;
+      return new Response(JSON.stringify({
+        issuer_id: 'issuer:v7', token_key_id: currentBinding.identity.token_key_id,
+        blind_signatures_b64: Array.from({ length: count }, () => signature()), successful: count, failed: 0,
+      }), { status: 200 });
+    });
+
+    await expect(issueNativeBearerV7Batch(sdk, {
+      owner_commitments: Array.from({ length: 130 }, () => new Uint8Array(32)),
+    }, metadata, metadata)).rejects.toMatchObject({
+      name: 'BatchIssuanceInterruptedError',
+      completed: expect.any(Array),
+      cause: expect.objectContaining({ code: 'issuance' }),
+    });
   });
 });

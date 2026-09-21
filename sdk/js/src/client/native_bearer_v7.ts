@@ -24,6 +24,8 @@ import {
 import { getV7KeyDiscoveryMetadata, refreshV7KeyDiscoveryMetadata } from './v7_discovery.js';
 
 const MAX_V7_BATCH_SIZE = 10_000;
+const MAX_V7_BATCH_BODY_BYTES = 60 * 1024;
+const V7_BLINDED_MESSAGE_B64_LENGTH = 512;
 
 export interface NativeBearerV7IssueOptions {
   readonly owner_commitment: Uint8Array;
@@ -133,12 +135,132 @@ async function prepare(
   return { body, binding, blinded: bytesToBase64Url(result.blinded), state: result.state };
 }
 
-async function post(state: ClientState, path: string, body: Record<string, unknown>): Promise<Response> {
+async function post(state: ClientState, path: string, serializedBody: string): Promise<Response> {
   return (state.config.fetch ?? fetch)(`${state.config.issuerUrl}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: serializedBody,
   });
+}
+
+function v7BatchBodyLimitBytes(state: ClientState): number {
+  const limit = state.config.batchBodyLimitBytes ?? MAX_V7_BATCH_BODY_BYTES;
+  if (!Number.isSafeInteger(limit) || limit <= 0) {
+    throw new FreebirdError('issuance', 'Batch body byte limit must be a positive safe integer');
+  }
+  if (limit > MAX_V7_BATCH_BODY_BYTES) {
+    throw new FreebirdError('issuance', 'Batch body byte limit cannot exceed 60 KiB');
+  }
+  return limit;
+}
+
+function serializedBody(body: Record<string, unknown>): { value: string; bytes: number } {
+  const value = JSON.stringify(body);
+  return { value, bytes: new TextEncoder().encode(value).byteLength };
+}
+
+function v7BatchBody(
+  tokenKeyId: string,
+  blinded: string[],
+  proof: SybilProof | undefined,
+): Record<string, unknown> {
+  return { token_key_id: tokenKeyId, blinded_msgs_b64: blinded, sybil_proof: proof };
+}
+
+function placeholderV7BatchBody(
+  binding: V7DirectBinding,
+  count: number,
+  proof: SybilProof | undefined,
+): Record<string, unknown> {
+  return v7BatchBody(
+    binding.identity.token_key_id,
+    Array.from({ length: count }, () => 'A'.repeat(V7_BLINDED_MESSAGE_B64_LENGTH)),
+    proof,
+  );
+}
+
+function maximumPlaceholderChunkSize(
+  binding: V7DirectBinding,
+  remaining: number,
+  limit: number,
+  proof: SybilProof | undefined,
+): number {
+  let count = 0;
+  while (count < remaining && serializedBody(placeholderV7BatchBody(binding, count + 1, proof)).bytes <= limit) {
+    count += 1;
+  }
+  return count;
+}
+
+type PreparedV7Chunk = {
+  readonly prepared: V7Prepared[];
+  readonly proof: SybilProof | undefined;
+  readonly serializedBody: string;
+};
+
+async function prepareV7Chunk(args: {
+  state: ClientState;
+  binding: V7DirectBinding;
+  ownerCommitments: readonly Uint8Array[];
+  nonces: readonly Uint8Array[] | undefined;
+  start: number;
+  fixedProof: SybilProof | undefined;
+  factory: SybilProofFactory | undefined;
+  limit: number;
+}): Promise<PreparedV7Chunk> {
+  const maxCount = maximumPlaceholderChunkSize(
+    args.binding,
+    args.ownerCommitments.length - args.start,
+    args.limit,
+    args.fixedProof === undefined ? undefined : args.fixedProof,
+  );
+  if (maxCount === 0) {
+    throw new FreebirdError('issuance', 'A single V7 batch item exceeds the configured JSON body limit');
+  }
+
+  const prepared: V7Prepared[] = [];
+  for (let index = 0; index < maxCount; index += 1) {
+    prepared.push(await prepare(
+      args.binding,
+      args.ownerCommitments[args.start + index],
+      args.nonces?.[args.start + index],
+    ));
+  }
+
+  for (;;) {
+    const blinded = prepared.map((item) => item.blinded);
+    const bindingText = buildNativeBearerV7BatchBinding(
+      args.binding.identity.issuer_id,
+      args.binding.identity.token_key_id,
+      blinded,
+    );
+    // Resolve even caller-supplied proofs through the same exact binding
+    // validation as factory-generated proofs. Chunking is rejected for fixed
+    // proofs before preparation, so this is the one exact chunk they attest.
+    const proof = await proofFor(args.state, args.fixedProof, args.factory, bindingText);
+    const serialized = serializedBody(v7BatchBody(args.binding.identity.token_key_id, blinded, proof));
+    if (serialized.bytes <= args.limit) return { prepared, proof, serializedBody: serialized.value };
+    if (prepared.length === 1) {
+      throw new FreebirdError('issuance', 'A single V7 batch item exceeds the configured JSON body limit');
+    }
+    prepared.pop();
+  }
+}
+
+function rejectFixedProofIfChunkingRequired(
+  binding: V7DirectBinding,
+  total: number,
+  proof: SybilProof | undefined,
+  limit: number,
+): void {
+  if (proof === undefined) return;
+  const full = serializedBody(placeholderV7BatchBody(binding, total, proof));
+  if (full.bytes > limit) {
+    throw new FreebirdError(
+      'issuance',
+      'A fixed Sybil proof cannot be reused when V7 batch request chunking is required',
+    );
+  }
 }
 
 function assertIdentity(response: Record<string, unknown>, binding: V7DirectBinding): void {
@@ -171,11 +293,11 @@ export async function issueNativeBearerV7(
     const prepared = await prepare(binding, options.owner_commitment, options.nonce);
     const bindingText = buildNativeBearerV7IssueBinding(binding.identity.issuer_id, binding.identity.token_key_id, prepared.blinded);
     const sybilProof = await proofFor(state, options.sybilProof, factory, bindingText);
-    const response = await post(state, '/v7/native-bearer/issue', {
+    const response = await post(state, '/v7/native-bearer/issue', serializedBody({
       token_key_id: binding.identity.token_key_id,
       blinded_msg_b64: prepared.blinded,
       sybil_proof: sybilProof,
-    });
+    }).value);
     if (!response.ok) {
       const error = await readError(response);
       if (isStaleResponse(response.status, error) && !retried) {
@@ -220,60 +342,79 @@ export async function issueNativeBearerV7Batch(
     throw new FreebirdError('issuance', 'V7 nonce count must match owner commitment count');
   }
   const factory = proofFactory(options);
+  const limit = v7BatchBodyLimitBytes(state);
   let metadata = await getDiscovery();
   let retried = false;
-  for (;;) {
-    const binding = bindingFromV7Discovery(metadata.native_bearer_v7);
-    const prepared: V7Prepared[] = [];
-    for (let index = 0; index < options.owner_commitments.length; index += 1) {
-      prepared.push(await prepare(binding, options.owner_commitments[index], options.nonces?.[index]));
-    }
-    const blinded = prepared.map((item) => item.blinded);
-    const bindingText = buildNativeBearerV7BatchBinding(binding.identity.issuer_id, binding.identity.token_key_id, blinded);
-    const sybilProof = await proofFor(state, options.sybilProof, factory, bindingText);
-    const response = await post(state, '/v7/native-bearer/issue/batch', {
-      token_key_id: binding.identity.token_key_id,
-      blinded_msgs_b64: blinded,
-      sybil_proof: sybilProof,
-    });
-    if (!response.ok) {
-      const error = await readError(response);
-      if (isStaleResponse(response.status, error) && !retried) {
-        if (options.sybilProof !== undefined && factory === undefined) throw new StalePublicKeyError('A fresh V7 proof factory is required after key rotation');
-        retried = true;
-        metadata = await refreshDiscovery();
-        continue;
-      }
-      throw new FreebirdError('issuance', 'V7 native bearer batch issuance failed');
-    }
-    const body = responseObject(await response.json());
-    if (body.issuer_id !== binding.identity.issuer_id) throw new DiscoveryError('Issuer identity changed during V7 batch issuance');
-    if (body.token_key_id !== binding.identity.token_key_id) {
-      if (!retried) {
-        if (options.sybilProof !== undefined && factory === undefined) throw new StalePublicKeyError('A fresh V7 proof factory is required after key rotation');
-        retried = true;
-        metadata = await refreshDiscovery();
-        continue;
-      }
-      throw new StalePublicKeyError();
-    }
-    if (!Array.isArray(body.blind_signatures_b64) || body.blind_signatures_b64.length !== prepared.length ||
-      body.successful !== prepared.length || body.failed !== 0) {
-      throw new FreebirdError('issuance', 'V7 native bearer batch response is malformed');
-    }
-    const completed: V7IssuedToken[] = [];
+  const completed: V7IssuedToken[] = [];
+  let offset = 0;
+
+  while (offset < options.owner_commitments.length) {
     try {
-      for (let index = 0; index < prepared.length; index += 1) {
-        const signature = blindSignature({ blind_signature_b64: body.blind_signatures_b64[index] });
-        const token = await finalizeV7(binding, prepared[index].body, prepared[index].state, signature);
-        const issued = asIssuedToken(token, binding);
-        completed.push(issued);
-        await save(state, issued);
+      const binding = bindingFromV7Discovery(metadata.native_bearer_v7);
+      if (offset === 0) {
+        // This check uses the exact request envelope and fixed-width V7 blinded
+        // messages, so a fixed proof is rejected before any blinding work when
+        // the logical batch would need more than one request.
+        rejectFixedProofIfChunkingRequired(binding, options.owner_commitments.length, options.sybilProof, limit);
       }
+
+      const chunk = await prepareV7Chunk({
+        state,
+        binding,
+        ownerCommitments: options.owner_commitments,
+        nonces: options.nonces,
+        start: offset,
+        fixedProof: options.sybilProof,
+        factory,
+        limit,
+      });
+      const response = await post(state, '/v7/native-bearer/issue/batch', chunk.serializedBody);
+      if (!response.ok) {
+        const error = await readError(response);
+        if (isStaleResponse(response.status, error) && !retried) {
+          if (options.sybilProof !== undefined && factory === undefined) {
+            throw new StalePublicKeyError('A fresh V7 proof factory is required after key rotation');
+          }
+          retried = true;
+          metadata = await refreshDiscovery();
+          continue;
+        }
+        throw new FreebirdError('issuance', 'V7 native bearer batch issuance failed');
+      }
+
+      const body = responseObject(await response.json());
+      if (body.issuer_id !== binding.identity.issuer_id) {
+        throw new DiscoveryError('Issuer identity changed during V7 batch issuance');
+      }
+      if (body.token_key_id !== binding.identity.token_key_id) {
+        if (!retried) {
+          if (options.sybilProof !== undefined && factory === undefined) {
+            throw new StalePublicKeyError('A fresh V7 proof factory is required after key rotation');
+          }
+          retried = true;
+          metadata = await refreshDiscovery();
+          continue;
+        }
+        throw new StalePublicKeyError();
+      }
+
+      if (!Array.isArray(body.blind_signatures_b64) || body.blind_signatures_b64.length !== chunk.prepared.length ||
+        body.successful !== chunk.prepared.length || body.failed !== 0) {
+        throw new FreebirdError('issuance', 'V7 native bearer batch response is malformed');
+      }
+      for (let index = 0; index < chunk.prepared.length; index += 1) {
+          const signature = blindSignature({ blind_signature_b64: body.blind_signatures_b64[index] });
+          const token = await finalizeV7(binding, chunk.prepared[index].body, chunk.prepared[index].state, signature);
+          const issued = asIssuedToken(token, binding);
+          completed.push(issued);
+          await save(state, issued);
+      }
+      offset += chunk.prepared.length;
     } catch (cause) {
-      if (completed.length > 0) throw new BatchIssuanceInterruptedError(completed, cause);
+      if (completed.length > 0) throw new BatchIssuanceInterruptedError(completed.slice(), cause);
       throw cause;
     }
-    return completed as unknown as FreebirdToken[];
   }
+
+  return completed as unknown as FreebirdToken[];
 }

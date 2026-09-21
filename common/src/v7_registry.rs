@@ -385,6 +385,32 @@ impl BearerKeyRegistry {
         &self.entries
     }
 
+    /// Find the immutable history entry for a published descriptor.
+    pub fn lookup_descriptor(&self, descriptor_id: &str) -> Option<&BearerKeyReservation> {
+        self.entries
+            .iter()
+            .find(|entry| entry.descriptor_id == descriptor_id)
+    }
+
+    /// Validate that a published exchange descriptor is exactly the record
+    /// retained in durable history. This is deliberately read-only: public
+    /// discovery validation must never extend the registry.
+    pub fn validate_exchange_descriptor(
+        &self,
+        descriptor: &NativeExchangeV3Descriptor,
+    ) -> Result<(), BearerKeyRegistryError> {
+        let candidate = BearerKeyReservation::from_exchange_descriptor(descriptor)?;
+        match self.lookup_descriptor(&candidate.descriptor_id) {
+            Some(existing) if existing == &candidate => Ok(()),
+            Some(_) => Err(BearerKeyRegistryError::Conflict(
+                "V7 exchange descriptor does not match durable registry history".into(),
+            )),
+            None => Err(BearerKeyRegistryError::Conflict(
+                "V7 exchange descriptor is absent from durable registry history".into(),
+            )),
+        }
+    }
+
     pub fn validate(&self) -> Result<(), BearerKeyRegistryError> {
         Self::from_entries(self.entries.clone()).map(|_| ())
     }

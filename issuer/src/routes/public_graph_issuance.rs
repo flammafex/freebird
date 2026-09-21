@@ -4,7 +4,7 @@ use crate::AppStateWithSybil;
 use axum::{
     body::Body,
     extract::{rejection::JsonRejection, rejection::QueryRejection, Query, State},
-    http::{header, StatusCode},
+    http::{header, HeaderValue, StatusCode},
     response::Response,
     Json,
 };
@@ -45,6 +45,7 @@ pub async fn post_v7(
         Ok(crate::graph_issuance::V7ProcessDecision::Committed(bytes)) => {
             exact(StatusCode::OK, bytes)
         }
+        Ok(crate::graph_issuance::V7ProcessDecision::Pending) => pending(),
         Ok(crate::graph_issuance::V7ProcessDecision::Conflict) => {
             error(StatusCode::CONFLICT, "v7_graph_operation_conflict")
         }
@@ -76,6 +77,7 @@ pub async fn status_v7(
         Ok(crate::graph_issuance::V7StatusDecision::Committed(bytes)) => {
             exact(StatusCode::OK, bytes)
         }
+        Ok(crate::graph_issuance::V7StatusDecision::Pending) => pending(),
         Ok(crate::graph_issuance::V7StatusDecision::Unknown) => {
             error(StatusCode::NOT_FOUND, "unknown_operation")
         }
@@ -161,4 +163,12 @@ fn error(status: StatusCode, code: &'static str) -> Response {
         serde_json::to_vec(&serde_json::json!({"error": code}))
             .expect("static graph issuance error JSON"),
     )
+}
+
+fn pending() -> Response {
+    let mut response = error(StatusCode::ACCEPTED, "v7_graph_pending");
+    response
+        .headers_mut()
+        .insert(header::RETRY_AFTER, HeaderValue::from_static("1"));
+    response
 }

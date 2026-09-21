@@ -4,7 +4,7 @@
 use crate::metadata::IssuerInfo;
 use crate::readiness::{MetadataStatus, StoreHealth, TokenFamily};
 use crate::replay_authority::ReplayAuthorityHealth;
-use crate::store::SpendStore;
+use crate::store::{SpendOutcome, SpendStore};
 use axum::http::StatusCode;
 use freebird_common::spend_key::v7_spend_key;
 use std::{
@@ -166,10 +166,14 @@ pub(crate) async fn record_spend(
     store: &dyn SpendStore,
     spend_key: &str,
     valid_until: Option<i64>,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<SpendOutcome> {
     match valid_until {
         Some(valid_until) => store.mark_spent_through(spend_key, valid_until).await,
-        None => store.mark_spent(spend_key, None).await,
+        None => Ok(if store.mark_spent(spend_key, None).await? {
+            SpendOutcome::Fresh
+        } else {
+            SpendOutcome::Replay
+        }),
     }
 }
 
@@ -189,7 +193,7 @@ pub(crate) async fn record_v7_spend(
     store: &dyn SpendStore,
     body: &freebird_crypto::PublicBearerV7Body,
     valid_until: i64,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<SpendOutcome> {
     store
         .mark_spent_through(&v7_spend_key_for_body(body), valid_until)
         .await
@@ -230,7 +234,7 @@ mod tests {
     };
     use crate::readiness::TokenFamily;
     use crate::replay_authority::{ReplayAuthorityConfig, ReplayAuthorityHealth};
-    use crate::store::SpendStore;
+    use crate::store::{SpendOutcome, SpendStore};
     use std::{
         collections::HashMap,
         sync::{Arc, Mutex},
@@ -283,12 +287,16 @@ mod tests {
             Ok(true)
         }
 
-        async fn mark_spent_through(&self, key: &str, valid_until: i64) -> anyhow::Result<bool> {
+        async fn mark_spent_through(
+            &self,
+            key: &str,
+            valid_until: i64,
+        ) -> anyhow::Result<SpendOutcome> {
             self.calls
                 .lock()
                 .unwrap()
                 .push((key.to_string(), Some(valid_until)));
-            Ok(true)
+            Ok(SpendOutcome::Fresh)
         }
     }
 
@@ -325,13 +333,22 @@ mod tests {
     async fn single_and_batch_writes_share_absolute_expiry_and_preserve_v4() {
         let store = RecordingStore::default();
 
-        assert!(record_spend(&store, "single-expiring", Some(123))
-            .await
-            .unwrap());
-        assert!(record_spend(&store, "batch-expiring", Some(123))
-            .await
-            .unwrap());
-        assert!(record_spend(&store, "v4", None).await.unwrap());
+        assert_eq!(
+            record_spend(&store, "single-expiring", Some(123))
+                .await
+                .unwrap(),
+            SpendOutcome::Fresh
+        );
+        assert_eq!(
+            record_spend(&store, "batch-expiring", Some(123))
+                .await
+                .unwrap(),
+            SpendOutcome::Fresh
+        );
+        assert_eq!(
+            record_spend(&store, "v4", None).await.unwrap(),
+            SpendOutcome::Fresh
+        );
 
         assert_eq!(
             *store.calls.lock().unwrap(),
@@ -402,8 +419,14 @@ mod tests {
         // record_v7_spend. The first mutation below is the consuming verify
         // path.
         let valid_until = time::OffsetDateTime::now_utc().unix_timestamp() + 60;
-        assert!(record_v7_spend(&store, &body, valid_until).await.unwrap());
-        assert!(!record_v7_spend(&store, &body, valid_until).await.unwrap());
+        assert_eq!(
+            record_v7_spend(&store, &body, valid_until).await.unwrap(),
+            SpendOutcome::Fresh
+        );
+        assert_eq!(
+            record_v7_spend(&store, &body, valid_until).await.unwrap(),
+            SpendOutcome::Replay
+        );
 
         // Randomized presentation fields are not part of the marker.  A
         // second artifact presenting the same body nullifier is therefore a

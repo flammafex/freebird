@@ -216,7 +216,12 @@ impl SybilResistance for SocialGraphGate {
             )?;
         }
 
-        let replay_ttl = replay_ttl(attestation, self.config.replay_ttl)?;
+        let replay_ttl = replay_ttl(
+            attestation,
+            self.config.replay_ttl,
+            self.config.clock_skew_secs,
+            self.config.attestation_max_age,
+        )?;
         let jti_key = format!("{}:{}", attester_id, required_string(attestation, "jti")?);
         self.replay_store
             .mark_once("social_graph:jti", &jti_key, replay_ttl)?;
@@ -288,6 +293,10 @@ fn canonical_json(value: &Value) -> Result<String> {
 
 fn validate_times(attestation: &Value, config: &SocialGraphConfig) -> Result<()> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    validate_times_at(attestation, config, now)
+}
+
+fn validate_times_at(attestation: &Value, config: &SocialGraphConfig, now: u64) -> Result<()> {
     let issued_at = required_u64(attestation, "issued_at")?;
     let expires_at = required_u64(attestation, "expires_at")?;
     if expires_at <= issued_at || expires_at.saturating_add(config.clock_skew_secs) < now {
@@ -303,10 +312,48 @@ fn validate_times(attestation: &Value, config: &SocialGraphConfig) -> Result<()>
     Ok(())
 }
 
-fn replay_ttl(attestation: &Value, configured_ttl: Duration) -> Result<Duration> {
+fn replay_ttl(
+    attestation: &Value,
+    configured_ttl: Duration,
+    clock_skew_secs: u64,
+    attestation_max_age: Duration,
+) -> Result<Duration> {
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
+    replay_ttl_at(
+        attestation,
+        configured_ttl,
+        clock_skew_secs,
+        attestation_max_age,
+        now,
+    )
+}
+
+fn replay_ttl_at(
+    attestation: &Value,
+    configured_ttl: Duration,
+    clock_skew_secs: u64,
+    attestation_max_age: Duration,
+    now: u64,
+) -> Result<Duration> {
+    let issued_at = required_u64(attestation, "issued_at")?;
     let expires_at = required_u64(attestation, "expires_at")?;
-    Ok(configured_ttl.min(Duration::from_secs(expires_at.saturating_sub(now))))
+    let expiry_endpoint = expires_at
+        .checked_add(clock_skew_secs)
+        .ok_or_else(|| anyhow!("social graph replay retention overflow"))?;
+    let age_endpoint = issued_at
+        .checked_add(attestation_max_age.as_secs())
+        .and_then(|endpoint| endpoint.checked_add(clock_skew_secs))
+        .ok_or_else(|| anyhow!("social graph replay retention overflow"))?;
+    let final_accepted_at = expiry_endpoint.min(age_endpoint);
+    let remaining = final_accepted_at.saturating_sub(now);
+    let required_secs = remaining
+        .checked_add(1)
+        .ok_or_else(|| anyhow!("social graph replay retention overflow"))?;
+    let required_ttl = Duration::from_secs(required_secs);
+
+    // The configured value is only an extension. It must never shorten the
+    // inclusive acceptance window (including expiration and clock skew).
+    Ok(configured_ttl.max(required_ttl))
 }
 
 fn required_string(value: &Value, field: &str) -> Result<String> {
@@ -346,7 +393,9 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
     use rand::rngs::OsRng;
     use serde_json::json;
+    use std::collections::HashMap;
     use std::fs;
+    use std::sync::Mutex;
 
     struct Fixture {
         gate: Arc<SocialGraphGate>,
@@ -441,6 +490,136 @@ mod tests {
             request_binding: Some("request-binding".to_string()),
             ..Default::default()
         }
+    }
+
+    #[derive(Default)]
+    struct ClockReplayStore {
+        now: Mutex<u64>,
+        entries: Mutex<HashMap<String, u64>>,
+    }
+
+    impl ClockReplayStore {
+        fn advance_to(&self, now: u64) {
+            *self.now.lock().unwrap() = now;
+        }
+    }
+
+    impl ReplayStore for ClockReplayStore {
+        fn mark_once(&self, namespace: &str, key: &str, ttl: Duration) -> Result<()> {
+            let now = *self.now.lock().unwrap();
+            let scoped_key = format!("{namespace}:{key}");
+            let mut entries = self.entries.lock().unwrap();
+            if entries
+                .get(&scoped_key)
+                .is_some_and(|expires_at| *expires_at > now)
+            {
+                bail!("already used");
+            }
+            entries.insert(scoped_key, now + ttl.as_secs());
+            Ok(())
+        }
+
+        fn health_check(&self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn replay_boundary_attestation(issued_at: u64, expires_at: u64) -> Value {
+        json!({"issued_at": issued_at, "expires_at": expires_at})
+    }
+
+    #[test]
+    fn replay_retention_covers_nominal_expiration_inclusive() {
+        let attestation = replay_boundary_attestation(100, 110);
+        assert_eq!(
+            replay_ttl_at(
+                &attestation,
+                Duration::from_secs(1),
+                0,
+                Duration::from_secs(300),
+                100
+            )
+            .unwrap()
+            .as_secs(),
+            11
+        );
+        let config = SocialGraphConfig {
+            clock_skew_secs: 0,
+            attestation_max_age: Duration::from_secs(300),
+            ..SocialGraphConfig::default()
+        };
+        assert!(validate_times_at(&attestation, &config, 110).is_ok());
+        assert!(validate_times_at(&attestation, &config, 111).is_err());
+    }
+
+    #[test]
+    fn replay_retention_covers_clock_skew_window() {
+        let attestation = replay_boundary_attestation(100, 110);
+        assert_eq!(
+            replay_ttl_at(
+                &attestation,
+                Duration::from_secs(1),
+                5,
+                Duration::from_secs(300),
+                100
+            )
+            .unwrap()
+            .as_secs(),
+            16
+        );
+        let config = SocialGraphConfig {
+            clock_skew_secs: 5,
+            attestation_max_age: Duration::from_secs(300),
+            ..SocialGraphConfig::default()
+        };
+        assert!(validate_times_at(&attestation, &config, 115).is_ok());
+        assert!(validate_times_at(&attestation, &config, 116).is_err());
+    }
+
+    #[test]
+    fn configured_short_replay_ttl_cannot_shorten_acceptance_floor() {
+        let attestation = replay_boundary_attestation(100, 110);
+        assert_eq!(
+            replay_ttl_at(
+                &attestation,
+                Duration::from_secs(1),
+                5,
+                Duration::from_secs(300),
+                100
+            )
+            .unwrap()
+            .as_secs(),
+            16
+        );
+    }
+
+    #[test]
+    fn jti_and_quota_replay_are_rejected_at_final_acceptance_timestamp() {
+        let attestation = replay_boundary_attestation(100, 110);
+        let ttl = replay_ttl_at(
+            &attestation,
+            Duration::from_secs(1),
+            5,
+            Duration::from_secs(300),
+            100,
+        )
+        .unwrap();
+        let store = ClockReplayStore::default();
+        store
+            .mark_once("social_graph:jti", "attester:jti", ttl)
+            .unwrap();
+        store
+            .mark_once("social_graph:quota", "attester:quota", ttl)
+            .unwrap();
+
+        // 115 is expires_at + clock skew, the final accepted timestamp.
+        store.advance_to(15);
+        assert!(store
+            .mark_once("social_graph:jti", "attester:jti", ttl)
+            .is_err());
+        assert!(store
+            .mark_once("social_graph:quota", "attester:quota", ttl)
+            .is_err());
     }
 
     #[test]

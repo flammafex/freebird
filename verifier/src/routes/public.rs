@@ -17,7 +17,7 @@ use freebird_common::api::{
 };
 use freebird_common::rate_limit::PublicRateLimitLayer;
 use freebird_common::spend_key::v4_spend_key;
-use rayon::prelude::*;
+use futures::{stream, StreamExt};
 use std::{
     collections::HashMap,
     sync::Arc,
@@ -31,6 +31,7 @@ use crate::state::{
     compute_throughput, ensure_token_family_enabled, ensure_v4_replay_authority_ready,
     record_spend, v7_spend_key_for_body, v7_trust_registry, AppState,
 };
+use crate::store::SpendOutcome;
 use crate::verify::{decode_token_version, verify_v4_token, verify_v7_public_token};
 
 pub(crate) fn router(state: Arc<AppState>) -> Router {
@@ -145,17 +146,23 @@ async fn verify(
             (StatusCode::INTERNAL_SERVER_ERROR, "store error".into())
         })?;
 
-    if !spent {
-        warn!("replay detected (token already used)");
-        return Ok((
-            StatusCode::UNAUTHORIZED,
-            Json(VerifyResp {
-                ok: false,
-                error: Some("replay_detected".to_string()),
-                verified_at: 0,
-            }),
-        )
-            .into_response());
+    match spent {
+        SpendOutcome::Fresh => {}
+        SpendOutcome::Replay => {
+            warn!("replay detected (token already used)");
+            return Ok((
+                StatusCode::UNAUTHORIZED,
+                Json(VerifyResp {
+                    ok: false,
+                    error: Some("replay_detected".to_string()),
+                    verified_at: 0,
+                }),
+            )
+                .into_response());
+        }
+        SpendOutcome::Expired => {
+            return Err((StatusCode::UNAUTHORIZED, "verification failed".into()));
+        }
     }
 
     info!("Token verified successfully");
@@ -244,55 +251,59 @@ const MAX_BATCH_SIZE: usize = 10_000;
 /// Minimum batch size for parallel processing
 const MIN_PARALLEL_BATCH_SIZE: usize = 10;
 
-async fn verify_one_async(
-    token_req: &TokenToVerify,
+struct PreparedSpend {
+    spend_key: String,
+    valid_until: Option<i64>,
+}
+
+fn prepare_spend(
+    token_b64: &str,
     issuers_snapshot: &HashMap<String, crate::routes::admin::IssuerInfo>,
-    st: &AppState,
-    now: i64,
-) -> VerifyResult {
-    let version = match decode_token_version(&token_req.token_b64) {
+    verifier_id: &str,
+    audience: &str,
+    scope_digest: &[u8; freebird_crypto::PRIVATE_TOKEN_SCOPE_DIGEST_LEN],
+) -> Result<PreparedSpend, VerifyResult> {
+    let version = match decode_token_version(token_b64) {
         Ok(version) => version,
         Err((_status, msg)) => {
-            return VerifyResult::Error {
+            return Err(VerifyResult::Error {
                 message: msg,
                 code: "verification_failed".to_string(),
-            }
+            })
         }
     };
 
     let (spend_key, valid_until) = match version {
         freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 => {
-            let parsed =
-                match verify_v4_token(&token_req.token_b64, issuers_snapshot, &st.scope_digest) {
-                    Ok((parsed, _issuer)) => parsed,
-                    Err((_status, msg)) => {
-                        return VerifyResult::Error {
-                            message: msg,
-                            code: "verification_failed".to_string(),
-                        };
-                    }
-                };
-            let null_key =
-                match freebird_crypto::nullifier_key_v4(&parsed, &st.verifier_id, &st.audience) {
-                    Ok(key) => key,
-                    Err(_) => {
-                        return VerifyResult::Error {
-                            message: "verification failed".to_string(),
-                            code: "verification_failed".to_string(),
-                        };
-                    }
-                };
+            let parsed = match verify_v4_token(token_b64, issuers_snapshot, scope_digest) {
+                Ok((parsed, _issuer)) => parsed,
+                Err((_status, msg)) => {
+                    return Err(VerifyResult::Error {
+                        message: msg,
+                        code: "verification_failed".to_string(),
+                    });
+                }
+            };
+            let null_key = match freebird_crypto::nullifier_key_v4(&parsed, verifier_id, audience) {
+                Ok(key) => key,
+                Err(_) => {
+                    return Err(VerifyResult::Error {
+                        message: "verification failed".to_string(),
+                        code: "verification_failed".to_string(),
+                    });
+                }
+            };
             (v4_spend_key(&null_key), None)
         }
         freebird_crypto::public_bearer_v7::V7_ENVELOPE_VERSION => {
             let trust = v7_trust_registry();
-            let (parsed, entry) = match verify_v7_public_token(&token_req.token_b64, &trust) {
+            let (parsed, entry) = match verify_v7_public_token(token_b64, &trust) {
                 Ok(result) => result,
                 Err((_status, msg)) => {
-                    return VerifyResult::Error {
+                    return Err(VerifyResult::Error {
                         message: msg,
                         code: "verification_failed".to_string(),
-                    };
+                    });
                 }
             };
             (
@@ -301,24 +312,58 @@ async fn verify_one_async(
             )
         }
         _ => {
-            return VerifyResult::Error {
+            return Err(VerifyResult::Error {
                 message: "unsupported token version".to_string(),
                 code: "verification_failed".to_string(),
-            }
+            });
         }
     };
 
-    match record_spend(st.store.as_ref(), &spend_key, valid_until).await {
-        Ok(true) => VerifyResult::Success { verified_at: now },
-        Ok(false) => VerifyResult::Error {
+    Ok(PreparedSpend {
+        spend_key,
+        valid_until,
+    })
+}
+
+fn spend_result(result: anyhow::Result<SpendOutcome>, now: i64) -> VerifyResult {
+    match result {
+        Ok(SpendOutcome::Fresh) => VerifyResult::Success { verified_at: now },
+        Ok(SpendOutcome::Replay) => VerifyResult::Error {
             message: "token already used".to_string(),
             code: "replay_detected".to_string(),
+        },
+        Ok(SpendOutcome::Expired) => VerifyResult::Error {
+            message: "verification failed".to_string(),
+            code: "verification_failed".to_string(),
         },
         Err(_) => VerifyResult::Error {
             message: "store error".to_string(),
             code: "store_error".to_string(),
         },
     }
+}
+
+async fn verify_one_async(
+    token_req: &TokenToVerify,
+    issuers_snapshot: &HashMap<String, crate::routes::admin::IssuerInfo>,
+    st: &AppState,
+    now: i64,
+) -> VerifyResult {
+    let prepared = match prepare_spend(
+        &token_req.token_b64,
+        issuers_snapshot,
+        &st.verifier_id,
+        &st.audience,
+        &st.scope_digest,
+    ) {
+        Ok(prepared) => prepared,
+        Err(result) => return result,
+    };
+
+    spend_result(
+        record_spend(st.store.as_ref(), &prepared.spend_key, prepared.valid_until).await,
+        now,
+    )
 }
 
 // ---------- Batch Verification Handler (V4) ----------
@@ -361,93 +406,13 @@ async fn batch_verify(
 
     // Snapshot issuers map for parallel processing
     let issuers = st.issuers.read().await;
-    let issuers_snapshot: HashMap<String, crate::routes::admin::IssuerInfo> = issuers.clone();
+    let issuers_snapshot = Arc::new(issuers.clone());
     drop(issuers);
 
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    let runtime_handle = tokio::runtime::Handle::current();
 
-    // Helper function to verify a single token
-    let verify_one = |token_req: &TokenToVerify| -> VerifyResult {
-        let version = match decode_token_version(&token_req.token_b64) {
-            Ok(version) => version,
-            Err((_status, msg)) => {
-                return VerifyResult::Error {
-                    message: msg,
-                    code: "verification_failed".to_string(),
-                }
-            }
-        };
-
-        let (spend_key, valid_until) = match version {
-            freebird_crypto::REDEMPTION_TOKEN_VERSION_V4 => {
-                let parsed = match verify_v4_token(
-                    &token_req.token_b64,
-                    &issuers_snapshot,
-                    &st.scope_digest,
-                ) {
-                    Ok((parsed, _issuer)) => parsed,
-                    Err((_status, msg)) => {
-                        return VerifyResult::Error {
-                            message: msg,
-                            code: "verification_failed".to_string(),
-                        };
-                    }
-                };
-                let null_key =
-                    match freebird_crypto::nullifier_key_v4(&parsed, &st.verifier_id, &st.audience)
-                    {
-                        Ok(key) => key,
-                        Err(_) => {
-                            return VerifyResult::Error {
-                                message: "verification failed".to_string(),
-                                code: "verification_failed".to_string(),
-                            };
-                        }
-                    };
-                (v4_spend_key(&null_key), None)
-            }
-            freebird_crypto::public_bearer_v7::V7_ENVELOPE_VERSION => {
-                let trust = v7_trust_registry();
-                let (parsed, entry) = match verify_v7_public_token(&token_req.token_b64, &trust) {
-                    Ok(result) => result,
-                    Err((_status, msg)) => {
-                        return VerifyResult::Error {
-                            message: msg,
-                            code: "verification_failed".to_string(),
-                        };
-                    }
-                };
-                (
-                    v7_spend_key_for_body(parsed.body()),
-                    Some(entry.valid_until),
-                )
-            }
-            _ => {
-                return VerifyResult::Error {
-                    message: "unsupported token version".to_string(),
-                    code: "verification_failed".to_string(),
-                }
-            }
-        };
-
-        let spent = runtime_handle
-            .block_on(async { record_spend(st.store.as_ref(), &spend_key, valid_until).await });
-
-        match spent {
-            Ok(true) => VerifyResult::Success { verified_at: now },
-            Ok(false) => VerifyResult::Error {
-                message: "token already used".to_string(),
-                code: "replay_detected".to_string(),
-            },
-            Err(_) => VerifyResult::Error {
-                message: "store error".to_string(),
-                code: "store_error".to_string(),
-            },
-        }
-    };
-
-    // Process tokens in parallel or sequentially based on batch size
+    // Keep small batches sequential; larger batches use ordered bounded async
+    // futures so store mutations never run on a Rayon worker.
     let results: Vec<VerifyResult> = if batch_size < MIN_PARALLEL_BATCH_SIZE {
         debug!(
             "using sequential processing for small batch (n={})",
@@ -455,12 +420,54 @@ async fn batch_verify(
         );
         let mut results = Vec::with_capacity(batch_size);
         for token_req in &req.tokens {
-            results.push(verify_one_async(token_req, &issuers_snapshot, &st, now).await);
+            results.push(verify_one_async(token_req, issuers_snapshot.as_ref(), &st, now).await);
         }
         results
     } else {
-        debug!("using parallel processing for batch (n={})", batch_size);
-        req.tokens.par_iter().map(verify_one).collect()
+        debug!(
+            "using bounded async processing for batch (n={})",
+            batch_size
+        );
+        let verifier_id = st.verifier_id.clone();
+        let audience = st.audience.clone();
+        let scope_digest = st.scope_digest;
+        let store = st.store.clone();
+        stream::iter(req.tokens.into_iter().map(|token_req| {
+            let token_b64 = token_req.token_b64;
+            let issuers_snapshot = issuers_snapshot.clone();
+            let verifier_id = verifier_id.clone();
+            let audience = audience.clone();
+            let scope_digest = scope_digest;
+            let store = store.clone();
+            async move {
+                let prepared = tokio::task::spawn_blocking(move || {
+                    prepare_spend(
+                        &token_b64,
+                        issuers_snapshot.as_ref(),
+                        &verifier_id,
+                        &audience,
+                        &scope_digest,
+                    )
+                })
+                .await;
+
+                match prepared {
+                    Ok(Ok(prepared)) => spend_result(
+                        record_spend(store.as_ref(), &prepared.spend_key, prepared.valid_until)
+                            .await,
+                        now,
+                    ),
+                    Ok(Err(result)) => result,
+                    Err(_) => VerifyResult::Error {
+                        message: "verification failed".to_string(),
+                        code: "verification_failed".to_string(),
+                    },
+                }
+            }
+        }))
+        .buffered(32)
+        .collect()
+        .await
     };
 
     // --- AGGREGATE RESULTS ---
@@ -531,7 +538,7 @@ mod tests {
     use crate::state::{
         commit_v7_trust, AppState, V7DescriptorIdentity, V7IssuerTrustEntry, V7IssuerTrustSnapshot,
     };
-    use crate::store::{InMemoryStore, SpendStore};
+    use crate::store::{InMemoryStore, SpendOutcome, SpendStore};
     use axum::{
         body::to_bytes,
         body::Body,
@@ -548,8 +555,12 @@ mod tests {
     };
     use serde_json::{json, Value};
     use std::{
-        collections::HashMap,
-        sync::Arc,
+        collections::{HashMap, HashSet},
+        sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc, Mutex,
+        },
+        thread::ThreadId,
         time::{Duration, Instant},
     };
     use tokio::sync::RwLock;
@@ -776,7 +787,100 @@ mod tests {
         assert_ne!(message, "replay_detected");
     }
 
+    #[derive(Default)]
+    struct ExpiredSpendStore;
+
+    #[async_trait::async_trait]
+    impl SpendStore for ExpiredSpendStore {
+        async fn health_check(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn mark_spent(&self, _key: &str, _ttl: Option<Duration>) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+
+        async fn mark_spent_through(
+            &self,
+            _key: &str,
+            _valid_until: i64,
+        ) -> anyhow::Result<SpendOutcome> {
+            Ok(SpendOutcome::Expired)
+        }
+    }
+
+    struct SlowSpendStore {
+        active: AtomicUsize,
+        max_active: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl SpendStore for SlowSpendStore {
+        async fn health_check(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn mark_spent(&self, _key: &str, _ttl: Option<Duration>) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+
+        async fn mark_spent_through(
+            &self,
+            _key: &str,
+            _valid_until: i64,
+        ) -> anyhow::Result<SpendOutcome> {
+            let active = self.active.fetch_add(1, Ordering::SeqCst) + 1;
+            self.max_active.fetch_max(active, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            self.active.fetch_sub(1, Ordering::SeqCst);
+            Ok(SpendOutcome::Fresh)
+        }
+    }
+
+    #[derive(Default)]
+    struct ThreadRecordingSpendStore {
+        spent: Mutex<HashSet<String>>,
+        mutation_threads: Mutex<Vec<ThreadId>>,
+    }
+
+    #[async_trait::async_trait]
+    impl SpendStore for ThreadRecordingSpendStore {
+        async fn health_check(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn mark_spent(&self, _key: &str, _ttl: Option<Duration>) -> anyhow::Result<bool> {
+            Ok(true)
+        }
+
+        async fn mark_spent_through(
+            &self,
+            key: &str,
+            _valid_until: i64,
+        ) -> anyhow::Result<SpendOutcome> {
+            self.mutation_threads
+                .lock()
+                .unwrap()
+                .push(std::thread::current().id());
+            tokio::task::yield_now().await;
+            if self.spent.lock().unwrap().insert(key.to_owned()) {
+                Ok(SpendOutcome::Fresh)
+            } else {
+                Ok(SpendOutcome::Replay)
+            }
+        }
+    }
+
     async fn v7_route_fixture(label: &str, validity_offset: i64) -> (Arc<AppState>, String) {
+        let store: Arc<dyn SpendStore> = Arc::new(InMemoryStore::default());
+        v7_route_fixture_with_store(label, validity_offset, store).await
+    }
+
+    async fn v7_route_fixture_with_store(
+        label: &str,
+        validity_offset: i64,
+        store: Arc<dyn SpendStore>,
+    ) -> (Arc<AppState>, String) {
         let v7_issuer = format!(
             "issuer:test:route-v7-{}",
             V7_ROUTE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -813,7 +917,6 @@ mod tests {
         );
         commit_v7_trust(&v7_issuer, snapshot).unwrap();
 
-        let store: Arc<dyn SpendStore> = Arc::new(InMemoryStore::default());
         let authority = Arc::new(
             ReplayAuthorityHealth::new(
                 store.clone(),
@@ -1074,6 +1177,117 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn large_mixed_v7_batch_preserves_input_order_and_outcomes() {
+        let (state, first) = v7_route_fixture("ordered-first", 60).await;
+        let (_, second) = v7_route_fixture("ordered-second", 60).await;
+        let invalid = Base64UrlUnpadded::encode_string(&[
+            freebird_crypto::public_bearer_v7::V7_ENVELOPE_VERSION,
+            0,
+        ]);
+        let tokens = vec![
+            first.clone(),
+            invalid.clone(),
+            first.clone(),
+            second.clone(),
+            invalid.clone(),
+            second.clone(),
+            first.clone(),
+            second.clone(),
+            invalid,
+            first.clone(),
+            second,
+            first,
+        ];
+
+        let response = router(state)
+            .oneshot(v7_batch_request(&tokens))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["successful"], 2);
+        assert_eq!(body["failed"], 10);
+
+        let results = body["results"].as_array().unwrap();
+        for index in [1, 4, 8] {
+            assert_eq!(results[index]["status"], "error");
+            assert_eq!(results[index]["code"], "verification_failed");
+        }
+        for group in [&[0usize, 2, 6, 9, 11][..], &[3usize, 5, 7, 10][..]] {
+            let fresh = group
+                .iter()
+                .filter(|&&index| results[index]["status"] == "success")
+                .count();
+            assert_eq!(fresh, 1);
+            for &index in group {
+                if results[index]["status"] != "success" {
+                    assert_eq!(results[index]["code"], "replay_detected");
+                }
+            }
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn large_v7_batch_does_not_require_blocking_runtime_driving() {
+        let runtime_thread = std::thread::current().id();
+        let tracking = Arc::new(ThreadRecordingSpendStore::default());
+        let store: Arc<dyn SpendStore> = tracking.clone();
+        let (state, token) = v7_route_fixture_with_store("constrained-runtime", 60, store).await;
+        let response = router(state)
+            .oneshot(v7_batch_request(&vec![token; 10]))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["successful"], 1);
+        assert_eq!(body["failed"], 9);
+        let results = body["results"].as_array().unwrap();
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| result["status"] == "success")
+                .count(),
+            1
+        );
+        assert!(results.iter().all(|result| {
+            result["status"] == "success" || result["code"] == "replay_detected"
+        }));
+        assert_eq!(tracking.mutation_threads.lock().unwrap().len(), 10);
+        assert!(tracking
+            .mutation_threads
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|thread| *thread == runtime_thread));
+    }
+
+    #[tokio::test]
+    async fn large_v7_batch_bounds_replay_mutation_concurrency() {
+        let tracking = Arc::new(SlowSpendStore {
+            active: AtomicUsize::new(0),
+            max_active: AtomicUsize::new(0),
+        });
+        let store: Arc<dyn SpendStore> = tracking.clone();
+        let (state, token) = v7_route_fixture_with_store("bounded-mutation", 60, store).await;
+        let response = router(state)
+            .oneshot(v7_batch_request(&vec![token; 64]))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["successful"], 64);
+        assert_eq!(body["failed"], 0);
+        assert!(tracking.max_active.load(Ordering::SeqCst) <= 32);
+        assert!(tracking.max_active.load(Ordering::SeqCst) > 1);
+    }
+
+    #[tokio::test]
     async fn expired_v7_token_is_rejected_by_public_verify_route() {
         let (state, token) = v7_route_fixture("expired", -1).await;
         let response = router(state)
@@ -1081,5 +1295,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn storage_expiry_is_generic_on_single_verify_route() {
+        let store: Arc<dyn SpendStore> = Arc::new(ExpiredSpendStore);
+        let (state, token) = v7_route_fixture_with_store("storage-expired-single", 60, store).await;
+
+        let Err((status, message)) = verify(
+            axum::extract::State(state),
+            Json(VerifyReq { token_b64: token }),
+        )
+        .await
+        else {
+            panic!("storage expiry unexpectedly succeeded");
+        };
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(message, "verification failed");
+        assert!(!message.contains("expired"));
+    }
+
+    #[tokio::test]
+    async fn storage_expiry_is_generic_in_batch_verify_results() {
+        let store: Arc<dyn SpendStore> = Arc::new(ExpiredSpendStore);
+        let (state, token) = v7_route_fixture_with_store("storage-expired-batch", 60, store).await;
+
+        let response = router(state)
+            .oneshot(v7_batch_request(&[token]))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(body["successful"], 0);
+        assert_eq!(body["failed"], 1);
+        assert_eq!(body["results"][0]["status"], "error");
+        assert_eq!(body["results"][0]["code"], "verification_failed");
+        assert_eq!(body["results"][0]["message"], "verification failed");
+        assert_ne!(body["results"][0]["message"], "expired");
     }
 }

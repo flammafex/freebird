@@ -9,6 +9,33 @@ use freebird_common::{
 };
 use std::path::{Path, PathBuf};
 
+/// Read the durable registry without creating locks or changing its history.
+pub fn load_read_only(path: &Path) -> Result<BearerKeyRegistry> {
+    if !path.is_file() {
+        anyhow::bail!("bearer registry {} does not exist", path.display());
+    }
+    serde_json::from_slice(
+        &std::fs::read(path).with_context(|| format!("read bearer registry {}", path.display()))?,
+    )
+    .with_context(|| format!("validate bearer registry {}", path.display()))
+}
+
+/// Require every durable reservation to belong to the configured issuer.
+///
+/// This check is deliberately read-only. Loading public exchange history must
+/// not acquire the registry lock or extend the append-only history merely to
+/// make it compatible.
+pub fn validate_issuer_compatibility(registry: &BearerKeyRegistry, issuer_id: &str) -> Result<()> {
+    if registry
+        .entries()
+        .iter()
+        .any(|entry| entry.issuer_id != issuer_id)
+    {
+        anyhow::bail!("V7 bearer registry contains a different issuer identity than {issuer_id}")
+    }
+    Ok(())
+}
+
 /// Load the durable V7-only registry, reserve the currently loaded V7 material,
 /// and atomically persist an updated registry when a new reservation appears.
 pub fn load_and_reserve(
@@ -38,13 +65,7 @@ pub fn load_and_reserve_all(
     let mut changed = false;
 
     for (v7_metadata, v7_binding) in signers {
-        if registry
-            .entries()
-            .iter()
-            .any(|entry| entry.issuer_id != v7_metadata.issuer_id)
-        {
-            anyhow::bail!("V7 bearer registry contains a different issuer identity");
-        }
+        validate_issuer_compatibility(&registry, &v7_metadata.issuer_id)?;
         changed |= matches!(
             registry.register(
                 freebird_common::v7_registry::BearerKeyReservation::from_v7_discovery(
@@ -220,6 +241,53 @@ mod tests {
         )
         .unwrap();
         assert!(load_and_reserve(&path, &metadata, &current).is_err());
+    }
+
+    #[test]
+    fn mixed_issuer_history_is_rejected_without_mutation() -> Result<()> {
+        let first_binding = binding(47);
+        let second_identity = V7KeyIdentity::new("issuer:other", V7TokenKeyId::new([48; 32]))
+            .map_err(|error| anyhow::anyhow!("invalid test identity: {error:?}"))?;
+        let second_binding =
+            freebird_crypto::provider::software::SoftwareV7BlindRsaProvider::generate(
+                second_identity,
+            )?
+            .binding()
+            .clone();
+        let policy = freebird_crypto::V7BodyPolicy::new("USD", 42)
+            .map_err(|error| anyhow::anyhow!("invalid test policy: {error:?}"))?;
+        let first = NativeBearerV7KeyInfo::from_binding(
+            &first_binding,
+            freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID,
+            &"16".repeat(32),
+            &policy,
+            1,
+            2,
+        )
+        .map_err(anyhow::Error::msg)?;
+        let second = NativeBearerV7KeyInfo::from_binding(
+            &second_binding,
+            freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID,
+            &"17".repeat(32),
+            &policy,
+            1,
+            2,
+        )
+        .map_err(anyhow::Error::msg)?;
+        let registry = BearerKeyRegistry::from_entries([
+            freebird_common::v7_registry::BearerKeyReservation::from_v7_discovery(
+                &first,
+                &first_binding,
+            )?,
+            freebird_common::v7_registry::BearerKeyReservation::from_v7_discovery(
+                &second,
+                &second_binding,
+            )?,
+        ])?;
+
+        let error = validate_issuer_compatibility(&registry, "issuer:test").unwrap_err();
+        assert!(error.to_string().contains("different issuer identity"));
+        Ok(())
     }
 
     #[test]

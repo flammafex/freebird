@@ -60,12 +60,20 @@ jobs:
           TAG: ${{ needs.gate.outputs.tag }}
         run: |
           set -euo pipefail
+          # Required archive metadata must come from the tagged commit, not generated fallbacks.
+          archive_metadata=(README.md SECURITY.md LICENSE CHANGELOG.md)
+          for file in "${archive_metadata[@]}"; do
+            [[ -s "$file" ]] || {
+              echo "::error::Release ${TAG} is missing required archive metadata: ${file}. Restore it before tagging."
+              exit 1
+            }
+          done
           rustup update stable --no-self-update
           cargo build --release -p freebird-issuer --bins -p freebird-verifier -p freebird-interface
           version="${TAG#v}"; package="freebird-${version}-linux-x86_64"
           mkdir -p "dist/${package}/bin" "dist/${package}/docs"
           cp target/release/freebird-{issuer,cli,validate-config,verifier,interface} "dist/${package}/bin/"
-          cp README.md SECURITY.md LICENSE CHANGELOG.md "dist/${package}/"
+          cp "${archive_metadata[@]}" "dist/${package}/"
           cp -R docs "dist/${package}/docs/freebird"; cp -R deploy k8s server-configs webauthn-client "dist/${package}/"
           tar -C dist -czf "dist/${package}.tar.gz" "$package"; sha256sum "dist/${package}.tar.gz" > "dist/${package}.tar.gz.sha256"
       - name: Create GitHub release

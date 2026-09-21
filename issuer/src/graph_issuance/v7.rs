@@ -27,11 +27,15 @@ use crate::v7_signers::{V7Signer, V7SignerIdentity, V7SignerInventory};
 
 #[path = "v7_store.rs"]
 mod v7_store;
-use self::v7_store::{StoredV7Operation, V7GraphIssuanceStore, V7ReserveOutcome};
+use self::v7_store::{
+    StoredV7Operation, V7ClaimOutcome, V7GraphIssuanceStore, V7ReserveOutcome, V7State,
+    V7TransitionOutcome,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum V7ProcessDecision {
     Committed(Vec<u8>),
+    Pending,
     Conflict,
     Rejected,
     Unavailable,
@@ -40,6 +44,7 @@ pub enum V7ProcessDecision {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum V7StatusDecision {
     Committed(Vec<u8>),
+    Pending,
     Unknown,
 }
 
@@ -204,10 +209,14 @@ impl V7GraphIssuanceEngine {
         signer: &V7Signer,
         replay_identity: &str,
     ) -> Result<Vec<u8>> {
+        let response = record
+            .response
+            .as_ref()
+            .context("committed V7 graph result is missing")?;
         let result: NativeGraphIssuanceV7Result =
-            serde_json::from_slice(&record.response).context("corrupt stored V7 graph result")?;
+            serde_json::from_slice(response).context("corrupt stored V7 graph result")?;
         validate_result_against(&result, request, policy, signer, replay_identity)?;
-        Ok(record.response.clone())
+        Ok(response.clone())
     }
 
     fn authorize(&self, request: &NativeGraphIssuanceV7Request) -> Result<V4LocalAuthorization> {
@@ -250,8 +259,9 @@ impl V7GraphIssuanceEngine {
         Ok(verified)
     }
 
-    /// Process one V7 request.  The Redis reservation is the finalization
-    /// point, so exact retries recover the original signed result.
+    /// Process one V7 request. The durable reservation is never released:
+    /// exact retries either recover a committed response or claim an expired
+    /// lease and continue the same operation.
     pub async fn process(
         &self,
         request: &NativeGraphIssuanceV7Request,
@@ -261,6 +271,8 @@ impl V7GraphIssuanceEngine {
         }
         let operation_id = decode_operation_id(&request.public_operation_id)?;
         let request_digest = request.request_digest().map_err(anyhow::Error::msg)?;
+        let canonical_request = request.canonical_bytes().map_err(anyhow::Error::msg)?;
+        let request_bytes = serde_json::to_vec(request)?;
         let Some(policy) = self.policies.get(&request.policy_id) else {
             return Ok(V7ProcessDecision::Rejected);
         };
@@ -292,22 +304,19 @@ impl V7GraphIssuanceEngine {
             V7GraphIssuanceStore::replay_identity(global_spend_key, &claim.nullifier_digest);
 
         if let Some(existing) = self.store.get(&operation_id).await? {
-            let response = Self::validate_stored_response(
+            if !same_request(
                 &existing,
-                request,
-                policy,
-                signer,
+                &request_bytes,
+                &canonical_request,
+                &request_digest,
                 &replay_identity,
-            )?;
-            return Ok(
-                if existing.request_digest == request_digest
-                    && existing.replay_identity == replay_identity
-                {
-                    V7ProcessDecision::Committed(response)
-                } else {
-                    V7ProcessDecision::Conflict
-                },
-            );
+                global_spend_key,
+            ) {
+                return Ok(V7ProcessDecision::Conflict);
+            }
+            return self
+                .recover(&operation_id, existing, policy, signer, &replay_identity)
+                .await;
         }
         if !self.enabled {
             return Ok(V7ProcessDecision::Unavailable);
@@ -317,47 +326,123 @@ impl V7GraphIssuanceEngine {
         if now < policy.valid_from || now > policy.valid_until || !signer.is_valid_at(now) {
             return Ok(V7ProcessDecision::Rejected);
         }
-        let message = match validate_blinded_message(policy, &request.blinded_message) {
-            Ok(message) => message,
-            Err(_) => return Ok(V7ProcessDecision::Rejected),
-        };
+        if validate_blinded_message(policy, &request.blinded_message).is_err() {
+            return Ok(V7ProcessDecision::Rejected);
+        }
         match self
             .store
             .reserve_authorization(
                 &operation_id,
+                &request_bytes,
+                &canonical_request,
                 &request_digest,
                 global_spend_key,
                 &replay_identity,
             )
             .await?
         {
-            V7ReserveOutcome::Created => {}
-            V7ReserveOutcome::Existing(existing) => {
-                let response = Self::validate_stored_response(
-                    &existing,
+            V7ReserveOutcome::Created(reservation) => {
+                self.execute_owned(
+                    &operation_id,
                     request,
                     policy,
                     signer,
                     &replay_identity,
-                )?;
-                return Ok(V7ProcessDecision::Committed(response));
+                    &request_digest,
+                    &reservation.fence,
+                )
+                .await
             }
-            V7ReserveOutcome::Conflict | V7ReserveOutcome::AuthorizationUsed => {
-                return Ok(V7ProcessDecision::Rejected)
+            V7ReserveOutcome::Existing(existing) => {
+                if !same_request(
+                    &existing,
+                    &request_bytes,
+                    &canonical_request,
+                    &request_digest,
+                    &replay_identity,
+                    global_spend_key,
+                ) {
+                    return Ok(V7ProcessDecision::Conflict);
+                }
+                self.recover(&operation_id, *existing, policy, signer, &replay_identity)
+                    .await
             }
-            V7ReserveOutcome::InProgress => return Ok(V7ProcessDecision::Unavailable),
+            V7ReserveOutcome::Conflict => Ok(V7ProcessDecision::Conflict),
+            V7ReserveOutcome::AuthorizationUsed => Ok(V7ProcessDecision::Rejected),
+            V7ReserveOutcome::InProgress => Ok(V7ProcessDecision::Pending),
         }
-        // This is the only signing call in the V7 graph lane.  The inventory
-        // performs the same validity and representative checks immediately
-        // before dispatching to the V7 provider.
-        let signature = match self.inventory.sign(&identity, &message).await {
-            Ok(signature) => signature,
-            Err(_) => {
-                self.store
-                    .release_authorization(&operation_id, &request_digest, global_spend_key)
-                    .await?;
-                return Ok(V7ProcessDecision::Rejected);
+    }
+
+    async fn recover(
+        &self,
+        operation_id: &[u8; 16],
+        record: StoredV7Operation,
+        policy: &NativeGraphIssuanceV7Policy,
+        signer: &V7Signer,
+        replay_identity: &str,
+    ) -> Result<V7ProcessDecision> {
+        if record.state == V7State::Committed {
+            let response = Self::validate_stored_response(
+                &record,
+                &serde_json::from_slice(&record.request)?,
+                policy,
+                signer,
+                replay_identity,
+            )?;
+            return Ok(V7ProcessDecision::Committed(response));
+        }
+        match self.store.claim(operation_id).await? {
+            V7ClaimOutcome::Claimed(reservation) => {
+                let request: NativeGraphIssuanceV7Request = serde_json::from_slice(&record.request)
+                    .context("invalid persisted V7 graph request")?;
+                self.execute_owned(
+                    operation_id,
+                    &request,
+                    policy,
+                    signer,
+                    replay_identity,
+                    &record.request_digest,
+                    &reservation.fence,
+                )
+                .await
             }
+            V7ClaimOutcome::Live => Ok(V7ProcessDecision::Pending),
+            V7ClaimOutcome::Committed => {
+                self.committed_from_store(
+                    operation_id,
+                    &serde_json::from_slice(&record.request)?,
+                    policy,
+                    signer,
+                    replay_identity,
+                )
+                .await
+            }
+            V7ClaimOutcome::Missing | V7ClaimOutcome::InvalidState => {
+                Ok(V7ProcessDecision::Pending)
+            }
+        }
+    }
+
+    async fn execute_owned(
+        &self,
+        operation_id: &[u8; 16],
+        request: &NativeGraphIssuanceV7Request,
+        policy: &NativeGraphIssuanceV7Policy,
+        signer: &V7Signer,
+        replay_identity: &str,
+        request_digest: &[u8; 32],
+        fence: &[u8],
+    ) -> Result<V7ProcessDecision> {
+        request.validate().map_err(anyhow::Error::msg)?;
+        if request.request_digest().map_err(anyhow::Error::msg)? != *request_digest {
+            bail!("persisted V7 graph request digest mismatch")
+        }
+        let message = validate_blinded_message(policy, &request.blinded_message)?;
+        // This is the only signing call in the V7 graph lane. A provider
+        // failure leaves the durable reservation in place for a later claim.
+        let signature = match self.inventory.sign(signer.identity(), &message).await {
+            Ok(signature) => signature,
+            Err(_) => return Ok(V7ProcessDecision::Pending),
         };
         let mut result = NativeGraphIssuanceV7Result {
             version: request.version,
@@ -374,7 +459,7 @@ impl V7GraphIssuanceEngine {
             quantity: request.quantity,
             blinded_message: request.blinded_message.clone(),
             request_commitment: request.request_commitment.clone(),
-            replay_identity: replay_identity.clone(),
+            replay_identity: replay_identity.to_owned(),
             blind_signature: Base64UrlUnpadded::encode_string(signature.as_bytes()),
             result_digest: String::new(),
         };
@@ -382,22 +467,86 @@ impl V7GraphIssuanceEngine {
             hex::encode(result.result_digest_bytes().map_err(anyhow::Error::msg)?);
         validate_result_against(&result, request, policy, signer, &replay_identity)?;
         let response = serde_json::to_vec(&result)?;
-        self.store
-            .commit(&operation_id, &request_digest, &response)
-            .await?;
-        Ok(V7ProcessDecision::Committed(response))
+        match self
+            .store
+            .commit(operation_id, request_digest, fence, &response)
+            .await?
+        {
+            V7TransitionOutcome::Applied | V7TransitionOutcome::Repeated => {
+                self.committed_from_store(operation_id, request, policy, signer, replay_identity)
+                    .await
+            }
+            V7TransitionOutcome::Conflict
+            | V7TransitionOutcome::InvalidState
+            | V7TransitionOutcome::StaleFence => match self.store.get(operation_id).await? {
+                Some(record) if record.state == V7State::Committed => {
+                    let request = serde_json::from_slice(&record.request)?;
+                    let response = Self::validate_stored_response(
+                        &record,
+                        &request,
+                        policy,
+                        signer,
+                        replay_identity,
+                    )?;
+                    Ok(V7ProcessDecision::Committed(response))
+                }
+                _ => Ok(V7ProcessDecision::Pending),
+            },
+        }
+    }
+
+    async fn committed_from_store(
+        &self,
+        operation_id: &[u8; 16],
+        request: &NativeGraphIssuanceV7Request,
+        policy: &NativeGraphIssuanceV7Policy,
+        signer: &V7Signer,
+        replay_identity: &str,
+    ) -> Result<V7ProcessDecision> {
+        let record = self
+            .store
+            .get(operation_id)
+            .await?
+            .context("committed V7 graph operation disappeared")?;
+        if record.state != V7State::Committed {
+            return Ok(V7ProcessDecision::Pending);
+        }
+        Ok(V7ProcessDecision::Committed(
+            Self::validate_stored_response(&record, request, policy, signer, replay_identity)?,
+        ))
     }
 
     pub async fn status(&self, operation_id: &[u8; 16]) -> Result<V7StatusDecision> {
         Ok(match self.store.get(operation_id).await? {
             None => V7StatusDecision::Unknown,
-            Some(record) => {
-                let result: NativeGraphIssuanceV7Result = serde_json::from_slice(&record.response)?;
-                result.validate().map_err(anyhow::Error::msg)?;
-                V7StatusDecision::Committed(record.response)
-            }
+            Some(record) => match record.state {
+                V7State::Reserved => V7StatusDecision::Pending,
+                V7State::Committed => {
+                    let response = record
+                        .response
+                        .context("committed V7 graph operation response missing")?;
+                    let result: NativeGraphIssuanceV7Result = serde_json::from_slice(&response)?;
+                    result.validate().map_err(anyhow::Error::msg)?;
+                    V7StatusDecision::Committed(response)
+                }
+            },
         })
     }
+}
+
+fn same_request(
+    record: &StoredV7Operation,
+    request: &[u8],
+    canonical_request: &[u8],
+    request_digest: &[u8; 32],
+    replay_identity: &str,
+    global_spend_key: &str,
+) -> bool {
+    record.request == request
+        && record.canonical_request == canonical_request
+        && record.request_digest == *request_digest
+        && record.replay_identity == replay_identity
+        && record.global_spend_key == global_spend_key
 }
 
 fn decode_operation_id(value: &str) -> Result<[u8; 16]> {

@@ -371,7 +371,7 @@ Issuer variables:
 | `ISSUER_ID` | `issuer:freebird:v4` | Embedded in issued tokens and metadata. |
 | `ISSUER_SK_PATH` | `issuer_sk.bin` | V4 issuer secret key path. Created if missing. |
 | `KEY_ROTATION_STATE_PATH` | `key_rotation_state.json` | V4 key rotation state. |
-| `KID` | derived | Optional key ID override; mismatched values are corrected with the derived prefix. |
+| `KID` | derived from persisted key | Optional compatibility override; it is preserved only when it begins with the persisted key's derived KID. Mismatched values fall back to that stable derived KID. Retain a legacy override while retaining matching legacy rotation state. |
 | `EPOCH_DURATION` | `1d` | Human-readable duration accepted. |
 | `EPOCH_RETENTION` | `2` | Number of previous epochs accepted. |
 | `SYBIL_RESISTANCE` | required | Set explicitly to `none` only for a deliberate no-checker opt-out; otherwise use `invitation`, `pow`, `rate_limit`, `progressive_trust`, `proof_of_diversity`, `multi_party_vouching`, `social_graph`, `webauthn`, or `combined`. |
@@ -395,6 +395,13 @@ Issuer variables:
 | `NATIVE_BEARER_V7_METADATA_PATH` | `native_bearer_v7.json` | V7 signer metadata path. |
 | `NATIVE_BEARER_V7_REGISTRY_PATH` | `native_bearer_v7_registry.json` | Append-only V7 key registry path. |
 | `NATIVE_BEARER_V7_VALIDITY` | `30d` | V7 fixed body validity window. |
+
+V4 verifier lookup remains exact-KID matching. During migration from the former
+date-suffixed default, a retained legacy rotation-state file requires `KID` to
+remain explicitly set to its legacy active value, which must retain the
+persisted key's derived-KID prefix. To omit `KID`, explicitly reset/delete the
+rotation-state file first; this accepts an identity transition to the stable
+key-derived KID.
 
 Verifier variables:
 

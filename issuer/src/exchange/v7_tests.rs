@@ -112,13 +112,10 @@ fn fixture() -> Fixture {
     let retained =
         V7SignerSpec::from_native_config(&signer_config(directory.path(), 0x22), "issuer:test")
             .unwrap();
+    let registry_path = directory.path().join("exchange-registry.json");
+    V7SignerInventory::load_or_generate(retained.clone(), Vec::new(), &registry_path).unwrap();
     let inventory = Arc::new(
-        V7SignerInventory::load_or_generate(
-            active,
-            vec![retained],
-            &directory.path().join("exchange-registry.json"),
-        )
-        .unwrap(),
+        V7SignerInventory::load_or_generate(active, vec![retained], &registry_path).unwrap(),
     );
     let signers = inventory
         .registry()
