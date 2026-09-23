@@ -437,7 +437,6 @@ async fn batch_verify(
             let issuers_snapshot = issuers_snapshot.clone();
             let verifier_id = verifier_id.clone();
             let audience = audience.clone();
-            let scope_digest = scope_digest;
             let store = store.clone();
             async move {
                 let prepared = tokio::task::spawn_blocking(move || {

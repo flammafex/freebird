@@ -155,6 +155,9 @@ impl ReadinessState {
         };
     }
 
+    // Startup passes the readiness dependencies as separate, stable inputs;
+    // retain that signature rather than adding a one-use configuration object.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn spawn_checks(
         &self,
         admission: AdmissionExecutor,

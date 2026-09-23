@@ -423,6 +423,9 @@ impl V7GraphIssuanceEngine {
         }
     }
 
+    // Keep this explicit transaction context together; splitting it into a
+    // parameter object would obscure the fixed request/policy/signer binding.
+    #[allow(clippy::too_many_arguments)]
     async fn execute_owned(
         &self,
         operation_id: &[u8; 16],
@@ -465,7 +468,7 @@ impl V7GraphIssuanceEngine {
         };
         result.result_digest =
             hex::encode(result.result_digest_bytes().map_err(anyhow::Error::msg)?);
-        validate_result_against(&result, request, policy, signer, &replay_identity)?;
+        validate_result_against(&result, request, policy, signer, replay_identity)?;
         let response = serde_json::to_vec(&result)?;
         match self
             .store

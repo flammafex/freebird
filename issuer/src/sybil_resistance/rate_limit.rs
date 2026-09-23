@@ -406,10 +406,9 @@ mod tests {
         // Exercise both server-derived (empty) and legacy fingerprint proof IDs.
         for explicit_id in [false, true] {
             limiter.clear();
-            for (index, user_agent) in
-                [Some("browser-a"), Some("browser-b"), None, Some("")]
-                    .into_iter()
-                    .enumerate()
+            for (index, user_agent) in [Some("browser-a"), Some("browser-b"), None, Some("")]
+                .into_iter()
+                .enumerate()
             {
                 let mut headers = HeaderMap::new();
                 if let Some(user_agent) = user_agent {

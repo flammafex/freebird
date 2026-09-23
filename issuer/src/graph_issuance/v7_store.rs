@@ -89,7 +89,11 @@ pub(super) struct StoredV7Operation {
     pub(super) replay_identity: String,
     pub(super) global_spend_key: String,
     pub(super) state: V7State,
+    // Preserve these persisted lease fields for Redis recovery and record
+    // inspection even though the current engine does not read them directly.
+    #[allow(dead_code)]
     pub(super) fence: Vec<u8>,
+    #[allow(dead_code)]
     pub(super) lease_until: u64,
     pub(super) response: Option<Vec<u8>>,
 }
@@ -301,8 +305,6 @@ mod tests {
     use super::{
         V7ClaimOutcome, V7GraphIssuanceStore, V7ReserveOutcome, V7State, V7TransitionOutcome,
     };
-    use redis::AsyncCommands;
-
     #[test]
     fn replay_identity_is_stable_and_domain_separated() {
         let identity = V7GraphIssuanceStore::replay_identity("global:test", &[7; 32]);

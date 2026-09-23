@@ -107,6 +107,71 @@ pub fn native_exchange_v3_ordered_root(
     Ok(level[0])
 }
 
+/// Generate the canonical six-sibling proof for a leaf in a fixed 64-leaf V7 tree.
+pub fn native_exchange_v3_output_proof(
+    leaves: &[[u8; 32]],
+    index: usize,
+) -> Result<String, NativeExchangeV3Error> {
+    if leaves.is_empty() || leaves.len() > NATIVE_EXCHANGE_V3_MAX_ITEMS || index >= leaves.len() {
+        return Err(NativeExchangeV3Error("invalid V7 Merkle proof index"));
+    }
+    let empty = hash(NATIVE_EXCHANGE_V3_DOMAIN_EMPTY_LEAF, &[]);
+    let mut level = vec![empty; NATIVE_EXCHANGE_V3_MAX_ITEMS];
+    level[..leaves.len()].copy_from_slice(leaves);
+    let mut position = index;
+    let mut proof = Vec::with_capacity(6 * 32);
+    while level.len() > 1 {
+        proof.extend_from_slice(&level[position ^ 1]);
+        level = level
+            .chunks_exact(2)
+            .map(|pair| {
+                let mut transcript = Vec::with_capacity(64);
+                transcript.extend_from_slice(&pair[0]);
+                transcript.extend_from_slice(&pair[1]);
+                hash(NATIVE_EXCHANGE_V3_DOMAIN_MERKLE_NODE, &transcript)
+            })
+            .collect();
+        position >>= 1;
+    }
+    Ok(Base64UrlUnpadded::encode_string(&proof))
+}
+
+/// Verify a canonical proof against the request-output or result-output leaf domain.
+pub fn native_exchange_v3_verify_output_proof(
+    result: bool,
+    index: u32,
+    output_id: &[u8; 16],
+    commitment: &[u8; 32],
+    proof: &str,
+    root: &[u8; 32],
+) -> Result<(), NativeExchangeV3Error> {
+    if index as usize >= NATIVE_EXCHANGE_V3_MAX_ITEMS {
+        return Err(NativeExchangeV3Error("invalid V7 Merkle proof index"));
+    }
+    let siblings = exact_b64::<192>(proof, "V7 proof must be canonical raw192")?;
+    let mut node = native_exchange_v3_output_leaf(result, index, output_id, commitment);
+    let mut position = index as usize;
+    for sibling in siblings.chunks_exact(32) {
+        let sibling: [u8; 32] = sibling
+            .try_into()
+            .map_err(|_| NativeExchangeV3Error("invalid V7 Merkle sibling"))?;
+        let mut transcript = Vec::with_capacity(64);
+        if position & 1 == 0 {
+            transcript.extend_from_slice(&node);
+            transcript.extend_from_slice(&sibling);
+        } else {
+            transcript.extend_from_slice(&sibling);
+            transcript.extend_from_slice(&node);
+        }
+        node = hash(NATIVE_EXCHANGE_V3_DOMAIN_MERKLE_NODE, &transcript);
+        position >>= 1;
+    }
+    if &node != root {
+        return Err(NativeExchangeV3Error("V7 Merkle proof root mismatch"));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NativeExchangeV3Profile {
@@ -962,6 +1027,41 @@ impl NativeExchangeV3Request {
             }
             put_output_request_transcript(&mut out, output)?;
         }
+        let request_leaves = self
+            .outputs
+            .iter()
+            .enumerate()
+            .map(|(index, output)| {
+                Ok(native_exchange_v3_output_leaf(
+                    false,
+                    index as u32,
+                    &exact_b64::<16>(&output.output_id, "invalid output id")?,
+                    &hex32(
+                        &output.request_output_commitment,
+                        "invalid request commitment",
+                    )?,
+                ))
+            })
+            .collect::<Result<Vec<_>, NativeExchangeV3Error>>()?;
+        let request_root = hex32(&self.request_output_root, "invalid request root")?;
+        if native_exchange_v3_ordered_root(&request_leaves)? != request_root {
+            return Err(NativeExchangeV3Error("V7 request-output root mismatch"));
+        }
+        for (index, output) in self.outputs.iter().enumerate() {
+            let output_id = exact_b64::<16>(&output.output_id, "invalid output id")?;
+            let commitment = hex32(
+                &output.request_output_commitment,
+                "invalid request commitment",
+            )?;
+            native_exchange_v3_verify_output_proof(
+                false,
+                index as u32,
+                &output_id,
+                &commitment,
+                &output.request_output_proof,
+                &request_root,
+            )?;
+        }
         Ok(out)
     }
 
@@ -1007,6 +1107,73 @@ impl NativeExchangeV3Result {
         }
         for output in &self.outputs {
             put_output_result_transcript(&mut out, output)?;
+        }
+        let request_leaves = self
+            .outputs
+            .iter()
+            .enumerate()
+            .map(|(index, output)| {
+                Ok(native_exchange_v3_output_leaf(
+                    false,
+                    index as u32,
+                    &exact_b64::<16>(&output.output_id, "invalid output id")?,
+                    &hex32(
+                        &output.request_output_commitment,
+                        "invalid request commitment",
+                    )?,
+                ))
+            })
+            .collect::<Result<Vec<_>, NativeExchangeV3Error>>()?;
+        let result_leaves = self
+            .outputs
+            .iter()
+            .enumerate()
+            .map(|(index, output)| {
+                Ok(native_exchange_v3_output_leaf(
+                    true,
+                    index as u32,
+                    &exact_b64::<16>(&output.output_id, "invalid output id")?,
+                    &hex32(
+                        &output.result_output_commitment,
+                        "invalid result commitment",
+                    )?,
+                ))
+            })
+            .collect::<Result<Vec<_>, NativeExchangeV3Error>>()?;
+        let request_root = hex32(&self.request_output_root, "invalid request root")?;
+        let result_root = hex32(&self.result_output_root, "invalid result root")?;
+        if native_exchange_v3_ordered_root(&request_leaves)? != request_root {
+            return Err(NativeExchangeV3Error("V7 request-output root mismatch"));
+        }
+        if native_exchange_v3_ordered_root(&result_leaves)? != result_root {
+            return Err(NativeExchangeV3Error("V7 result-output root mismatch"));
+        }
+        for (index, output) in self.outputs.iter().enumerate() {
+            let output_id = exact_b64::<16>(&output.output_id, "invalid output id")?;
+            let request_commitment = hex32(
+                &output.request_output_commitment,
+                "invalid request commitment",
+            )?;
+            let result_commitment = hex32(
+                &output.result_output_commitment,
+                "invalid result commitment",
+            )?;
+            native_exchange_v3_verify_output_proof(
+                false,
+                index as u32,
+                &output_id,
+                &request_commitment,
+                &output.request_output_proof,
+                &request_root,
+            )?;
+            native_exchange_v3_verify_output_proof(
+                true,
+                index as u32,
+                &output_id,
+                &result_commitment,
+                &output.result_output_proof,
+                &result_root,
+            )?;
         }
         Ok(hash(NATIVE_EXCHANGE_V3_DOMAIN_RESULT, &out))
     }
@@ -1095,6 +1262,96 @@ mod tests {
         Base64UrlUnpadded::encode_string(&[7; N])
     }
 
+    fn test_source(amount_minor: u64) -> NativeExchangeV3Source {
+        let nonce = [1; 32];
+        let owner_commitment = [2; 32];
+        let nullifier = freebird_crypto::PublicBearerV7Body::derive_nullifier(
+            "issuer:test",
+            &nonce,
+            &owner_commitment,
+        )
+        .unwrap();
+        let body = freebird_crypto::PublicBearerV7Body::new(
+            "USD",
+            amount_minor,
+            "issuer:test",
+            freebird_crypto::V7TokenKeyId::new([3; 32]),
+            nonce,
+            nullifier,
+            owner_commitment,
+        )
+        .unwrap();
+        let artifact = freebird_crypto::NativeBearerV7Token::new(
+            body,
+            freebird_crypto::V7MessageRandomizer::new([4; 32]),
+            freebird_crypto::V7Signature::new([5; 384]),
+        )
+        .serialize()
+        .unwrap();
+        let token = freebird_crypto::parse_native_bearer_v7_token(&artifact).unwrap();
+        NativeExchangeV3Source {
+            artifact: Base64UrlUnpadded::encode_string(&artifact),
+            source_artifact_digest: hex::encode(token.artifact_digest().unwrap()),
+            descriptor_id: "11".repeat(32),
+            keyset_id: "22".repeat(32),
+            slot_id: "source".into(),
+        }
+    }
+
+    fn test_request(output_count: usize) -> NativeExchangeV3Request {
+        let mut outputs = (0..output_count)
+            .map(|index| NativeExchangeV3Output {
+                output_id: Base64UrlUnpadded::encode_string(&[index as u8 + 1; 16]),
+                descriptor_id: "33".repeat(32),
+                keyset_id: "44".repeat(32),
+                slot_id: format!("output-{index}"),
+                asset_id: "USD".into(),
+                amount_minor: "1".into(),
+                blinded_message: raw::<384>(),
+                handoff_commitment: "55".repeat(32),
+                request_output_commitment: format!("{:02x}", index + 1).repeat(32),
+                request_output_proof: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let request_leaves = outputs
+            .iter()
+            .enumerate()
+            .map(|(index, output)| {
+                native_exchange_v3_output_leaf(
+                    false,
+                    index as u32,
+                    &exact_b64::<16>(&output.output_id, "id").unwrap(),
+                    &hex32(&output.request_output_commitment, "commitment").unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (index, output) in outputs.iter_mut().enumerate() {
+            output.request_output_proof =
+                native_exchange_v3_output_proof(&request_leaves, index).unwrap();
+        }
+        NativeExchangeV3Request {
+            version: 3,
+            profile_id: NATIVE_EXCHANGE_V3_PROFILE_ID.into(),
+            issuer_or_federation_id: "federation:test".into(),
+            public_operation_id: raw::<16>(),
+            graph_id: "66".repeat(32),
+            transition_id: "77".repeat(32),
+            source_keyset_id: "22".repeat(32),
+            target_keyset_id: "44".repeat(32),
+            asset_id: "USD".into(),
+            source_count: 1,
+            output_count: output_count as u32,
+            source_total_minor: output_count.to_string(),
+            output_total_minor: output_count.to_string(),
+            source_root: "88".repeat(32),
+            request_output_root: hex::encode(
+                native_exchange_v3_ordered_root(&request_leaves).unwrap(),
+            ),
+            sources: vec![test_source(output_count as u64)],
+            outputs,
+        }
+    }
+
     #[test]
     fn v7_exchange_identifier_namespaces_are_canonical_and_distinct() {
         let token = "11".repeat(32);
@@ -1117,6 +1374,314 @@ mod tests {
             ordered,
             native_exchange_v3_ordered_root(&[first, second]).unwrap()
         );
+    }
+
+    #[test]
+    fn v7_output_proofs_bind_domains_indices_order_and_fixed_tree_root() {
+        fn independent_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+            let mut nodes = vec![hash(NATIVE_EXCHANGE_V3_DOMAIN_EMPTY_LEAF, &[]); 64];
+            nodes[..leaves.len()].copy_from_slice(leaves);
+            for _ in 0..6 {
+                nodes = nodes
+                    .chunks_exact(2)
+                    .map(|pair| {
+                        let mut bytes = Vec::from(pair[0]);
+                        bytes.extend_from_slice(&pair[1]);
+                        hash(NATIVE_EXCHANGE_V3_DOMAIN_MERKLE_NODE, &bytes)
+                    })
+                    .collect();
+            }
+            nodes[0]
+        }
+
+        let ids = [[1; 16], [2; 16]];
+        let commitments = [[3; 32], [4; 32]];
+        let request_leaves = [
+            native_exchange_v3_output_leaf(false, 0, &ids[0], &commitments[0]),
+            native_exchange_v3_output_leaf(false, 1, &ids[1], &commitments[1]),
+        ];
+        let result_leaves = [
+            native_exchange_v3_output_leaf(true, 0, &ids[0], &commitments[0]),
+            native_exchange_v3_output_leaf(true, 1, &ids[1], &commitments[1]),
+        ];
+        let request_root = independent_root(&request_leaves);
+        let result_root = independent_root(&result_leaves);
+        assert_eq!(
+            native_exchange_v3_ordered_root(&request_leaves).unwrap(),
+            request_root
+        );
+        assert_eq!(
+            native_exchange_v3_ordered_root(&result_leaves).unwrap(),
+            result_root
+        );
+        assert_ne!(request_root, result_root);
+
+        for index in 0..2 {
+            let request_proof = native_exchange_v3_output_proof(&request_leaves, index).unwrap();
+            let result_proof = native_exchange_v3_output_proof(&result_leaves, index).unwrap();
+            assert_ne!(request_proof, result_proof);
+            native_exchange_v3_verify_output_proof(
+                false,
+                index as u32,
+                &ids[index],
+                &commitments[index],
+                &request_proof,
+                &request_root,
+            )
+            .unwrap();
+            native_exchange_v3_verify_output_proof(
+                true,
+                index as u32,
+                &ids[index],
+                &commitments[index],
+                &result_proof,
+                &result_root,
+            )
+            .unwrap();
+
+            let mut wrong_sibling = Base64UrlUnpadded::decode_vec(&result_proof).unwrap();
+            wrong_sibling[0] ^= 1;
+            assert!(native_exchange_v3_verify_output_proof(
+                true,
+                index as u32,
+                &ids[index],
+                &commitments[index],
+                &Base64UrlUnpadded::encode_string(&wrong_sibling),
+                &result_root,
+            )
+            .is_err());
+            assert!(native_exchange_v3_verify_output_proof(
+                true,
+                index as u32,
+                &ids[index],
+                &commitments[index],
+                &result_proof[..result_proof.len() - 1],
+                &result_root,
+            )
+            .is_err());
+        }
+
+        let proof = native_exchange_v3_output_proof(&result_leaves, 0).unwrap();
+        assert!(native_exchange_v3_verify_output_proof(
+            false,
+            0,
+            &ids[0],
+            &commitments[0],
+            &proof,
+            &request_root,
+        )
+        .is_err());
+        assert!(native_exchange_v3_verify_output_proof(
+            true,
+            1,
+            &ids[0],
+            &commitments[0],
+            &proof,
+            &result_root,
+        )
+        .is_err());
+        let reordered = [result_leaves[1], result_leaves[0]];
+        assert_ne!(independent_root(&reordered), result_root);
+        assert!(native_exchange_v3_output_proof(&result_leaves, 2).is_err());
+    }
+
+    #[test]
+    fn v7_full_request_and_result_validation_bind_exact_ordered_leaf_sets() {
+        fn independent_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+            let mut nodes = vec![hash(NATIVE_EXCHANGE_V3_DOMAIN_EMPTY_LEAF, &[]); 64];
+            nodes[..leaves.len()].copy_from_slice(leaves);
+            for _ in 0..6 {
+                nodes = nodes
+                    .chunks_exact(2)
+                    .map(|pair| {
+                        let mut bytes = Vec::from(pair[0]);
+                        bytes.extend_from_slice(&pair[1]);
+                        hash(NATIVE_EXCHANGE_V3_DOMAIN_MERKLE_NODE, &bytes)
+                    })
+                    .collect();
+            }
+            nodes[0]
+        }
+
+        fn independent_proof(leaves: &[[u8; 32]], index: usize) -> Vec<u8> {
+            let mut nodes = vec![hash(NATIVE_EXCHANGE_V3_DOMAIN_EMPTY_LEAF, &[]); 64];
+            nodes[..leaves.len()].copy_from_slice(leaves);
+            let mut position = index;
+            let mut proof = Vec::new();
+            while nodes.len() > 1 {
+                proof.extend_from_slice(&nodes[position ^ 1]);
+                nodes = nodes
+                    .chunks_exact(2)
+                    .map(|pair| {
+                        let mut bytes = Vec::from(pair[0]);
+                        bytes.extend_from_slice(&pair[1]);
+                        hash(NATIVE_EXCHANGE_V3_DOMAIN_MERKLE_NODE, &bytes)
+                    })
+                    .collect();
+                position >>= 1;
+            }
+            proof
+        }
+
+        fn unchecked_result_digest(result: &NativeExchangeV3Result) -> [u8; 32] {
+            let mut bytes = prefix(
+                result.version,
+                &result.profile_id,
+                &result.issuer_or_federation_id,
+                &result.public_operation_id,
+                &result.graph_id,
+                &result.transition_id,
+                &result.source_keyset_id,
+                &result.target_keyset_id,
+                &result.asset_id,
+            )
+            .unwrap();
+            bytes.extend_from_slice(&result.source_count.to_be_bytes());
+            bytes.extend_from_slice(&result.output_count.to_be_bytes());
+            bytes.extend_from_slice(&amount(&result.source_total_minor).unwrap().to_be_bytes());
+            bytes.extend_from_slice(&amount(&result.output_total_minor).unwrap().to_be_bytes());
+            bytes.extend_from_slice(&hex32(&result.source_root, "source").unwrap());
+            bytes.extend_from_slice(&hex32(&result.request_output_root, "request").unwrap());
+            bytes.extend_from_slice(&hex32(&result.result_output_root, "result").unwrap());
+            bytes.extend_from_slice(&hex32(&result.request_digest, "request digest").unwrap());
+            for output in &result.outputs {
+                put_output_result_transcript(&mut bytes, output).unwrap();
+            }
+            hash(NATIVE_EXCHANGE_V3_DOMAIN_RESULT, &bytes)
+        }
+
+        for count in [1, 2, 64] {
+            let request = test_request(count);
+            request.validate().unwrap();
+            let mut padded = request.clone();
+            padded.outputs[0].request_output_proof.push('=');
+            assert!(padded.validate().is_err());
+            if count > 1 {
+                let mut reordered = request.clone();
+                reordered.outputs.swap(0, 1);
+                assert!(reordered.validate().is_err());
+            }
+            let request_leaves = request
+                .outputs
+                .iter()
+                .enumerate()
+                .map(|(index, output)| {
+                    native_exchange_v3_output_leaf(
+                        false,
+                        index as u32,
+                        &exact_b64::<16>(&output.output_id, "id").unwrap(),
+                        &hex32(&output.request_output_commitment, "commitment").unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let expected_request_root = independent_root(&request_leaves);
+            assert_eq!(
+                hex::decode(&request.request_output_root).unwrap(),
+                expected_request_root
+            );
+            for (index, output) in request.outputs.iter().enumerate() {
+                assert_eq!(
+                    Base64UrlUnpadded::decode_vec(&output.request_output_proof).unwrap(),
+                    independent_proof(&request_leaves, index)
+                );
+            }
+
+            let result_leaves = request_leaves
+                .iter()
+                .enumerate()
+                .map(|(index, _)| {
+                    native_exchange_v3_output_leaf(
+                        true,
+                        index as u32,
+                        &exact_b64::<16>(&request.outputs[index].output_id, "id").unwrap(),
+                        &hex32(
+                            &request.outputs[index].request_output_commitment,
+                            "commitment",
+                        )
+                        .unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let result_root = independent_root(&result_leaves);
+            let mut result = NativeExchangeV3Result {
+                version: request.version,
+                profile_id: request.profile_id.clone(),
+                issuer_or_federation_id: request.issuer_or_federation_id.clone(),
+                public_operation_id: request.public_operation_id.clone(),
+                graph_id: request.graph_id.clone(),
+                transition_id: request.transition_id.clone(),
+                source_keyset_id: request.source_keyset_id.clone(),
+                target_keyset_id: request.target_keyset_id.clone(),
+                asset_id: request.asset_id.clone(),
+                source_count: request.source_count,
+                output_count: request.output_count,
+                source_total_minor: request.source_total_minor.clone(),
+                output_total_minor: request.output_total_minor.clone(),
+                source_root: request.source_root.clone(),
+                request_output_root: request.request_output_root.clone(),
+                result_output_root: hex::encode(result_root),
+                request_digest: hex::encode(request.request_digest().unwrap()),
+                outputs: request
+                    .outputs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, output)| NativeExchangeV3ResultOutput {
+                        output_id: output.output_id.clone(),
+                        descriptor_id: output.descriptor_id.clone(),
+                        keyset_id: output.keyset_id.clone(),
+                        slot_id: output.slot_id.clone(),
+                        asset_id: output.asset_id.clone(),
+                        amount_minor: output.amount_minor.clone(),
+                        blinded_message: output.blinded_message.clone(),
+                        handoff_commitment: output.handoff_commitment.clone(),
+                        request_output_commitment: output.request_output_commitment.clone(),
+                        request_output_proof: output.request_output_proof.clone(),
+                        result_output_commitment: output.request_output_commitment.clone(),
+                        result_output_proof: Base64UrlUnpadded::encode_string(&independent_proof(
+                            &result_leaves,
+                            index,
+                        )),
+                        blind_signature: raw::<384>(),
+                    })
+                    .collect(),
+                result_digest: String::new(),
+            };
+            result.result_digest = hex::encode(result.result_digest().unwrap());
+            result.validate().unwrap();
+
+            if count == 1 {
+                let mut forged = result.clone();
+                let mut siblings =
+                    Base64UrlUnpadded::decode_vec(&forged.outputs[0].result_output_proof).unwrap();
+                siblings[0] ^= 0x80; // replace the canonical empty sibling
+                forged.outputs[0].result_output_proof = Base64UrlUnpadded::encode_string(&siblings);
+
+                let leaf = native_exchange_v3_output_leaf(
+                    true,
+                    0,
+                    &exact_b64::<16>(&forged.outputs[0].output_id, "id").unwrap(),
+                    &hex32(&forged.outputs[0].result_output_commitment, "commitment").unwrap(),
+                );
+                let mut node = leaf;
+                for sibling in siblings.chunks_exact(32) {
+                    let mut pair = Vec::from(node);
+                    pair.extend_from_slice(sibling);
+                    node = hash(NATIVE_EXCHANGE_V3_DOMAIN_MERKLE_NODE, &pair);
+                }
+                forged.result_output_root = hex::encode(node);
+                native_exchange_v3_verify_output_proof(
+                    true,
+                    0,
+                    &exact_b64::<16>(&forged.outputs[0].output_id, "id").unwrap(),
+                    &hex32(&forged.outputs[0].result_output_commitment, "commitment").unwrap(),
+                    &forged.outputs[0].result_output_proof,
+                    &node,
+                )
+                .unwrap();
+                forged.result_digest = hex::encode(unchecked_result_digest(&forged));
+                assert!(forged.validate().is_err());
+            }
+        }
     }
 
     #[test]

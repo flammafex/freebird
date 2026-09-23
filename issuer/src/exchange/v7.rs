@@ -10,9 +10,9 @@ use anyhow::{bail, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
 use freebird_common::api::{
     native_exchange_v3_ordered_root, native_exchange_v3_output_leaf,
-    native_exchange_v3_source_leaf, NativeExchangeV3Descriptor, NativeExchangeV3Discovery,
-    NativeExchangeV3Receipt, NativeExchangeV3Request, NativeExchangeV3Result,
-    NativeExchangeV3ResultOutput, NATIVE_EXCHANGE_V3_PROFILE_ID,
+    native_exchange_v3_output_proof, native_exchange_v3_source_leaf, NativeExchangeV3Descriptor,
+    NativeExchangeV3Discovery, NativeExchangeV3Receipt, NativeExchangeV3Request,
+    NativeExchangeV3Result, NativeExchangeV3ResultOutput, NATIVE_EXCHANGE_V3_PROFILE_ID,
     NATIVE_EXCHANGE_V3_RECEIPT_LIFETIME_SECS, NATIVE_EXCHANGE_V3_VERSION,
 };
 use freebird_common::v7_wire::{decode_base64url, parse_operation_id, MAX_ARTIFACT};
@@ -404,7 +404,7 @@ impl V7ExchangeEngine {
                 V7ClaimOutcome::Claimed(reservation) => {
                     return self
                         .execute_owned(operation_id, record, reservation.fence)
-                        .await
+                        .await;
                 }
                 V7ClaimOutcome::Live => return Ok(V7ProcessDecision::Retryable),
                 V7ClaimOutcome::Committed | V7ClaimOutcome::InvalidState => {
@@ -484,6 +484,8 @@ impl V7ExchangeEngine {
                 .as_deref()
                 .context("persisted V7 result missing")?,
         )?;
+        // Pre-v0.10.3 ResultReady V7 records may contain copied request proofs.
+        // Deploy v0.10.3 only after emptying/resetting V7 exchange Redis state.
         result
             .validate()
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
@@ -609,7 +611,7 @@ fn unix_now() -> Result<i64> {
     i64::try_from(now).context("system clock exceeds V7 timestamp range")
 }
 
-fn build_result<'a>(
+pub(super) fn build_result<'a>(
     request: &'a NativeExchangeV3Request,
     signatures: Vec<(&'a freebird_common::api::NativeExchangeV3Output, String)>,
 ) -> Result<NativeExchangeV3Result> {
@@ -642,11 +644,14 @@ fn build_result<'a>(
             request_output_commitment: output.request_output_commitment.clone(),
             request_output_proof: output.request_output_proof.clone(),
             result_output_commitment: output.request_output_commitment.clone(),
-            result_output_proof: output.request_output_proof.clone(),
+            result_output_proof: String::new(),
             blind_signature: signature,
         });
     }
     let result_output_root = hex::encode(native_exchange_v3_ordered_root(&leaves)?);
+    for (index, output) in result_outputs.iter_mut().enumerate() {
+        output.result_output_proof = native_exchange_v3_output_proof(&leaves, index)?;
+    }
     Ok(NativeExchangeV3Result {
         version: request.version,
         profile_id: request.profile_id.clone(),
