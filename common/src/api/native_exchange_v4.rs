@@ -980,7 +980,11 @@ pub fn native_exchange_v4_ordered_root(
     let mut width = level.len();
     while width > 1 {
         let mut next = Vec::with_capacity(width / 2);
-        for pair in level[..width].chunks_exact(2) {
+        let (pairs, remainder) = level[..width].as_chunks::<2>();
+        if !remainder.is_empty() {
+            return Err(NativeExchangeV4Error("invalid Merkle tree width"));
+        }
+        for pair in pairs {
             next.push(hash(
                 NATIVE_EXCHANGE_V4_DOMAIN_MERKLE_NODE,
                 &[pair[0].as_slice(), pair[1].as_slice()].concat(),

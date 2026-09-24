@@ -95,7 +95,11 @@ pub fn native_exchange_v3_ordered_root(
     let mut width = level.len();
     while width > 1 {
         let mut next = Vec::with_capacity(width / 2);
-        for pair in level[..width].as_chunks::<2>().0 {
+        let (pairs, remainder) = level[..width].as_chunks::<2>();
+        if !remainder.is_empty() {
+            return Err(NativeExchangeV3Error("invalid V7 Merkle tree width"));
+        }
+        for pair in pairs {
             let mut transcript = Vec::with_capacity(64);
             transcript.extend_from_slice(&pair[0]);
             transcript.extend_from_slice(&pair[1]);
@@ -122,8 +126,12 @@ pub fn native_exchange_v3_output_proof(
     let mut proof = Vec::with_capacity(6 * 32);
     while level.len() > 1 {
         proof.extend_from_slice(&level[position ^ 1]);
-        level = level
-            .chunks_exact(2)
+        let (pairs, remainder) = level.as_chunks::<2>();
+        if !remainder.is_empty() {
+            return Err(NativeExchangeV3Error("invalid V7 Merkle tree width"));
+        }
+        level = pairs
+            .iter()
             .map(|pair| {
                 let mut transcript = Vec::with_capacity(64);
                 transcript.extend_from_slice(&pair[0]);
@@ -151,16 +159,17 @@ pub fn native_exchange_v3_verify_output_proof(
     let siblings = exact_b64::<192>(proof, "V7 proof must be canonical raw192")?;
     let mut node = native_exchange_v3_output_leaf(result, index, output_id, commitment);
     let mut position = index as usize;
-    for sibling in siblings.chunks_exact(32) {
-        let sibling: [u8; 32] = sibling
-            .try_into()
-            .map_err(|_| NativeExchangeV3Error("invalid V7 Merkle sibling"))?;
+    let (siblings, remainder) = siblings.as_chunks::<32>();
+    if !remainder.is_empty() {
+        return Err(NativeExchangeV3Error("invalid V7 Merkle proof length"));
+    }
+    for sibling in siblings {
         let mut transcript = Vec::with_capacity(64);
         if position & 1 == 0 {
             transcript.extend_from_slice(&node);
-            transcript.extend_from_slice(&sibling);
+            transcript.extend_from_slice(sibling);
         } else {
-            transcript.extend_from_slice(&sibling);
+            transcript.extend_from_slice(sibling);
             transcript.extend_from_slice(&node);
         }
         node = hash(NATIVE_EXCHANGE_V3_DOMAIN_MERKLE_NODE, &transcript);

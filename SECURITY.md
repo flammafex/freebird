@@ -71,13 +71,14 @@ other RustSec advisory:
   and reviewed. A crypto migration is required; this exception must be
   removed when that migration is available and validated, or sooner if the
   risk or dependency path changes.
-- **RUSTSEC-2024-0436 (`paste`)** is reached only through the optional
-  `freebird-crypto/pkcs11` feature and `cryptoki` 0.6. This is a temporary
-  compatibility exception: the feature is excluded by default and the
-  advisory remains visible in audit output. Upgrade work requires compilation
-  and real HSM (or equivalent SoftHSM) validation before it is accepted. The
-  exception expires when that validation-backed upgrade is completed, or must
-  be revisited sooner if PKCS#11 becomes part of a release build.
+
+The optional `freebird-crypto/pkcs11` feature uses `cryptoki` 0.10.1 or later
+within the 0.10 release line. It is not enabled by default. PKCS#11 provider
+initialization and public-key lookup are implemented, but VOPRF evaluation is
+explicitly unimplemented; enabling this feature does not provide HSM-backed
+VOPRF evaluation. This provider has not been validated against real HSM
+hardware or SoftHSM, and deployments must not treat it as a validated HSM
+integration.
 
 CI ignores only RUSTSEC-2023-0071. These exceptions do not suppress warnings,
 yanked-package checks, or any other advisory.
