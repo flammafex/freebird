@@ -6,8 +6,8 @@ eight required checks before creating the tag. Do not tag a commit that has not
 first landed on `main`:
 
 ```bash
-git tag -a v0.10.3 -m "Freebird 0.10.3"
-git push origin v0.10.3
+git tag -a v0.10.4 -m "Freebird 0.10.4"
+git push origin v0.10.4
 ```
 
 Pushing a `v*` tag starts two workflows:
@@ -25,14 +25,23 @@ It validates, packs, consumer-tests, and publishes the `@flammafex/freebird` npm
 package. It uses the protected `npm-publish` GitHub Environment and a granular
 npm automation token; it does not use OIDC or npm provenance.
 
-## v0.10.3
+## v0.10.4
 
-- Strengthens V7 multi-output exchange request/result Merkle-proof soundness.
-- Before upgrading an issuer to v0.10.3, ensure its V7 exchange Redis state is
-  fresh or has been emptied. Pre-v0.10.3 `ResultReady` records may contain copied
-  request proofs and are unsupported by this release; no migration is provided.
+- Carries forward the V7 multi-output exchange request/result Merkle-proof
+  soundness correction and patched `rustls` and `cryptoki` dependencies.
+- Before upgrading an issuer, ensure its V7 exchange Redis state is fresh or
+  has been emptied. Pre-v0.10.3 `ResultReady` records may contain copied request
+  proofs and are unsupported; no migration is provided.
 - V4 and V7 are supported; V5 and V2 are retired. The JavaScript SDK requires
   Node.js 24 or newer.
+
+## v0.10.3 source/tag history
+
+The existing v0.10.3 tags identify source history and must not be moved. The
+release archive workflow failed because the root `CHANGELOG.md` was missing;
+the npm publish workflow was blocked because the protected `npm-publish`
+Environment lacked its required `NPM_TOKEN` secret. Neither failure establishes
+that a release tarball or npm package was published. See the root changelog.
 
 ## v0.10.0 V7 canonical-descriptor migration
 
@@ -105,7 +114,7 @@ to `origin/main`, runs `scripts/release-gate.py` for the exact SHA, and checks
 out that SHA for packaging. Neither a moving branch nor a manually supplied
 SHA can bypass the gate.
 
-### SDK release (`@flammafex/freebird@0.10.3`)
+### SDK release (`@flammafex/freebird@0.10.4`)
 
 SDK npm releases use dedicated immutable `sdk-vMAJOR.MINOR.PATCH` tags rather
 than the Rust/container `v*` tags. After the npm organization, token, and
@@ -114,14 +123,14 @@ Environment are configured:
 The SDK release requires Node.js 24 or newer.
 
 1. In the reviewed release commit, update `sdk/js/package.json` and the root
-   `sdk/js/package-lock.json` entry to `0.10.3`. Confirm that their names and
+   `sdk/js/package-lock.json` entry to `0.10.4`. Confirm that their names and
    versions match exactly, merge that commit to protected `main`, and wait for
    all required CI checks to pass.
 2. Create and push the dedicated tag only after that review and gate:
 
    ```bash
-   git tag -a sdk-v0.10.3 <reviewed-commit> -m "Publish @flammafex/freebird 0.10.3"
-   git push origin sdk-v0.10.3
+   git tag -a sdk-v0.10.4 <reviewed-commit> -m "Publish @flammafex/freebird 0.10.4"
+   git push origin sdk-v0.10.4
    ```
 
 3. The tag push starts the workflow. Alternatively, start it manually from
@@ -129,7 +138,7 @@ The SDK release requires Node.js 24 or newer.
    and gates that tag commit and cannot select a branch or SHA:
 
    ```bash
-   gh workflow run npm-publish.yml --ref main -f tag=sdk-v0.10.3
+   gh workflow run npm-publish.yml --ref main -f tag=sdk-v0.10.4
    ```
 
 4. Approve the `npm-publish` Environment deployment and wait for the workflow's
@@ -148,12 +157,12 @@ The workflow run is the first verification. A maintainer should also confirm
 the public registry record and both consumer forms after publication:
 
 ```bash
-npm view @flammafex/freebird@0.10.3 version dist.tarball --registry=https://registry.npmjs.org
+npm view @flammafex/freebird@0.10.4 version dist.tarball --registry=https://registry.npmjs.org
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 cd "$tmp"
 npm init --yes >/dev/null
-npm install --ignore-scripts --no-audit --no-fund @flammafex/freebird@0.10.3 typescript@^5
+npm install --ignore-scripts --no-audit --no-fund @flammafex/freebird@0.10.4 typescript@^5
 node --input-type=module --eval "import('@flammafex/freebird').then(({FreebirdClient, crypto}) => { if (typeof FreebirdClient !== 'function' || typeof crypto.blind !== 'function') process.exit(1); })"
 node --eval "const {FreebirdClient, crypto} = require('@flammafex/freebird'); if (typeof FreebirdClient !== 'function' || typeof crypto.blind !== 'function') process.exit(1)"
 ```
@@ -215,7 +224,7 @@ The archive contains:
 Verify the archive checksum before installing:
 
 ```bash
-sha256sum -c freebird-0.10.3-linux-x86_64.tar.gz.sha256
+sha256sum -c freebird-0.10.4-linux-x86_64.tar.gz.sha256
 ```
 
 ## Container Images
@@ -223,9 +232,9 @@ sha256sum -c freebird-0.10.3-linux-x86_64.tar.gz.sha256
 Tag releases publish:
 
 ```text
-ghcr.io/flammafex/freebird-issuer:0.10.3
+ghcr.io/flammafex/freebird-issuer:0.10.4
 ghcr.io/flammafex/freebird-issuer:0.10
-ghcr.io/flammafex/freebird-verifier:0.10.3
+ghcr.io/flammafex/freebird-verifier:0.10.4
 ghcr.io/flammafex/freebird-verifier:0.10
 ```
 
@@ -241,7 +250,7 @@ After installing `cosign`, verify a pinned image digest with:
 
 ```bash
 cosign verify \
-  --certificate-identity-regexp 'https://github.com/.*/.github/workflows/docker.yml@refs/tags/v0.10.3' \
+  --certificate-identity-regexp 'https://github.com/.*/.github/workflows/docker.yml@refs/tags/v0.10.4' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/flammafex/freebird-issuer@sha256:<digest>
 ```
