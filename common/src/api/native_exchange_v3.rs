@@ -1391,8 +1391,10 @@ mod tests {
             let mut nodes = vec![hash(NATIVE_EXCHANGE_V3_DOMAIN_EMPTY_LEAF, &[]); 64];
             nodes[..leaves.len()].copy_from_slice(leaves);
             for _ in 0..6 {
-                nodes = nodes
-                    .chunks_exact(2)
+                let (pairs, remainder) = nodes.as_chunks::<2>();
+                assert!(remainder.is_empty());
+                nodes = pairs
+                    .iter()
                     .map(|pair| {
                         let mut bytes = Vec::from(pair[0]);
                         bytes.extend_from_slice(&pair[1]);
@@ -1500,8 +1502,10 @@ mod tests {
             let mut nodes = vec![hash(NATIVE_EXCHANGE_V3_DOMAIN_EMPTY_LEAF, &[]); 64];
             nodes[..leaves.len()].copy_from_slice(leaves);
             for _ in 0..6 {
-                nodes = nodes
-                    .chunks_exact(2)
+                let (pairs, remainder) = nodes.as_chunks::<2>();
+                assert!(remainder.is_empty());
+                nodes = pairs
+                    .iter()
                     .map(|pair| {
                         let mut bytes = Vec::from(pair[0]);
                         bytes.extend_from_slice(&pair[1]);
@@ -1519,8 +1523,10 @@ mod tests {
             let mut proof = Vec::new();
             while nodes.len() > 1 {
                 proof.extend_from_slice(&nodes[position ^ 1]);
-                nodes = nodes
-                    .chunks_exact(2)
+                let (pairs, remainder) = nodes.as_chunks::<2>();
+                assert!(remainder.is_empty());
+                nodes = pairs
+                    .iter()
                     .map(|pair| {
                         let mut bytes = Vec::from(pair[0]);
                         bytes.extend_from_slice(&pair[1]);
@@ -1672,7 +1678,9 @@ mod tests {
                     &hex32(&forged.outputs[0].result_output_commitment, "commitment").unwrap(),
                 );
                 let mut node = leaf;
-                for sibling in siblings.chunks_exact(32) {
+                let (sibling_chunks, remainder) = siblings.as_chunks::<32>();
+                assert!(remainder.is_empty());
+                for sibling in sibling_chunks {
                     let mut pair = Vec::from(node);
                     pair.extend_from_slice(sibling);
                     node = hash(NATIVE_EXCHANGE_V3_DOMAIN_MERKLE_NODE, &pair);
