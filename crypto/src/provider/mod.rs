@@ -23,6 +23,8 @@ pub mod pkcs11;
 /// - HSM implementations MUST ensure secret keys never leave the device
 /// - All operations MUST be constant-time where applicable
 /// - Implementations MUST properly zeroize sensitive intermediate values
+// async_trait boxes a Future (already must_use); Clippy 1.99 also flags its generated annotation.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait CryptoProvider: Send + Sync {
     /// Evaluate a VOPRF blinded element using the secret key
@@ -74,6 +76,8 @@ pub trait CryptoProvider: Send + Sync {
 /// Cryptographic provider for the separate V7 randomized public bearer flow.
 ///
 /// V7 deliberately uses its own provider trait and identity binding.
+// async_trait boxes a Future (already must_use); Clippy 1.99 also flags its generated annotation.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait V7BlindRsaProvider: Send + Sync {
     /// Sign a V7 blinded message for the explicitly requested identity.
