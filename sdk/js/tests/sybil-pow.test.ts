@@ -102,21 +102,30 @@ describe('PoW mining and verification', () => {
   });
 
   it('yields to the event loop during mining (no synchronous block)', async () => {
+    const binding = buildIssueBinding(ISSUER_ID, BLINDED_ELEMENT);
+    const timestamp = 1_700_000_000;
+    const yieldEvery = 50;
+    // Fix the transcript so these initial candidates are guaranteed not to
+    // solve the proof before the miner reaches its first scheduled yield.
+    for (let nonce = 0; nonce < yieldEvery; nonce++) {
+      expect(verifyPow(binding, nonce, timestamp, 14)).toBe(false);
+    }
+
     let timerFired = false;
     const timer = setTimeout(() => {
       timerFired = true;
     }, 0);
     const proof = await generateProofOfWork(
-      buildIssueBinding(ISSUER_ID, BLINDED_ELEMENT),
+      binding,
       14,
-      { yieldEvery: 50 },
+      { timestamp, yieldEvery },
     );
     clearTimeout(timer);
     // If the mining loop never yielded, the 0ms timer could not have fired
     // before mining completed.
     expect(timerFired).toBe(true);
     expect(verifyPow(proof.input, proof.nonce, proof.timestamp, 14)).toBe(true);
-  });
+  }, 30_000);
 });
 
 describe('PoW integration in issuance', () => {

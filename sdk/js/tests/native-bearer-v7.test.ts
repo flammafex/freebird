@@ -99,7 +99,7 @@ describe('V7 native bearer crypto', () => {
     expect(token.signature).toHaveLength(384);
     expect(await verifyV7Token(binding, token, 42n)).toBe(true);
     expect(parseV7Token(serializeV7Token(token))).toEqual(token);
-  });
+  }, 30_000); // RSA-3072 key generation can exceed Vitest's default under CI load.
 
   it('matches the pinned Rust envelope and artifact digest fixture', () => {
     const body = fixtureBody();

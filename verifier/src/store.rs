@@ -132,6 +132,10 @@ pub enum SpendOutcome {
 //
 // ─── GENERIC SPEND STORE TRAIT ──────────────────────────────────────
 //
+// async_trait wraps these public async methods in futures; their generated
+// Future-returning signatures trigger double_must_use even though the lint is
+// redundant for the async_trait API surface.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait SpendStore: Send + Sync {
     /// Check that the backing store is reachable.  Readiness must not infer
