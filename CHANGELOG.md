@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.10.5
+
+- V7 graph-issuance policy discovery now references one exchange descriptor,
+  keyset, and signer rather than reserving a duplicate graph-profile signer.
+- Issuer graph issuance, startup configuration, offline validation, and
+  readiness use the same exchange-profile binding; strict SDK discovery parity
+  fixtures cover the shared graph/exchange role.
+- V4-local holder authorization, V7 wire fields and canonical digests, and
+  replay semantics remain unchanged.
+- Test-only Gate 0 evidence tooling covers private fixture
+  validation, replay-authority negative control, dropped-response recovery,
+  verifier checking, and post-check spend-marker absence. It does not establish
+  two-wallet exchange/spending or CLI/web product promotion.
+
 ## v0.10.4
 
 - Carries forward the V7 multi-output exchange request/result Merkle-proof
