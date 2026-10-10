@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 use super::native_bearer_v7::{validate_native_bearer_v7_discovery, NativeBearerV7KeyInfo};
 use super::native_exchange_v4::{NativeExchangeV4Descriptor, NativeExchangeV4Discovery};
+use super::native_graph_issuance_v7::validate_native_graph_issuance_v7_exchange_bindings;
 use super::native_graph_issuance_v8::{
     NativeGraphIssuanceV8Discovery, NativeGraphIssuanceV8Policy,
 };
@@ -102,17 +103,6 @@ impl V7KeyDiscoveryResp {
                     .map_err(registry_error)?;
             }
         }
-        if let Some(graph) = &self.native_graph_issuance_v7 {
-            for policy in graph
-                .active_policies
-                .iter()
-                .chain(graph.retained_policies.iter())
-            {
-                registry
-                    .register_graph_policy(policy)
-                    .map_err(registry_error)?;
-            }
-        }
         Ok(registry)
     }
 
@@ -165,15 +155,18 @@ fn validate_v7_envelope(response: &V7KeyDiscoveryResp) -> Result<(), String> {
         }
     }
     if let Some(graph) = &response.native_graph_issuance_v7 {
-        graph.validate().map_err(|error| error.to_string())?;
-        for policy in graph
+        let exchange = response
+            .native_exchange_v7
+            .as_ref()
+            .ok_or_else(|| "V7 graph discovery requires V7 exchange discovery".to_owned())?;
+        validate_native_graph_issuance_v7_exchange_bindings(&response.issuer_id, graph, exchange)?;
+        if graph
             .active_policies
             .iter()
-            .chain(graph.retained_policies.iter())
+            .chain(&graph.retained_policies)
+            .any(|policy| policy.issuer_id != response.issuer_id)
         {
-            if policy.issuer_id != response.issuer_id {
-                return Err("V7 graph policy issuer mismatch".into());
-            }
+            return Err("V7 graph policy issuer mismatch".into());
         }
     }
     Ok(())
@@ -404,5 +397,134 @@ mod v2_tests {
         }))
         .expect_err("legacy fields must not deserialize as V2 discovery");
         assert!(error.to_string().contains("unknown field"));
+    }
+}
+
+#[cfg(test)]
+mod v7_graph_reference_tests {
+    use super::super::native_graph_issuance_v7::canonical_graph_policy_id;
+    use super::*;
+    use base64ct::{Base64UrlUnpadded, Encoding};
+
+    fn response_fixture() -> V7KeyDiscoveryResp {
+        serde_json::from_str(include_str!("../../test-fixtures/v7-graph-reference.json")).unwrap()
+    }
+
+    #[test]
+    fn graph_policy_references_exchange_without_reserving_another_signer() {
+        let response = response_fixture();
+        let registry = response.validated_registry().unwrap();
+        assert_eq!(registry.entries().len(), 2);
+        let encoded = serde_json::to_vec(&registry).unwrap();
+        assert_eq!(
+            encoded,
+            serde_json::to_vec(&response.validated_registry().unwrap()).unwrap()
+        );
+        assert_eq!(
+            registry.entries()[1].profile_id,
+            crate::api::NATIVE_EXCHANGE_V3_PROFILE_ID
+        );
+        assert!(registry
+            .entries()
+            .iter()
+            .all(|entry| { entry.profile_id != crate::api::NATIVE_GRAPH_ISSUANCE_V7_PROFILE_ID }));
+    }
+
+    #[test]
+    fn retained_graph_policy_reference_is_validated_as_the_same_exchange_binding() {
+        let mut response = response_fixture();
+        let exchange = response.native_exchange_v7.as_mut().unwrap();
+        exchange.retained_descriptors = std::mem::take(&mut exchange.active_descriptors);
+        exchange.retained_keysets = std::mem::take(&mut exchange.active_keysets);
+        let graph = response.native_graph_issuance_v7.as_mut().unwrap();
+        graph.retained_policies = std::mem::take(&mut graph.active_policies);
+        assert_eq!(response.validated_registry().unwrap().entries().len(), 2);
+
+        let policy = &mut response
+            .native_graph_issuance_v7
+            .as_mut()
+            .unwrap()
+            .retained_policies[0];
+        policy.asset_id = "EUR".into();
+        policy.policy_id = canonical_graph_policy_id(policy).unwrap();
+        assert!(response.validated_registry().is_err());
+    }
+
+    #[test]
+    fn graph_policy_ids_and_role_references_are_canonical_and_unique() {
+        let mut noncanonical = response_fixture();
+        let policy = &mut noncanonical
+            .native_graph_issuance_v7
+            .as_mut()
+            .unwrap()
+            .active_policies[0];
+        policy.policy_id.replace_range(0..1, "1");
+        assert!(noncanonical.validated_registry().is_err());
+
+        let mut duplicate = response_fixture();
+        let graph = duplicate.native_graph_issuance_v7.as_mut().unwrap();
+        graph.retained_policies = graph.active_policies.clone();
+        assert!(duplicate.validated_registry().is_err());
+
+        let mut repeated_role = response_fixture();
+        let graph = repeated_role.native_graph_issuance_v7.as_mut().unwrap();
+        let mut second_policy = graph.active_policies[0].clone();
+        second_policy.keyset_id = "55".repeat(32);
+        second_policy.policy_id = canonical_graph_policy_id(&second_policy).unwrap();
+        graph.retained_policies.push(second_policy);
+        let error = repeated_role
+            .native_graph_issuance_v7
+            .as_ref()
+            .unwrap()
+            .validate()
+            .unwrap_err();
+        assert_eq!(error.to_string(), "duplicate V7 graph token key reference");
+        assert!(repeated_role.validated_registry().is_err());
+    }
+
+    #[test]
+    fn graph_reference_mismatches_and_missing_exchange_fail() {
+        let mut response = response_fixture();
+        response.native_exchange_v7 = None;
+        assert!(response.validated_registry().is_err());
+
+        for mutate in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12] {
+            let mut response = response_fixture();
+            let policy = &mut response
+                .native_graph_issuance_v7
+                .as_mut()
+                .unwrap()
+                .active_policies[0];
+            match mutate {
+                0 => policy.graph_id = "55".repeat(32),
+                1 => policy.descriptor_id = "55".repeat(32),
+                2 => policy.keyset_id = "55".repeat(32),
+                3 => policy.issuer_id = "issuer:other".into(),
+                4 => policy.token_key_id = "55".repeat(32),
+                5 => policy.pubkey_spki_b64 = Base64UrlUnpadded::encode_string(&[1, 2, 3]),
+                6 => policy.spki_fingerprint = "55".repeat(32),
+                7 => policy.asset_id = "EUR".into(),
+                8 => policy.amount_minor = "43".into(),
+                9 => policy.valid_from = 11,
+                10 => policy.valid_until = 99,
+                11 => policy.profile_id = "freebird/native-graph-issuance/other".into(),
+                _ => {
+                    response.native_exchange_v7.as_mut().unwrap().active_keysets[0].descriptor_ids
+                        [0] = "55".repeat(32)
+                }
+            }
+            if mutate != 5 {
+                let policy = &mut response
+                    .native_graph_issuance_v7
+                    .as_mut()
+                    .unwrap()
+                    .active_policies[0];
+                policy.policy_id = canonical_graph_policy_id(policy).unwrap();
+            }
+            assert!(
+                response.validated_registry().is_err(),
+                "mutation {mutate} accepted"
+            );
+        }
     }
 }

@@ -21,6 +21,10 @@ mod http_runtime;
 mod key_material;
 mod preflight;
 mod sybil_audit_runtime;
+#[cfg(test)]
+mod v7_gate0_fixture_tests;
+#[cfg(test)]
+mod v7_graph_enabled_tests;
 mod webauthn_runtime;
 pub(crate) use exchange_runtime::validate_v7_exchange_inventory;
 pub use exchange_runtime::validate_v7_runtime_config;

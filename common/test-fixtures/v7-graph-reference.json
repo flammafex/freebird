@@ -1,0 +1,32 @@
+{
+  "issuer_id": "issuer:test",
+  "current_epoch": 1,
+  "valid_epochs": [1],
+  "epoch_duration_sec": 86400,
+  "voprf": {"suite":"VOPRF-P256-SHA256","kid":"kid","pubkey":"pubkey"},
+  "native_bearer_v7": {
+    "profile_id":"scarcity/native-bearer/v7","issuer_id":"issuer:test",
+    "descriptor_id":"69b7c77d1dbd3ec08cf2472d6a6aae8db3c7873dfde2152bb45ca6af6f94f5f2",
+    "token_key_id":"1111111111111111111111111111111111111111111111111111111111111111",
+    "asset_id":"USD","amount_minor":42,"suite":"RSABSSA-SHA384-PSS-Randomized-V7",
+    "modulus_bits":3072,"exponent":65537,
+    "pubkey_spki_b64":"MIIB0jA9BgkqhkiG9w0BAQowMKANMAsGCWCGSAFlAwQCAqEaMBgGCSqGSIb3DQEBCDALBglghkgBZQMEAgKiAwIBMAOCAY8AMIIBigKCAYEAugMDnFjfJD81rPAEnFhwG-JPvl5vRZYgVVQqjwet3CMQu3D0F2m_PAB-oZx4_0wYV7-kMsvN6L9kRY2mZzYxwoal4E1D7b7DPdkV_NxRFM0DPq7uQjkAetlCwQrzetJF8tiuShlBN5UV_bOnqalvd_PB8O3aSCAkwdUUdKSrNto0GU-D6yuSg7bKzW7raDVCMsiQw8NjK06ccS5YpMjhlpdk5wbIAFJbUZ0wHhmJuNKObRAdQnBjw1sWRzrk5g-cydBmiN5_pNbrLLIo-ZSOKC3hHjfX7dv_Q3mew9xW-DsZWg43MK2ScN-3IMakA9Lv1ByV7Bbt3JYm_UmrhC3LMtam2ViEUUCfCAHSwHBv9XAeF9Fv5KKGjxFmBGWo__WnVXh0_JI-dSLgupk6Rlp51gOvQkRhN5MTliDnNqEsKE0F8oVlfJll2BmSHLq0Tv3UPpTiBSEuiVv4mUxwAQX5ghp2k7uj3ITAHaVMsJf2twaUP4RStecVG5K92dbPTvWvAgMBAAE",
+    "spki_fingerprint":"c7d159e128fcac721d78292d2496ecd74a6cd91013602df8119076b2dfdf8a97",
+    "valid_from":1,"valid_until":2
+  },
+  "native_bearer_v7_retained": [],
+  "native_exchange_v7": {
+    "version":3,
+    "profile":{"version":3,"profile_id":"freebird/native-exchange/v3","graph_id":"ebd7be96c21cfeb624974b96569084de33bbcc7d3bc5576d2de242ade7156efe","suite":"RSABSSA-SHA384-PSS-Randomized-V7","modulus_bits":3072,"exponent":65537},
+    "active_descriptors":[
+      {"descriptor_id":"b2b8797a04e8341ca3f10deb2053de64bf868dd3db0a8f99e5ac2e3278c0569a","profile_id":"freebird/native-exchange/v3","issuer_id":"issuer:test","token_key_id":"2222222222222222222222222222222222222222222222222222222222222222","asset_id":"USD","amount_minor":"42","suite":"RSABSSA-SHA384-PSS-Randomized-V7","modulus_bits":3072,"exponent":65537,"pubkey_spki_b64":"MIIB0jA9BgkqhkiG9w0BAQowMKANMAsGCWCGSAFlAwQCAqEaMBgGCSqGSIb3DQEBCDALBglghkgBZQMEAgKiAwIBMAOCAY8AMIIBigKCAYEApzhk4J6yRwejhjI1WgNUN3P_iyhBFf5F7LwRF5tOTVOTR2knK8S8ojPi3Vb5d1bmRzVMuVeHhdLmoYUo-PluB1pf68vcl8tAEPLOgy_kihBtY1JXfvThH1kheZdNEriUx8A1T7cu7OrVQmITv6OJeU4THg-NfAebxzv2JwD64Fd_mylQ56-HNpunkehDFMhE8vw7jtL9pUnUX77ovJu5VlxQqESt4ZqgnoUg_tEvq_xPvvepf-59sTMGhDprr2bguQbpp1YbKIQpqw66na0xl4n4bDdXl_h6by_lNWUSQRH9RKYgEz-nadCreCpfEmB_kizfPDBHAKj0LxryjLjKviVUZUkqxjs_UJVTOrwGDodfVWnl3Kyo0YYejuQf6n6bsUvJb4Uw5opGkHACz07Kiep9DRMXMEesQ2_GPTWxxwknVARwgndZ5PFGVOHZyT55wYlB62OeemMqls1_bs_doXemp0X-t4XPUOoCkMYpkLfVpU92yyGdCBF8EPijxToZAgMBAAE","spki_fingerprint":"29da989c3181a00e39fdb4d3bc3ed79ec2f96c33bd4c1fe954d451e6e987d821","valid_from":1,"valid_until":2}
+    ],
+    "retained_descriptors":[],
+    "active_keysets":[
+      {"keyset_id":"a264ac5743948feea6d3b6bfc08b34be606ffcb40b673fefc59b6c33fa7f867a","profile_id":"freebird/native-exchange/v3","descriptor_ids":["b2b8797a04e8341ca3f10deb2053de64bf868dd3db0a8f99e5ac2e3278c0569a"]}
+    ],
+    "retained_keysets":[],
+    "transitions":[]
+  },
+  "native_graph_issuance_v7":{"version":7,"profile_id":"freebird/native-graph-issuance/v7","active_policies":[{"policy_id":"04e122f20d6adbe7271a5d6917c1fb8755def65e176bb48437955940da032b8d","profile_id":"freebird/native-graph-issuance/v7","graph_id":"ebd7be96c21cfeb624974b96569084de33bbcc7d3bc5576d2de242ade7156efe","keyset_id":"a264ac5743948feea6d3b6bfc08b34be606ffcb40b673fefc59b6c33fa7f867a","descriptor_id":"b2b8797a04e8341ca3f10deb2053de64bf868dd3db0a8f99e5ac2e3278c0569a","token_key_id":"2222222222222222222222222222222222222222222222222222222222222222","issuer_id":"issuer:test","asset_id":"USD","amount_minor":"42","suite":"RSABSSA-SHA384-PSS-Randomized-V7","modulus_bits":3072,"exponent":65537,"quantity":1,"pubkey_spki_b64":"MIIB0jA9BgkqhkiG9w0BAQowMKANMAsGCWCGSAFlAwQCAqEaMBgGCSqGSIb3DQEBCDALBglghkgBZQMEAgKiAwIBMAOCAY8AMIIBigKCAYEApzhk4J6yRwejhjI1WgNUN3P_iyhBFf5F7LwRF5tOTVOTR2knK8S8ojPi3Vb5d1bmRzVMuVeHhdLmoYUo-PluB1pf68vcl8tAEPLOgy_kihBtY1JXfvThH1kheZdNEriUx8A1T7cu7OrVQmITv6OJeU4THg-NfAebxzv2JwD64Fd_mylQ56-HNpunkehDFMhE8vw7jtL9pUnUX77ovJu5VlxQqESt4ZqgnoUg_tEvq_xPvvepf-59sTMGhDprr2bguQbpp1YbKIQpqw66na0xl4n4bDdXl_h6by_lNWUSQRH9RKYgEz-nadCreCpfEmB_kizfPDBHAKj0LxryjLjKviVUZUkqxjs_UJVTOrwGDodfVWnl3Kyo0YYejuQf6n6bsUvJb4Uw5opGkHACz07Kiep9DRMXMEesQ2_GPTWxxwknVARwgndZ5PFGVOHZyT55wYlB62OeemMqls1_bs_doXemp0X-t4XPUOoCkMYpkLfVpU92yyGdCBF8EPijxToZAgMBAAE","spki_fingerprint":"29da989c3181a00e39fdb4d3bc3ed79ec2f96c33bd4c1fe954d451e6e987d821","valid_from":1,"valid_until":2}],"retained_policies":[]}
+}

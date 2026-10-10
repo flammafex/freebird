@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use super::native_bearer_v7::validate_v7_identifier_namespace;
-use super::native_exchange_v3::{NATIVE_EXCHANGE_V3_RAW384_BYTES, NATIVE_EXCHANGE_V3_SUITE};
+use super::native_exchange_v3::{
+    NativeExchangeV3Discovery, NATIVE_EXCHANGE_V3_RAW384_BYTES, NATIVE_EXCHANGE_V3_SUITE,
+};
 
 pub const NATIVE_GRAPH_ISSUANCE_V7_VERSION: u8 = 7;
 pub const NATIVE_GRAPH_ISSUANCE_V7_PROFILE_ID: &str = "freebird/native-graph-issuance/v7";
@@ -309,15 +311,148 @@ impl NativeGraphIssuanceV7Discovery {
         {
             return Err(NativeGraphIssuanceV7Error("invalid V7 graph discovery"));
         }
+        let mut policy_ids = std::collections::BTreeSet::new();
+        let mut token_key_ids = std::collections::BTreeSet::new();
         for policy in self
             .active_policies
             .iter()
             .chain(self.retained_policies.iter())
         {
             policy.validate()?;
+            if !policy_ids.insert(&policy.policy_id) {
+                return Err(NativeGraphIssuanceV7Error("duplicate V7 graph policy ID"));
+            }
+            if !token_key_ids.insert(&policy.token_key_id) {
+                return Err(NativeGraphIssuanceV7Error(
+                    "duplicate V7 graph token key reference",
+                ));
+            }
+            if policy.policy_id != canonical_graph_policy_id(policy)? {
+                return Err(NativeGraphIssuanceV7Error(
+                    "non-canonical V7 graph policy ID",
+                ));
+            }
         }
         Ok(())
     }
+}
+
+pub(super) fn canonical_graph_policy_id(
+    policy: &NativeGraphIssuanceV7Policy,
+) -> Result<String, NativeGraphIssuanceV7Error> {
+    let mut transcript = Vec::new();
+    for value in [
+        &policy.profile_id,
+        &policy.graph_id,
+        &policy.keyset_id,
+        &policy.descriptor_id,
+        &policy.token_key_id,
+        &policy.issuer_id,
+        &policy.asset_id,
+        &policy.amount_minor,
+        &policy.suite,
+    ] {
+        let length = u32::try_from(value.len())
+            .map_err(|_| NativeGraphIssuanceV7Error("V7 graph policy field is too large"))?;
+        transcript.extend_from_slice(&length.to_be_bytes());
+        transcript.extend_from_slice(value.as_bytes());
+    }
+    transcript.extend_from_slice(&policy.modulus_bits.to_be_bytes());
+    transcript.extend_from_slice(&policy.exponent.to_be_bytes());
+    transcript.extend_from_slice(&policy.quantity.to_be_bytes());
+    let spki = canonical_spki(&policy.pubkey_spki_b64)?;
+    let spki_len = u32::try_from(spki.len())
+        .map_err(|_| NativeGraphIssuanceV7Error("V7 graph policy SPKI is too large"))?;
+    transcript.extend_from_slice(&spki_len.to_be_bytes());
+    transcript.extend_from_slice(&spki);
+    let fingerprint_len = u32::try_from(policy.spki_fingerprint.len())
+        .map_err(|_| NativeGraphIssuanceV7Error("V7 graph policy fingerprint is too large"))?;
+    transcript.extend_from_slice(&fingerprint_len.to_be_bytes());
+    transcript.extend_from_slice(policy.spki_fingerprint.as_bytes());
+    transcript.extend_from_slice(
+        &u64::try_from(policy.valid_from)
+            .map_err(|_| NativeGraphIssuanceV7Error("invalid V7 policy validity"))?
+            .to_be_bytes(),
+    );
+    transcript.extend_from_slice(
+        &u64::try_from(policy.valid_until)
+            .map_err(|_| NativeGraphIssuanceV7Error("invalid V7 policy validity"))?
+            .to_be_bytes(),
+    );
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(b"freebird native graph issuance policy v7\0");
+    hasher.update(transcript);
+    Ok(hex::encode(hasher.finalize()))
+}
+
+/// Validate that every V7 graph policy is an immutable reference to exactly
+/// one active or retained exchange descriptor and a keyset containing it.
+/// Graph policies are references, not additional key reservations.
+pub fn validate_native_graph_issuance_v7_exchange_bindings(
+    issuer_id: &str,
+    graph: &NativeGraphIssuanceV7Discovery,
+    exchange: &NativeExchangeV3Discovery,
+) -> Result<(), String> {
+    exchange.validate().map_err(|error| error.to_string())?;
+    graph.validate().map_err(|error| error.to_string())?;
+
+    let descriptors = exchange
+        .active_descriptors
+        .iter()
+        .chain(&exchange.retained_descriptors);
+    let keysets = exchange
+        .active_keysets
+        .iter()
+        .chain(&exchange.retained_keysets)
+        .collect::<Vec<_>>();
+    for policy in graph.active_policies.iter().chain(&graph.retained_policies) {
+        if policy.graph_id != exchange.profile.graph_id {
+            return Err("V7 graph policy graph does not match exchange profile".into());
+        }
+        let mut descriptor_matches = descriptors
+            .clone()
+            .filter(|descriptor| descriptor.descriptor_id == policy.descriptor_id);
+        let descriptor = descriptor_matches
+            .next()
+            .ok_or_else(|| "V7 graph policy references a missing exchange descriptor".to_owned())?;
+        if descriptor_matches.next().is_some() {
+            return Err("V7 graph policy exchange descriptor is ambiguous".into());
+        }
+        if policy.issuer_id != issuer_id || policy.issuer_id != descriptor.issuer_id {
+            return Err("V7 graph policy issuer does not match exchange descriptor".into());
+        }
+        let mut keyset_matches = keysets
+            .iter()
+            .filter(|keyset| keyset.keyset_id == policy.keyset_id);
+        let keyset = keyset_matches
+            .next()
+            .ok_or_else(|| "V7 graph policy references a missing exchange keyset".to_owned())?;
+        if keyset_matches.next().is_some() {
+            return Err("V7 graph policy exchange keyset is ambiguous".into());
+        }
+        if !keyset
+            .descriptor_ids
+            .iter()
+            .any(|id| id == &policy.descriptor_id)
+        {
+            return Err("V7 graph policy descriptor is not a member of its keyset".into());
+        }
+        if policy.issuer_id != descriptor.issuer_id
+            || policy.token_key_id != descriptor.token_key_id
+            || policy.asset_id != descriptor.asset_id
+            || policy.amount_minor != descriptor.amount_minor
+            || policy.suite != descriptor.suite
+            || policy.modulus_bits != descriptor.modulus_bits
+            || policy.exponent != descriptor.exponent
+            || policy.pubkey_spki_b64 != descriptor.pubkey_spki_b64
+            || policy.spki_fingerprint != descriptor.spki_fingerprint
+            || u64::try_from(policy.valid_from).ok() != Some(descriptor.valid_from)
+            || u64::try_from(policy.valid_until).ok() != Some(descriptor.valid_until)
+        {
+            return Err("V7 graph policy does not match its exchange descriptor".into());
+        }
+    }
+    Ok(())
 }
 
 impl NativeGraphIssuanceV7Request {

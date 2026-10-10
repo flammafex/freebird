@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
 import { createHash, generateKeyPairSync } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import {
   canonicalV7DirectDescriptorId,
@@ -121,10 +122,10 @@ type TestDocument = ReturnType<typeof documentFor> & {
 
 function fullDocument(issuerId = 'issuer:test'): TestDocument {
   const document = documentFor(issuerId);
-  const directSpki = Buffer.from(document.native_bearer_v7.pubkey_spki_b64 as string, 'base64url');
+  const firstSpki = v7Spki();
   const secondSpki = v7Spki();
-  const firstDescriptor = exchangeDescriptor(directSpki, issuerId, '11'.repeat(32), '42');
-  const secondDescriptor = exchangeDescriptor(secondSpki, issuerId, '22'.repeat(32), '43');
+  const firstDescriptor = exchangeDescriptor(firstSpki, issuerId, '22'.repeat(32), '42');
+  const secondDescriptor = exchangeDescriptor(secondSpki, issuerId, '33'.repeat(32), '43');
   const firstKeyset = { keyset_id: '', profile_id: 'freebird/native-exchange/v3', descriptor_ids: [firstDescriptor.descriptor_id] };
   const secondKeyset = { keyset_id: '', profile_id: 'freebird/native-exchange/v3', descriptor_ids: [secondDescriptor.descriptor_id] };
   firstKeyset.keyset_id = canonicalV7KeysetId(firstKeyset.descriptor_ids as string[]);
@@ -153,7 +154,7 @@ function fullDocument(issuerId = 'issuer:test'): TestDocument {
     pubkey_spki_b64: firstDescriptor.pubkey_spki_b64,
     spki_fingerprint: firstDescriptor.spki_fingerprint, valid_from: 1, valid_until: 2,
   };
-  policy.policy_id = canonicalV7GraphPolicyId(policy, directSpki);
+  policy.policy_id = canonicalV7GraphPolicyId(policy, firstSpki);
   return {
     ...document,
     native_exchange_v7: exchange,
@@ -218,10 +219,22 @@ describe('strict V7 discovery', () => {
     expect(parsed.native_exchange_v7?.profile.graph_id).toMatch(/^[0-9a-f]{64}$/);
     expect(parsed.native_graph_issuance_v7?.active_policies[0].policy_id).toMatch(/^[0-9a-f]{64}$/);
     const registry = await materializeV7Registry(parsed);
-    const shared = registry.by_token_key_id.get(parsed.native_bearer_v7.token_key_id);
-    expect(shared?.roles).toEqual(['direct', 'exchange', 'graph_issuance']);
-    expect(shared?.references).toHaveLength(3);
+    const exchange = registry.by_token_key_id.get(parsed.native_exchange_v7!.active_descriptors[0].token_key_id);
+    expect(exchange?.roles).toEqual(['exchange', 'graph_issuance']);
+    expect(exchange?.references).toHaveLength(2);
+    expect(registry.entries).toHaveLength(3);
+  });
+
+  it('parses the pinned Common discovery fixture and materializes its shared exchange/graph role', async () => {
+    const fixture = readFileSync(new URL('../../../common/test-fixtures/v7-graph-reference.json', import.meta.url), 'utf8');
+    const parsed = await parseV7KeyDiscovery(fixture);
+    const registry = await materializeV7Registry(parsed);
+    const directKey = parsed.native_bearer_v7.token_key_id;
+    const exchangeKey = parsed.native_exchange_v7!.active_descriptors[0].token_key_id;
+    expect(directKey).not.toBe(exchangeKey);
     expect(registry.entries).toHaveLength(2);
+    expect(registry.by_token_key_id.get(directKey)?.roles).toEqual(['direct']);
+    expect(registry.by_token_key_id.get(exchangeKey)?.roles).toEqual(['exchange', 'graph_issuance']);
   });
 
   it.each([

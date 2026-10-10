@@ -1,0 +1,405 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://freebird.invalid/schemas/scarcity-freebird-gate0-v1.json",
+  "title": "Scarcity Freebird Gate 0 public manifest",
+  "description": "Closed public pins for the separately supervised Gate 0 candidate fixture. This schema is not service-health evidence.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "run_id",
+    "issuer_origin",
+    "verifier_origin",
+    "issuer_id",
+    "graph_issuer_id",
+    "asset_id",
+    "graph_policy_id",
+    "v4",
+    "replay_authority",
+    "receipt_keyset",
+    "discovery_pins",
+    "sybil"
+  ],
+  "properties": {
+    "version": { "const": "scarcity/freebird-gate0/v1" },
+    "run_id": { "$ref": "#/$defs/runId" },
+    "issuer_origin": { "$ref": "#/$defs/loopbackOrigin" },
+    "verifier_origin": { "$ref": "#/$defs/loopbackOrigin" },
+    "issuer_id": { "$ref": "#/$defs/issuerId" },
+    "graph_issuer_id": { "$ref": "#/$defs/issuerId" },
+    "asset_id": { "$ref": "#/$defs/text128" },
+    "graph_policy_id": { "$ref": "#/$defs/lowerHex32" },
+    "v4": { "$ref": "#/$defs/v4" },
+    "replay_authority": { "$ref": "#/$defs/replayAuthority" },
+    "receipt_keyset": { "$ref": "#/$defs/receiptKeyset" },
+    "discovery_pins": { "$ref": "#/$defs/discoveryPins" },
+    "sybil": { "$ref": "#/$defs/sybil" }
+  },
+  "$defs": {
+    "runId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "issuerId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[\\x21-\\x7e]+$"
+    },
+    "text128": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[\\x21-\\x7e]+$"
+    },
+    "kid": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[\\x21-\\x7e]+$"
+    },
+    "lowerHex32": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "raw32B64": {
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 43,
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "publicKeyB64": {
+      "type": "string",
+      "minLength": 44,
+      "maxLength": 44,
+      "pattern": "^[A-Za-z0-9_-]{44}$"
+    },
+    "loopbackOrigin": {
+      "type": "string",
+      "pattern": "^http://127\\.0\\.0\\.1:(?:[2-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$"
+    },
+    "positiveSafeInteger": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 9007199254740991
+    },
+    "nonnegativeSafeInteger": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "amountMinorString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 20,
+      "pattern": "^[1-9][0-9]*$"
+    },
+    "v4": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "credential_issuer_id",
+        "kid",
+        "public_key_b64",
+        "verifier_id",
+        "audience",
+        "scope_digest_b64"
+      ],
+      "properties": {
+        "credential_issuer_id": { "$ref": "#/$defs/issuerId" },
+        "kid": { "$ref": "#/$defs/kid" },
+        "public_key_b64": { "$ref": "#/$defs/p256PublicKeyB64" },
+        "verifier_id": { "$ref": "#/$defs/kid" },
+        "audience": { "$ref": "#/$defs/kid" },
+        "scope_digest_b64": { "$ref": "#/$defs/raw32B64" }
+      }
+    },
+    "p256PublicKeyB64": {
+      "type": "string",
+      "minLength": 44,
+      "maxLength": 44,
+      "pattern": "^[A-Za-z0-9_-]{44}$"
+    },
+    "replayAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "authority_id", "v4_scope_digest_tombstones" ],
+      "properties": {
+        "authority_id": { "$ref": "#/$defs/raw32B64" },
+        "v4_scope_digest_tombstones": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/raw32B64" }
+        }
+      }
+    },
+    "receiptKeyset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "issuer_id", "origin", "profile_id", "keys" ],
+      "properties": {
+        "issuer_id": { "$ref": "#/$defs/issuerId" },
+        "origin": { "$ref": "#/$defs/loopbackOrigin" },
+        "profile_id": { "const": "freebird/native-exchange/v3" },
+        "keys": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "contains": {
+            "$ref": "#/$defs/receiptKey",
+            "properties": { "status": { "const": "active" } }
+          },
+          "minContains": 1,
+          "maxContains": 1,
+          "items": { "$ref": "#/$defs/receiptKey" }
+        }
+      }
+    },
+    "receiptKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "key_id",
+        "algorithm",
+        "purpose",
+        "public_key_b64",
+        "status",
+        "valid_from",
+        "valid_until"
+      ],
+      "properties": {
+        "key_id": { "$ref": "#/$defs/lowerHex32" },
+        "algorithm": { "const": "Ed25519" },
+        "purpose": { "const": "exchange_receipt_v7" },
+        "public_key_b64": { "$ref": "#/$defs/raw32B64" },
+        "status": { "enum": [ "active", "retained" ] },
+        "valid_from": { "$ref": "#/$defs/positiveSafeInteger" },
+        "valid_until": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "discoveryPins": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "native_bearer_v7",
+        "native_bearer_v7_retained",
+        "native_exchange_v7",
+        "native_graph_issuance_v7"
+      ],
+      "properties": {
+        "native_bearer_v7": { "$ref": "#/$defs/directKey" },
+        "native_bearer_v7_retained": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/directKey" }
+        },
+        "native_exchange_v7": { "$ref": "#/$defs/exchangeDiscovery" },
+        "native_graph_issuance_v7": { "$ref": "#/$defs/graphDiscovery" }
+      }
+    },
+    "directKey": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_id", "issuer_id", "descriptor_id", "token_key_id", "asset_id",
+        "amount_minor", "suite", "modulus_bits", "exponent", "pubkey_spki_b64",
+        "spki_fingerprint", "valid_from", "valid_until"
+      ],
+      "properties": {
+        "profile_id": { "const": "scarcity/native-bearer/v7" },
+        "issuer_id": { "$ref": "#/$defs/issuerId" },
+        "descriptor_id": { "$ref": "#/$defs/lowerHex32" },
+        "token_key_id": { "$ref": "#/$defs/lowerHex32" },
+        "asset_id": { "$ref": "#/$defs/text128" },
+        "amount_minor": { "$ref": "#/$defs/positiveSafeInteger" },
+        "suite": { "const": "RSABSSA-SHA384-PSS-Randomized-V7" },
+        "modulus_bits": { "const": 3072 },
+        "exponent": { "const": 65537 },
+        "pubkey_spki_b64": { "$ref": "#/$defs/spkiB64" },
+        "spki_fingerprint": { "$ref": "#/$defs/lowerHex32" },
+        "valid_from": { "$ref": "#/$defs/positiveSafeInteger" },
+        "valid_until": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "spkiB64": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 5462,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "exchangeDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "descriptor_id", "profile_id", "issuer_id", "token_key_id", "asset_id",
+        "amount_minor", "suite", "modulus_bits", "exponent", "pubkey_spki_b64",
+        "spki_fingerprint", "valid_from", "valid_until"
+      ],
+      "properties": {
+        "descriptor_id": { "$ref": "#/$defs/lowerHex32" },
+        "profile_id": { "const": "freebird/native-exchange/v3" },
+        "issuer_id": { "$ref": "#/$defs/issuerId" },
+        "token_key_id": { "$ref": "#/$defs/lowerHex32" },
+        "asset_id": { "$ref": "#/$defs/text128" },
+        "amount_minor": { "$ref": "#/$defs/amountMinorString" },
+        "suite": { "const": "RSABSSA-SHA384-PSS-Randomized-V7" },
+        "modulus_bits": { "const": 3072 },
+        "exponent": { "const": 65537 },
+        "pubkey_spki_b64": { "$ref": "#/$defs/spkiB64" },
+        "spki_fingerprint": { "$ref": "#/$defs/lowerHex32" },
+        "valid_from": { "$ref": "#/$defs/nonnegativeSafeInteger" },
+        "valid_until": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "exchangeKeyset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "keyset_id", "profile_id", "descriptor_ids" ],
+      "properties": {
+        "keyset_id": { "$ref": "#/$defs/lowerHex32" },
+        "profile_id": { "const": "freebird/native-exchange/v3" },
+        "descriptor_ids": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/lowerHex32" }
+        }
+      }
+    },
+    "exchangeSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "descriptor_id", "keyset_id", "slot_id", "quantity" ],
+      "properties": {
+        "descriptor_id": { "$ref": "#/$defs/lowerHex32" },
+        "keyset_id": { "$ref": "#/$defs/lowerHex32" },
+        "slot_id": { "$ref": "#/$defs/text128" },
+        "quantity": { "const": 1 }
+      }
+    },
+    "exchangeTransition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "transition_id", "profile_id", "source_keyset_id", "target_keyset_id",
+        "source_slots", "output_slots"
+      ],
+      "properties": {
+        "transition_id": { "$ref": "#/$defs/lowerHex32" },
+        "profile_id": { "const": "freebird/native-exchange/v3" },
+        "source_keyset_id": { "$ref": "#/$defs/lowerHex32" },
+        "target_keyset_id": { "$ref": "#/$defs/lowerHex32" },
+        "source_slots": { "$ref": "#/$defs/exchangeSlots" },
+        "output_slots": { "$ref": "#/$defs/exchangeSlots" }
+      }
+    },
+    "exchangeSlots": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/exchangeSlot" }
+    },
+    "exchangeDiscovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version", "profile", "active_descriptors", "retained_descriptors",
+        "active_keysets", "retained_keysets", "transitions"
+      ],
+      "properties": {
+        "version": { "const": 3 },
+        "profile": { "$ref": "#/$defs/exchangeProfile" },
+        "active_descriptors": { "$ref": "#/$defs/exchangeDescriptors" },
+        "retained_descriptors": { "$ref": "#/$defs/exchangeDescriptors" },
+        "active_keysets": { "$ref": "#/$defs/exchangeKeysets" },
+        "retained_keysets": { "$ref": "#/$defs/exchangeKeysets" },
+        "transitions": {
+          "type": "array",
+          "maxItems": 64,
+          "items": { "$ref": "#/$defs/exchangeTransition" }
+        }
+      }
+    },
+    "exchangeProfile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "version", "profile_id", "graph_id", "suite", "modulus_bits", "exponent" ],
+      "properties": {
+        "version": { "const": 3 },
+        "profile_id": { "const": "freebird/native-exchange/v3" },
+        "graph_id": { "$ref": "#/$defs/lowerHex32" },
+        "suite": { "const": "RSABSSA-SHA384-PSS-Randomized-V7" },
+        "modulus_bits": { "const": 3072 },
+        "exponent": { "const": 65537 }
+      }
+    },
+    "exchangeDescriptors": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/exchangeDescriptor" }
+    },
+    "exchangeKeysets": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/exchangeKeyset" }
+    },
+    "graphPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "policy_id", "profile_id", "graph_id", "keyset_id", "descriptor_id", "token_key_id",
+        "issuer_id", "asset_id", "amount_minor", "suite", "modulus_bits", "exponent",
+        "quantity", "pubkey_spki_b64", "spki_fingerprint", "valid_from", "valid_until"
+      ],
+      "properties": {
+        "policy_id": { "$ref": "#/$defs/lowerHex32" },
+        "profile_id": { "const": "freebird/native-graph-issuance/v7" },
+        "graph_id": { "$ref": "#/$defs/lowerHex32" },
+        "keyset_id": { "$ref": "#/$defs/lowerHex32" },
+        "descriptor_id": { "$ref": "#/$defs/lowerHex32" },
+        "token_key_id": { "$ref": "#/$defs/lowerHex32" },
+        "issuer_id": { "$ref": "#/$defs/issuerId" },
+        "asset_id": { "$ref": "#/$defs/text128" },
+        "amount_minor": { "$ref": "#/$defs/amountMinorString" },
+        "suite": { "const": "RSABSSA-SHA384-PSS-Randomized-V7" },
+        "modulus_bits": { "const": 3072 },
+        "exponent": { "const": 65537 },
+        "quantity": { "const": 1 },
+        "pubkey_spki_b64": { "$ref": "#/$defs/spkiB64" },
+        "spki_fingerprint": { "$ref": "#/$defs/lowerHex32" },
+        "valid_from": { "$ref": "#/$defs/nonnegativeSafeInteger" },
+        "valid_until": { "$ref": "#/$defs/positiveSafeInteger" }
+      }
+    },
+    "graphDiscovery": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "version", "profile_id", "active_policies", "retained_policies" ],
+      "properties": {
+        "version": { "const": 7 },
+        "profile_id": { "const": "freebird/native-graph-issuance/v7" },
+        "active_policies": { "$ref": "#/$defs/graphPolicies" },
+        "retained_policies": { "$ref": "#/$defs/graphPolicies" }
+      }
+    },
+    "graphPolicies": {
+      "type": "array",
+      "maxItems": 64,
+      "items": { "$ref": "#/$defs/graphPolicy" }
+    },
+    "sybil": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [ "type", "difficulty" ],
+      "properties": {
+        "type": { "const": "proof_of_work" },
+        "difficulty": { "type": "integer", "minimum": 1, "maximum": 24 }
+      }
+    }
+  }
+}

@@ -93,7 +93,8 @@ pub use native_exchange_v4::{
     NATIVE_EXCHANGE_V4_SUITE, NATIVE_EXCHANGE_V4_VERSION,
 };
 pub use native_graph_issuance_v7::{
-    native_graph_issuance_v7_authorization_proof_digest, NativeGraphIssuanceV7Discovery,
+    native_graph_issuance_v7_authorization_proof_digest,
+    validate_native_graph_issuance_v7_exchange_bindings, NativeGraphIssuanceV7Discovery,
     NativeGraphIssuanceV7Error, NativeGraphIssuanceV7Policy, NativeGraphIssuanceV7Request,
     NativeGraphIssuanceV7Result, NATIVE_GRAPH_ISSUANCE_V7_DOMAIN_AUTHORIZATION_BINDING,
     NATIVE_GRAPH_ISSUANCE_V7_DOMAIN_AUTHORIZATION_PROOF, NATIVE_GRAPH_ISSUANCE_V7_DOMAIN_REQUEST,

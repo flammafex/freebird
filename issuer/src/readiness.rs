@@ -40,8 +40,6 @@ pub(crate) struct V7ExchangeReadinessState {
 #[derive(Clone)]
 pub(crate) struct V7GraphIssuanceReadinessState {
     engine: Arc<crate::graph_issuance::V7GraphIssuanceEngine>,
-    inventory: Arc<crate::v7_signers::V7SignerInventory>,
-    discovery: freebird_common::api::NativeGraphIssuanceV7Discovery,
     v4_local_authorization: bool,
 }
 
@@ -73,60 +71,23 @@ impl V7ExchangeReadinessState {
 impl V7GraphIssuanceReadinessState {
     pub(crate) fn new(
         engine: Arc<crate::graph_issuance::V7GraphIssuanceEngine>,
-        inventory: Arc<crate::v7_signers::V7SignerInventory>,
-        discovery: freebird_common::api::NativeGraphIssuanceV7Discovery,
         v4_local_authorization: bool,
     ) -> Self {
         Self {
             engine,
-            inventory,
-            discovery,
             v4_local_authorization,
         }
     }
 
     async fn check(&self) -> bool {
-        if self.discovery.validate().is_err() {
-            return false;
-        }
         if !self.engine.issuance_enabled()
             || !self.v4_local_authorization
-            || validate_v7_graph_inventory(&self.discovery, &self.inventory).is_err()
+            || self.engine.validate_bindings().is_err()
         {
             return false;
         }
         self.engine.readiness_check().await.is_ok()
     }
-}
-
-fn validate_v7_graph_inventory(
-    discovery: &freebird_common::api::NativeGraphIssuanceV7Discovery,
-    inventory: &crate::v7_signers::V7SignerInventory,
-) -> anyhow::Result<()> {
-    for policy in discovery
-        .active_policies
-        .iter()
-        .chain(discovery.retained_policies.iter())
-    {
-        let token_key_id: [u8; 32] = hex::decode(&policy.token_key_id)?
-            .try_into()
-            .map_err(|_| anyhow::anyhow!("invalid V7 graph token key ID"))?;
-        let identity = crate::v7_signers::V7SignerIdentity::new(
-            policy.issuer_id.clone(),
-            policy.profile_id.clone(),
-            policy.descriptor_id.clone(),
-            freebird_crypto::V7TokenKeyId::new(token_key_id),
-        )?;
-        let signer = inventory.lookup(&identity)?;
-        if signer.metadata().pubkey_spki_b64 != policy.pubkey_spki_b64
-            || signer.metadata().spki_fingerprint != policy.spki_fingerprint
-            || signer.metadata().asset_id != policy.asset_id
-            || signer.metadata().amount_minor.to_string() != policy.amount_minor
-        {
-            anyhow::bail!("V7 graph policy does not match shared signer inventory")
-        }
-    }
-    Ok(())
 }
 
 impl ReadinessState {

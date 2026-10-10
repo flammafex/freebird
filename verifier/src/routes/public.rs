@@ -531,6 +531,7 @@ async fn readiness_handler(State(st): State<Arc<AppState>>) -> impl axum::respon
 #[cfg(test)]
 mod tests {
     use super::{check, router, verify};
+    use crate::discovery::trusted_v7_keys;
     use crate::readiness::{MetadataStatus, StoreHealth, TokenFamily};
     use crate::replay_authority::{ReplayAuthorityConfig, ReplayAuthorityHealth};
     use crate::routes::admin::IssuerInfo;
@@ -553,8 +554,11 @@ mod tests {
         VOPRF_CONTEXT_V4,
     };
     use serde_json::{json, Value};
+    use sha2::Digest;
     use std::{
-        collections::{HashMap, HashSet},
+        collections::{BTreeSet, HashMap, HashSet},
+        fs,
+        path::PathBuf,
         sync::{
             atomic::{AtomicUsize, Ordering},
             Arc, Mutex,
@@ -564,6 +568,34 @@ mod tests {
     };
     use tokio::sync::RwLock;
     static V7_ROUTE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    const U2B_ARTIFACT_VERSION: &str = "freebird/u2b-graph-artifact/v1";
+
+    #[derive(Default)]
+    struct CheckOnlySpendStore {
+        mutation_attempts: AtomicUsize,
+    }
+
+    #[async_trait::async_trait]
+    impl SpendStore for CheckOnlySpendStore {
+        async fn health_check(&self) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn mark_spent(&self, _key: &str, _ttl: Option<Duration>) -> anyhow::Result<bool> {
+            self.mutation_attempts.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("read-only verifier test sentinel rejected spend mutation")
+        }
+
+        async fn mark_spent_through(
+            &self,
+            _key: &str,
+            _valid_until: i64,
+        ) -> anyhow::Result<SpendOutcome> {
+            self.mutation_attempts.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("read-only verifier test sentinel rejected spend mutation")
+        }
+    }
 
     const ISSUER_ID: &str = "issuer:test:verify-contract";
     const ISSUER_KID: &str = "kid:test:verify-contract";
@@ -1334,5 +1366,184 @@ mod tests {
         assert_eq!(body["results"][0]["code"], "verification_failed");
         assert_eq!(body["results"][0]["message"], "verification failed");
         assert_ne!(body["results"][0]["message"], "expired");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the private artifact from the opted-in issuer U2b test"]
+    async fn u2b_check_issued_graph_artifact() {
+        let run_id = std::env::var("FREEBIRD_U2B_RUN_ID")
+            .expect("FREEBIRD_U2B_RUN_ID is required when explicitly running this test");
+        let path = PathBuf::from(
+            std::env::var_os("FREEBIRD_U2B_ARTIFACT_FILE")
+                .expect("FREEBIRD_U2B_ARTIFACT_FILE is required when explicitly running this test"),
+        );
+        assert!(path.is_absolute(), "U2b artifact path must be absolute");
+        let parent = path
+            .parent()
+            .expect("U2b artifact path must have a parent directory");
+        let parent_metadata =
+            fs::symlink_metadata(parent).expect("U2b artifact parent metadata must be readable");
+        assert!(
+            parent_metadata.file_type().is_dir(),
+            "U2b artifact parent must be a real directory"
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                parent_metadata.permissions().mode() & 0o777,
+                0o700,
+                "U2b artifact parent must be private"
+            );
+        }
+        let metadata = fs::symlink_metadata(&path).expect("U2b artifact file must exist");
+        assert!(
+            metadata.file_type().is_file(),
+            "U2b artifact must be a regular file, not a symlink"
+        );
+        assert!(metadata.len() > 0 && metadata.len() <= 2_000_000);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                metadata.permissions().mode() & 0o777,
+                0o600,
+                "U2b artifact file must be private"
+            );
+        }
+        let bytes = fs::read(&path).expect("U2b artifact must be readable");
+        assert!(bytes.len() <= 2_000_000);
+
+        let bundle: Value =
+            serde_json::from_slice(&bytes).expect("U2b artifact must be valid JSON");
+        let object = bundle
+            .as_object()
+            .expect("U2b artifact root must be a JSON object");
+        let expected_keys = BTreeSet::from([
+            "version",
+            "run_id",
+            "issuer_id",
+            "discovery",
+            "artifact_b64",
+            "artifact_sha256_hex",
+        ]);
+        let actual_keys = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+        assert_eq!(
+            actual_keys, expected_keys,
+            "U2b artifact fields must be closed"
+        );
+        assert_eq!(
+            bundle["version"].as_str(),
+            Some(U2B_ARTIFACT_VERSION),
+            "U2b artifact version mismatch"
+        );
+        assert_eq!(
+            bundle["run_id"].as_str(),
+            Some(run_id.as_str()),
+            "U2b artifact run ID mismatch"
+        );
+        let expected_issuer = format!("issuer:u2b:{run_id}");
+        assert_eq!(
+            bundle["issuer_id"].as_str(),
+            Some(expected_issuer.as_str()),
+            "U2b artifact issuer mismatch"
+        );
+        let artifact_b64 = bundle["artifact_b64"]
+            .as_str()
+            .expect("U2b artifact encoding must be a string");
+        let artifact_bytes =
+            Base64UrlUnpadded::decode_vec(artifact_b64).expect("U2b artifact must use base64url");
+        assert!(!artifact_bytes.is_empty() && artifact_bytes.len() <= 16_384);
+        assert!(
+            Base64UrlUnpadded::encode_string(&artifact_bytes) == artifact_b64,
+            "U2b artifact base64url must be canonical"
+        );
+        let digest_hex = bundle["artifact_sha256_hex"]
+            .as_str()
+            .expect("U2b artifact digest must be a string");
+        assert_eq!(digest_hex.len(), 64);
+        assert!(digest_hex
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase()));
+        let digest_bytes = hex::decode(digest_hex).expect("U2b artifact digest must be hex");
+        let actual_digest = sha2::Sha256::digest(&artifact_bytes);
+        assert!(actual_digest
+            .iter()
+            .copied()
+            .eq(digest_bytes.iter().copied()));
+
+        let discovery: freebird_common::api::V7KeyDiscoveryResp =
+            serde_json::from_value(bundle["discovery"].clone())
+                .expect("U2b discovery must match the strict V7 contract");
+        let snapshot = trusted_v7_keys(&expected_issuer, discovery)
+            .expect("issuer bundle trust must pass Common validated_registry");
+        commit_v7_trust(&expected_issuer, snapshot)
+            .expect("strict U2b V7 trust snapshot must commit");
+
+        let store = Arc::new(CheckOnlySpendStore::default());
+        let store_trait: Arc<dyn SpendStore> = store.clone();
+        let replay_authority = Arc::new(
+            ReplayAuthorityHealth::new(
+                store_trait.clone(),
+                ReplayAuthorityConfig {
+                    graph_issuer_urls: Vec::new(),
+                    probe_interval: Duration::from_secs(30),
+                    max_staleness: Duration::from_secs(60),
+                },
+                [0; 32],
+            )
+            .expect("local verifier sentinel state must initialize"),
+        );
+        let verifier_id = format!("verifier:u2b:{run_id}");
+        let audience = format!("audience:u2b:{run_id}");
+        let scope_digest = freebird_crypto::build_scope_digest(&verifier_id, &audience)
+            .expect("U2b verifier scope must be valid");
+        let state = Arc::new(AppState {
+            issuers: Arc::new(RwLock::new(HashMap::new())),
+            store: store_trait.clone(),
+            verifier_id,
+            audience,
+            scope_digest,
+            epoch_duration_sec: 86_400,
+            epoch_retention: 2,
+            issuer_urls: Vec::new(),
+            metadata: Arc::new(RwLock::new(HashMap::new())),
+            accepted_token_families: vec![TokenFamily::V7],
+            refresh_interval: Duration::from_secs(600),
+            store_health: StoreHealth::new(store_trait),
+            replay_authority,
+            store_is_memory: false,
+        });
+        let app = router(state);
+        let token_request = || json_request("/v1/check", json!({ "token_b64": artifact_b64 }));
+        for _ in 0..2 {
+            let response = app.clone().oneshot(token_request()).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            if let Some(cache_control) = response.headers().get("cache-control") {
+                assert_eq!(cache_control.to_str().ok(), Some("no-store"));
+            }
+            let response_body: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .expect("/v1/check must return JSON");
+            assert_eq!(response_body["ok"], true);
+            assert_eq!(store.mutation_attempts.load(Ordering::SeqCst), 0);
+        }
+
+        let mut bad_signature = artifact_bytes;
+        assert!(bad_signature.len() > freebird_crypto::public_bearer_v7::V7_SIGNATURE_LEN);
+        let signature_offset =
+            bad_signature.len() - freebird_crypto::public_bearer_v7::V7_SIGNATURE_LEN;
+        bad_signature[signature_offset] ^= 1;
+        assert!(freebird_crypto::parse_native_bearer_v7_token(&bad_signature).is_ok());
+        let bad_signature_b64 = Base64UrlUnpadded::encode_string(&bad_signature);
+        let response = app
+            .oneshot(json_request(
+                "/v1/check",
+                json!({ "token_b64": bad_signature_b64 }),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(store.mutation_attempts.load(Ordering::SeqCst), 0);
     }
 }
