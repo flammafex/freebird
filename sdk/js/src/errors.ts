@@ -20,7 +20,7 @@ export type FreebirdErrorCode =
   | 'replayed_token'
 ;
 
-/** Public V4/V7 error codes. Retired operation errors are not part of this union. */
+/** Public V4 error codes. Retired operation errors are not part of this union. */
 export type PublicFreebirdErrorCode = FreebirdErrorCode;
 
 /**

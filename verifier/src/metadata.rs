@@ -3,13 +3,12 @@
 
 use anyhow::{anyhow, Context};
 use base64ct::{Base64UrlUnpadded, Encoding};
-use freebird_common::api::V7KeyDiscoveryResp;
 use serde::Deserialize;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tracing::{info, instrument, warn};
 
-use crate::readiness::{MetadataStatus, TokenFamily};
-use crate::state::{commit_v7_trust, family_enabled, AppState, V7IssuerTrustSnapshot};
+use crate::readiness::MetadataStatus;
+use crate::state::AppState;
 
 /// Information about a trusted issuer.
 ///
@@ -101,34 +100,6 @@ fn load_verification_keyring() -> anyhow::Result<HashMap<String, [u8; 32]>> {
         .collect()
 }
 
-fn issuer_keys_url(issuer_url: &str) -> anyhow::Result<String> {
-    let mut url = reqwest::Url::parse(issuer_url).context("parse issuer metadata URL")?;
-    url.set_path("/.well-known/keys");
-    url.set_query(None);
-    url.set_fragment(None);
-    Ok(url.to_string())
-}
-
-async fn load_v7_trust(issuer_url: &str, issuer_id: &str) -> anyhow::Result<V7IssuerTrustSnapshot> {
-    let keys_url = issuer_keys_url(issuer_url)?;
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("build HTTP client")?;
-    let url = reqwest::Url::parse(&keys_url).context("parse V7 keys URL")?;
-    let response = client
-        .get(url)
-        .send()
-        .await?
-        .error_for_status()
-        .with_context(|| format!("V7 issuer key discovery request failed: {keys_url}"))?;
-    let discovery: V7KeyDiscoveryResp = response
-        .json()
-        .await
-        .context("deserialize V7 issuer key discovery")?;
-    crate::discovery::trusted_v7_keys(issuer_id, discovery)
-}
-
 fn validate_secret_key_matches_pubkey(
     secret_key: [u8; 32],
     ctx: &[u8],
@@ -169,42 +140,25 @@ pub(crate) async fn refresh_issuer_metadata(
         .error_for_status()
         .context("issuer metadata request failed")?;
     let wk: WellKnown = res.json().await?;
-    let v7_trust = if family_enabled(&state.accepted_token_families, TokenFamily::V7) {
-        Some(load_v7_trust(issuer_url, &wk.issuer_id).await?)
+    let pubkey_bytes =
+        Base64UrlUnpadded::decode_vec(&wk.voprf.pubkey).context("base64 decode pubkey")?;
+    let ctx = freebird_crypto::VOPRF_CONTEXT_V4.to_vec();
+    let mut keyring = load_verification_keyring()?;
+    let verification_key = if let Some(key) = keyring.remove(&wk.voprf.kid) {
+        validate_secret_key_matches_pubkey(key, &ctx, &pubkey_bytes)?;
+        Some(key)
+    } else if let Some(key) = load_default_verification_key()? {
+        validate_secret_key_matches_pubkey(key, &ctx, &pubkey_bytes)?;
+        Some(key)
     } else {
+        warn!(issuer = %wk.issuer_id, kid = %wk.voprf.kid, "V4 private verification key unavailable");
         None
-    };
-
-    // Do not even parse issuer VOPRF key material or read verifier key files
-    // when V4 is disabled. This keeps V7-only deployments independent of V4.
-    let (pubkey_bytes, ctx, keyring, verification_key) = if family_enabled(
-        &state.accepted_token_families,
-        TokenFamily::V4,
-    ) {
-        let pubkey_bytes =
-            Base64UrlUnpadded::decode_vec(&wk.voprf.pubkey).context("base64 decode pubkey")?;
-        let ctx = freebird_crypto::VOPRF_CONTEXT_V4.to_vec();
-        let mut keyring = load_verification_keyring()?;
-        let verification_key = if let Some(key) = keyring.remove(&wk.voprf.kid) {
-            validate_secret_key_matches_pubkey(key, &ctx, &pubkey_bytes)?;
-            Some(key)
-        } else if let Some(key) = load_default_verification_key()? {
-            validate_secret_key_matches_pubkey(key, &ctx, &pubkey_bytes)?;
-            Some(key)
-        } else {
-            warn!(issuer = %wk.issuer_id, kid = %wk.voprf.kid, "V4 private verification key unavailable");
-            None
-        };
-        (pubkey_bytes, ctx, keyring, verification_key)
-    } else {
-        (Vec::new(), Vec::new(), HashMap::new(), None)
     };
 
     let kid_for_log = wk.voprf.kid.clone();
     let ctx_len = ctx.len();
-    // Hold both state locks until the validated trust snapshot and freshness
-    // marker have been committed.  Validation/history failures therefore
-    // leave the last good issuer state and freshness untouched.
+    // Hold both state locks until the validated issuer keys and freshness
+    // marker have been committed.
     let mut issuers = state.issuers.write().await;
     let mut metadata = state.metadata.write().await;
     let mut deprecated_verification_keys = issuers
@@ -223,17 +177,9 @@ pub(crate) async fn refresh_issuer_metadata(
             deprecated_verification_keys.insert(kid, key);
         }
     }
-    if let Some(snapshot) = v7_trust {
-        // Discovery has been completely fetched and validated, including all
-        // direct, retained, exchange, and graph records.  Only now can the
-        // process-lifetime trust history advance.  Any failure leaves both
-        // the prior snapshot and metadata freshness untouched.
-        commit_v7_trust(&wk.issuer_id, snapshot)?;
-    }
     let refreshed_at = Instant::now();
 
     let has_private_key = verification_key.is_some();
-    let public_key_count = v7_trust_snapshot_count(&wk.issuer_id);
     let info = IssuerInfo {
         pubkey_bytes,
         kid: wk.voprf.kid,
@@ -251,106 +197,6 @@ pub(crate) async fn refresh_issuer_metadata(
             last_refresh: Some(refreshed_at),
         },
     );
-    info!(issuer = %wk.issuer_id, kid = %kid_for_log, ctx_len, has_private_key, public_key_count, "updated issuer metadata");
+    info!(issuer = %wk.issuer_id, kid = %kid_for_log, ctx_len, has_private_key, "updated issuer metadata");
     Ok(())
-}
-
-fn v7_trust_snapshot_count(issuer_id: &str) -> usize {
-    crate::state::v7_trust_snapshot(issuer_id)
-        .map(|snapshot| snapshot.by_token_key_id.len())
-        .unwrap_or(0)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::load_v7_trust;
-    use axum::{routing::get, Json, Router};
-    use base64ct::{Base64UrlUnpadded, Encoding};
-    use freebird_common::api::{
-        NativeBearerV7KeyInfo, V7KeyDiscoveryResp, V7VoprfKeyInfo, EXCHANGE_MAX_VALID_UNTIL,
-        NATIVE_BEARER_V7_PROFILE_ID,
-    };
-    use freebird_crypto::{
-        provider::software::SoftwareV7BlindRsaProvider, V7BodyPolicy, V7KeyIdentity, V7TokenKeyId,
-    };
-
-    fn strict_v7_discovery() -> V7KeyDiscoveryResp {
-        let issuer_id = "issuer:test:v7-metadata";
-        let identity = V7KeyIdentity::new(issuer_id, V7TokenKeyId::new([1; 32])).unwrap();
-        let provider = SoftwareV7BlindRsaProvider::generate(identity).unwrap();
-        let policy = V7BodyPolicy::new("USD", 1).unwrap();
-        let direct = NativeBearerV7KeyInfo::from_binding(
-            provider.binding(),
-            NATIVE_BEARER_V7_PROFILE_ID,
-            &"11".repeat(32),
-            &policy,
-            1,
-            EXCHANGE_MAX_VALID_UNTIL,
-        )
-        .unwrap();
-        V7KeyDiscoveryResp {
-            issuer_id: issuer_id.into(),
-            current_epoch: 1,
-            valid_epochs: vec![1],
-            epoch_duration_sec: 86_400,
-            voprf: V7VoprfKeyInfo {
-                suite: "VOPRF-P256-SHA256".into(),
-                kid: "v7-kid".into(),
-                pubkey: "v7-pubkey".into(),
-            },
-            native_bearer_v7: direct,
-            native_bearer_v7_retained: vec![],
-            native_exchange_v7: None,
-            native_graph_issuance_v7: None,
-        }
-    }
-
-    async fn serve(discovery: serde_json::Value) -> (String, tokio::task::JoinHandle<()>) {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        let app = Router::new().route(
-            "/.well-known/keys",
-            get(move || {
-                let discovery = discovery.clone();
-                async move { Json(discovery) }
-            }),
-        );
-        let task = tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-        (format!("http://{address}"), task)
-    }
-
-    #[tokio::test]
-    async fn load_v7_trust_consumes_strict_keys_only() {
-        let discovery = strict_v7_discovery();
-        let (url, task) = serve(serde_json::to_value(&discovery).unwrap()).await;
-        let trust = load_v7_trust(&url, &discovery.issuer_id).await.unwrap();
-        assert_eq!(trust.by_token_key_id.len(), 1);
-        task.abort();
-
-        let legacy = serde_json::json!({
-            "issuer_id": discovery.issuer_id,
-            "current_epoch": 1,
-            "valid_epochs": [1],
-            "epoch_duration_sec": 86400,
-            "voprf": {"suite": "suite", "kid": "kid", "pubkey": "pubkey"},
-            "public": [{
-                "token_key_id": "11",
-                "token_type": "public-bearer",
-                "rfc9474_variant": "legacy",
-                "modulus_bits": 2048,
-                "pubkey_spki_b64": Base64UrlUnpadded::encode_string(&[1, 2, 3]),
-                "issuer_id": "issuer:test:v7-metadata",
-                "valid_from": 1,
-                "valid_until": 2,
-                "spend_policy": "single_use"
-            }]
-        });
-        let (url, task) = serve(legacy).await;
-        assert!(load_v7_trust(&url, "issuer:test:v7-metadata")
-            .await
-            .is_err());
-        task.abort();
-    }
 }

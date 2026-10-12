@@ -9,8 +9,6 @@ The implemented token families are:
 
 - **V4**: a Freebird-specific, bespoke P-256 VOPRF-like private-verification
   construction. It is not RFC 9497 or Privacy Pass interoperable.
-- **V7**: native bearer tokens using randomized RSA blind signatures and
-  issuer-published discovery metadata.
 
 V5 and V2 are removed and rejected. V6 is reserved and rejected. Start with
 [issuers](issuers.md), [verifiers](verifiers.md), and [tokens](tokens.md), then

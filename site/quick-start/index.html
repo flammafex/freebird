@@ -1702,11 +1702,6 @@ Deployment</a> before deploying a public service.</p>
 <p>From the repository root, install Docker with Compose support, then run:</p>
 <div class="highlight"><pre><span></span><code>cp<span class="w"> </span>.env.example<span class="w"> </span>.env
 <span class="c1"># For the self-contained interface smoke test, set SYBIL_RESISTANCE=none in .env.</span>
-<span class="c1"># Replace the .env.example V7 placeholder with a real 64-character lowercase</span>
-<span class="c1"># hexadecimal token key ID before starting Compose.</span>
-<span class="nv">V7_TOKEN_KEY_ID</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">32</span><span class="k">)</span><span class="s2">"</span>
-sed<span class="w"> </span>-i.bak<span class="w"> </span><span class="s2">"s|^NATIVE_BEARER_V7_TOKEN_KEY_ID=.*|NATIVE_BEARER_V7_TOKEN_KEY_ID=</span><span class="si">${</span><span class="nv">V7_TOKEN_KEY_ID</span><span class="si">}</span><span class="s2">|"</span><span class="w"> </span>.env
-rm<span class="w"> </span>-f<span class="w"> </span>.env.bak
 ./launch.sh<span class="w"> </span>up
 </code></pre></div>
 <p><code>launch.sh</code> checks prerequisites, creates <code>.env</code> when needed, can generate an
@@ -1741,33 +1736,19 @@ setting.</p>
 unsafe development verifier replay store and disables Sybil checks only to make
 the local interface exercise self-contained. Use three terminals from the
 repository root.</p>
-<p>Issuer (first run in a clean directory):</p>
-<div class="highlight"><pre><span></span><code><span class="nv">V7_TOKEN_KEY_ID</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">32</span><span class="k">)</span><span class="s2">"</span>
-<span class="nv">ADMIN_API_KEY</span><span class="o">=</span>local-admin-key-must-be-at-least-32-chars<span class="w"> </span><span class="se">\</span>
+<p>Issuer:</p>
+<div class="highlight"><pre><span></span><code><span class="nv">ADMIN_API_KEY</span><span class="o">=</span>local-admin-key-must-be-at-least-32-chars<span class="w"> </span><span class="se">\</span>
 <span class="nv">FREEBIRD_ENV</span><span class="o">=</span>development<span class="w"> </span><span class="nv">FREEBIRD_UNSAFE_DEVELOPMENT_MODE</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
 <span class="nv">AUDIT_LOG_PATH</span><span class="o">=</span>audit_log.json<span class="w"> </span><span class="se">\</span>
 <span class="nv">BIND_ADDR</span><span class="o">=</span><span class="m">127</span>.0.0.1:8081<span class="w"> </span><span class="nv">ISSUER_ID</span><span class="o">=</span>issuer:local:v4<span class="w"> </span><span class="se">\</span>
 <span class="nv">ISSUER_SK_PATH</span><span class="o">=</span>issuer_sk.bin<span class="w"> </span><span class="nv">KEY_ROTATION_STATE_PATH</span><span class="o">=</span>key_rotation_state.json<span class="w"> </span><span class="se">\</span>
 <span class="nv">SYBIL_RESISTANCE</span><span class="o">=</span>none<span class="w"> </span><span class="nv">REQUIRE_TLS</span><span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>
-<span class="nv">NATIVE_BEARER_V7_ENABLE</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
-<span class="nv">NATIVE_BEARER_V7_SK_PATH</span><span class="o">=</span>native_bearer_v7.der<span class="w"> </span><span class="se">\</span>
-<span class="nv">NATIVE_BEARER_V7_METADATA_PATH</span><span class="o">=</span>native_bearer_v7.json<span class="w"> </span><span class="se">\</span>
-<span class="nv">NATIVE_BEARER_V7_REGISTRY_PATH</span><span class="o">=</span>native_bearer_v7_registry.json<span class="w"> </span><span class="se">\</span>
-<span class="nv">NATIVE_BEARER_V7_TOKEN_KEY_ID</span><span class="o">=</span><span class="s2">"</span><span class="nv">$V7_TOKEN_KEY_ID</span><span class="s2">"</span><span class="w"> </span><span class="se">\</span>
-<span class="nv">NATIVE_BEARER_V7_ASSET_ID</span><span class="o">=</span>USD<span class="w"> </span><span class="nv">NATIVE_BEARER_V7_AMOUNT_MINOR</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="se">\</span>
 cargo<span class="w"> </span>run<span class="w"> </span>-p<span class="w"> </span>freebird-issuer<span class="w"> </span>--bin<span class="w"> </span>freebird-issuer
 </code></pre></div>
-<p>The <code>openssl</code> command supplies a real 64-character lowercase hexadecimal V7
-token key ID. Keep that value, along with the generated V7 files, for later
-starts. On first startup the issuer supports creating and then managing
-<code>native_bearer_v7.der</code>, <code>native_bearer_v7.json</code>, and
-<code>native_bearer_v7_registry.json</code>; it reuses the persisted material on restart.
-Do not generate a new ID for an existing set of files. These settings are
-unsafe development settings only.</p>
 <p>Verifier:</p>
 <div class="highlight"><pre><span></span><code><span class="nv">ADMIN_API_KEY</span><span class="o">=</span>local-admin-key-must-be-at-least-32-chars<span class="w"> </span><span class="se">\</span>
 <span class="nv">BIND_ADDR</span><span class="o">=</span><span class="m">127</span>.0.0.1:8082<span class="w"> </span><span class="nv">VERIFIER_ID</span><span class="o">=</span>verifier:local:v4<span class="w"> </span><span class="se">\</span>
-<span class="nv">VERIFIER_AUDIENCE</span><span class="o">=</span><span class="nb">local</span><span class="w"> </span><span class="nv">VERIFIER_ACCEPTED_TOKEN_VERSIONS</span><span class="o">=</span>v4<span class="w"> </span><span class="se">\</span>
+<span class="nv">VERIFIER_AUDIENCE</span><span class="o">=</span><span class="nb">local</span><span class="w"> </span><span class="se">\</span>
 <span class="nv">VERIFIER_ENV</span><span class="o">=</span>development<span class="w"> </span><span class="nv">IN_MEMORY_REPLAY_STORE</span><span class="o">=</span><span class="nb">true</span><span class="w"> </span><span class="se">\</span>
 <span class="nv">ISSUER_URL</span><span class="o">=</span>http://127.0.0.1:8081/.well-known/issuer<span class="w"> </span><span class="se">\</span>
 <span class="nv">VERIFIER_SK_PATH</span><span class="o">=</span>issuer_sk.bin<span class="w"> </span><span class="nv">REFRESH_INTERVAL_MIN</span><span class="o">=</span><span class="m">1</span><span class="w"> </span><span class="nv">REQUIRE_TLS</span><span class="o">=</span><span class="nb">false</span><span class="w"> </span><span class="se">\</span>

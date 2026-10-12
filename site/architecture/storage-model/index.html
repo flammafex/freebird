@@ -1719,24 +1719,14 @@
 <p>Issuer persistence can include:</p>
 <ul>
 <li>V4 issuer secret key and key-rotation state;</li>
-<li>V7 RSA private key, public metadata, and append-only registry;</li>
 <li>invitation, progressive-trust, diversity, vouching, and social-graph state;</li>
 <li>Sybil replay records, when configured for Redis;</li>
-<li>optional WebAuthn credentials and audit log data;</li>
-<li>optional V7 exchange/graph operation records, spend markers, budgets, and
-  replay-authority state.</li>
+<li>optional WebAuthn credentials and audit log data.</li>
 </ul>
-<p>V7 discovery/history and retained public verification material must be kept
-coherent with private signers and Redis operation state. Do not restore only one
-part of that set.</p>
 <h2 id="verifier">Verifier<a class="headerlink" href="#verifier" title="Permanent link">&para;</a></h2>
 <p>The verifier stores token replay identities in Redis by default. V4 spend
-records are non-expiring because V4 has no issuer-enforced expiry. V7 records
-expire through the inclusive validity endpoint. A process-local map is only an
-explicit development backend.</p>
-<p>The verifier also keeps in-process issuer metadata and a process-lifetime V7
-trust history. V7 retained bindings cannot silently disappear or be rebound in
-later discovery snapshots.</p>
+records are non-expiring because V4 has no issuer-enforced expiry. A
+process-local map is only an explicit development backend.</p>
 <h2 id="webauthn-and-redis">WebAuthn and Redis<a class="headerlink" href="#webauthn-and-redis" title="Permanent link">&para;</a></h2>
 <p>WebAuthn credential storage can use Redis; without it the current subsystem can
 use in-memory credential storage, which is not restart-safe. WebAuthn proof

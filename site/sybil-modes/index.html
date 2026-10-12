@@ -1791,23 +1791,16 @@ startup. Use <code>SYBIL_RESISTANCE=none</code> only for a deliberate no-checker
 <div class="highlight"><pre><span></span><code>SHA256(input || nonce || timestamp)
 </code></pre></div>
 <p>has the configured number of leading zero bits.</p>
-<p>The issuer now binds PoW proofs to issuance request context when the proof is
-submitted to V4 or V7 native bearer routes. For custom clients, the PoW <code>input</code>
+<p>The issuer binds PoW proofs to issuance request context when the proof is
+submitted to V4 issuance. For custom clients, the PoW <code>input</code>
 must match the route-specific request binding.</p>
-<p>V7 native bearer issuance validates the requested token key before processing
-any Sybil proof. A stale key therefore returns HTTP 400 with
-<code>{"error":"token_key_not_active"}</code> without consuming the proof.</p>
 <p>Single V4 issuance:</p>
 <div class="highlight"><pre><span></span><code>freebird:issue:v1:{issuer_id}:{blinded_element_b64}
 </code></pre></div>
-<p>Single V7 native bearer issuance:</p>
-<div class="highlight"><pre><span></span><code>freebird:native-bearer-v7:issue:v1:{issuer_id}:{token_key_id}:{blinded_msg_b64}
-</code></pre></div>
 <p>Batch issuance:</p>
-<div class="highlight"><pre><span></span><code>freebird:native-bearer-v7:issue-batch:v1:{issuer_id}:{token_key_id}:{count}:{digest}
+<div class="highlight"><pre><span></span><code>freebird:issue-batch:v1:{issuer_id}:{count}:{digest}
 </code></pre></div>
-<p>For V4, the corresponding route scope is <code>issue-batch</code>; for V7 the scope above
-is used. <code>digest</code> is base64url without padding of the first 16 bytes of:</p>
+<p><code>digest</code> is base64url without padding of the first 16 bytes of:</p>
 <div class="highlight"><pre><span></span><code>SHA256(len_le_u64(element_0) || element_0 || ... || len_le_u64(element_n) || element_n)
 </code></pre></div>
 <p>Replay protection uses the configured Sybil replay store. The default store is

@@ -22,15 +22,13 @@ pub struct VerifyResp {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-/// Verifier metadata remains independent from the strict issuer discovery wire
-/// contract. V4 replay-authority code continues to consume
-/// [`crate::api::KeyDiscoveryResp`] unchanged.
+/// Verifier metadata remains independent from issuer V4 key discovery.
 pub struct VerifierMetadataResp {
     pub verifier_id: String,
     pub audience: String,
     /// Base64url-encoded SHA-256 scope digest clients must bind into V4 token input.
     pub scope_digest_b64: String,
-    /// Token families accepted by this verifier (for example `v4`, `v7`).
+    /// Token families accepted by this verifier (for example `v4`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accepted_token_versions: Option<Vec<String>>,
 }

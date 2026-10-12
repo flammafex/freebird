@@ -1073,17 +1073,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#v7-native-bearer-tokens" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        V7 native bearer tokens
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#shared-assumptions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1687,17 +1676,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#v7-native-bearer-tokens" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        V7 native bearer tokens
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#shared-assumptions" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1754,17 +1732,8 @@ secret input to an honest issuer through the protocol transcript, and that the
 client's blinding/finalization steps are performed correctly. This assumption
 does not survive a compromised client, malicious endpoint behavior, key
 compromise, or correlation through external metadata.</p>
-<h2 id="v7-native-bearer-tokens">V7 native bearer tokens<a class="headerlink" href="#v7-native-bearer-tokens" title="Permanent link">&para;</a></h2>
-<p>V7 uses randomized RSA blind signatures. Its integrity assumptions include the
-security of the RSA signature construction and hash/encoding rules used by the
-implementation, correct blind-signature processing, unpredictable client
-randomness, authenticated issuer discovery, and protected V7 private keys.</p>
-<p>V7 replay prevention additionally depends on the body nullifier being handled as
-specified and on the verifier's replay store providing the required atomic and
-durable behavior. A valid signature alone is not a guarantee against a second
-use when replay state is lost or misconfigured.</p>
 <h2 id="shared-assumptions">Shared assumptions<a class="headerlink" href="#shared-assumptions" title="Permanent link">&para;</a></h2>
-<p>Both flows depend on:</p>
+<p>The V4 flow depends on:</p>
 <ul>
 <li>correct domain separation, scope, key identifiers, parsing, and validation;</li>
 <li>authentic issuer metadata and correct verifier configuration;</li>

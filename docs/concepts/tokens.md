@@ -1,6 +1,6 @@
 # Tokens
 
-Freebird currently accepts two token families: V4 and V7.
+Freebird currently issues and verifies V4 private-verification tokens.
 
 ## V4 private-verification token
 
@@ -16,18 +16,6 @@ The client receives an issuer evaluation from `/v1/oprf/issue`, unblinds it,
 and constructs the final token. The authenticator is the unblinded result over
 the issuer ID, key ID, nonce, and verifier-scope digest. The verifier
 recomputes it with issuer-trusted private verification material.
-
-## V7 native bearer token
-
-V7 uses randomized RSA blind signatures. Its canonical body includes the
-configured asset ID and minor amount, issuer/key identity, a nonce, a 32-byte
-body nullifier, and an owner commitment. The envelope carries the V7 dispatch
-version, message randomizer, and RSA signature. The verifier checks the body
-policy, discovered binding, signature, and inclusive validity window.
-
-V7 direct issuance is exposed at `/v7/native-bearer/issue`; optional durable
-exchange and graph issuance are separate V7 operations. See
-[blind issuance](blind-issuance.md).
 
 For security goals, non-goals, and metadata leakage limits, read the [threat
 model](../threat-model.md).

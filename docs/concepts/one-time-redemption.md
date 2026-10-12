@@ -12,14 +12,6 @@ verifier scope, then stores a V4 spend key. V4 tokens do not carry an
 issuer-enforced expiration timestamp, so the persistent replay record does not
 use a token validity expiry.
 
-## V7
-
-The V7 replay identity is the issuer namespace plus the lowercase hexadecimal
-body nullifier. It deliberately excludes the signature, whole artifact,
-descriptor, graph, keyset, verifier, and audience. A second signature over the
-same V7 body nullifier is therefore still a replay. V7 replay records expire at
-the inclusive `valid_until` boundary.
-
 The one-time property depends on the storage deployment, not only on token
 cryptography. Use durable Redis for restart-safe or multi-instance operation;
 memory is development-only. See [replay protection](replay-protection.md) and

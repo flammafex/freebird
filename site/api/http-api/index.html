@@ -1760,9 +1760,8 @@
 
 <h1 id="http-api">HTTP API<a class="headerlink" href="#http-api" title="Permanent link">&para;</a></h1>
 <p>Freebird exposes public protocol routes and a separately protected operator
-control plane. Route availability can also depend on configuration, token
-family, and readiness state. The lists below are the supported bounded surface;
-they are not a promise that every optional V7 feature is enabled.</p>
+control plane. Route availability can also depend on configuration and readiness
+state. The lists below describe the supported V4 surface.</p>
 <h2 id="public-issuer-routes">Public issuer routes<a class="headerlink" href="#public-issuer-routes" title="Permanent link">&para;</a></h2>
 <p>The issuer publishes discovery metadata and accepts blinded issuance requests:</p>
 <table>
@@ -1781,13 +1780,8 @@ they are not a promise that every optional V7 feature is enabled.</p>
 </tr>
 <tr>
 <td><code>GET</code></td>
-<td><code>/.well-known/replay-authority</code></td>
-<td>V4 replay-authority metadata used for verifier health refresh.</td>
-</tr>
-<tr>
-<td><code>GET</code></td>
 <td><code>/.well-known/keys</code></td>
-<td>Strict V7 native-bearer discovery when V7 is configured.</td>
+<td>V4 signing-key discovery used by clients to discover keys and refresh after a stale-key response.</td>
 </tr>
 <tr>
 <td><code>POST</code></td>
@@ -1799,27 +1793,14 @@ they are not a promise that every optional V7 feature is enabled.</p>
 <td><code>/v1/oprf/issue/batch</code></td>
 <td>Bounded V4 batch issuance.</td>
 </tr>
-<tr>
-<td><code>POST</code></td>
-<td><code>/v7/native-bearer/issue</code></td>
-<td>Direct V7 native-bearer issuance when enabled.</td>
-</tr>
-<tr>
-<td><code>POST</code></td>
-<td><code>/v7/native-bearer/issue/batch</code></td>
-<td>Direct V7 batch issuance when enabled.</td>
-</tr>
 </tbody>
 </table>
 <p>V4 issuance accepts a blinded element and may require a request-bound
-<code>sybil_proof</code>. V7 issuance is key-bound and uses the exact request contract;
-use the SDK or the source types rather than constructing an unvalidated payload
-from this overview. See <a href="../../client-proofs/">Client Sybil Proofs</a> and <a href="../../public-bearer-exchange/">Public
-Bearer Exchange</a> for their respective contracts.</p>
-<p>Optional V7 exchange and graph-issuance routes are documented in <a href="../../public-bearer-exchange/">Public Bearer
-Exchange</a> and are disabled unless configured. Do
-not expose an operator probe or an internal authority route as a general public
-API.</p>
+<code>sybil_proof</code>. See <a href="../../client-proofs/">Client Sybil Proofs</a> for its contract.
+Both discovery routes are served by the issuer. Publish <code>/.well-known/keys</code> at
+the issuer's public HTTPS origin and proxy it to the issuer backend on port
+8081; it is not a verifier or admin route. The key response must be revalidated
+on each discovery so stale-key recovery can observe prompt signing-key changes.</p>
 <h2 id="public-verifier-routes">Public verifier routes<a class="headerlink" href="#public-verifier-routes" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1848,7 +1829,7 @@ API.</p>
 <tr>
 <td><code>POST</code></td>
 <td><code>/v1/check</code></td>
-<td>Validate a V4 or V7 token without consuming it.</td>
+<td>Validate a V4 token without consuming it.</td>
 </tr>
 <tr>
 <td><code>POST</code></td>
@@ -1883,10 +1864,8 @@ issuance or verification route.</p>
 not a public client API. The complete supported operator route inventory is in
 <a href="../../admin-operations/">Admin Operations</a>, including invitations, vouching,
 WebAuthn, keys, and audit operations.</p>
-<p>For full version-specific issuance/proof and browser operations, also consult
-<a href="../../client-proofs/">Client Proofs</a>, <a href="../../webauthn-browser-flow/">WebAuthn Browser
-Flow</a>, and the V7 exchange documentation. This
-bounded page intentionally does not restate every legacy or optional payload.</p>
+<p>For issuance proofs and browser operations, also consult <a href="../../client-proofs/">Client
+Proofs</a> and <a href="../../webauthn-browser-flow/">WebAuthn Browser Flow</a>.</p>
 <h2 id="transport-and-errors">Transport and errors<a class="headerlink" href="#transport-and-errors" title="Permanent link">&para;</a></h2>
 <p>Production traffic must use HTTPS through the configured trusted proxy and
 <code>REQUIRE_TLS=true</code>. Public routes are rate-limited. Clients should handle

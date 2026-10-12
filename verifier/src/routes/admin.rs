@@ -15,8 +15,7 @@
 //! All endpoints require authentication via API key in the `X-Admin-Key` header.
 //! The API key should be configured via the `ADMIN_API_KEY` environment variable.
 
-use crate::readiness::{self, MetadataStatus, StoreHealth, TokenFamily};
-use crate::replay_authority::ReplayAuthorityHealth;
+use crate::readiness::{self, MetadataStatus, StoreHealth};
 use crate::routes::admin_rate_limit::AdminRateLimiter;
 use crate::store::SpendStore;
 use axum::{
@@ -66,9 +65,7 @@ pub struct AdminState {
     /// Configuration values
     pub config: VerifierConfig,
     pub metadata: Arc<RwLock<HashMap<String, MetadataStatus>>>,
-    pub accepted_token_families: Vec<TokenFamily>,
     pub store_health: StoreHealth,
-    pub replay_authority: Arc<ReplayAuthorityHealth>,
 }
 
 /// Derive a session signing key from the admin API key using HKDF-SHA256.
@@ -123,10 +120,6 @@ pub struct VerifierConfig {
     pub refresh_interval_min: u64,
     pub store_backend: String,
     pub issuer_urls: Vec<String>,
-    pub accepted_token_versions: Vec<String>,
-    pub graph_issuer_urls: Vec<String>,
-    pub replay_authority_probe_interval_secs: u64,
-    pub replay_authority_max_staleness_secs: u64,
 }
 
 // ============================================================================
@@ -205,7 +198,6 @@ pub struct ConfigResponse {
 pub struct IssuerSummary {
     pub issuer_id: String,
     pub kid: String,
-    pub public_key_count: usize,
     /// First 16 chars of base64-encoded pubkey for identification
     pub pubkey_preview: String,
     /// Seconds since last refresh (if known)
@@ -226,7 +218,6 @@ pub struct IssuerDetailsResponse {
     pub kid: String,
     pub pubkey_b64: String,
     pub context: String,
-    pub public_key_ids: Vec<String>,
     pub age_secs: Option<u64>,
 }
 
@@ -479,16 +470,12 @@ pub async fn readiness_handler(
     verify_api_key(&headers, &state, client_ip).await?;
     let issuers = state.issuers.read().await.clone();
     let metadata = state.metadata.read().await.clone();
-    let v7_trust = crate::state::v7_trust_registry();
     let report = readiness::evaluate(
         &state.store_health,
         &issuers,
-        &v7_trust,
         &metadata,
         &state.config.issuer_urls,
-        &state.accepted_token_families,
         std::time::Duration::from_secs(state.config.refresh_interval_min * 60),
-        Some(state.replay_authority.as_ref()),
     )
     .await;
     Ok(Json(
@@ -574,14 +561,9 @@ pub async fn list_issuers_handler(
 
             let age_secs = info.last_refreshed.map(|t| t.elapsed().as_secs());
 
-            let v7_key_count = crate::state::v7_trust_snapshot(id)
-                .map(|snapshot| snapshot.by_token_key_id.len())
-                .unwrap_or(0);
-
             IssuerSummary {
                 issuer_id: id.clone(),
                 kid: info.kid.clone(),
-                public_key_count: v7_key_count,
                 pubkey_preview,
                 age_secs,
             }
@@ -617,15 +599,6 @@ pub async fn get_issuer_handler(
 
     let pubkey_b64 = base64ct::Base64UrlUnpadded::encode_string(&info.pubkey_bytes);
     let context = String::from_utf8_lossy(&info.ctx).to_string();
-    let public_key_ids = crate::state::v7_trust_snapshot(&issuer_id)
-        .map(|snapshot| {
-            snapshot
-                .by_token_key_id
-                .keys()
-                .map(|key_id| hex::encode(key_id.as_bytes()))
-                .collect()
-        })
-        .unwrap_or_default();
     let age_secs = info.last_refreshed.map(|t| t.elapsed().as_secs());
 
     info!("Admin: retrieved issuer details for {}", issuer_id);
@@ -635,7 +608,6 @@ pub async fn get_issuer_handler(
         kid: info.kid.clone(),
         pubkey_b64,
         context,
-        public_key_ids,
         age_secs,
     }))
 }

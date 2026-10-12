@@ -1,20 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0 OR MIT
 
-use crate::{
-    replay_authority::ReplayAuthorityHealth, routes::admin::IssuerInfo, store::SpendStore,
-};
+use crate::{routes::admin::IssuerInfo, store::SpendStore};
 use std::{
     collections::HashMap,
     sync::Arc,
     time::{Duration, Instant},
 };
 use tokio::sync::Mutex;
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TokenFamily {
-    V4,
-    V7,
-}
 
 #[derive(Clone, Debug)]
 pub struct MetadataStatus {
@@ -75,27 +67,16 @@ impl ReadinessReport {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn evaluate(
     store_health: &StoreHealth,
     issuers: &HashMap<String, IssuerInfo>,
-    v7_trust: &HashMap<String, crate::state::V7IssuerTrustSnapshot>,
     metadata: &HashMap<String, MetadataStatus>,
     issuer_urls: &[String],
-    accepted: &[TokenFamily],
     refresh_interval: Duration,
-    replay_authority: Option<&ReplayAuthorityHealth>,
 ) -> ReadinessReport {
     let mut failures = Vec::new();
     if !store_health.healthy().await {
         failures.push("replay store is unreachable".into());
-    }
-    if accepted.contains(&TokenFamily::V4) {
-        if let Some(health) = replay_authority {
-            if health.configured() && !health.healthy().await {
-                failures.push("replay authority is unavailable or stale".into());
-            }
-        }
     }
     let max_age = refresh_interval.saturating_mul(2);
     let now = Instant::now();
@@ -120,27 +101,8 @@ pub async fn evaluate(
             failures.push(format!("issuer {issuer_id} is not loaded"));
             continue;
         };
-        for family in accepted {
-            match family {
-                TokenFamily::V4 if info.verification_key.is_none() => {
-                    failures.push(format!("V4 private key unavailable for issuer {issuer_id}"))
-                }
-                TokenFamily::V7 => {
-                    let now = time::OffsetDateTime::now_utc().unix_timestamp();
-                    let valid = v7_trust.get(issuer_id).is_some_and(|snapshot| {
-                        snapshot
-                            .by_token_key_id
-                            .values()
-                            .any(|entry| entry.valid_from <= now && now <= entry.valid_until)
-                    });
-                    if !valid {
-                        failures.push(format!(
-                            "V7 trust unavailable or expired for issuer {issuer_id}"
-                        ));
-                    }
-                }
-                _ => {}
-            }
+        if info.verification_key.is_none() {
+            failures.push(format!("V4 private key unavailable for issuer {issuer_id}"));
         }
     }
     ReadinessReport { failures }
@@ -190,7 +152,7 @@ mod tests {
         assert!(health.healthy().await);
     }
 
-    fn issuer(v4: bool, _v7: bool) -> IssuerInfo {
+    fn issuer(v4: bool) -> IssuerInfo {
         IssuerInfo {
             pubkey_bytes: vec![],
             kid: "kid".into(),
@@ -202,7 +164,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn each_enabled_family_and_issuer_is_independent() {
+    async fn issuer_readiness_is_independent() {
         let store: Arc<dyn SpendStore> = Arc::new(HealthyStore);
         let health = StoreHealth::new(store);
         let urls: Vec<String> = vec!["one".into(), "two".into()];
@@ -223,41 +185,14 @@ mod tests {
             })
             .collect();
         let mut issuers = HashMap::new();
-        issuers.insert("one".into(), issuer(true, true));
-        issuers.insert("two".into(), issuer(false, true));
-        let report = evaluate(
-            &health,
-            &issuers,
-            &HashMap::new(),
-            &metadata,
-            &urls,
-            &[TokenFamily::V4, TokenFamily::V7],
-            Duration::from_secs(60),
-            None,
-        )
-        .await;
+        issuers.insert("one".into(), issuer(true));
+        issuers.insert("two".into(), issuer(false));
+        let report = evaluate(&health, &issuers, &metadata, &urls, Duration::from_secs(60)).await;
         assert!(!report.ready());
         assert!(report
             .failures
             .iter()
             .any(|f| f.contains("V4") && f.contains("two")));
-        issuers.insert("two".into(), issuer(true, false));
-        let report = evaluate(
-            &health,
-            &issuers,
-            &HashMap::new(),
-            &metadata,
-            &urls,
-            &[TokenFamily::V4, TokenFamily::V7],
-            Duration::from_secs(60),
-            None,
-        )
-        .await;
-        assert!(!report.ready());
-        assert!(report
-            .failures
-            .iter()
-            .any(|f| f.contains("V7") && f.contains("two")));
     }
 
     #[tokio::test]
@@ -265,7 +200,7 @@ mod tests {
         let store: Arc<dyn SpendStore> = Arc::new(HealthyStore);
         let health = StoreHealth::new(store);
         let mut issuers = HashMap::new();
-        issuers.insert("one".into(), issuer(true, true));
+        issuers.insert("one".into(), issuer(true));
         let mut metadata = HashMap::new();
         metadata.insert(
             "one".into(),
@@ -277,12 +212,9 @@ mod tests {
         let report = evaluate(
             &health,
             &issuers,
-            &HashMap::new(),
             &metadata,
             &["one".into()],
-            &[TokenFamily::V4],
             Duration::from_secs(60),
-            None,
         )
         .await;
         assert!(!report.ready());

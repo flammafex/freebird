@@ -4,17 +4,8 @@ Freebird currently implements issuer-to-verifier metadata discovery.
 
 ## Implemented trust relationships
 
-The verifier periodically fetches configured issuer metadata. `ISSUER_URL` or
-`ISSUER_URLS` are normalized to `GET /.well-known/keys` for strict V7
-discovery. The complete V7 container is validated before its direct and
-retained key bindings, policies, and optional V7 exchange/graph descriptors
-enter the verifier trust snapshot.
-
-V4 has a separate authority-only metadata path,
-`GET /.well-known/replay-authority`, and an operator-controlled probe at
-`POST /v1/public/graph/replay-authority/probe`. A graph participant can use
-these to attest that the verifier and issuer are using the intended replay
-authority. These paths do not provide V7 keys.
+The verifier periodically fetches configured V4 issuer metadata from
+`ISSUER_URL` or `ISSUER_URLS`.
 
 With `REQUIRE_TLS=true`, configured issuer URLs must use HTTPS. Discovery
 metadata is therefore part of the deployment trust boundary and must be

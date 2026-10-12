@@ -1,6 +1,6 @@
 [package]
 name = "integration_tests"
-version = "0.10.5"
+version = "0.11.0"
 edition = "2021"
 publish = false
 
@@ -33,6 +33,5 @@ freebird-common = { path = "../common" }
 freebird-issuer = { path = "../issuer" }
 
 freebird-verifier = { path = "../verifier" } # <--- Now accessible as a lib
-blind-rsa-signatures = "0.17.1"
 redis = { version = "0.24", features = ["aio", "tokio-comp"] }
 hex = "0.4"

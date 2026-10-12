@@ -38,15 +38,6 @@ spec:
                 name: issuer
                 port:
                   number: 8081
-          # V4 authority-only metadata for verifier health refresh. This is
-          # separate from strict V7 key discovery and the POST probe route.
-          - path: /.well-known/replay-authority
-            pathType: Exact
-            backend:
-              service:
-                name: issuer
-                port:
-                  number: 8081
           - path: /.well-known/keys
             pathType: Exact
             backend:
@@ -70,22 +61,6 @@ spec:
                   number: 8081
           - path: /v1/oprf
             pathType: Prefix
-            backend:
-              service:
-                name: issuer
-                port:
-                  number: 8081
-          - path: /v1/public
-            pathType: Prefix
-            backend:
-              service:
-                name: issuer
-                port:
-                  number: 8081
-          # Includes the V4 replay-authority probe. Keep it behind this
-          # trusted HTTPS ingress; verifiers must not call the pod directly.
-          - path: /v1/public/graph/replay-authority/probe
-            pathType: Exact
             backend:
               service:
                 name: issuer

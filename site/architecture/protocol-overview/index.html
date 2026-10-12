@@ -763,17 +763,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#v7-native-bearer" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        V7 native bearer
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#discovery" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1676,17 +1665,6 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#v7-native-bearer" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        V7 native bearer
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#discovery" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1728,23 +1706,9 @@
    latter records a spend.</li>
 </ol>
 <p>This construction is bespoke and not RFC 9497 interoperable.</p>
-<h2 id="v7-native-bearer">V7 native bearer<a class="headerlink" href="#v7-native-bearer" title="Permanent link">&para;</a></h2>
-<ol>
-<li>The client constructs the fixed body and blinds its RSA message.</li>
-<li>It sends the explicit key ID and blinded message to
-   <code>POST /v7/native-bearer/issue</code> (or batch).</li>
-<li>The issuer validates the active key and any admission proof, then returns a
-   blind signature.</li>
-<li>The client finalizes the V7 token.</li>
-<li>The verifier validates it against the issuer's strict V7 discovery and
-   atomically consumes the body-nullifier replay identity.</li>
-</ol>
-<p>V7 also has optional durable exchange and graph-issuance routes. They are not
-legacy V2/V5 compatibility paths. V5 and V2 are removed; V6 is reserved.</p>
 <h2 id="discovery">Discovery<a class="headerlink" href="#discovery" title="Permanent link">&para;</a></h2>
-<p>The verifier refreshes <code>/.well-known/keys</code> for V7. The separate V4
-<code>/.well-known/replay-authority</code> metadata and graph probe attest replay-authority
-relationships only. See <a href="../../concepts/federation/">federation</a>.</p>
+<p>The verifier refreshes V4 issuer metadata from <code>/.well-known/issuer</code>. See
+<a href="../../concepts/federation/">federation</a>.</p>
 
 
 

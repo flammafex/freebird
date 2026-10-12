@@ -94,23 +94,6 @@ async fn build_issuer_state(
         kid.clone(),
         VOPRF_CONTEXT_V4,
     )?);
-    let native_root = tempfile::tempdir()?;
-    let native_bearer_v7 = Arc::new(
-        freebird_issuer::native_bearer_v7::NativeBearerV7Issuer::load_or_generate(
-            &freebird_issuer::config::NativeBearerV7Config {
-                sk_path: native_root.path().join("v7.der"),
-                metadata_path: native_root.path().join("v7.json"),
-                registry_path: native_root.path().join("registry.json"),
-                profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
-                descriptor_id: String::new(),
-                token_key_id: "74".repeat(32),
-                asset_id: "USD".into(),
-                amount_minor: 1,
-                validity_secs: 3600,
-            },
-            "issuer:test:regression",
-        )?,
-    );
     let state = Arc::new(AppStateWithSybil {
         issuer_id: "issuer:test:regression".to_string(),
         kid,
@@ -120,13 +103,6 @@ async fn build_issuer_state(
         sybil_checker,
         admission: Default::default(),
         invitation_system: None,
-        native_bearer_v7,
-        native_bearer_v7_retained: vec![],
-        native_exchange_v7: None,
-        native_exchange_v7_discovery: None,
-        native_graph_issuance_v7: None,
-        native_graph_issuance_v7_discovery: None,
-        replay_authority: None,
         epoch_duration_sec: 86400,
         epoch_retention: 2,
         admin_api_key: None,

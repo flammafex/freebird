@@ -31,8 +31,7 @@ application accounts, timing, or operator logs.
 4. **Verifier:** The client presents the token; the verifier validates it and
    records its nullifier so a second presentation is rejected.
 
-Freebird currently supports V4 private-verification tokens and V7 native bearer
-tokens. The details and protocol boundaries are documented in
+Freebird currently supports V4 private-verification tokens. The details and protocol boundaries are documented in
 [Architecture](architecture/index.md).
 
 ## Quick start
@@ -41,15 +40,10 @@ For the shortest local path, use the repository's Docker Compose helper:
 
 ```bash
 cp .env.example .env
-V7_TOKEN_KEY_ID="$(openssl rand -hex 32)"
-sed -i.bak "s|^NATIVE_BEARER_V7_TOKEN_KEY_ID=.*|NATIVE_BEARER_V7_TOKEN_KEY_ID=${V7_TOKEN_KEY_ID}|" .env
-rm -f .env.bak
 ./launch.sh up
 ```
 
-The generated ID replaces the `.env.example` placeholder with a real
-64-character lowercase hexadecimal value. This is a development workflow, not
-a production deployment profile.
+This is a development workflow, not a production deployment profile.
 
 See the [Quick Start](quick-start.md) for the complete Docker and source-build
 commands.
@@ -85,7 +79,7 @@ this documentation as an audit or as a substitute for deployment review.
 ## Explore the documentation
 
 - [Quick Start](quick-start.md) — run a local development deployment.
-- [Architecture](architecture/index.md) — components, V4/V7 flows, metadata, and
+- [Architecture](architecture/index.md) — V4 components, metadata, and
   storage boundaries.
 - [Security](security/index.md) — goals, assumptions, non-goals, and privacy
   limitations.

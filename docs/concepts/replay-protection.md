@@ -12,8 +12,6 @@ one instance.
 
 The verifier uses an atomic set-if-absent operation. For V4, Redis uses an
 atomic Lua `SETNX` without expiry because V4 has no issuer-enforced expiration.
-For V7, Redis uses `SET NX EXAT` with an absolute expiry at
-`valid_until + 1`; this preserves the inclusive `valid_until` validity second.
 The operation returns fresh or already-present; only fresh spends are accepted.
 
 ```bash

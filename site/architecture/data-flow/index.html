@@ -829,17 +829,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#durable-public-operations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Durable public operations
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1686,17 +1675,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#durable-public-operations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Durable public operations
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1717,30 +1695,20 @@
 <h1 id="data-flow">Data Flow<a class="headerlink" href="#data-flow" title="Permanent link">&para;</a></h1>
 <div class="highlight"><pre><span></span><code>client -- blinded request + optional proof --&gt; issuer
 client &lt;-- evaluation or blind signature -- issuer
-client -- finalized V4/V7 token ----------&gt; verifier
+client -- finalized V4 token -------------&gt; verifier
 verifier -- validated metadata -----------&gt; issuer discovery
 verifier -- atomic spend -----------------&gt; Redis
 </code></pre></div>
 <h2 id="issuance">Issuance<a class="headerlink" href="#issuance" title="Permanent link">&para;</a></h2>
-<p>For V4, the issuer checks the optional Sybil proof and evaluates a 33-byte
+<p>The issuer checks the optional Sybil proof and evaluates a 33-byte
 base64url-decoded blinded P-256 element. The client performs unblinding and
-constructs the redemption token. For V7, the issuer checks the explicit active
-key ID, validates the 384-byte blinded message, applies admission policy, and
-returns a randomized-RSA blind signature.</p>
+constructs the redemption token.</p>
 <h2 id="verification">Verification<a class="headerlink" href="#verification" title="Permanent link">&para;</a></h2>
-<p><code>POST /v1/verify</code> dispatches by the token's version byte. V4 verification checks
-scope and issuer-trusted private verification material. V7 verification parses
-the canonical envelope, resolves issuer ID and token key ID from the trusted
-V7 snapshot, checks policy/signature/time, and derives a body-nullifier spend
-key. An atomic store mutation decides whether the request is fresh.</p>
+<p><code>POST /v1/verify</code> validates the V4 token against verifier scope and
+issuer-trusted private verification material. An atomic store mutation decides
+whether the request is fresh.</p>
 <p><code>POST /v1/check</code> follows validation paths but deliberately skips the spend
 mutation. It must not be used as evidence that a token has been consumed.</p>
-<h2 id="durable-public-operations">Durable public operations<a class="headerlink" href="#durable-public-operations" title="Permanent link">&para;</a></h2>
-<p>Optional V7 exchange requests use a public, non-secret 16-byte operation ID and
-a separate 32-byte status capability. The capability is accepted in exactly
-one header and is never a body or URL value. Exact retries recover committed
-responses without signing or spending twice. See <a href="../../public-bearer-exchange/">Public Bearer
-Exchange</a>.</p>
 
 
 

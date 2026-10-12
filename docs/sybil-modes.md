@@ -32,13 +32,9 @@ SHA256(input || nonce || timestamp)
 
 has the configured number of leading zero bits.
 
-The issuer now binds PoW proofs to issuance request context when the proof is
-submitted to V4 or V7 native bearer routes. For custom clients, the PoW `input`
+The issuer binds PoW proofs to issuance request context when the proof is
+submitted to V4 issuance. For custom clients, the PoW `input`
 must match the route-specific request binding.
-
-V7 native bearer issuance validates the requested token key before processing
-any Sybil proof. A stale key therefore returns HTTP 400 with
-`{"error":"token_key_not_active"}` without consuming the proof.
 
 Single V4 issuance:
 
@@ -46,20 +42,13 @@ Single V4 issuance:
 freebird:issue:v1:{issuer_id}:{blinded_element_b64}
 ```
 
-Single V7 native bearer issuance:
-
-```text
-freebird:native-bearer-v7:issue:v1:{issuer_id}:{token_key_id}:{blinded_msg_b64}
-```
-
 Batch issuance:
 
 ```text
-freebird:native-bearer-v7:issue-batch:v1:{issuer_id}:{token_key_id}:{count}:{digest}
+freebird:issue-batch:v1:{issuer_id}:{count}:{digest}
 ```
 
-For V4, the corresponding route scope is `issue-batch`; for V7 the scope above
-is used. `digest` is base64url without padding of the first 16 bytes of:
+`digest` is base64url without padding of the first 16 bytes of:
 
 ```text
 SHA256(len_le_u64(element_0) || element_0 || ... || len_le_u64(element_n) || element_n)

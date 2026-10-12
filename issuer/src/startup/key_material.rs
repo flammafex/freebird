@@ -9,9 +9,6 @@ pub(super) struct KeyMaterial {
     pub(super) kid: String,
     pub(super) pubkey_b64: String,
     pub(super) voprf: Arc<crate::multi_key_voprf::MultiKeyVoprfCore>,
-    pub(super) native_bearer_v7: Arc<crate::native_bearer_v7::NativeBearerV7Issuer>,
-    pub(super) native_bearer_v7_retained: Vec<freebird_common::api::NativeBearerV7KeyInfo>,
-    pub(super) v7_signer_inventory: Arc<crate::v7_signers::V7SignerInventory>,
 }
 
 impl KeyMaterial {
@@ -45,45 +42,11 @@ impl KeyMaterial {
             }
         });
 
-        let signer_spec = crate::v7_signers::V7SignerSpec::from_native_config(
-            &config.native_bearer_v7_config,
-            &config.issuer_id,
-        )?;
-        let retained_specs = crate::config::load_v7_additional_signer_configs()?
-            .into_iter()
-            .map(|signer_config| {
-                crate::v7_signers::V7SignerSpec::from_native_config(
-                    &signer_config,
-                    &config.issuer_id,
-                )
-            })
-            .collect::<anyhow::Result<Vec<_>>>()?;
-        let v7_signer_inventory = Arc::new(
-            crate::v7_signers::V7SignerInventory::load_or_generate(
-                signer_spec,
-                retained_specs,
-                &config.native_bearer_v7_config.registry_path,
-            )
-            .context("Failed to initialize V7 signer inventory")?,
-        );
-        let native_bearer_v7 = Arc::new(
-            crate::native_bearer_v7::NativeBearerV7Issuer::from_inventory(
-                v7_signer_inventory.clone(),
-                &config.native_bearer_v7_config,
-                &config.issuer_id,
-            )
-            .context("Failed to initialize V7 native bearer issuer")?,
-        );
-        let native_bearer_v7_retained = native_bearer_v7.retained_discovery()?;
-
         Ok(Self {
             secret_guard: sk_bytes,
             kid,
             pubkey_b64,
             voprf,
-            native_bearer_v7,
-            native_bearer_v7_retained,
-            v7_signer_inventory,
         })
     }
 }

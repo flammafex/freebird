@@ -13,11 +13,6 @@ From the repository root, install Docker with Compose support, then run:
 ```bash
 cp .env.example .env
 # For the self-contained interface smoke test, set SYBIL_RESISTANCE=none in .env.
-# Replace the .env.example V7 placeholder with a real 64-character lowercase
-# hexadecimal token key ID before starting Compose.
-V7_TOKEN_KEY_ID="$(openssl rand -hex 32)"
-sed -i.bak "s|^NATIVE_BEARER_V7_TOKEN_KEY_ID=.*|NATIVE_BEARER_V7_TOKEN_KEY_ID=${V7_TOKEN_KEY_ID}|" .env
-rm -f .env.bak
 ./launch.sh up
 ```
 
@@ -67,39 +62,24 @@ unsafe development verifier replay store and disables Sybil checks only to make
 the local interface exercise self-contained. Use three terminals from the
 repository root.
 
-Issuer (first run in a clean directory):
+Issuer:
 
 ```bash
-V7_TOKEN_KEY_ID="$(openssl rand -hex 32)"
 ADMIN_API_KEY=local-admin-key-must-be-at-least-32-chars \
 FREEBIRD_ENV=development FREEBIRD_UNSAFE_DEVELOPMENT_MODE=true \
 AUDIT_LOG_PATH=audit_log.json \
 BIND_ADDR=127.0.0.1:8081 ISSUER_ID=issuer:local:v4 \
 ISSUER_SK_PATH=issuer_sk.bin KEY_ROTATION_STATE_PATH=key_rotation_state.json \
 SYBIL_RESISTANCE=none REQUIRE_TLS=false \
-NATIVE_BEARER_V7_ENABLE=true \
-NATIVE_BEARER_V7_SK_PATH=native_bearer_v7.der \
-NATIVE_BEARER_V7_METADATA_PATH=native_bearer_v7.json \
-NATIVE_BEARER_V7_REGISTRY_PATH=native_bearer_v7_registry.json \
-NATIVE_BEARER_V7_TOKEN_KEY_ID="$V7_TOKEN_KEY_ID" \
-NATIVE_BEARER_V7_ASSET_ID=USD NATIVE_BEARER_V7_AMOUNT_MINOR=1 \
 cargo run -p freebird-issuer --bin freebird-issuer
 ```
-
-The `openssl` command supplies a real 64-character lowercase hexadecimal V7
-token key ID. Keep that value, along with the generated V7 files, for later
-starts. On first startup the issuer supports creating and then managing
-`native_bearer_v7.der`, `native_bearer_v7.json`, and
-`native_bearer_v7_registry.json`; it reuses the persisted material on restart.
-Do not generate a new ID for an existing set of files. These settings are
-unsafe development settings only.
 
 Verifier:
 
 ```bash
 ADMIN_API_KEY=local-admin-key-must-be-at-least-32-chars \
 BIND_ADDR=127.0.0.1:8082 VERIFIER_ID=verifier:local:v4 \
-VERIFIER_AUDIENCE=local VERIFIER_ACCEPTED_TOKEN_VERSIONS=v4 \
+VERIFIER_AUDIENCE=local \
 VERIFIER_ENV=development IN_MEMORY_REPLAY_STORE=true \
 ISSUER_URL=http://127.0.0.1:8081/.well-known/issuer \
 VERIFIER_SK_PATH=issuer_sk.bin REFRESH_INTERVAL_MIN=1 REQUIRE_TLS=false \

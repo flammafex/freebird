@@ -1581,10 +1581,43 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#v0100-v7-canonical-descriptor-migration" class="md-nav__link">
+  <a href="#current-release-v0110-sdk-sdk-v0110" class="md-nav__link">
     <span class="md-ellipsis">
       
-        v0.10.0 V7 canonical-descriptor migration
+        Current release: v0.11.0 / SDK sdk-v0.11.0
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v0104" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.10.4
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#v0103-sourcetag-history" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.10.3 source/tag history
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#historical-v0100-v7-canonical-descriptor-migration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Historical v0.10.0 V7 canonical-descriptor migration
       
     </span>
   </a>
@@ -1626,10 +1659,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#sdk-release-flammafexfreebird0100" class="md-nav__link">
+  <a href="#sdk-release-flammafexfreebird0104" class="md-nav__link">
     <span class="md-ellipsis">
       
-        SDK release (@flammafex/freebird@0.10.0)
+        SDK release (@flammafex/freebird@0.10.4)
       
     </span>
   </a>
@@ -1726,11 +1759,13 @@
 
 <h1 id="release-packaging">Release Packaging<a class="headerlink" href="#release-packaging" title="Permanent link">&para;</a></h1>
 <p>Freebird releases are tag-driven. CI runs on <code>main</code> (and pull requests targeting
-<code>main</code>), so push or merge the intended commit to <code>origin/main</code> and wait for its
-eight required checks before creating the tag. Do not tag a commit that has not
-first landed on <code>main</code>:</p>
-<div class="highlight"><pre><span></span><code>git<span class="w"> </span>tag<span class="w"> </span>-a<span class="w"> </span>v0.10.0<span class="w"> </span>-m<span class="w"> </span><span class="s2">"Freebird 0.10.0"</span>
-git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </span>v0.10.0
+<code>main</code>), so push the intended commit to both <code>origin/main</code> (Forgejo) and
+<code>github/main</code>, then wait for its eight required GitHub checks before creating
+either tag. Do not tag a commit that has not first landed on <code>main</code>:</p>
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>tag<span class="w"> </span>-a<span class="w"> </span>v0.11.0<span class="w"> </span>-m<span class="w"> </span><span class="s2">"Freebird 0.11.0"</span>
+git<span class="w"> </span>tag<span class="w"> </span>-a<span class="w"> </span>sdk-v0.11.0<span class="w"> </span>-m<span class="w"> </span><span class="s2">"Freebird SDK 0.11.0"</span>
+git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </span>v0.11.0<span class="w"> </span>sdk-v0.11.0
+git<span class="w"> </span>push<span class="w"> </span>github<span class="w"> </span>v0.11.0<span class="w"> </span>sdk-v0.11.0
 </code></pre></div>
 <p>Pushing a <code>v*</code> tag starts two workflows:</p>
 <ul>
@@ -1746,18 +1781,42 @@ git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </
 It validates, packs, consumer-tests, and publishes the <code>@flammafex/freebird</code> npm
 package. It uses the protected <code>npm-publish</code> GitHub Environment and a granular
 npm automation token; it does not use OIDC or npm provenance.</p>
-<h2 id="v0100-v7-canonical-descriptor-migration">v0.10.0 V7 canonical-descriptor migration<a class="headerlink" href="#v0100-v7-canonical-descriptor-migration" title="Permanent link">&para;</a></h2>
+<h2 id="current-release-v0110-sdk-sdk-v0110">Current release: v0.11.0 / SDK sdk-v0.11.0<a class="headerlink" href="#current-release-v0110-sdk-sdk-v0110" title="Permanent link">&para;</a></h2>
+<p>This release removes Freebird V7 bearer issuance and verification, direct
+bearer, exchange, graph-issuance, and their JavaScript SDK surfaces. V4
+admission and verification remain supported. The Scarcity B2 demo depends on
+V7 and is incompatible with this release. The older release records below
+describe their historical source states, not the current supported surface.</p>
+<h2 id="v0104">v0.10.4<a class="headerlink" href="#v0104" title="Permanent link">&para;</a></h2>
+<p>This release note records the v0.10.4 source state; its V7 functionality and
+upgrade notes do not describe the current supported service surface.</p>
+<ul>
+<li>Included the V7 multi-output exchange request/result Merkle-proof soundness
+  correction and patched <code>rustls</code> and <code>cryptoki</code> dependencies.</li>
+<li>At that release, pre-v0.10.3 <code>ResultReady</code> exchange records were unsupported
+  and had no migration path.</li>
+<li>The JavaScript SDK required Node.js 24 or newer.</li>
+</ul>
+<h2 id="v0103-sourcetag-history">v0.10.3 source/tag history<a class="headerlink" href="#v0103-sourcetag-history" title="Permanent link">&para;</a></h2>
+<p>The existing v0.10.3 tags identify source history and must not be moved. The
+release archive workflow failed because the root <code>CHANGELOG.md</code> was missing;
+the npm publish workflow was blocked because the protected <code>npm-publish</code>
+Environment lacked its required <code>NPM_TOKEN</code> secret. Neither failure establishes
+that a release tarball or npm package was published. See the root changelog.</p>
+<h2 id="historical-v0100-v7-canonical-descriptor-migration">Historical v0.10.0 V7 canonical-descriptor migration<a class="headerlink" href="#historical-v0100-v7-canonical-descriptor-migration" title="Permanent link">&para;</a></h2>
+<p>The following records the migration guidance that applied to v0.10.0 only. V7
+is no longer part of the current supported service surface; do not use this as
+current deployment guidance.</p>
 <p>v0.10.0 derives canonical direct and exchange descriptor IDs from finalized
 signer metadata and the canonical exchange descriptor transcript. Old arbitrary
 descriptor IDs are rejected. The corrected exchange transcript therefore
 invalidates prior exchange, keyset, transition, and graph-policy derived IDs.</p>
-<p>Before releasing or upgrading an affected V7 deployment, operators must
-regenerate and rotate the affected signer metadata, then regenerate the V7
-registry and discovery/history from the canonical material. Do not reuse old V7
-signer metadata, registry, discovery, keyset, transition, graph-policy, or other
-derived data. For direct bootstrap, start once without
-<code>NATIVE_BEARER_V7_DESCRIPTOR_ID</code>, persist the derived canonical output, and only
-then optionally pin that public expected value for subsequent starts.</p>
+<p>The v0.10.0 migration instructed affected V7 operators to regenerate and rotate
+signer metadata, then regenerate the registry and discovery/history from the
+canonical material. It warned against reusing old V7 signer metadata, registry,
+discovery, keyset, transition, graph-policy, or other derived data. The
+historical direct-bootstrap procedure omitted <code>NATIVE_BEARER_V7_DESCRIPTOR_ID</code>
+on first start and only pinned its derived output after persistence.</p>
 <h2 id="npm-sdk-publishing">npm SDK publishing<a class="headerlink" href="#npm-sdk-publishing" title="Permanent link">&para;</a></h2>
 <p>The npm package is published from the exact release tag. The workflow runs
 credential-free <code>--ignore-scripts</code> install, lint, tests, build, and pack steps,
@@ -1800,7 +1859,7 @@ tarball with <code>--ignore-scripts</code>.</p>
   <code>security</code>, <code>javascript-sdk</code>, <code>repository-hygiene</code>, and <code>compose-smoke</code>.</li>
 <li>Create a GitHub repository ruleset targeting <code>sdk-v*.*.*</code>. Restrict tag
   creation to release maintainers, block tag updates and deletions, and block
-  force pushes. Once <code>sdk-v0.10.0</code> is created, do not retarget or recreate it.</li>
+  force pushes. Never retarget or recreate an SDK release tag after creation.</li>
 <li>Require the <code>npm-publish</code> Environment for the publishing job, with required
   reviewers and the <code>NPM_TOKEN</code> environment secret. Allow <code>main</code> only because
   manual dispatch is constrained to protected <code>main</code>; tag pushes use
@@ -1810,27 +1869,27 @@ tarball with <code>--ignore-scripts</code>.</p>
 to <code>origin/main</code>, runs <code>scripts/release-gate.py</code> for the exact SHA, and checks
 out that SHA for packaging. Neither a moving branch nor a manually supplied
 SHA can bypass the gate.</p>
-<h3 id="sdk-release-flammafexfreebird0100">SDK release (<code>@flammafex/freebird@0.10.0</code>)<a class="headerlink" href="#sdk-release-flammafexfreebird0100" title="Permanent link">&para;</a></h3>
+<h3 id="sdk-release-flammafexfreebird0104">SDK release (<code>@flammafex/freebird@0.10.4</code>)<a class="headerlink" href="#sdk-release-flammafexfreebird0104" title="Permanent link">&para;</a></h3>
 <p>SDK npm releases use dedicated immutable <code>sdk-vMAJOR.MINOR.PATCH</code> tags rather
 than the Rust/container <code>v*</code> tags. After the npm organization, token, and
 Environment are configured:</p>
 <p>The SDK release requires Node.js 24 or newer.</p>
 <ol>
 <li>In the reviewed release commit, update <code>sdk/js/package.json</code> and the root
-   <code>sdk/js/package-lock.json</code> entry to <code>0.10.0</code>. Confirm that their names and
+   <code>sdk/js/package-lock.json</code> entry to <code>0.10.4</code>. Confirm that their names and
    versions match exactly, merge that commit to protected <code>main</code>, and wait for
    all required CI checks to pass.</li>
 <li>Create and push the dedicated tag only after that review and gate:</li>
 </ol>
-<div class="highlight"><pre><span></span><code>git<span class="w"> </span>tag<span class="w"> </span>-a<span class="w"> </span>sdk-v0.10.0<span class="w"> </span>&lt;reviewed-commit&gt;<span class="w"> </span>-m<span class="w"> </span><span class="s2">"Publish @flammafex/freebird 0.10.0"</span>
-git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </span>sdk-v0.10.0
+<div class="highlight"><pre><span></span><code>git<span class="w"> </span>tag<span class="w"> </span>-a<span class="w"> </span>sdk-v0.10.4<span class="w"> </span>&lt;reviewed-commit&gt;<span class="w"> </span>-m<span class="w"> </span><span class="s2">"Publish @flammafex/freebird 0.10.4"</span>
+git<span class="w"> </span>push<span class="w"> </span>origin<span class="w"> </span>sdk-v0.10.4
 </code></pre></div>
 <ol>
 <li>The tag push starts the workflow. Alternatively, start it manually from
    protected <code>main</code> with the exact existing tag; manual dispatch still resolves
    and gates that tag commit and cannot select a branch or SHA:</li>
 </ol>
-<div class="highlight"><pre><span></span><code>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>npm-publish.yml<span class="w"> </span>--ref<span class="w"> </span>main<span class="w"> </span>-f<span class="w"> </span><span class="nv">tag</span><span class="o">=</span>sdk-v0.10.0
+<div class="highlight"><pre><span></span><code>gh<span class="w"> </span>workflow<span class="w"> </span>run<span class="w"> </span>npm-publish.yml<span class="w"> </span>--ref<span class="w"> </span>main<span class="w"> </span>-f<span class="w"> </span><span class="nv">tag</span><span class="o">=</span>sdk-v0.10.4
 </code></pre></div>
 <ol>
 <li>Approve the <code>npm-publish</code> Environment deployment and wait for the workflow's
@@ -1845,12 +1904,12 @@ trigger the workflow. Future tag-triggered runs do not rewrite package metadata.
 <h3 id="verify-a-published-sdk">Verify a published SDK<a class="headerlink" href="#verify-a-published-sdk" title="Permanent link">&para;</a></h3>
 <p>The workflow run is the first verification. A maintainer should also confirm
 the public registry record and both consumer forms after publication:</p>
-<div class="highlight"><pre><span></span><code>npm<span class="w"> </span>view<span class="w"> </span>@flammafex/freebird@0.10.0<span class="w"> </span>version<span class="w"> </span>dist.tarball<span class="w"> </span>--registry<span class="o">=</span>https://registry.npmjs.org
+<div class="highlight"><pre><span></span><code>npm<span class="w"> </span>view<span class="w"> </span>@flammafex/freebird@0.10.4<span class="w"> </span>version<span class="w"> </span>dist.tarball<span class="w"> </span>--registry<span class="o">=</span>https://registry.npmjs.org
 <span class="nv">tmp</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>mktemp<span class="w"> </span>-d<span class="k">)</span><span class="s2">"</span>
 <span class="nb">trap</span><span class="w"> </span><span class="s1">'rm -rf "$tmp"'</span><span class="w"> </span>EXIT
 <span class="nb">cd</span><span class="w"> </span><span class="s2">"</span><span class="nv">$tmp</span><span class="s2">"</span>
 npm<span class="w"> </span>init<span class="w"> </span>--yes<span class="w"> </span>&gt;/dev/null
-npm<span class="w"> </span>install<span class="w"> </span>--ignore-scripts<span class="w"> </span>--no-audit<span class="w"> </span>--no-fund<span class="w"> </span>@flammafex/freebird@0.10.0<span class="w"> </span>typescript@^5
+npm<span class="w"> </span>install<span class="w"> </span>--ignore-scripts<span class="w"> </span>--no-audit<span class="w"> </span>--no-fund<span class="w"> </span>@flammafex/freebird@0.10.4<span class="w"> </span>typescript@^5
 node<span class="w"> </span>--input-type<span class="o">=</span>module<span class="w"> </span>--eval<span class="w"> </span><span class="s2">"import('@flammafex/freebird').then(({FreebirdClient, crypto}) =&gt; { if (typeof FreebirdClient !== 'function' || typeof crypto.blind !== 'function') process.exit(1); })"</span>
 node<span class="w"> </span>--eval<span class="w"> </span><span class="s2">"const {FreebirdClient, crypto} = require('@flammafex/freebird'); if (typeof FreebirdClient !== 'function' || typeof crypto.blind !== 'function') process.exit(1)"</span>
 </code></pre></div>
@@ -1901,13 +1960,13 @@ those checks are actually reported for the tag SHA.</p>
   systemd examples, and reverse-proxy examples</li>
 </ul>
 <p>Verify the archive checksum before installing:</p>
-<div class="highlight"><pre><span></span><code>sha256sum<span class="w"> </span>-c<span class="w"> </span>freebird-0.10.0-linux-x86_64.tar.gz.sha256
+<div class="highlight"><pre><span></span><code>sha256sum<span class="w"> </span>-c<span class="w"> </span>freebird-0.10.4-linux-x86_64.tar.gz.sha256
 </code></pre></div>
 <h2 id="container-images">Container Images<a class="headerlink" href="#container-images" title="Permanent link">&para;</a></h2>
 <p>Tag releases publish:</p>
-<div class="highlight"><pre><span></span><code>ghcr.io/flammafex/freebird-issuer:0.10.0
+<div class="highlight"><pre><span></span><code>ghcr.io/flammafex/freebird-issuer:0.10.4
 ghcr.io/flammafex/freebird-issuer:0.10
-ghcr.io/flammafex/freebird-verifier:0.10.0
+ghcr.io/flammafex/freebird-verifier:0.10.4
 ghcr.io/flammafex/freebird-verifier:0.10
 </code></pre></div>
 <p>The default branch also publishes <code>latest</code>. Production deployments must replace
@@ -1918,7 +1977,7 @@ production prerequisite.</p>
 <p>The container workflow signs image digests with GitHub OIDC keyless signing.
 After installing <code>cosign</code>, verify a pinned image digest with:</p>
 <div class="highlight"><pre><span></span><code>cosign<span class="w"> </span>verify<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'https://github.com/.*/.github/workflows/docker.yml@refs/tags/v0.10.0'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--certificate-identity-regexp<span class="w"> </span><span class="s1">'https://github.com/.*/.github/workflows/docker.yml@refs/tags/v0.10.4'</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--certificate-oidc-issuer<span class="w"> </span>https://token.actions.githubusercontent.com<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>ghcr.io/flammafex/freebird-issuer@sha256:&lt;digest&gt;
 </code></pre></div>

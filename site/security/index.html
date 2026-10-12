@@ -1649,7 +1649,7 @@ certification, a production-readiness statement, or a promise of anonymity.</p>
   and the metadata that remains visible to surrounding systems.</li>
 <li><a href="non-goals/">Non-goals</a> — claims Freebird does not make.</li>
 <li><a href="cryptographic-assumptions/">Cryptographic assumptions</a> — the assumptions
-  behind the current V4 and V7 token flows, without claiming formal proof or
+  behind the current V4 token flow, without claiming formal proof or
   interoperability.</li>
 <li><a href="audit-status/">Audit status</a> — current review status, operational logging,
   and known security exceptions.</li>
@@ -1657,10 +1657,8 @@ certification, a production-readiness statement, or a promise of anonymity.</p>
 <h2 id="current-boundary">Current boundary<a class="headerlink" href="#current-boundary" title="Permanent link">&para;</a></h2>
 <p>The current issuance API is transitional and experimental. V4 uses a
 Freebird-specific bespoke P-256 VOPRF-like construction and is not RFC 9497
-interoperable. V7 uses randomized RSA blind signatures and issuer-published
-discovery metadata. In both cases, the client obtains a blinded issuance result,
-finalizes a token, and the verifier checks and consumes a replay identity or
-nullifier.</p>
+interoperable. The client obtains a blinded issuance result, finalizes a token,
+and the verifier checks and consumes its replay identity.</p>
 <p>Optional Sybil mechanisms are issuer admission controls. They can raise cost,
 apply local quotas, or require configured credentials, but none proves global
 human uniqueness. A weak or disabled Sybil configuration can allow token farming

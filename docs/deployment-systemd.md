@@ -3,13 +3,10 @@
 Use the systemd templates for a single-host production deployment behind a
 reverse proxy such as nginx.
 
-This guide covers the current transitional V4 and native V7 issuance APIs;
-it does not implement or select a named profile. V4 key rotation is unsafe for
+This guide covers the current transitional V4 issuance API; it does not
+implement or select a named profile. V4 key rotation is unsafe for
 production until Phase C. Keep the stable issuer key and matching verifier key
 in place until then.
-
-V4 and V7 are supported. V5 and V2 have been removed and are rejected; V6 is
-reserved and rejected.
 
 ## Layout
 
@@ -51,13 +48,9 @@ install -o root -g freebird -m 0640 deploy/systemd/verifier.env.example /etc/fre
 For a single-host deployment, Redis can run locally. For public use, enable a
 standalone writable Redis master with AOF, `appendfsync always`, and
 `maxmemory-policy noeviction`, and restrict it to localhost or a private
-network. Set both `REDIS_URL` and `SYBIL_REPLAY_REDIS_URL`; in-memory stores are
-not safe. When native V7 exchange or graph issuance is enabled, set
-`NATIVE_EXCHANGE_V7_REDIS_URL` to the same logical database as every
-participating verifier's `REDIS_URL`. Do not use URL string equality as proof;
-the graph authority probe proves the shared store.
-Verifier deployments must also set `VERIFIER_ACCEPTED_TOKEN_VERSIONS` explicitly,
-`VERIFIER_ENV=production`, and `IN_MEMORY_REPLAY_STORE=false`.
+network. Set `REDIS_URL` and `SYBIL_REPLAY_REDIS_URL`; in-memory stores are not
+safe. Verifier deployments must set `VERIFIER_ENV=production` and
+`IN_MEMORY_REPLAY_STORE=false`.
 Keep issuer keys/state and verifier data in separate directories and backups.
 
 ## Start
@@ -74,12 +67,6 @@ freebird-validate-config
 Then start:
 
 ```bash
-# This preflight is required when using the two systemd environment files. It
-# rejects a graph-enabled issuer unless the verifier is explicitly configured
-# as a graph participant through the same trusted HTTPS boundary.
-scripts/validate-graph-coupling.sh \
-  /etc/freebird/issuer.env /etc/freebird/verifier.env
-
 systemctl daemon-reload
 systemctl enable --now freebird-issuer
 systemctl enable --now freebird-verifier
@@ -102,33 +89,13 @@ verifier `GET /health` and `GET /ready`; these exact routes are safe health
 surfaces and carry the same strict forwarded headers. Do not substitute an
 admin or wildcard route for probes.
 
-The active issuer routes are `POST /v1/oprf/issue` and `/v1/oprf/issue/batch`
-for V4, `POST /v7/native-bearer/issue` and `/v7/native-bearer/issue/batch` for
-V7 direct issuance, and the V7 exchange and graph routes under `/v7/public/`.
-V5 and V2 direct/public routes are removed and rejected; they must not be
-proxied. V6 is reserved and rejected.
-
-For native V7 graph issuance, proxy the strict V7 discovery route
-`GET /.well-known/keys` and the exact issuer route
-`POST /v1/public/graph/replay-authority/probe` through HTTPS. The keys route must
-serve the complete `native_bearer_v7` container; do not merge it with V4 issuer
-metadata or accept legacy V5/V2 discovery shapes. Also proxy the distinct V4
-authority-only metadata route `GET /.well-known/replay-authority`; verifier
-health refresh uses that route, not V7 key discovery. The probe is the stable
-V4 authority check, separate from both metadata and V7 bearer routes; preserve
-the JSON body/path, allow POST, disable caching and request-header/body logging,
-and do not expose the loopback backend directly. Verifiers configure the issuer
-separately with `VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS`, plus the frozen
-`VERIFIER_REPLAY_AUTHORITY_PROBE_INTERVAL=30s` and
-`VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS=60s` values.
-
-Graph enablement is a coupled deployment setting, not an issuer-only switch.
-Set `NATIVE_GRAPH_ISSUANCE_V7_ENABLE=true` in both environment files, set
-the issuer's V7 exchange and graph policy/authorizer settings, and set the
-verifier's `VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS` to the issuer's public HTTPS
-URL. Run `validate-graph-coupling.sh` and `freebird-validate-config` before
-starting either unit. A verifier with the marker or URL missing is not a valid
-participant and must not serve V4 traffic for this deployment.
+The supported issuer routes include `GET /.well-known/issuer` and
+`GET /.well-known/keys` for V4 issuer metadata and signing-key discovery, plus
+`POST /v1/oprf/issue` and `POST /v1/oprf/issue/batch`. Proxy both discovery
+paths at the issuer's public HTTPS origin to the issuer backend on port 8081;
+the key-discovery response must be immediately revalidated so stale-key
+recovery can observe prompt key rotation. Do not expose the loopback backend
+directly.
 
 Admin API keys are secrets: do not expose them to clients or logs, and isolate
 issuer and verifier admin access (use separate operator credentials where

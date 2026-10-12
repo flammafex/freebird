@@ -1740,7 +1740,7 @@
 <p>Freebird reads configuration from environment variables. This page lists the
 settings needed to understand the local flow and the production baseline; it is
 not an exhaustive environment-variable reference. Defaults and requirements
-can change with the selected token family and optional feature.</p>
+describe the V4 services and production baseline.</p>
 <h2 id="common-service-settings">Common service settings<a class="headerlink" href="#common-service-settings" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1793,6 +1793,10 @@ reverse proxy. Compose's direct local HTTP mode does not satisfy this baseline.<
 <td>V4 key-rotation state path.</td>
 </tr>
 <tr>
+<td><code>KID</code></td>
+<td>Optional V4 KID compatibility override. The default is derived only from the persisted issuer key and is stable across restarts and UTC date changes; an override is preserved only when it begins with that derived KID, otherwise startup falls back to the derived KID. Rotation metadata must contain the same active KID and supported state version or startup fails; retain a legacy override while retaining matching legacy rotation state.</td>
+</tr>
+<tr>
 <td><code>SYBIL_RESISTANCE</code></td>
 <td>Admission mode; use an explicit mode, and do not use <code>none</code> for a public issuer.</td>
 </tr>
@@ -1804,39 +1808,17 @@ reverse proxy. Compose's direct local HTTP mode does not satisfy this baseline.<
 <td><code>SYBIL_REPLAY_REDIS_URL</code></td>
 <td>Redis URL for that Sybil replay backend; it can fall back to <code>REDIS_URL</code>.</td>
 </tr>
-<tr>
-<td><code>NATIVE_BEARER_V7_ENABLE</code></td>
-<td>V7 issuance is mandatory; <code>false</code> (or <code>0</code>) is rejected. Set <code>true</code>.</td>
-</tr>
-<tr>
-<td><code>NATIVE_BEARER_V7_SK_PATH</code> / <code>NATIVE_BEARER_V7_METADATA_PATH</code></td>
-<td>Persistent V7 signer key and metadata paths.</td>
-</tr>
-<tr>
-<td><code>NATIVE_BEARER_V7_REGISTRY_PATH</code></td>
-<td>Append-only V7 registry path.</td>
-</tr>
-<tr>
-<td><code>NATIVE_BEARER_V7_TOKEN_KEY_ID</code></td>
-<td>Mandatory 64-character lowercase hexadecimal V7 token key ID.</td>
-</tr>
-<tr>
-<td><code>NATIVE_BEARER_V7_ASSET_ID</code></td>
-<td>Mandatory V7 fixed-body asset identifier.</td>
-</tr>
-<tr>
-<td><code>NATIVE_BEARER_V7_AMOUNT_MINOR</code></td>
-<td>Mandatory V7 fixed-body amount in minor units; it must be an integer.</td>
-</tr>
 </tbody>
 </table>
+<p>V4 verification continues to use strict exact-KID lookup. The intentional
+legacy migration path is to set <code>KID</code> to the former date-suffixed value when it
+begins with the persisted key's derived KID and retain that override while the
+matching legacy rotation-state file is retained. To omit <code>KID</code>, explicitly
+reset/delete the rotation-state file first; this accepts an identity transition
+to the stable key-derived identity.</p>
 <p>WebAuthn additionally requires <code>WEBAUTHN_RP_ID</code>, <code>WEBAUTHN_RP_ORIGIN</code>, and a
 high-entropy <code>WEBAUTHN_PROOF_SECRET</code>. The origin must match the browser origin;
-production should use HTTPS. Optional V7 exchange and graph issuance have
-additional strict JSON, signer, and Redis settings; see <a href="../../production-deployment/">Production
-Deployment</a> and <a href="../../public-bearer-exchange/">Public Bearer
-Exchange</a>, rather than enabling them from this
-summary.</p>
+production should use HTTPS.</p>
 <h2 id="verifier-settings">Verifier settings<a class="headerlink" href="#verifier-settings" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1855,12 +1837,8 @@ summary.</p>
 <td>Audience in the verifier scope; defaults to the verifier ID.</td>
 </tr>
 <tr>
-<td><code>VERIFIER_ACCEPTED_TOKEN_VERSIONS</code></td>
-<td>Comma-separated accepted families, <code>v4</code> and/or <code>v7</code>.</td>
-</tr>
-<tr>
 <td><code>ISSUER_URL</code> / <code>ISSUER_URLS</code></td>
-<td>Issuer discovery URL(s); HTTPS is required when TLS enforcement is enabled.</td>
+<td>V4 issuer metadata URL(s); HTTPS is required when TLS enforcement is enabled.</td>
 </tr>
 <tr>
 <td><code>REDIS_URL</code></td>
@@ -1872,7 +1850,7 @@ summary.</p>
 </tr>
 <tr>
 <td><code>VERIFIER_SK_PATH</code></td>
-<td>V4 private verification key; V7 uses issuer discovery instead.</td>
+<td>V4 private verification key.</td>
 </tr>
 <tr>
 <td><code>REFRESH_INTERVAL_MIN</code></td>
@@ -1881,14 +1859,12 @@ summary.</p>
 </tbody>
 </table>
 <h2 id="production-storage-baseline">Production storage baseline<a class="headerlink" href="#production-storage-baseline" title="Permanent link">&para;</a></h2>
-<p>Production requires durable Redis for verifier replay protection and issuer Sybil
-replay state, plus persistent protected storage for issuer keys, V7 key/registry
-and discovery material where used, and audit logs. Do not use
-<code>IN_MEMORY_REPLAY_STORE=true</code> in production. For V7 exchange/graph deployments,
-the participating services must use the same standalone writable Redis logical
-database with AOF, <code>appendfsync always</code>, and <code>maxmemory-policy noeviction</code>.</p>
-<p>Keep keys at restrictive filesystem permissions, back up Redis and related key,
-discovery, registry, receipt, and audit data as one coherent recovery unit, and
+<p>Production requires durable Redis for verifier replay protection and issuer
+Sybil replay state, plus persistent protected storage for issuer keys and audit
+logs. Do not use
+<code>IN_MEMORY_REPLAY_STORE=true</code> in production.</p>
+<p>Keep keys at restrictive filesystem permissions, back up Redis and related key
+and audit data as one coherent recovery unit, and
 run <a href="../cli/#configuration-validation">the configuration validator</a> against the
 exact production environment. See <a href="../../production-deployment/">Production Deployment</a>
 for the complete baseline and <a href="../../admin-operations/">Admin Operations</a> for

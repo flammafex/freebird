@@ -1592,32 +1592,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#v7-canonical-descriptor-migration" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        V7 canonical-descriptor migration
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
   <a href="#minimum-environment" class="md-nav__link">
     <span class="md-ellipsis">
       
         Minimum environment
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#v7-exchange-and-graph-issuance" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        V7 exchange and graph issuance
       
     </span>
   </a>
@@ -1664,10 +1642,7 @@
 
 
 <h1 id="production-deployment">Production Deployment<a class="headerlink" href="#production-deployment" title="Permanent link">&para;</a></h1>
-<p>This is the operator baseline for a public Freebird deployment. V4 private
-verification and V7 native bearer verification are active. V5 public bearer
-passes are retired and not accepted; V6 is reserved. Do not copy retired V5
-configuration into a deployment.</p>
+<p>This is the operator baseline for a public Freebird V4 deployment.</p>
 <p>Before rollout, verify issuer and verifier image digests from the release
 artifact and deploy operator-provided immutable <code>@sha256:</code> references. Keep one
 stable V4 issuer key until the documented rotation procedure is approved.</p>
@@ -1676,28 +1651,10 @@ stable V4 issuer key until the documented rotation procedure is approved.</p>
 <li>issuer and verifier;</li>
 <li>durable standalone Redis for verifier replay and issuer Sybil replay state;</li>
 <li>an independently managed HTTPS reverse proxy;</li>
-<li>persistent storage for V4 keys, V7 native bearer keys and registry, V7
-  discovery/history, receipt keys, graph signers, and audit logs.</li>
+<li>persistent storage for V4 keys and audit logs.</li>
 </ul>
 <p>Compose is a direct-development probe only. It binds local HTTP ports and does
 not provide the trusted TLS/proxy boundary required in production.</p>
-<p>When V7 exchange or graph issuance is enabled, the issuer and every
-participating verifier must use the same standalone Redis logical database. It
-must be a writable master with AOF enabled, <code>appendfsync always</code>, and
-<code>maxmemory-policy noeviction</code>. URL equality is not proof; the V4 replay
-authority probe proves the logical-database relationship.</p>
-<h2 id="v7-canonical-descriptor-migration">V7 canonical-descriptor migration<a class="headerlink" href="#v7-canonical-descriptor-migration" title="Permanent link">&para;</a></h2>
-<p>In v0.10.0, direct and exchange descriptor IDs are derived from finalized signer
-metadata and canonical transcripts. Old arbitrary descriptor IDs are rejected.
-The corrected exchange descriptor transcript invalidates prior exchange, keyset,
-transition, and graph-policy derived IDs.</p>
-<p>For an affected deployment, regenerate and rotate the affected V7 signer
-metadata, then regenerate the registry and discovery/history from the canonical
-material. Do not reuse old V7 signer metadata, registry, discovery, exchange
-state, keysets, transitions, graph policies, or other derived data. For direct
-bootstrap, omit <code>NATIVE_BEARER_V7_DESCRIPTOR_ID</code> on the first start, persist the
-derived canonical output, and only then optionally set the variable to that
-public expected value as a pin.</p>
 <h2 id="minimum-environment">Minimum environment<a class="headerlink" href="#minimum-environment" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><span class="nv">ADMIN_API_KEY</span><span class="o">=</span>&lt;at-least-32-random-characters&gt;
 <span class="nv">REQUIRE_TLS</span><span class="o">=</span><span class="nb">true</span>
@@ -1708,7 +1665,6 @@ public expected value as a pin.</p>
 <span class="nv">ISSUER_SK_PATH</span><span class="o">=</span>/data/keys/issuer_sk.bin
 <span class="nv">VERIFIER_ID</span><span class="o">=</span>verifier:example:v4
 <span class="nv">VERIFIER_AUDIENCE</span><span class="o">=</span>example
-<span class="nv">VERIFIER_ACCEPTED_TOKEN_VERSIONS</span><span class="o">=</span>v4,v7
 <span class="nv">VERIFIER_ENV</span><span class="o">=</span>production
 <span class="nv">IN_MEMORY_REPLAY_STORE</span><span class="o">=</span><span class="nb">false</span>
 <span class="nv">ISSUER_URL</span><span class="o">=</span>https://issuer.example.org/.well-known/issuer
@@ -1717,85 +1673,25 @@ public expected value as a pin.</p>
 <span class="nv">REDIS_URL</span><span class="o">=</span>redis://redis:6379
 <span class="nv">SYBIL_REPLAY_STORE</span><span class="o">=</span>redis
 <span class="nv">SYBIL_REPLAY_REDIS_URL</span><span class="o">=</span>redis://redis:6379
-
-<span class="nv">NATIVE_BEARER_V7_ENABLE</span><span class="o">=</span><span class="nb">true</span>
-<span class="nv">NATIVE_BEARER_V7_SK_PATH</span><span class="o">=</span>/data/keys/native_bearer_v7.der
-<span class="nv">NATIVE_BEARER_V7_METADATA_PATH</span><span class="o">=</span>/data/config/native_bearer_v7.json
-<span class="nv">NATIVE_BEARER_V7_REGISTRY_PATH</span><span class="o">=</span>/data/config/native_bearer_v7_registry.json
-<span class="nv">NATIVE_BEARER_V7_PROFILE_ID</span><span class="o">=</span>scarcity/native-bearer/v7
-<span class="nv">NATIVE_BEARER_V7_TOKEN_KEY_ID</span><span class="o">=</span>&lt;<span class="m">64</span>-lowercase-hex&gt;
-<span class="nv">NATIVE_BEARER_V7_ASSET_ID</span><span class="o">=</span>USD
-<span class="nv">NATIVE_BEARER_V7_AMOUNT_MINOR</span><span class="o">=</span><span class="m">1</span>
-<span class="nv">NATIVE_BEARER_V7_VALIDITY</span><span class="o">=</span>30d
 </code></pre></div>
-<p><code>NATIVE_BEARER_V7_DESCRIPTOR_ID</code> is optional. Omit it on first boot: the issuer
-derives the canonical descriptor ID from finalized direct signer metadata. After
-that metadata is persisted, an operator may set the variable to the persisted
-derived value as a public expected-value pin. It is not an arbitrary identity and
-must not be fabricated. The token-key ID remains required. Do not replace either
-identity casually or reuse an RSA key with changed issuer, suite, audience, or
-validity bounds.</p>
-<h2 id="v7-exchange-and-graph-issuance">V7 exchange and graph issuance<a class="headerlink" href="#v7-exchange-and-graph-issuance" title="Permanent link">&para;</a></h2>
-<p>Enable exchange only after reviewing the active and retained native V7
-discovery files:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">NATIVE_EXCHANGE_V7_ENABLE</span><span class="o">=</span><span class="nb">true</span>
-<span class="nv">NATIVE_EXCHANGE_V7_REDIS_URL</span><span class="o">=</span>redis://redis:6379
-<span class="nv">NATIVE_EXCHANGE_V7_DISCOVERY_PATH</span><span class="o">=</span>/data/config/native-exchange-v7-discovery.json
-<span class="nv">NATIVE_EXCHANGE_V7_RETAINED_DISCOVERY_PATHS</span><span class="o">=</span>/data/config/native-exchange-v7-previous.json
-<span class="nv">NATIVE_EXCHANGE_V7_PUBLIC_HISTORY_PATH</span><span class="o">=</span>/data/config/native-exchange-v7-history.json
-<span class="nv">NATIVE_EXCHANGE_V7_DISABLED_PUBLICATION_ACK_PATHS</span><span class="o">=</span>/data/config/native-exchange-v7-ack.json
-<span class="nv">NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_KEY_PATH</span><span class="o">=</span>/data/keys/native-exchange-v7-receipt.key
-<span class="nv">NATIVE_EXCHANGE_V7_ACTIVE_RECEIPT_METADATA_PATH</span><span class="o">=</span>/data/config/native-exchange-v7-receipt.json
-<span class="nv">NATIVE_EXCHANGE_V7_RECEIPT_LIFETIME</span><span class="o">=</span>1d
-<span class="nv">NATIVE_EXCHANGE_V7_MAX_BODY_BYTES</span><span class="o">=</span><span class="m">3145728</span>
-<span class="nv">NATIVE_EXCHANGE_V7_TIMEOUT</span><span class="o">=</span>30s
-</code></pre></div>
-<p>For graph blind issuance, couple issuer and participating verifiers and use
-the approved local V4 authorizer:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">NATIVE_GRAPH_ISSUANCE_V7_ENABLE</span><span class="o">=</span><span class="nb">true</span>
-<span class="nv">NATIVE_GRAPH_ISSUANCE_V7_POLICY_PATH</span><span class="o">=</span>/data/config/native-graph-issuance-v7-discovery.json
-<span class="nv">NATIVE_GRAPH_ISSUANCE_V7_AUTHORIZATION</span><span class="o">=</span>v4_local
-<span class="nv">NATIVE_GRAPH_ISSUANCE_V7_VERIFIER_ID</span><span class="o">=</span>verifier:issuer
-<span class="nv">NATIVE_GRAPH_ISSUANCE_V7_AUDIENCE</span><span class="o">=</span>freebird-native-graph-v7
-<span class="nv">NATIVE_GRAPH_ISSUANCE_V7_V4_KEYRING_B64</span><span class="o">=</span>&lt;issuer-local-secret-json&gt;
-<span class="nv">VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS</span><span class="o">=</span>https://issuer.example.org
-<span class="nv">VERIFIER_REPLAY_AUTHORITY_PROBE_INTERVAL</span><span class="o">=</span>30s
-<span class="nv">VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS</span><span class="o">=</span>60s
-</code></pre></div>
-<p>Leave the V7 graph marker false and authority URL empty on non-participating
-verifiers. Retain private signers until pending references reach zero, then
-publish public discovery/history before retirement.</p>
 <h2 id="proxy-and-replay-requirements">Proxy and replay requirements<a class="headerlink" href="#proxy-and-replay-requirements" title="Permanent link">&para;</a></h2>
-<p>Expose only these native V7 public routes through HTTPS:</p>
+<p>Expose only the supported V4 public routes through HTTPS:</p>
 <ul>
-<li><code>POST /v7/native-bearer/issue</code> and <code>/v7/native-bearer/issue/batch</code>;</li>
-<li><code>POST /v7/public/exchange</code> and
-  <code>GET /v7/public/exchange/status?public_operation_id=...</code>;</li>
-<li><code>POST /v7/public/graph/issue</code> and its status route;</li>
-<li><code>GET /.well-known/issuer</code>;</li>
-<li><code>GET /.well-known/replay-authority</code> for V4 authority-only verifier health metadata;</li>
-<li><code>GET /.well-known/keys</code> for strict V7 native-bearer discovery.</li>
+<li><code>POST /v1/oprf/issue</code> and <code>/v1/oprf/issue/batch</code>;</li>
+<li><code>POST /v1/check</code>, <code>/v1/verify</code>, and <code>/v1/verify/batch</code>;</li>
+<li><code>GET /.well-known/issuer</code> for V4 issuer metadata;</li>
+<li><code>GET /.well-known/keys</code> at the issuer origin for V4 signing-key discovery
+  and stale-key refresh.</li>
 </ul>
-<p>Preserve exactly one status-capability header, use <code>Cache-Control: no-store</code>,
-and never log capabilities, bearer bodies, or nullifiers. The public operation
-ID is non-secret and is not authorization.</p>
-<p>V7 replay identity is exactly the issuer namespace plus the lowercase
-hexadecimal <strong>body nullifier</strong>. The artifact, descriptor, graph, keyset,
-verifier, and audience do not participate. Store this identity in durable Redis
-with the inclusive V7 validity expiry; never substitute a signature digest or
-whole-artifact digest.</p>
-<p>The fixed <code>GET /.well-known/replay-authority</code> route is the V4 authority-only
-metadata endpoint used by verifier health refresh. Keep it distinct from strict
-V7 <code>/.well-known/keys</code> discovery. The separate
-<code>POST /v1/public/graph/replay-authority/probe</code> route remains the operator-only V4
-authority check for graph participants; it is not metadata or a bearer issuance
-route and must not be exposed through <code>/admin</code> or a direct backend port.</p>
+<p>Route <code>/.well-known/keys</code> to the issuer backend on port 8081 and configure its
+cache policy for immediate revalidation so clients can recover from a stale
+key after rotation. Keep it separate from the private admin surface.</p>
+<p>Keep Redis state durable and restrict access to the services that require it.
+Never log token bodies, blinding state, or nullifiers.</p>
 <h2 id="preflight-and-backup">Preflight and backup<a class="headerlink" href="#preflight-and-backup" title="Permanent link">&para;</a></h2>
 <p>Run <code>freebird-validate-config</code> against the exact production environment, then
 exercise discovery and readiness through the HTTPS proxy. Back up Redis AOF,
-V4/V7 key material, the append-only V7 registry, active/retained discovery,
-public history, receipt metadata, graph signers, and audit logs as one coherent
-recovery unit. Never restore Redis independently from V7 discovery or signers.</p>
+V4 key material, and audit logs as a coherent recovery unit.</p>
 <p>Use <code>k8s/validate-overlays.sh</code> for Kubernetes manifests and see
 <a href="../deployment-kubernetes/">Kubernetes Deployment</a> for the ingress boundary.</p>
 

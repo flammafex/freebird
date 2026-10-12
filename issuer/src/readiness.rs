@@ -14,12 +14,6 @@ pub struct ReadinessReport {
     pub redis: bool,
     pub storage: bool,
     pub issuance_key: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub exchange: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub graph_issuance: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub replay_authority: Option<bool>,
     pub stores: BTreeMap<String, bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub development_unsafe: Option<bool>,
@@ -28,66 +22,6 @@ pub struct ReadinessReport {
 #[derive(Clone)]
 pub struct ReadinessState {
     report: Arc<RwLock<ReadinessReport>>,
-}
-
-#[derive(Clone)]
-pub(crate) struct V7ExchangeReadinessState {
-    engine: Arc<crate::exchange::v7::V7ExchangeEngine>,
-    inventory: Arc<crate::v7_signers::V7SignerInventory>,
-    discovery: freebird_common::api::NativeExchangeV3Discovery,
-}
-
-#[derive(Clone)]
-pub(crate) struct V7GraphIssuanceReadinessState {
-    engine: Arc<crate::graph_issuance::V7GraphIssuanceEngine>,
-    v4_local_authorization: bool,
-}
-
-impl V7ExchangeReadinessState {
-    pub(crate) fn new(
-        engine: Arc<crate::exchange::v7::V7ExchangeEngine>,
-        inventory: Arc<crate::v7_signers::V7SignerInventory>,
-        discovery: freebird_common::api::NativeExchangeV3Discovery,
-    ) -> Self {
-        Self {
-            engine,
-            inventory,
-            discovery,
-        }
-    }
-
-    async fn check(&self) -> bool {
-        if self.discovery.validate().is_err() {
-            return false;
-        }
-        if crate::startup::validate_v7_exchange_inventory(&self.discovery, &self.inventory).is_err()
-        {
-            return false;
-        }
-        self.engine.readiness_check().await.is_ok()
-    }
-}
-
-impl V7GraphIssuanceReadinessState {
-    pub(crate) fn new(
-        engine: Arc<crate::graph_issuance::V7GraphIssuanceEngine>,
-        v4_local_authorization: bool,
-    ) -> Self {
-        Self {
-            engine,
-            v4_local_authorization,
-        }
-    }
-
-    async fn check(&self) -> bool {
-        if !self.engine.issuance_enabled()
-            || !self.v4_local_authorization
-            || self.engine.validate_bindings().is_err()
-        {
-            return false;
-        }
-        self.engine.readiness_check().await.is_ok()
-    }
 }
 
 impl ReadinessState {
@@ -116,47 +50,19 @@ impl ReadinessState {
         };
     }
 
-    // Startup passes the readiness dependencies as separate, stable inputs;
-    // retain that signature rather than adding a one-use configuration object.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn spawn_checks(
         &self,
         admission: AdmissionExecutor,
         replay_store: Arc<dyn ReplayStore>,
         storage_paths: Vec<(String, PathBuf)>,
         voprf: Arc<MultiKeyVoprfCore>,
-        v7_exchange: Option<V7ExchangeReadinessState>,
-        v7_graph_issuance: Option<V7GraphIssuanceReadinessState>,
-        replay_authority: Option<Arc<crate::replay_authority::ReplayAuthority>>,
     ) {
         let state = self.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(Duration::from_secs(5));
             loop {
                 ticker.tick().await;
-                let mut report = check_once_with_replay_authority(
-                    &admission,
-                    &replay_store,
-                    &storage_paths,
-                    &voprf,
-                    replay_authority.as_ref(),
-                )
-                .await;
-                if let Some(exchange) = &v7_exchange {
-                    let ready = tokio::time::timeout(Duration::from_secs(2), exchange.check())
-                        .await
-                        .is_ok_and(|ready| ready);
-                    report.exchange = Some(ready);
-                    report.ready &= ready;
-                }
-                if let Some(graph_issuance) = &v7_graph_issuance {
-                    let ready =
-                        tokio::time::timeout(Duration::from_secs(2), graph_issuance.check())
-                            .await
-                            .is_ok_and(|ready| ready);
-                    report.graph_issuance = Some(report.graph_issuance.unwrap_or(true) && ready);
-                    report.ready &= ready;
-                }
+                let report = check_once(&admission, &replay_store, &storage_paths, &voprf).await;
                 state.update(report);
             }
         });
@@ -168,16 +74,6 @@ pub async fn check_once(
     replay_store: &Arc<dyn ReplayStore>,
     storage_paths: &[(String, PathBuf)],
     voprf: &Arc<MultiKeyVoprfCore>,
-) -> ReadinessReport {
-    check_once_with_replay_authority(admission, replay_store, storage_paths, voprf, None).await
-}
-
-pub(crate) async fn check_once_with_replay_authority(
-    admission: &AdmissionExecutor,
-    replay_store: &Arc<dyn ReplayStore>,
-    storage_paths: &[(String, PathBuf)],
-    voprf: &Arc<MultiKeyVoprfCore>,
-    replay_authority: Option<&Arc<crate::replay_authority::ReplayAuthority>>,
 ) -> ReadinessReport {
     let store = Arc::clone(replay_store);
     // The shared admission executor owns the blocking job and its permit.
@@ -201,23 +97,11 @@ pub(crate) async fn check_once_with_replay_authority(
     let storage_ready = !storage.is_empty() && storage.values().all(|ready| *ready);
     let issuance_key =
         !voprf.active_kid().await.is_empty() && !voprf.active_pubkey_b64().await.is_empty();
-    let replay_authority_ready = match replay_authority {
-        Some(authority) => Some(
-            tokio::time::timeout(Duration::from_secs(2), authority.health_check())
-                .await
-                .is_ok_and(|result| result.is_ok()),
-        ),
-        None => None,
-    };
-    let authority_ready = replay_authority_ready.unwrap_or(true);
     ReadinessReport {
-        ready: redis && storage_ready && issuance_key && authority_ready,
+        ready: redis && storage_ready && issuance_key,
         redis,
         storage: storage_ready,
         issuance_key,
-        exchange: None,
-        graph_issuance: None,
-        replay_authority: replay_authority_ready,
         stores: storage,
         development_unsafe: None,
     }
@@ -285,7 +169,6 @@ pub async fn liveness() -> impl axum::response::IntoResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::replay_authority::ReplayAuthority;
     use crate::sybil_resistance::memory_replay_store;
     use tempfile::tempdir;
 
@@ -461,26 +344,6 @@ mod tests {
         assert!(!report.redis);
         assert!(report.storage);
         assert!(report.issuance_key);
-    }
-
-    #[tokio::test]
-    async fn replay_authority_failure_is_not_ready() {
-        let dir = tempdir().unwrap();
-        let authority = Arc::new(ReplayAuthority::new("redis://127.0.0.1:1").unwrap());
-        let report = tokio::time::timeout(
-            Duration::from_secs(3),
-            check_once_with_replay_authority(
-                &AdmissionExecutor::default(),
-                &memory_replay_store(),
-                &[("audit".into(), dir.path().join("audit.json"))],
-                &core().await,
-                Some(&authority),
-            ),
-        )
-        .await
-        .unwrap();
-        assert!(!report.ready);
-        assert_eq!(report.replay_authority, Some(false));
     }
 
     #[tokio::test]

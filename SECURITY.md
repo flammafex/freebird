@@ -59,18 +59,12 @@ mode means tokens may be easy to farm even if the token cryptography works.
   proxy or VPN boundary.
 - Audit logs are operational records, not tamper-evident security logs.
 
-## Temporary Audit Exceptions
+## Dependency Audit Notes
 
-The following narrowly scoped exceptions are temporary maintainer-approved
-compatibility decisions; they are not security sign-offs and do not waive any
-other RustSec advisory:
-
-- **RUSTSEC-2023-0071 (`rsa`)** is currently reached through
-  `blind-rsa-signatures`. It is temporarily excepted from the CI
-  `cargo audit` exit check while the blind-RSA/RSA implementation is migrated
-  and reviewed. A crypto migration is required; this exception must be
-  removed when that migration is available and validated, or sooner if the
-  risk or dependency path changes.
+`cargo audit` currently reports RUSTSEC-2024-0436 (`paste` 1.0.15, unmaintained)
+through the optional PKCS#11 dependency path. Cargo-audit reports it as an
+allowed warning under its default warning policy; CI does not ignore this
+advisory. Recheck the result when dependencies or audit policy change.
 
 The optional `freebird-crypto/pkcs11` feature uses `cryptoki` 0.10.1 or later
 within the 0.10 release line. It is not enabled by default. PKCS#11 provider
@@ -80,8 +74,9 @@ VOPRF evaluation. This provider has not been validated against real HSM
 hardware or SoftHSM, and deployments must not treat it as a validated HSM
 integration.
 
-CI ignores only RUSTSEC-2023-0071. These exceptions do not suppress warnings,
-yanked-package checks, or any other advisory.
+CI runs `cargo audit` without advisory ignores. Review any reported advisory
+against the affected dependency path and enabled features; the PKCS#11 caveats
+above remain applicable regardless of audit results.
 
 ## Production Baseline
 

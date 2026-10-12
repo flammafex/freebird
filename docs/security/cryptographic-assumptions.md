@@ -22,21 +22,9 @@ client's blinding/finalization steps are performed correctly. This assumption
 does not survive a compromised client, malicious endpoint behavior, key
 compromise, or correlation through external metadata.
 
-## V7 native bearer tokens
-
-V7 uses randomized RSA blind signatures. Its integrity assumptions include the
-security of the RSA signature construction and hash/encoding rules used by the
-implementation, correct blind-signature processing, unpredictable client
-randomness, authenticated issuer discovery, and protected V7 private keys.
-
-V7 replay prevention additionally depends on the body nullifier being handled as
-specified and on the verifier's replay store providing the required atomic and
-durable behavior. A valid signature alone is not a guarantee against a second
-use when replay state is lost or misconfigured.
-
 ## Shared assumptions
 
-Both flows depend on:
+The V4 flow depends on:
 
 - correct domain separation, scope, key identifiers, parsing, and validation;
 - authentic issuer metadata and correct verifier configuration;

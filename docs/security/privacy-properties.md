@@ -35,13 +35,12 @@ TLS protects traffic in transit when correctly deployed. It does not stop an
 issuer, verifier, proxy, relay, hosting provider, or application from observing
 its own endpoint metadata.
 
-## V4 and V7 scope
+## V4 scope
 
 V4 is a Freebird-specific bespoke P-256 VOPRF-like construction. It is not RFC
 9497 interoperable, and this page makes no Privacy Pass or standards-conformance
-claim. V7 uses randomized RSA blind signatures and issuer-published discovery
-metadata. Their privacy properties must be read as implementation-specific
-claims, not as a transfer of guarantees from a named standard.
+claim. Its privacy properties are implementation-specific, not a transfer of
+guarantees from a named standard.
 
 ## Operational limits
 

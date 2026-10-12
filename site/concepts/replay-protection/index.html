@@ -1725,8 +1725,6 @@ one instance.</p>
 <h2 id="verifier-token-replay">Verifier token replay<a class="headerlink" href="#verifier-token-replay" title="Permanent link">&para;</a></h2>
 <p>The verifier uses an atomic set-if-absent operation. For V4, Redis uses an
 atomic Lua <code>SETNX</code> without expiry because V4 has no issuer-enforced expiration.
-For V7, Redis uses <code>SET NX EXAT</code> with an absolute expiry at
-<code>valid_until + 1</code>; this preserves the inclusive <code>valid_until</code> validity second.
 The operation returns fresh or already-present; only fresh spends are accepted.</p>
 <div class="highlight"><pre><span></span><code><span class="nv">REDIS_URL</span><span class="o">=</span>redis://redis:6379
 <span class="nv">VERIFIER_ENV</span><span class="o">=</span>production

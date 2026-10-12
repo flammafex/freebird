@@ -65,15 +65,28 @@ for manifest in \
   "$root/k8s/base/issuer-deployment.yaml" \
   "$root/k8s/base/verifier-deployment.yaml"; do
   if grep -Eq 'ghcr\.io/flammafex/freebird-(issuer|verifier):0\.7\.0' "$manifest"; then
-    printf '%s\n' "$manifest: historical 0.7.0 image must not be used for graph-capable deployment" >&2
+    printf '%s\n' "$manifest: historical 0.7.0 image must not be used for deployment" >&2
     exit 1
   fi
 done
 if ! grep -q 'ghcr.io/flammafex/freebird-issuer@sha256:REQUIRED_ISSUER_IMAGE_DIGEST' \
-    "$root/k8s/base/issuer-deployment.yaml" || \
+     "$root/k8s/base/issuer-deployment.yaml" || \
    ! grep -q 'ghcr.io/flammafex/freebird-verifier@sha256:REQUIRED_VERIFIER_IMAGE_DIGEST' \
     "$root/k8s/base/verifier-deployment.yaml"; then
   printf '%s\n' 'base manifests must require operator-provided immutable image digests' >&2
+  exit 1
+fi
+
+# Keep the standalone nginx template aligned with the public V4 key-discovery
+# route and ensure caches revalidate immediately after a signing-key rotation.
+if ! awk '
+  /^    location = \/\.well-known\/keys \{/ { in_keys=1; location_count++; next }
+  in_keys && /^    }/ { in_keys=0; next }
+  in_keys && /proxy_pass \$backend;/ { proxy_count++ }
+  in_keys && /Cache-Control "no-cache, max-age=0, must-revalidate" always;/ { cache_count++ }
+  END { exit !(location_count == 1 && proxy_count == 1 && cache_count == 1) }
+' "$root/server-configs/freebird-issuer.conf"; then
+  printf '%s\n' 'nginx issuer template must proxy exact /.well-known/keys with immediate cache revalidation' >&2
   exit 1
 fi
 
@@ -93,10 +106,6 @@ done
 
 common_checks() {
   local name=$1 output=$2
-  if grep -q 'PUBLIC_BEARER_' "$output"; then
-    printf '%s\n' "$name: retired PUBLIC_BEARER configuration is present" >&2
-    return 1
-  fi
   if grep -q '10\.244\.0\.0/16\|172\.18\.0\.0/16' "$output"; then
     printf '%s\n' "$name: broad assumed network trust is forbidden" >&2
     return 1
@@ -135,82 +144,6 @@ common_checks() {
       return 1
     fi
   done
-  if grep -q 'PUBLIC_BEARER_EXCHANGE_PROFILE_PATH\|PUBLIC_BEARER_EXCHANGE_RETAINED_PROFILE_PATHS\|PUBLIC_BEARER_EXCHANGE_RECEIPT_KEY_PATH\|PUBLIC_BEARER_GRAPH_ISSUANCE_V4_REPLAY_REDIS_URL' "$output"; then
-    printf '%s\n' "$name: obsolete V1 graph/exchange configuration is present" >&2
-    return 1
-  fi
-  if ! grep -q '/v1/public/graph/replay-authority/probe' "$output"; then
-    printf '%s\n' "$name: V7 graph replay-authority probe route is not exposed" >&2
-    return 1
-  fi
-  if ! grep -q 'path: /\.well-known/replay-authority' "$output"; then
-    printf '%s\n' "$name: V4 replay-authority metadata route is not exposed" >&2
-    return 1
-  fi
-  if ! grep -q 'VERIFIER_REPLAY_AUTHORITY_PROBE_INTERVAL: 30s' "$output" || \
-     ! grep -q 'VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS: 60s' "$output"; then
-    printf '%s\n' "$name: frozen 30s/60s replay-authority health settings are missing" >&2
-    return 1
-  fi
-}
-
-config_value() {
-  local output=$1 config_name=$2 key=$3
-  awk -v config_name="$config_name" -v key="$key" '
-    /^kind: ConfigMap$/ { in_cm=1; selected=0 }
-    in_cm && $0 == "  name: " config_name { selected=1; next }
-    selected && $0 ~ ("^  " key ":") {
-      sub("^  " key ": ?", "")
-      gsub(/^"|"$/, "")
-      print
-      exit
-    }
-    selected && /^---$/ { exit }
-  ' "$output"
-}
-
-check_graph_coupling() {
-  local name=$1 output=$2
-  # The production template intentionally carries unresolved operator choices.
-  # Validate the rendered fixtures instead of guessing those choices here.
-  if grep -q 'REQUIRED_GRAPH_ISSUANCE_' "$output"; then
-    return 0
-  fi
-  local issuer_graph verifier_graph issuer_exchange verifier_urls
-  issuer_graph=$(config_value "$output" issuer-config NATIVE_GRAPH_ISSUANCE_V7_ENABLE)
-  verifier_graph=$(config_value "$output" verifier-config NATIVE_GRAPH_ISSUANCE_V7_ENABLE)
-  issuer_exchange=$(config_value "$output" issuer-config NATIVE_EXCHANGE_V7_ENABLE)
-  verifier_urls=$(config_value "$output" verifier-config VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS)
-  if [ "$issuer_graph" = true ] || [ "$issuer_graph" = "1" ]; then
-    [ "$issuer_exchange" = true ] || [ "$issuer_exchange" = "1" ] || {
-      printf '%s\n' "$name: graph issuance requires exchange enabled" >&2
-      return 1
-    }
-    [ "$verifier_graph" = true ] || [ "$verifier_graph" = "1" ] || {
-      printf '%s\n' "$name: graph-enabled issuer is not coupled to the verifier marker" >&2
-      return 1
-    }
-    [ -n "$verifier_urls" ] || {
-      printf '%s\n' "$name: graph-enabled issuer has no verifier authority URL" >&2
-      return 1
-    }
-    case "$verifier_urls" in
-      https://*) ;;
-      *)
-        printf '%s\n' "$name: graph authority URL must use HTTPS" >&2
-        return 1
-        ;;
-    esac
-  else
-    [ "$verifier_graph" = false ] || [ -z "$verifier_graph" ] || {
-      printf '%s\n' "$name: verifier graph marker is enabled while issuer graph issuance is disabled" >&2
-      return 1
-    }
-    [ -z "$verifier_urls" ] || {
-      printf '%s\n' "$name: verifier graph authority URL is set while graph issuance is disabled" >&2
-      return 1
-    }
-  fi
 }
 
 check_service_contract() {
@@ -324,17 +257,17 @@ check_probe_contract() {
   check_route_backend "$name" "$output" /readyz issuer-probe required
   check_route_backend "$name" "$output" /health verifier-probe required
   check_route_backend "$name" "$output" /ready verifier-probe required
-  check_route_backend "$name" "$output" /.well-known/replay-authority issuer required
-
   for route in \
     /.well-known/issuer \
     /.well-known/keys \
     /v1/oprf \
-    /v1/public \
-    /v1/public/graph/replay-authority/probe \
     /webauthn \
     /admin; do
-    check_route_backend "$name" "$output" "$route" issuer optional
+    if [ "$route" = /.well-known/keys ]; then
+      check_route_backend "$name" "$output" "$route" issuer required
+    else
+      check_route_backend "$name" "$output" "$route" issuer optional
+    fi
   done
   for route in /.well-known/verifier /v1/verify /v1/verify/batch /v1/check; do
     check_route_backend "$name" "$output" "$route" verifier optional
@@ -347,8 +280,7 @@ base_output=$(mktemp)
 kind_output=$(mktemp)
 production_output=$(mktemp)
 fixture_output=$(mktemp)
-graph_fixture_output=$(mktemp)
-trap 'rm -f "$root_output" "$base_output" "$kind_output" "$production_output" "$fixture_output" "$graph_fixture_output"' EXIT
+trap 'rm -f "$root_output" "$base_output" "$kind_output" "$production_output" "$fixture_output"' EXIT
 
 "${build[@]}" "$root/k8s" >"$root_output"
 "${build[@]}" "$root/k8s/base" >"$base_output"
@@ -363,7 +295,6 @@ check_probe_contract base "$base_output"
 
 "${build[@]}" "$root/k8s/overlays/kind" >"$kind_output"
 common_checks kind "$kind_output"
-check_graph_coupling kind "$kind_output"
 check_probe_contract kind "$kind_output"
 if grep -q 'REQUIRED_' "$kind_output"; then
   printf '%s\n' 'kind overlay contains unresolved values' >&2
@@ -391,10 +322,6 @@ if ! grep -q 'ISSUER_URL: https://issuer\.freebird\.test/\.well-known/issuer' "$
    ! grep -q 'secretName: issuer-ci-ca' "$kind_output" || \
    ! grep -q 'issuer.freebird.test' "$kind_output"; then
   printf '%s\n' 'kind: HTTPS issuer metadata CA/TLS wiring is incomplete' >&2
-  exit 1
-fi
-if ! grep -q 'VERIFIER_ACCEPTED_TOKEN_VERSIONS: v4' "$kind_output"; then
-  printf '%s\n' 'kind: V4 token family is not explicitly configured' >&2
   exit 1
 fi
 if ! grep -q -- '--appendfsync' "$kind_output" || \
@@ -467,16 +394,13 @@ sed -e 's/REQUIRED_PUBLIC_ISSUER_HOST/issuer.fixture.invalid/g' \
   -e 's/REQUIRED_PROXY_COMPONENT_LABEL/controller/g' \
   -e 's/REQUIRED_ISSUER_IMAGE_DIGEST/fixture-not-a-registry-digest/g' \
   -e 's/REQUIRED_VERIFIER_IMAGE_DIGEST/fixture-not-a-registry-digest/g' \
-  -e 's/REQUIRED_GRAPH_ISSUANCE_ENABLED/false/g' \
-  -e 's/REQUIRED_GRAPH_ISSUANCE_EXCHANGE_ENABLED/false/g' \
-  -e 's/REQUIRED_GRAPH_ISSUANCE_ISSUER_URLS//g' \
   "$production_output" >"$fixture_output"
 if grep -q 'REQUIRED_' "$fixture_output"; then
   printf '%s\n' 'production fixture contains unresolved values' >&2
   exit 1
 fi
 common_checks production-fixture "$fixture_output"
-check_graph_coupling production-fixture "$fixture_output"
+check_probe_contract production-fixture "$fixture_output"
 if ! grep -q 'ingress-nginx-controller\.ingress-nginx\.svc\.cluster\.local:443' "$fixture_output" || \
    ! grep -A25 'name: allow-proxy-boundary-probes' "$fixture_output" | grep -q 'port: 443'; then
   printf '%s\n' 'production: probe service wiring is inconsistent with fixed HTTPS port' >&2
@@ -488,27 +412,3 @@ if ! grep -q 'issuer\.fixture\.invalid/readyz' "$fixture_output" || \
   exit 1
 fi
 printf '%s\n' 'validated rendered production fixture'
-
-# Also exercise the enabled relationship without claiming a real registry
-# digest. These are representative manifest values only.
-sed -e 's/REQUIRED_PUBLIC_ISSUER_HOST/issuer.fixture.invalid/g' \
-  -e 's/REQUIRED_PUBLIC_VERIFIER_HOST/verifier.fixture.invalid/g' \
-  -e 's/REQUIRED_ISSUER_ADMIN_HOST/admin.fixture.invalid/g' \
-  -e 's/REQUIRED_OPERATOR_CIDR/192.0.2.10\/32/g' \
-  -e 's/REQUIRED_INGRESS_SOURCE_CIDR/192.0.2.10\/32/g' \
-  -e 's/REQUIRED_PROXY_SERVICE_NAME/ingress-nginx-controller/g' \
-  -e "s/REQUIRED_PROXY_NAMESPACE/${proxy_namespace}/g" \
-  -e 's/REQUIRED_PROXY_COMPONENT_LABEL/controller/g' \
-  -e 's/REQUIRED_ISSUER_IMAGE_DIGEST/fixture-not-a-registry-digest/g' \
-  -e 's/REQUIRED_VERIFIER_IMAGE_DIGEST/fixture-not-a-registry-digest/g' \
-  -e 's/REQUIRED_GRAPH_ISSUANCE_ENABLED/true/g' \
-  -e 's/REQUIRED_GRAPH_ISSUANCE_EXCHANGE_ENABLED/true/g' \
-  -e 's#REQUIRED_GRAPH_ISSUANCE_ISSUER_URLS#https://issuer.fixture.invalid#g' \
-  "$production_output" >"$graph_fixture_output"
-if grep -q 'REQUIRED_' "$graph_fixture_output"; then
-  printf '%s\n' 'graph production fixture contains unresolved values' >&2
-  exit 1
-fi
-common_checks graph-production-fixture "$graph_fixture_output"
-check_graph_coupling graph-production-fixture "$graph_fixture_output"
-printf '%s\n' 'validated graph-enabled production coupling fixture'

@@ -7,7 +7,7 @@ authorization, identity, moderation, or abuse-prevention system.
 ## Conceptual flow
 
 1. An issuer admits a participant using the deployment's configured Sybil mode
-   and issues a V4 private-verification token or an enabled V7 native bearer.
+   and issues a V4 private-verification token.
 2. The community edge checks the token with `/v1/check` before allowing a
    session or a low-risk action.
 3. For an action intended to be single-use, the edge calls `/v1/verify` and

@@ -1,7 +1,7 @@
 # Verifiers
 
-The verifier accepts configured token families, validates them against its
-trust material, and consumes a replay identity on `/v1/verify`.
+The verifier validates V4 tokens against its trust material and consumes a
+replay identity on `/v1/verify`.
 
 ## Implemented endpoints
 
@@ -12,20 +12,12 @@ trust material, and consumes a replay identity on `/v1/verify`.
   scope digest.
 - `GET /health` and `GET /ready` expose liveness/readiness checks.
 
-The verifier refreshes issuer metadata from `ISSUER_URL` or `ISSUER_URLS`.
-Those inputs are normalized to `/.well-known/keys` for V7 trust. V4 uses
-issuer-authorized verification material and the verifier's configured scope;
-V7 uses a fully validated V7 discovery container and retained key bindings.
+The verifier refreshes V4 issuer metadata from `ISSUER_URL` or `ISSUER_URLS`
+and uses issuer-authorized verification material with its configured scope.
 
 ## Scope and trust
 
-V4 tokens are bound to `(verifier_id, audience)` through a scope digest. A V7
-token is checked against the issuer ID and typed V7 token key ID in its body,
-the discovered public key and body policy, and its validity window.
-
-The verifier must not treat graph-authority metadata as a V7 key source. The
-separate V4 replay-authority relationship is described in [federation](federation.md)
-and [trust boundaries](../architecture/trust-boundaries.md).
+V4 tokens are bound to `(verifier_id, audience)` through a scope digest.
 
 ## Replay storage
 

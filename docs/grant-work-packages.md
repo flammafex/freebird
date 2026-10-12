@@ -15,7 +15,7 @@ not products or high-value deployments.
 **Purpose:** turn the current implementation-specific security boundary into a
 reviewable baseline.
 
-**Activities:** maintain the threat model and claim matrix; preserve V4/V7
+**Activities:** maintain the threat model and claim matrix; preserve V4
 compatibility fixtures and negative tests; document V4's bespoke,
 non-RFC-9497-interoperable construction; prepare an independent cryptographic
 design review target.
@@ -46,7 +46,7 @@ claims; this package does not make Sybil mechanisms proof-of-personhood systems.
 **Purpose:** make key and metadata transitions reviewable and recoverable.
 
 **Activities:** define activation, retention, rotation, freshness, rollback, and
-backup expectations; test V4/V7 lifecycle behavior and verifier discovery;
+backup expectations; test V4 lifecycle behavior and verifier metadata refresh;
 document protected storage requirements.
 
 **Deliverables:** lifecycle design, failure/recovery tests, operator runbook, and

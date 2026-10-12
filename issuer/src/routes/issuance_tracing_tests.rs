@@ -1,6 +1,6 @@
 //! Exercise the real handler spans, including early rejection, without a global subscriber.
 use super::*;
-use freebird_common::api::{BatchIssueReq, NativeBearerV7BatchIssueReq, NativeBearerV7IssueReq};
+use freebird_common::api::BatchIssueReq;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use tracing::{field::Visit, instrument::WithSubscriber, span, Subscriber};
@@ -52,13 +52,6 @@ async fn issuance_handler_spans_exclude_private_inputs() {
         sybil_checker: None,
         admission: Default::default(),
         invitation_system: None,
-        native_bearer_v7: crate::main_state::test_native_bearer_v7(),
-        native_bearer_v7_retained: vec![],
-        native_exchange_v7: None,
-        native_exchange_v7_discovery: None,
-        native_graph_issuance_v7: None,
-        native_graph_issuance_v7_discovery: None,
-        replay_authority: None,
         epoch_duration_sec: 86400,
         epoch_retention: 1,
         admin_api_key: None,
@@ -106,32 +99,11 @@ async fn issuance_handler_spans_exclude_private_inputs() {
         }
     )
     .is_err());
-    assert!(invoke!(
-        crate::routes::native_bearer_v7::handle,
-        NativeBearerV7IssueReq {
-            token_key_id: "01".repeat(32),
-            blinded_msg_b64: REQUEST.into(),
-            sybil_proof: proof(),
-        }
-    )
-    .is_err());
-    assert!(invoke!(
-        crate::routes::native_bearer_v7::handle_batch,
-        NativeBearerV7BatchIssueReq {
-            token_key_id: "01".repeat(32),
-            blinded_msgs_b64: vec![REQUEST.into()],
-            sybil_proof: proof(),
-        }
-    )
-    .is_err());
-
     let spans = capture.0.lock().unwrap();
     for (name, expected) in [
         ("issue_token", vec!["has_proof", "kid", "sybil_configured"]),
         ("renew_token", vec!["has_proof", "kid", "sybil_configured"]),
         ("handle_batch", vec!["batch_size"]),
-        ("issue_native_bearer_v7", vec![]),
-        ("issue_native_bearer_v7_batch", vec![]),
     ] {
         let fields = spans
             .get(name)

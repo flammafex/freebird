@@ -129,30 +129,6 @@ export function buildIssueBinding(issuerId: string, blindedElementB64: string): 
   return `freebird:issue:v1:${issuerId}:${blindedElementB64}`;
 }
 
-/** V7 direct single-issuance binding; the token key ID is part of the proof. */
-export function buildNativeBearerV7IssueBinding(
-  issuerId: string,
-  tokenKeyId: string,
-  blindedMsgB64: string,
-): string {
-  return `freebird:native-bearer-v7:issue:v1:${issuerId}:${tokenKeyId}:${blindedMsgB64}`;
-}
-
-/** V7 direct batch binding; preserves the ordered blinded-message digest. */
-export function buildNativeBearerV7BatchBinding(
-  issuerId: string,
-  tokenKeyId: string,
-  blindedMsgsB64: string[],
-): string {
-  const hasher = sha256.create();
-  for (const element of blindedMsgsB64) {
-    hasher.update(u64Le(element.length));
-    hasher.update(new TextEncoder().encode(element));
-  }
-  const digest = hasher.digest();
-  return `freebird:native-bearer-v7:issue-batch:v1:${issuerId}:${tokenKeyId}:${blindedMsgsB64.length}:${bytesToBase64Url(digest.slice(0, 16))}`;
-}
-
 /**
  * V4 renewal request binding.
  * Matches `issue.rs`: `freebird:renew:v1:<issuer_id>:<blinded_element_b64>`.

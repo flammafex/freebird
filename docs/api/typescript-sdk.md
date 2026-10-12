@@ -11,11 +11,9 @@ TypeScript declarations, and uses the platform `fetch` implementation.
 
 ## Supported client flows
 
-The SDK supports the active **V4 private-token** flow and **direct V7
-native-bearer** flow. V4 uses `issueToken`, `checkToken`, and `verifyToken`;
-V4 also has bounded `issueTokens` and `verifyBatch` operations. Direct V7 uses
-`issueNativeBearerV7`, `issueNativeBearerV7Batch`, and local verification helpers
-after validating `/.well-known/keys` discovery.
+The SDK supports the active **V4 private-token** flow through `issueToken`,
+`checkToken`, and `verifyToken`; V4 also has bounded `issueTokens` and
+`verifyBatch` operations.
 
 ```ts
 import { FreebirdClient } from '@flammafex/freebird';
@@ -31,10 +29,9 @@ const checked = await client.checkToken(token); // does not consume
 const verified = await client.verifyToken(token); // consumes once
 ```
 
-Direct V7 issuance requires a 32-byte owner commitment and validated key
-discovery. The SDK binds Sybil proofs to the exact request. Create a fresh proof
-when request data changes or a retry requires a new request; do not reuse a
-proof across different bodies.
+The SDK binds Sybil proofs to the exact V4 request. Create a fresh proof when
+request data changes or a retry requires a new request; do not reuse a proof
+across different bodies.
 
 ## Configuration highlights
 
@@ -51,8 +48,7 @@ configuration.
   sensitive application data.
 - Never log blinding state, proof material, bearer bodies, private keys, or
   status capabilities; keep them out of analytics and URLs.
-- Use HTTPS service URLs and validate issuer discovery before key-bound V7
-  operations.
+- Use HTTPS service URLs.
 - Use typed `FreebirdError.code` values rather than matching human-readable
   error messages.
 - A local `checkToken` is non-consuming; `verifyToken` consumes and replay

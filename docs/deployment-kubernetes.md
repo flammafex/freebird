@@ -12,18 +12,14 @@ They assume:
 - secret management outside Git
 - one issuer replica and one or more verifier replicas
 
-The current release supports V4 and V7. V5 and V2 have been removed and are
-rejected; V6 is reserved and rejected.
+The current deployment supports V4 private-verification tokens.
 
 ## Image Pinning
 
 Every registry image in the raw and base manifests is a
 `@sha256:REQUIRED_*_IMAGE_DIGEST` sentinel. Replace both sentinels with
 operator-provided, signature-verified immutable `@sha256:` references from the
-feature-bearing release artifact before applying. No v0.10.0 GHCR digest is
-invented or checked in here because those release digests are not publicly
-discoverable in this lane. Historical v0.7.0 images are not graph-capable and
-must not be used for graph issuance.
+release artifact before applying.
 
 The kind overlay deliberately substitutes `freebird-issuer:kind-smoke` and
 `freebird-verifier:kind-smoke`; `scripts/release-kind-smoke.sh` retags and
@@ -43,7 +39,7 @@ cosign verify \
 
 ```bash
 # First replace REQUIRED_* values in the production overlay, including both
-# image digest markers and graph coupling choices.
+# image digest markers.
 k8s/validate-overlays.sh
 # This complete overlay apply is for an availability-preserving production
 # rollout only; use the clean bootstrap waves below for a new installation.
@@ -62,19 +58,8 @@ trusted ingress source, never a pod CIDR. The proxy-policy patch supplies the
 matching namespace and controller label. Probe and health egress use HTTPS
 port 443 in both overlays.
 
-The base manifests use the native V7 exchange names. Do not restore retired V5
-or legacy `PUBLIC_BEARER_EXCHANGE_*` profile settings. Exchange and graph
-issuance remain disabled in the base; enabling them requires setting
-`NATIVE_EXCHANGE_V7_ENABLE` and
-`NATIVE_GRAPH_ISSUANCE_V7_ENABLE` to `true` in the issuer ConfigMap,
-setting the same V7 graph marker and a non-empty
-`VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS` in the verifier ConfigMap, mounting the
-V7 discovery/history/acknowledgement/policy files and signer material at the paths
-in the issuer ConfigMap, and creating the referenced
-`graph-issuance-credentials` secret with exactly one production authorizer
-secret. Run `freebird-validate-config` against the same Redis database used by
-the verifiers. The overlay validator rejects an issuer-only graph
-configuration or a non-HTTPS authority URL.
+Run `freebird-validate-config` against the exact production environment before
+starting the services.
 
 ## Ingress controller forwarding and TLS boundary
 
@@ -189,7 +174,9 @@ controller `/32`, and local images, restarts and waits for issuer, confirms the
 issuer primary Service endpoint, fetches `/.well-known/issuer` through verified
 HTTPS ingress from an in-cluster health-labeled curl pod, and only then scales
 verifier directly to three and verifies issuer-metadata refresh in every
-verifier log. This scale-to-zero sequence is only smoke initialization
+verifier log. The same public issuer origin must expose `/.well-known/keys` for
+V4 SDK key discovery and stale-key refresh, routed to issuer:8081. This
+scale-to-zero sequence is only smoke initialization
 behavior; it is not production rollout guidance.
 
 Production must make the issuer discovery route reachable from the verifier's
@@ -230,12 +217,8 @@ direct application-port bypass.
 probe status endpoints):
 
 - `/.well-known/issuer`
-- `/.well-known/replay-authority` (V4 authority-only metadata for verifier health refresh)
-- `/.well-known/keys`
+- `/.well-known/keys` (V4 signing-key discovery and stale-key refresh)
 - `/v1/oprf`
-- `/v7/native-bearer`
-- `/v7/public`
-- `/v1/public/graph/replay-authority/probe` (V4 authority probe for V7 graph participants)
 - `/webauthn`
 - `/healthz`
 - `/readyz`
@@ -254,8 +237,7 @@ with an operator CIDR allowlist only if required.
 Redis is used for verifier nullifier storage and issuer Sybil replay storage.
 The examples enable a standalone writable master, append-only persistence with
 `appendfsync always`, `maxmemory-policy noeviction`, and password
-authentication. These settings are required for V7 exchange/graph issuance;
-RDB-only or `everysec` durability is not a fallback.
+authentication. RDB-only or `everysec` durability is not a fallback.
 
 The issuer receives:
 
@@ -266,21 +248,14 @@ The issuer receives:
 The verifier receives:
 
 - `REDIS_URL`
-- `VERIFIER_ACCEPTED_TOKEN_VERSIONS` (`v4,v7`; V5 and V2 are removed and
-  rejected; V6 is reserved and rejected)
 - `VERIFIER_ENV=production`
 - `IN_MEMORY_REPLAY_STORE=false`
-- `VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS` when participating in V7 graph
-  issuance;
-- `VERIFIER_REPLAY_AUTHORITY_PROBE_INTERVAL=30s` and
-  `VERIFIER_REPLAY_AUTHORITY_MAX_STALENESS=60s` for the authority health
-  contract.
 
 Network policies allow Redis access only from issuer and verifier pods.
 
 ### Numeric replay endpoint and fresh installation ordering
 
-Only `SYBIL_REPLAY_REDIS_URL` must avoid DNS. The Redis Service is an ordinary
+`SYBIL_REPLAY_REDIS_URL` must avoid DNS. The Redis Service is an ordinary
 IPv4 SingleStack ClusterIP Service (`ipFamilies: [IPv4]`,
 `ipFamilyPolicy: SingleStack`); Kubernetes allocates its address. Do not pin a
 cluster-specific IP or restore `clusterIP: None`. IPv6-only clusters are not
@@ -290,8 +265,8 @@ The issuer explicitly uses `enableServiceLinks: true` and constructs
 `redis://:$(REDIS_PASSWORD)@$(REDIS_SERVICE_HOST):$(REDIS_SERVICE_PORT)`.
 `REDIS_PASSWORD` remains earlier in its environment list so Kubernetes expands
 the reference. Keep existing credentials URL-safe/percent-encoded as required
-by the Redis URL format. Other URLs (`REDIS_URL`, `WEBAUTHN_REDIS_URL`,
-`NATIVE_EXCHANGE_V7_REDIS_URL`, and verifier Redis access) still use `redis:6379`.
+by the Redis URL format. Other URLs (`REDIS_URL`, `WEBAUTHN_REDIS_URL`, and
+verifier Redis access) still use `redis:6379`.
 The Service selector, TCP port, authentication, Deployment, and persistent data
 configuration are unchanged.
 
@@ -325,8 +300,8 @@ Service links.
 Use this procedure **only** when `kubectl -n freebird get service redis
 -o jsonpath='{.spec.clusterIP}'` reports `None`. The headless-to-ClusterIP change
 cannot be applied in place. Schedule a maintenance window: deleting/recreating
-the Service temporarily disrupts **all** Redis consumers, including verifier,
-exchange, WebAuthn, and issuer replay traffic. Some consumers may require
+    the Service temporarily disrupts **all** Redis consumers, including verifier,
+    WebAuthn, and issuer Sybil replay traffic. Some consumers may require
 reconnection or a controlled restart after DNS caches refresh.
 
 1. Keep the existing Redis Deployment, `redis-data` PVC, `redis-credentials`
@@ -361,17 +336,8 @@ reconnection or a controlled restart after DNS caches refresh.
    recovery. Service recreation does not erase Redis data; never delete volumes
    or credentials as a remedy for readiness failures.
 
-When V7 graph issuance is enabled, set the verifier graph URL to the issuer's
-public HTTPS host (for example, `https://issuer.example.com`) and expose the
-distinct V4 `GET /.well-known/replay-authority` metadata route, strict V7
-`GET /.well-known/keys` discovery route, and exact
-`POST /v1/public/graph/replay-authority/probe` path on the issuer ingress. The
-verifier health refresh consumes the V4 metadata route; it must not use V7 keys
-or the POST probe as a metadata substitute. The fixed V4 probe is retained for
-V7 graph participants and proves that the verifier's `REDIS_URL` and issuer
-exchange Redis reach the same logical database; URL string equality is not used
-as proof. The verifier readiness probe must use the HTTPS ingress boundary, not
-the issuer ClusterIP.
+The verifier readiness probe must use the HTTPS ingress boundary, not the issuer
+ClusterIP.
 
 ## Issuer Scaling
 

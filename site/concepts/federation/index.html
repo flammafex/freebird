@@ -1695,16 +1695,8 @@
 <h1 id="federation-and-discovery">Federation and Discovery<a class="headerlink" href="#federation-and-discovery" title="Permanent link">&para;</a></h1>
 <p>Freebird currently implements issuer-to-verifier metadata discovery.</p>
 <h2 id="implemented-trust-relationships">Implemented trust relationships<a class="headerlink" href="#implemented-trust-relationships" title="Permanent link">&para;</a></h2>
-<p>The verifier periodically fetches configured issuer metadata. <code>ISSUER_URL</code> or
-<code>ISSUER_URLS</code> are normalized to <code>GET /.well-known/keys</code> for strict V7
-discovery. The complete V7 container is validated before its direct and
-retained key bindings, policies, and optional V7 exchange/graph descriptors
-enter the verifier trust snapshot.</p>
-<p>V4 has a separate authority-only metadata path,
-<code>GET /.well-known/replay-authority</code>, and an operator-controlled probe at
-<code>POST /v1/public/graph/replay-authority/probe</code>. A graph participant can use
-these to attest that the verifier and issuer are using the intended replay
-authority. These paths do not provide V7 keys.</p>
+<p>The verifier periodically fetches configured V4 issuer metadata from
+<code>ISSUER_URL</code> or <code>ISSUER_URLS</code>.</p>
 <p>With <code>REQUIRE_TLS=true</code>, configured issuer URLs must use HTTPS. Discovery
 metadata is therefore part of the deployment trust boundary and must be
 protected like other service traffic.</p>

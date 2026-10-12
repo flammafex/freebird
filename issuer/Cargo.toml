@@ -1,6 +1,6 @@
 [package]
 name = "freebird-issuer"
-version = "0.10.5"
+version = "0.11.0"
 edition = "2021"
 description = "Token issuer service for the Freebird privacy-preserving authentication system"
 license = "MIT OR Apache-2.0"
@@ -22,8 +22,8 @@ name = "freebird-cli"
 path = "src/bin/cli.rs"
 
 [dependencies]
-freebird-common = { version = "0.10.5", path = "../common" }
-freebird-crypto = { version = "0.10.5", path = "../crypto", features = ["voprf-p256"] }
+freebird-common = { version = "0.11.0", path = "../common" }
+freebird-crypto = { version = "0.11.0", path = "../crypto", features = ["voprf-p256"] }
 axum = "0.7"
 rayon = "1.10"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "fs"] }  # Added "fs" feature
@@ -39,7 +39,6 @@ elliptic-curve = "0.13"
 sha2 = "0.10"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 blake3 = "1"
-blind-rsa-signatures = "0.17.1"
 hex = "0.4"  # For invitation signature serialization
 subtle = "2"  # For constant-time comparisons
 hmac = "0.12"  # For constant-time API key verification

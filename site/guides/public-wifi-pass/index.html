@@ -1734,11 +1734,9 @@ security.</p>
 spend. The network controller, DHCP/DNS system, firewall, and accounting layer
 remain outside Freebird and must be designed independently.</p>
 <h2 id="validity-and-expiration">Validity and expiration<a class="headerlink" href="#validity-and-expiration" title="Permanent link">&para;</a></h2>
-<p>V4 has no issuer-enforced token expiry. V7 validity comes from the signer and its
-published discovery policy. A required expiration for a Wi-Fi pass must
-therefore be a correctly configured V7 policy or be enforced externally by the
-captive portal, gateway, or another application component; it is not a generic
-Freebird expiration guarantee.</p>
+<p>V4 has no issuer-enforced token expiry. A required expiration for a Wi-Fi pass
+must be enforced externally by the captive portal, gateway, or another
+application component; it is not a generic Freebird expiration guarantee.</p>
 <h2 id="lab-only-deployment-notes">Lab-only deployment notes<a class="headerlink" href="#lab-only-deployment-notes" title="Permanent link">&para;</a></h2>
 <p>Use the local <a href="../../quick-start/">quick start</a> and synthetic passes. Do not
 bind the Compose ports to an untrusted interface or use the development memory

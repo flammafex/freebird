@@ -22,11 +22,9 @@ remain outside Freebird and must be designed independently.
 
 ## Validity and expiration
 
-V4 has no issuer-enforced token expiry. V7 validity comes from the signer and its
-published discovery policy. A required expiration for a Wi-Fi pass must
-therefore be a correctly configured V7 policy or be enforced externally by the
-captive portal, gateway, or another application component; it is not a generic
-Freebird expiration guarantee.
+V4 has no issuer-enforced token expiry. A required expiration for a Wi-Fi pass
+must be enforced externally by the captive portal, gateway, or another
+application component; it is not a generic Freebird expiration guarantee.
 
 ## Lab-only deployment notes
 

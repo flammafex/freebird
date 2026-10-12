@@ -508,17 +508,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#v7-native-bearer-token" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        V7 native bearer token
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1664,17 +1653,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#v7-native-bearer-token" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        V7 native bearer token
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1693,7 +1671,7 @@
 
 
 <h1 id="tokens">Tokens<a class="headerlink" href="#tokens" title="Permanent link">&para;</a></h1>
-<p>Freebird currently accepts two token families: V4 and V7.</p>
+<p>Freebird currently issues and verifies V4 private-verification tokens.</p>
 <h2 id="v4-private-verification-token">V4 private-verification token<a class="headerlink" href="#v4-private-verification-token" title="Permanent link">&para;</a></h2>
 <p>V4 is a bespoke P-256 VOPRF-like construction using the <code>freebird:v4</code> context.
 It is not RFC 9497 compatible. The final redemption-token wire format is:</p>
@@ -1704,15 +1682,6 @@ It is not RFC 9497 compatible. The final redemption-token wire format is:</p>
 and constructs the final token. The authenticator is the unblinded result over
 the issuer ID, key ID, nonce, and verifier-scope digest. The verifier
 recomputes it with issuer-trusted private verification material.</p>
-<h2 id="v7-native-bearer-token">V7 native bearer token<a class="headerlink" href="#v7-native-bearer-token" title="Permanent link">&para;</a></h2>
-<p>V7 uses randomized RSA blind signatures. Its canonical body includes the
-configured asset ID and minor amount, issuer/key identity, a nonce, a 32-byte
-body nullifier, and an owner commitment. The envelope carries the V7 dispatch
-version, message randomizer, and RSA signature. The verifier checks the body
-policy, discovered binding, signature, and inclusive validity window.</p>
-<p>V7 direct issuance is exposed at <code>/v7/native-bearer/issue</code>; optional durable
-exchange and graph issuance are separate V7 operations. See
-<a href="../blind-issuance/">blind issuance</a>.</p>
 <p>For security goals, non-goals, and metadata leakage limits, read the <a href="../../threat-model/">threat
 model</a>.</p>
 

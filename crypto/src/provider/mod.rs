@@ -73,29 +73,6 @@ pub trait CryptoProvider: Send + Sync {
     fn context(&self) -> &[u8];
 }
 
-/// Cryptographic provider for the separate V7 randomized public bearer flow.
-///
-/// V7 deliberately uses its own provider trait and identity binding.
-// async_trait boxes a Future (already must_use); Clippy 1.99 also flags its generated annotation.
-#[allow(clippy::double_must_use)]
-#[async_trait]
-pub trait V7BlindRsaProvider: Send + Sync {
-    /// Sign a V7 blinded message for the explicitly requested identity.
-    async fn blind_sign(
-        &self,
-        identity: &crate::public_bearer_v7::V7KeyIdentity,
-        blinded_msg: &crate::public_bearer_v7::V7BlindMessage,
-    ) -> Result<crate::public_bearer_v7::V7BlindSignature>;
-
-    /// Return the RFC 9474 randomized RSA-BSSA suite identifier.
-    fn variant(&self) -> &str {
-        crate::V7_RFC9474_VARIANT
-    }
-
-    /// Return the explicit issuer/key-id binding for this V7 key.
-    fn binding(&self) -> &crate::public_bearer_v7::V7PublicKeyBinding;
-}
-
 /// Configuration for creating a crypto provider
 #[derive(Debug, Clone)]
 pub enum ProviderConfig {

@@ -21,9 +21,8 @@ function isToken(value: unknown): value is FreebirdToken {
   const token = value as FreebirdToken;
   return typeof token.tokenValue === 'string' &&
     typeof token.issuerId === 'string' &&
-    (token.version === undefined || token.version === 4 || token.version === 7) &&
+    (token.version === undefined || token.version === 4) &&
     (token.kid === undefined || typeof token.kid === 'string') &&
-    (token.tokenKeyId === undefined || typeof token.tokenKeyId === 'string') &&
     (token.valid_until === undefined ||
       (typeof token.valid_until === 'number' && Number.isSafeInteger(token.valid_until)));
 }

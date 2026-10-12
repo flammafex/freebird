@@ -872,6 +872,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Direct development">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#compose-quickstart-and-redis-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compose quickstart and Redis network
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -879,17 +896,6 @@
     <span class="md-ellipsis">
       
         Production direct services behind a proxy
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#optional-v7-durable-operations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Optional V7 durable operations
       
     </span>
   </a>
@@ -1684,6 +1690,23 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Direct development">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#compose-quickstart-and-redis-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Compose quickstart and Redis network
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -1691,17 +1714,6 @@
     <span class="md-ellipsis">
       
         Production direct services behind a proxy
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#optional-v7-durable-operations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Optional V7 durable operations
       
     </span>
   </a>
@@ -1744,9 +1756,43 @@ development. A representative verifier configuration is:</p>
 <span class="nv">IN_MEMORY_REPLAY_STORE</span><span class="o">=</span><span class="nb">true</span>
 <span class="nv">REQUIRE_TLS</span><span class="o">=</span><span class="nb">false</span>
 </code></pre></div>
-<p>This mode is not restart-safe and must not be used for public, exchange, graph,
-or multi-instance deployments. Docker Compose is a direct-development probe;
+<p>This mode is not restart-safe and must not be used for public or multi-instance
+deployments. Docker Compose is a direct-development probe;
 it does not provide the trusted production proxy boundary.</p>
+<h3 id="compose-quickstart-and-redis-network">Compose quickstart and Redis network<a class="headerlink" href="#compose-quickstart-and-redis-network" title="Permanent link">&para;</a></h3>
+<p>Copy <code>.env.example</code> to <code>.env</code>, configure the admin key, then run:</p>
+<div class="highlight"><pre><span></span><code>docker<span class="w"> </span>compose<span class="w"> </span>config<span class="w"> </span>--quiet
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build<span class="w"> </span>--wait
+</code></pre></div>
+<p>Compose keeps Redis on TCP port 6379 with its existing AOF configuration and
+named data volume. It assigns Redis <code>REDIS_IPV4</code> (default <code>172.30.84.10</code>) on
+<code>FREEBIRD_SUBNET</code> (default <code>172.30.84.0/24</code>). Only the issuer's
+<code>SYBIL_REPLAY_REDIS_URL</code> is derived from that address: replay admission rejects
+hostname endpoints to avoid unbounded DNS work. Verifier <code>REDIS_URL</code>, WebAuthn,
+and other Redis consumers use the <code>redis</code> service hostname.
+This local Compose Redis remains internal and unauthenticated; this change does
+not add a production authentication or proxy boundary.</p>
+<p>If the subnet conflicts with your LAN, VPN, or another Docker network, set both
+values in <code>.env</code> to an unused private range and a host address within it, for
+example <code>FREEBIRD_SUBNET=172.30.85.0/24</code> and <code>REDIS_IPV4=172.30.85.10</code>. Do not use
+the subnet, broadcast, or gateway address. Keep the same Compose project name
+so its existing named volumes are reused.</p>
+<p><strong>Existing installations:</strong> preserve your secrets and other
+settings; do not replace <code>.env</code> wholesale. Add the two network settings and
+remove the old <code>SYBIL_REPLAY_REDIS_URL=redis://redis:6379</code> entry. Compose sets that
+variable explicitly from <code>REDIS_IPV4</code>, overriding stale env-file values. Do not
+rewrite other Redis URLs. When introducing or changing IPAM settings, schedule
+a brief outage for all Compose consumers and recreate the network without
+removing volumes:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># From the same project directory, with the same project name as before:</span>
+docker<span class="w"> </span>compose<span class="w"> </span>down<span class="w">          </span><span class="c1"># no --volumes / -v; keep issuer-data and redis-data</span>
+<span class="c1"># Update .env network settings as described above.</span>
+docker<span class="w"> </span>compose<span class="w"> </span>config<span class="w"> </span>--quiet
+docker<span class="w"> </span>compose<span class="w"> </span>up<span class="w"> </span>-d<span class="w"> </span>--build<span class="w"> </span>--wait
+</code></pre></div>
+<p>Do not prune volumes or delete persisted keys/replay state to resolve a network
+conflict. Outside Compose, explicitly set <code>SYBIL_REPLAY_REDIS_URL</code> to your
+reachable numeric Redis endpoint, including its existing credentials/database.</p>
 <h2 id="production-direct-services-behind-a-proxy">Production direct services behind a proxy<a class="headerlink" href="#production-direct-services-behind-a-proxy" title="Permanent link">&para;</a></h2>
 <p>The expected production shape is issuer and verifier behind an independently
 managed HTTPS reverse proxy, with durable Redis and persistent key/config
@@ -1758,14 +1804,10 @@ storage:</p>
 <span class="nv">IN_MEMORY_REPLAY_STORE</span><span class="o">=</span><span class="nb">false</span>
 <span class="nv">REDIS_URL</span><span class="o">=</span>redis://redis:6379
 <span class="nv">SYBIL_REPLAY_STORE</span><span class="o">=</span>redis
+<span class="nv">SYBIL_REPLAY_REDIS_URL</span><span class="o">=</span>redis://&lt;numeric-Redis-address&gt;:6379
 </code></pre></div>
 <p><code>BEHIND_PROXY=true</code> is safe only when the proxy and trusted CIDRs are correctly
 configured. Admin routes need network controls as well as <code>ADMIN_API_KEY</code>.</p>
-<h2 id="optional-v7-durable-operations">Optional V7 durable operations<a class="headerlink" href="#optional-v7-durable-operations" title="Permanent link">&para;</a></h2>
-<p>V7 exchange and graph issuance add Redis-backed operation authority, immutable
-discovery/history, receipt keys, and retention obligations. Participating
-services must share the exact Redis logical database and restore Redis,
-discovery, signers, and history as one recovery unit.</p>
 <h2 id="not-a-deployment-mode">Not a deployment mode<a class="headerlink" href="#not-a-deployment-mode" title="Permanent link">&para;</a></h2>
 <p>There is no current interoperable federation mode. Multiple issuer URLs express
 configured discovery/trust relationships; they do not establish a common

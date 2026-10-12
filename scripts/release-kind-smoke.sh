@@ -186,10 +186,6 @@ kubectl create secret generic admin-credentials --namespace freebird \
   --from-literal=admin-api-key=release-smoke-admin-key-01234567890123456789
 kubectl create secret generic redis-credentials --namespace freebird \
   --from-literal=password=release-smoke-redis-password
-# The issuer deployment requires a V7 key identifier even when this smoke run
-# exercises only V4 endpoints. Generate a cluster-local, non-production value.
-kubectl create secret generic native-bearer-v7-credentials --namespace freebird \
-  --from-literal=token-key-id="$(openssl rand -hex 32)"
 openssl genrsa -out "$TMP/issuer-ca.key" 2048
 openssl req -x509 -new -nodes -key "$TMP/issuer-ca.key" \
   -sha256 -days 1 -out "$TMP/issuer-ca.crt" \

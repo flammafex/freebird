@@ -4,9 +4,6 @@ pub mod admin_rate_limit;
 pub mod batch_issue;
 pub mod issue;
 pub mod metadata;
-pub mod native_bearer_v7;
-pub mod public_exchange;
-pub mod public_graph_issuance;
 
 // Re-export types from common directly
 pub use freebird_common::api::{BatchIssueReq, BatchIssueResp, IssueReq, IssueResp};

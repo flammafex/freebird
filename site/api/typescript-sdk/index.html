@@ -1721,11 +1721,9 @@
 <p>The SDK requires <strong>Node.js 24 or newer</strong>. It provides ESM and CommonJS builds,
 TypeScript declarations, and uses the platform <code>fetch</code> implementation.</p>
 <h2 id="supported-client-flows">Supported client flows<a class="headerlink" href="#supported-client-flows" title="Permanent link">&para;</a></h2>
-<p>The SDK supports the active <strong>V4 private-token</strong> flow and <strong>direct V7
-native-bearer</strong> flow. V4 uses <code>issueToken</code>, <code>checkToken</code>, and <code>verifyToken</code>;
-V4 also has bounded <code>issueTokens</code> and <code>verifyBatch</code> operations. Direct V7 uses
-<code>issueNativeBearerV7</code>, <code>issueNativeBearerV7Batch</code>, and local verification helpers
-after validating <code>/.well-known/keys</code> discovery.</p>
+<p>The SDK supports the active <strong>V4 private-token</strong> flow through <code>issueToken</code>,
+<code>checkToken</code>, and <code>verifyToken</code>; V4 also has bounded <code>issueTokens</code> and
+<code>verifyBatch</code> operations.</p>
 <div class="highlight"><pre><span></span><code><span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">FreebirdClient</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">'@flammafex/freebird'</span><span class="p">;</span>
 
 <span class="kd">const</span><span class="w"> </span><span class="nx">client</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="ow">new</span><span class="w"> </span><span class="nx">FreebirdClient</span><span class="p">({</span>
@@ -1738,10 +1736,9 @@ after validating <code>/.well-known/keys</code> discovery.</p>
 <span class="kd">const</span><span class="w"> </span><span class="nx">checked</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">client</span><span class="p">.</span><span class="nx">checkToken</span><span class="p">(</span><span class="nx">token</span><span class="p">);</span><span class="w"> </span><span class="c1">// does not consume</span>
 <span class="kd">const</span><span class="w"> </span><span class="nx">verified</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">client</span><span class="p">.</span><span class="nx">verifyToken</span><span class="p">(</span><span class="nx">token</span><span class="p">);</span><span class="w"> </span><span class="c1">// consumes once</span>
 </code></pre></div>
-<p>Direct V7 issuance requires a 32-byte owner commitment and validated key
-discovery. The SDK binds Sybil proofs to the exact request. Create a fresh proof
-when request data changes or a retry requires a new request; do not reuse a
-proof across different bodies.</p>
+<p>The SDK binds Sybil proofs to the exact V4 request. Create a fresh proof when
+request data changes or a retry requires a new request; do not reuse a proof
+across different bodies.</p>
 <h2 id="configuration-highlights">Configuration highlights<a class="headerlink" href="#configuration-highlights" title="Permanent link">&para;</a></h2>
 <p><code>issuerUrl</code> is required. <code>verifierUrl</code> is required for remote checks; V4 scope
 overrides, token storage, a custom <code>fetch</code>, optional proof-of-work settings, and
@@ -1755,8 +1752,7 @@ configuration.</p>
   sensitive application data.</li>
 <li>Never log blinding state, proof material, bearer bodies, private keys, or
   status capabilities; keep them out of analytics and URLs.</li>
-<li>Use HTTPS service URLs and validate issuer discovery before key-bound V7
-  operations.</li>
+<li>Use HTTPS service URLs.</li>
 <li>Use typed <code>FreebirdError.code</code> values rather than matching human-readable
   error messages.</li>
 <li>A local <code>checkToken</code> is non-consuming; <code>verifyToken</code> consumes and replay

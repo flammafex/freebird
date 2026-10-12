@@ -13,9 +13,6 @@ spec:
           - path: /.well-known/issuer
             pathType: Exact
             backend: {service: {name: issuer, port: {number: 8081}}}
-          - path: /.well-known/replay-authority
-            pathType: Exact
-            backend: {service: {name: issuer, port: {number: 8081}}}
           - path: /.well-known/keys
             pathType: Exact
             backend: {service: {name: issuer, port: {number: 8081}}}
@@ -27,12 +24,6 @@ spec:
             backend: {service: {name: issuer-probe, port: {number: 8081}}}
           - path: /v1/oprf
             pathType: Prefix
-            backend: {service: {name: issuer, port: {number: 8081}}}
-          - path: /v1/public
-            pathType: Prefix
-            backend: {service: {name: issuer, port: {number: 8081}}}
-          - path: /v1/public/graph/replay-authority/probe
-            pathType: Exact
             backend: {service: {name: issuer, port: {number: 8081}}}
           - path: /webauthn
             pathType: Prefix

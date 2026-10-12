@@ -1624,9 +1624,7 @@
 
 
 <h1 id="api-documentation">API documentation<a class="headerlink" href="#api-documentation" title="Permanent link">&para;</a></h1>
-<p>Freebird has separate issuer, verifier, and operator surfaces. The current
-protocol compatibility set is V4 private-verification tokens and V7 native
-bearer tokens. Retired V5 and V2 flows, and reserved V6, are not current APIs.</p>
+<p>Freebird has separate V4 issuer, verifier, and operator surfaces.</p>
 <h2 id="pages">Pages<a class="headerlink" href="#pages" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="http-api/">HTTP API</a>: bounded public verification and discovery routes,
@@ -1638,15 +1636,13 @@ bearer tokens. Retired V5 and V2 flows, and reserved V6, are not current APIs.</
   production deployments.</li>
 </ul>
 <p>For a runnable local setup, see the <a href="../quick-start/">quick start</a>. For
-version-specific issuer operations, invitations, WebAuthn, vouching, and audit
-workflows, use <a href="../admin-operations/">Admin Operations</a>. The detailed V7
-exchange contract is documented separately in <a href="../public-bearer-exchange/">Public Bearer
-Exchange</a>.</p>
+issuer operations, invitations, WebAuthn, vouching, and audit workflows, use
+<a href="../admin-operations/">Admin Operations</a>.</p>
 <h2 id="scope-and-compatibility">Scope and compatibility<a class="headerlink" href="#scope-and-compatibility" title="Permanent link">&para;</a></h2>
 <p>These pages intentionally cover the bounded API surface rather than reproduce
 every internal or version-specific payload. Clients should use discovery and
 the SDK where available, validate response shapes, and treat unsupported token
-families as rejected. Do not infer an API from an old V2/V5 example.</p>
+unsupported token families as rejected.</p>
 
 
 

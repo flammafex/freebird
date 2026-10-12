@@ -1827,20 +1827,14 @@ application accounts, timing, or operator logs.</p>
 <li><strong>Verifier:</strong> The client presents the token; the verifier validates it and
    records its nullifier so a second presentation is rejected.</li>
 </ol>
-<p>Freebird currently supports V4 private-verification tokens and V7 native bearer
-tokens. The details and protocol boundaries are documented in
+<p>Freebird currently supports V4 private-verification tokens. The details and protocol boundaries are documented in
 <a href="architecture/">Architecture</a>.</p>
 <h2 id="quick-start">Quick start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
 <p>For the shortest local path, use the repository's Docker Compose helper:</p>
 <div class="highlight"><pre><span></span><code>cp<span class="w"> </span>.env.example<span class="w"> </span>.env
-<span class="nv">V7_TOKEN_KEY_ID</span><span class="o">=</span><span class="s2">"</span><span class="k">$(</span>openssl<span class="w"> </span>rand<span class="w"> </span>-hex<span class="w"> </span><span class="m">32</span><span class="k">)</span><span class="s2">"</span>
-sed<span class="w"> </span>-i.bak<span class="w"> </span><span class="s2">"s|^NATIVE_BEARER_V7_TOKEN_KEY_ID=.*|NATIVE_BEARER_V7_TOKEN_KEY_ID=</span><span class="si">${</span><span class="nv">V7_TOKEN_KEY_ID</span><span class="si">}</span><span class="s2">|"</span><span class="w"> </span>.env
-rm<span class="w"> </span>-f<span class="w"> </span>.env.bak
 ./launch.sh<span class="w"> </span>up
 </code></pre></div>
-<p>The generated ID replaces the <code>.env.example</code> placeholder with a real
-64-character lowercase hexadecimal value. This is a development workflow, not
-a production deployment profile.</p>
+<p>This is a development workflow, not a production deployment profile.</p>
 <p>See the <a href="quick-start/">Quick Start</a> for the complete Docker and source-build
 commands.</p>
 <h2 id="current-status">Current status<a class="headerlink" href="#current-status" title="Permanent link">&para;</a></h2>
@@ -1869,7 +1863,7 @@ this documentation as an audit or as a substitute for deployment review.</p>
 <h2 id="explore-the-documentation">Explore the documentation<a class="headerlink" href="#explore-the-documentation" title="Permanent link">&para;</a></h2>
 <ul>
 <li><a href="quick-start/">Quick Start</a> — run a local development deployment.</li>
-<li><a href="architecture/">Architecture</a> — components, V4/V7 flows, metadata, and
+<li><a href="architecture/">Architecture</a> — V4 components, metadata, and
   storage boundaries.</li>
 <li><a href="security/">Security</a> — goals, assumptions, non-goals, and privacy
   limitations.</li>

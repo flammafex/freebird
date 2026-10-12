@@ -5,8 +5,6 @@ use anyhow::{anyhow, Context};
 use std::net::SocketAddr;
 use tracing::{info, warn};
 
-use crate::readiness::TokenFamily;
-use crate::replay_authority::ReplayAuthorityConfig;
 use crate::store::StoreBackend;
 
 /// Startup settings which are available before the replay store is built.
@@ -18,7 +16,6 @@ use crate::store::StoreBackend;
 pub struct Settings {
     pub(crate) epoch_duration_sec: u64,
     pub(crate) epoch_retention: u32,
-    pub(crate) accepted_token_families: Vec<TokenFamily>,
     pub(crate) backend: Option<StoreBackend>,
     pub(crate) store_backend_name: String,
 }
@@ -26,13 +23,11 @@ pub struct Settings {
 pub(crate) struct LoadedSettings {
     pub(crate) epoch_duration_sec: u64,
     pub(crate) epoch_retention: u32,
-    pub(crate) accepted_token_families: Vec<TokenFamily>,
     pub(crate) issuer_urls: Vec<String>,
     pub(crate) refresh_interval_min: u64,
     pub(crate) verifier_id: String,
     pub(crate) audience: String,
     pub(crate) scope_digest: [u8; freebird_crypto::PRIVATE_TOKEN_SCOPE_DIGEST_LEN],
-    pub(crate) replay_authority_config: ReplayAuthorityConfig,
 }
 
 pub(crate) struct AdminSettings {
@@ -55,10 +50,6 @@ impl Settings {
             .unwrap_or(2); // Default: accept 2 previous epochs
 
         // ---------- Backend selection ----------
-        let accepted_raw = std::env::var("VERIFIER_ACCEPTED_TOKEN_VERSIONS")
-            .unwrap_or_else(|_| "v4,v7".to_string());
-        let accepted_token_families = parse_accepted_token_families(&accepted_raw)?;
-
         let memory_opt_in =
             parse_in_memory_replay_store(std::env::var("IN_MEMORY_REPLAY_STORE").ok().as_deref())?;
         let redis_url = std::env::var("REDIS_URL").ok();
@@ -75,7 +66,6 @@ impl Settings {
         Ok(Self {
             epoch_duration_sec,
             epoch_retention,
-            accepted_token_families,
             backend: Some(backend),
             store_backend_name,
         })
@@ -108,18 +98,14 @@ impl Settings {
         let audience = std::env::var("VERIFIER_AUDIENCE").unwrap_or_else(|_| verifier_id.clone());
         let scope_digest = freebird_crypto::build_scope_digest(&verifier_id, &audience)
             .map_err(|e| anyhow!("invalid verifier scope: {:?}", e))?;
-        let replay_authority_config = ReplayAuthorityConfig::from_env()?;
-
         Ok(LoadedSettings {
             epoch_duration_sec: self.epoch_duration_sec,
             epoch_retention: self.epoch_retention,
-            accepted_token_families: self.accepted_token_families.clone(),
             issuer_urls,
             refresh_interval_min,
             verifier_id,
             audience,
             scope_digest,
-            replay_authority_config,
         })
     }
 
@@ -154,24 +140,6 @@ impl Settings {
         let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8082".into());
         Ok(bind_addr.parse()?)
     }
-}
-
-pub(crate) fn parse_accepted_token_families(raw: &str) -> anyhow::Result<Vec<TokenFamily>> {
-    let mut families = Vec::new();
-    for value in raw.split(',').map(str::trim).filter(|v| !v.is_empty()) {
-        let family = match value.to_ascii_lowercase().as_str() {
-            "v4" => TokenFamily::V4,
-            "v7" => TokenFamily::V7,
-            _ => anyhow::bail!("VERIFIER_ACCEPTED_TOKEN_VERSIONS must contain only v4 and/or v7"),
-        };
-        if !families.contains(&family) {
-            families.push(family);
-        }
-    }
-    if families.is_empty() {
-        anyhow::bail!("VERIFIER_ACCEPTED_TOKEN_VERSIONS must enable at least one token family");
-    }
-    Ok(families)
 }
 
 pub(crate) fn parse_in_memory_replay_store(raw: Option<&str>) -> anyhow::Result<bool> {
@@ -215,22 +183,10 @@ pub(crate) fn select_store_backend(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        in_memory_replay_allowed, parse_accepted_token_families, parse_in_memory_replay_store,
-        select_store_backend,
-    };
-    use crate::readiness::TokenFamily;
+    use super::{in_memory_replay_allowed, parse_in_memory_replay_store, select_store_backend};
 
     #[test]
-    fn token_family_configuration_is_explicit_and_rejects_disabled() {
-        assert!(parse_accepted_token_families("").is_err());
-        let accepted = parse_accepted_token_families("v4").unwrap();
-        assert!(accepted.contains(&TokenFamily::V4));
-        assert!(!accepted.contains(&TokenFamily::V7));
-        assert_eq!(
-            parse_accepted_token_families("v7,v4,v7").unwrap(),
-            vec![TokenFamily::V7, TokenFamily::V4]
-        );
+    fn in_memory_backend_requires_explicit_development_opt_in() {
         assert!(!in_memory_replay_allowed(true, Some("production"), false));
         assert!(!in_memory_replay_allowed(false, Some("development"), false));
         assert!(!in_memory_replay_allowed(true, Some("production"), true));
@@ -252,20 +208,5 @@ mod tests {
             crate::store::StoreBackend::InMemory
         ));
         assert!(select_store_backend(None, true, Some("production"), true).is_err());
-    }
-
-    #[test]
-    fn redis_backend_selection_has_no_graph_authority_url_policy() {
-        assert!(matches!(
-            select_store_backend(
-                Some("redis://verifier-store:6379/1".into()),
-                false,
-                Some("production"),
-                false,
-            )
-            .unwrap()
-            .0,
-            crate::store::StoreBackend::Redis(_)
-        ));
     }
 }

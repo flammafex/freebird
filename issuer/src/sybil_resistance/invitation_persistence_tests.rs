@@ -1,8 +1,6 @@
 use super::*;
 use axum::{extract::State, http::HeaderMap, http::StatusCode, Json};
-use freebird_common::api::{
-    BatchIssueReq, IssueReq, NativeBearerV7BatchIssueReq, NativeBearerV7IssueReq,
-};
+use freebird_common::api::{BatchIssueReq, IssueReq};
 
 async fn blocked_save_fixture() -> (tempfile::TempDir, Arc<InvitationSystem>, SybilProof) {
     let dir = tempfile::tempdir().unwrap();
@@ -72,13 +70,6 @@ fn app_state(system: Arc<InvitationSystem>) -> Arc<crate::AppStateWithSybil> {
         sybil_checker: Some(system.clone()),
         admission: Default::default(),
         invitation_system: Some(system),
-        native_bearer_v7: crate::main_state::test_native_bearer_v7(),
-        native_bearer_v7_retained: vec![],
-        native_exchange_v7: None,
-        native_exchange_v7_discovery: None,
-        native_graph_issuance_v7: None,
-        native_graph_issuance_v7_discovery: None,
-        replay_authority: None,
         epoch_duration_sec: 86400,
         epoch_retention: 1,
         admin_api_key: Some("test-admin-key".into()),
@@ -110,14 +101,12 @@ async fn issuance_routes_fail_closed_on_redemption_save_failure() {
     // Reuse the signing-key fixture, but give each call a fresh invitation system.
     let (_dir, initial_system, _) = blocked_save_fixture().await;
     let initial_state = app_state(initial_system);
-    for route in 0..4 {
+    for route in 0..2 {
         let (_dir, system, proof) = blocked_save_fixture().await;
         let mut state = (*initial_state).clone();
         state.sybil_checker = Some(system.clone());
         state.invitation_system = Some(system.clone());
         let state = State((Arc::new(state), voprf.clone()));
-        let mut v7_representative = [0; 384];
-        v7_representative[383] = 1;
         let error = match route {
             0 => crate::routes::issue::handle(
                 state,
@@ -153,27 +142,18 @@ async fn issuance_routes_fail_closed_on_redemption_save_failure() {
             )
             .await
             .unwrap_err(),
-            2 => crate::routes::native_bearer_v7::handle(
+            _ => crate::routes::batch_issue::handle_batch(
                 state,
                 None,
                 None,
                 HeaderMap::new(),
-                Json(NativeBearerV7IssueReq {
-                    token_key_id: "01".repeat(32),
-                    blinded_msg_b64: Base64UrlUnpadded::encode_string(&v7_representative),
-                    sybil_proof: Some(proof.clone()),
-                }),
-            )
-            .await
-            .unwrap_err(),
-            _ => crate::routes::native_bearer_v7::handle_batch(
-                state,
-                None,
-                None,
-                HeaderMap::new(),
-                Json(NativeBearerV7BatchIssueReq {
-                    token_key_id: "01".repeat(32),
-                    blinded_msgs_b64: vec![Base64UrlUnpadded::encode_string(&v7_representative)],
+                Json(BatchIssueReq {
+                    blinded_elements: vec![Base64UrlUnpadded::encode_string(
+                        &freebird_crypto::Server::from_secret_key([1; 32], b"test")
+                            .unwrap()
+                            .public_key_sec1_compressed(),
+                    )],
+                    ctx_b64: None,
                     sybil_proof: Some(proof.clone()),
                 }),
             )

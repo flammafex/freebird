@@ -18,7 +18,7 @@ When configured, the issuer serves `/webauthn/`, `/webauthn/register`, and
 }
 ```
 
-The client supplies that object as `sybil_proof` to V4 or V7 issuance. The
+The client supplies that object as `sybil_proof` to V4 issuance. The
 proof is bound to an opaque hash of a deployment-local handle, not the label
 itself, and accepted proofs are replay-protected.
 

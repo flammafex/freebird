@@ -1709,9 +1709,8 @@ profile is implemented, validated, and documented as available, operators and
 clients <strong>MUST NOT</strong> describe it as supported or select it in configuration.</p>
 <p>The current issuance API is <strong>transitional and experimental</strong>. It is not a
 profile, does not meet any planned profile by name, and remains subject to
-replacement during Phase B. The active deployment accepts V4 private tokens
-and V7 native bearer tokens. V5 public bearer and V2 exchange routes are
-retired historical material, not current deployment instructions.</p>
+replacement during Phase B. The active deployment supports V4
+private-verification tokens.</p>
 <h2 id="status-and-permitted-claims">Status and permitted claims<a class="headerlink" href="#status-and-permitted-claims" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1727,7 +1726,7 @@ retired historical material, not current deployment instructions.</p>
 <tr>
 <td>Current issuance</td>
 <td>Transitional / experimental</td>
-<td>Current V4 and V7 issuance routes and their configured Sybil gates. Their semantics are not a named profile.</td>
+<td>Current V4 issuance routes and their configured Sybil gates. Their semantics are not a named profile.</td>
 <td>Only implementation-specific statements that are true for the deployed configuration, such as configured replay storage and token-layer behavior.</td>
 <td>Production readiness, a profile guarantee, unique-human proof, or anonymity against correlated operational metadata.</td>
 </tr>
@@ -1743,7 +1742,7 @@ retired historical material, not current deployment instructions.</p>
 <td><strong>PLANNED</strong></td>
 <td>Profile-controlled ticket admission and redemption semantics, with durable shared state where the profile requires it. Redis is required for this profile.</td>
 <td>Only the ticket/profile guarantees specified by its eventual implementation and deployment guide.</td>
-<td>That the current V4 or V7 routes issue <code>ticket-v1</code> tokens, global human uniqueness, or protection from issuer/verifier metadata correlation.</td>
+<td>That the current V4 routes issue <code>ticket-v1</code> tokens, global human uniqueness, or protection from issuer/verifier metadata correlation.</td>
 </tr>
 <tr>
 <td><code>enhanced-privacy-v1</code></td>
@@ -1886,8 +1885,8 @@ separate, explicitly isolated transitional issuer/key trust domain:</p>
 </tr>
 <tr>
 <td>JavaScript SDK</td>
-<td><code>sdk/js/src/client.ts</code> posts to <code>/v1/oprf/issue</code>; V7 native bearer transport is a separate cutover surface.</td>
-<td>Version/migrate the SDK API and examples to V4/V7.</td>
+<td><code>sdk/js/src/client.ts</code> posts to <code>/v1/oprf/issue</code>.</td>
+<td>Keep the SDK aligned with the supported V4 API.</td>
 </tr>
 <tr>
 <td>WebAuthn browser client</td>

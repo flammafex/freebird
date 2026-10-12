@@ -1744,27 +1744,20 @@ need, but it does not receive the client's unblinded V4 input.</p>
 <p>The issuer currently exposes:</p>
 <ul>
 <li><code>POST /v1/oprf/issue</code> and <code>/v1/oprf/issue/batch</code> for V4 evaluation;</li>
-<li><code>POST /v7/native-bearer/issue</code> and <code>/v7/native-bearer/issue/batch</code> for V7
-  blind signing;</li>
 <li><code>GET /.well-known/issuer</code> for combined issuer metadata;</li>
-<li><code>GET /.well-known/keys</code> for strict V7 discovery;</li>
-<li><code>GET /.well-known/replay-authority</code> for V4 authority-only health metadata.</li>
 </ul>
 <p>The V4 request carries a base64url blinded element and may carry a
 <code>sybil_proof</code>. A configured Sybil mechanism requires a matching proof; public
-issuance does not accept <code>RegisteredUser</code> as a bypass. V7 requests explicitly
-select a 64-character lowercase hexadecimal <code>token_key_id</code> and carry one
-canonical base64url 384-byte blinded message.</p>
+issuance does not accept <code>RegisteredUser</code> as a bypass.</p>
 <h2 id="admission-is-not-issuance-privacy">Admission is not issuance privacy<a class="headerlink" href="#admission-is-not-issuance-privacy" title="Permanent link">&para;</a></h2>
 <p>Sybil checks run before evaluation or signing. They control access to issuance
 and can use server-observed request context, such as a validated client IP and
 hashed User-Agent. They do not prove global human uniqueness. See
 <a href="../../sybil-modes/">Sybil modes</a> for tradeoffs and replay-store configuration.</p>
 <h2 id="operator-state">Operator state<a class="headerlink" href="#operator-state" title="Permanent link">&para;</a></h2>
-<p>Issuers need persistent V4 key material and rotation state. Current V7
-issuance also requires the V7 private key, metadata, and append-only registry.
-Optional admission modes add their own state; WebAuthn credentials may use
-Redis. Public deployments should use shared Redis for admission-proof replay
+<p>Issuers need persistent V4 key material and rotation state. Optional admission
+modes add their own state; WebAuthn credentials may use Redis. Public deployments
+should use shared Redis for admission-proof replay
 protection. See the <a href="../../architecture/storage-model/">storage model</a> and
 <a href="../../production-deployment/">production baseline</a>.</p>
 <h2 id="future-review-material">Future / review material<a class="headerlink" href="#future-review-material" title="Permanent link">&para;</a></h2>

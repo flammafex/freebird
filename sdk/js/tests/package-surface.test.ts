@@ -11,31 +11,19 @@ const runtimeExports = [
   'FreebirdError', 'InvalidTokenError', 'MemoryTokenStore', 'RateLimitedError',
   'ReplayedTokenError', 'StorageTokenStore', 'StalePublicKeyError', 'VerificationError',
   'VerifierNotConfiguredError', 'VerifierUnavailableError', 'buildBatchBinding',
-  'buildIssueBinding', 'buildNativeBearerV7BatchBinding', 'buildNativeBearerV7IssueBinding',
-  'buildRenewBinding', 'crypto', 'generateProofOfWork', 'tokenId', 'verifyPow',
+  'buildIssueBinding', 'buildRenewBinding', 'crypto', 'generateProofOfWork', 'tokenId', 'verifyPow',
 ].sort();
 const cryptoExports = [
   'blind', 'buildPrivateTokenInput', 'buildRedemptionToken', 'buildScopeDigest', 'finalize',
-  'nativeBearerV7', 'parseRedemptionToken',
-].sort();
-const nativeV7Exports = [
-  'bindingFromV7Discovery', 'blindV7', 'buildV7Body', 'deriveV7Nullifier',
-  'directBindingFromDiscovery', 'finalizeV7', 'parseV7Body', 'parseV7Token',
-  'serializeV7Token', 'v7ApplicationDigest', 'v7ArtifactDigest', 'v7BodyTranscript',
-  'verifyV7Token',
+  'parseRedemptionToken',
 ].sort();
 
 function assertRuntimeSurface(source: Record<string, unknown>): void {
   expect(Object.keys(source).sort()).toEqual(runtimeExports);
   expect(Object.keys(source.crypto as object).sort()).toEqual(cryptoExports);
-  expect(Object.keys((source.crypto as { nativeBearerV7: object }).nativeBearerV7).sort())
-    .toEqual(nativeV7Exports);
   const client = source.FreebirdClient as typeof import('../src/client.js').FreebirdClient;
   expect(typeof client.prototype.issueToken).toBe('function');
   expect(typeof client.prototype.issueTokens).toBe('function');
-  expect(typeof client.prototype.issueNativeBearerV7).toBe('function');
-  expect(typeof client.prototype.issueNativeBearerV7Batch).toBe('function');
-  expect(typeof client.prototype.verifyNativeBearerV7Locally).toBe('function');
   for (const removed of [
     'issuePublicToken', 'issuePublicTokens', 'issuePublicBlindSignature',
     'issuePublicTokenForCurrentKey', 'issuePublicTokensForCurrentKey',
@@ -57,7 +45,7 @@ describe('SDK package surface', () => {
     expect(manifest.exports['.'].require).toEqual({ types: './dist/index.d.cts', default: './dist/index.cjs' });
   });
 
-  it('declares the Node.js engine required by the V7 crypto dependency', () => {
+  it('declares the supported Node.js engine', () => {
     const manifest = JSON.parse(readFileSync(`${packageRoot}/package.json`, 'utf8')) as {
       engines?: { node?: string };
     };
@@ -68,7 +56,7 @@ describe('SDK package surface', () => {
     expect(lockfile.packages?.['']?.engines?.node).toBe('>=24');
   });
 
-  it('keeps the source index runtime facade V4/V7-only', async () => {
+  it('keeps the source index runtime facade V4-only', async () => {
     assertRuntimeSurface(await import('../src/index.js') as unknown as Record<string, unknown>);
   });
 

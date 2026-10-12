@@ -536,17 +536,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#v7" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        V7
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1664,17 +1653,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#v7" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        V7
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1702,12 +1680,6 @@ without recording a spend, so checking does not make a token one-time-used.</p>
 verifier scope, then stores a V4 spend key. V4 tokens do not carry an
 issuer-enforced expiration timestamp, so the persistent replay record does not
 use a token validity expiry.</p>
-<h2 id="v7">V7<a class="headerlink" href="#v7" title="Permanent link">&para;</a></h2>
-<p>The V7 replay identity is the issuer namespace plus the lowercase hexadecimal
-body nullifier. It deliberately excludes the signature, whole artifact,
-descriptor, graph, keyset, verifier, and audience. A second signature over the
-same V7 body nullifier is therefore still a replay. V7 replay records expire at
-the inclusive <code>valid_until</code> boundary.</p>
 <p>The one-time property depends on the storage deployment, not only on token
 cryptography. Use durable Redis for restart-safe or multi-instance operation;
 memory is development-only. See <a href="../replay-protection/">replay protection</a> and

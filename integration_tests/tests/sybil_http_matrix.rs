@@ -29,7 +29,6 @@ use rand::rngs::OsRng;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{path::PathBuf, sync::Arc, time::Duration};
-use tempfile::TempDir;
 use tower::ServiceExt;
 
 const ISSUER_ID: &str = "issuer:test:sybil-http";
@@ -37,7 +36,6 @@ const USER_AGENT: &str = "freebird-sybil-http-test";
 
 struct TestApp {
     router: Router,
-    _tmp: TempDir,
 }
 
 struct EndpointRequest {
@@ -59,24 +57,6 @@ async fn build_app(sybil_checker: Option<Arc<dyn SybilResistance>>) -> Result<Te
         VOPRF_CONTEXT_V4,
     )?);
 
-    let tmp = tempfile::tempdir()?;
-    let native_bearer_v7 = Arc::new(
-        freebird_issuer::native_bearer_v7::NativeBearerV7Issuer::load_or_generate(
-            &freebird_issuer::config::NativeBearerV7Config {
-                sk_path: tmp.path().join("v7.der"),
-                metadata_path: tmp.path().join("v7.json"),
-                registry_path: tmp.path().join("registry.json"),
-                profile_id: freebird_common::api::NATIVE_BEARER_V7_PROFILE_ID.into(),
-                descriptor_id: String::new(),
-                token_key_id: "76".repeat(32),
-                asset_id: "USD".into(),
-                amount_minor: 1,
-                validity_secs: 3600,
-            },
-            ISSUER_ID,
-        )?,
-    );
-
     let state = Arc::new(AppStateWithSybil {
         issuer_id: ISSUER_ID.to_string(),
         kid,
@@ -86,14 +66,7 @@ async fn build_app(sybil_checker: Option<Arc<dyn SybilResistance>>) -> Result<Te
         sybil_checker,
         admission: Default::default(),
         invitation_system: None,
-        native_bearer_v7,
-        native_bearer_v7_retained: vec![],
         admin_api_key: None,
-        native_exchange_v7: None,
-        native_exchange_v7_discovery: None,
-        native_graph_issuance_v7: None,
-        native_graph_issuance_v7_discovery: None,
-        replay_authority: None,
         epoch_duration_sec: 86400,
         epoch_retention: 2,
         sybil_summary: None,
@@ -104,7 +77,7 @@ async fn build_app(sybil_checker: Option<Arc<dyn SybilResistance>>) -> Result<Te
         .route("/v1/oprf/issue/batch", post(batch_issue::handle_batch))
         .with_state((state, voprf));
 
-    Ok(TestApp { router, _tmp: tmp })
+    Ok(TestApp { router })
 }
 
 async fn post_json(router: &Router, path: &str, body: Value) -> Result<StatusCode> {

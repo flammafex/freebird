@@ -22,7 +22,7 @@ does not need to know which issuance request produced a redeemed token.
 | `verifier` | HTTP verifier, issuer metadata refresh, nullifier storage, admin routes. |
 | `attester` | Optional Social Graph Attester service: signed-edge scoring, short-lived attestations, and JWKS publication. |
 | `interface` | Local V4 smoke-test client for source builds. |
-| `crypto` | VOPRF, blind RSA, token, and provider primitives. |
+| `crypto` | VOPRF, token, and provider primitives. |
 | `common` | Shared API types, metrics, TLS enforcement, duration parsing, rate limits. |
 | `sdk/js` | TypeScript client SDK and examples. |
 | `integration_tests` | Cross-crate protocol and storage regression tests. |
@@ -48,69 +48,18 @@ Privacy Pass VOPRF deployments. It is the flow exercised by
 Batch V4 issuance uses `POST /v1/oprf/issue/batch` and applies one Sybil proof
 to the batch request.
 
-## V7 Native Bearer Flow
-
-V7 uses randomized RSA blind signatures for native bearer tokens. V5 public
-bearer passes are retired and are not accepted; V6 is reserved.
-
-1. The client constructs the fixed V7 bearer body, including its body nullifier,
-   and blinds the message with the V7 randomized RSA suite.
-2. The client sends the blinded message to `POST /v7/native-bearer/issue`.
-3. The issuer validates the active V7 descriptor and any configured Sybil proof.
-4. The issuer returns a blind signature.
-5. The client finalizes the V7 native bearer token.
-6. The verifier validates the token against immutable V7 key discovery and
-   consumes the replay identity derived from the issuer ID and body nullifier.
-
-Batch V7 issuance uses `POST /v7/native-bearer/issue/batch`.
-
-For V7 consuming verification, the replay identity is the issuer namespace
-plus the lowercase hexadecimal body nullifier. Signature bytes, the complete
-artifact, descriptor, graph, keyset, verifier, and audience are intentionally
-excluded, so a second signature over the same body nullifier is still a replay.
-
-Both V7 native bearer issuance routes return HTTP 400 with
-`{"error":"token_key_not_active"}` when a requested V7 key is stale. The
-`/v1/verify` route returns HTTP 401 with
+The `/v1/verify` route returns HTTP 401 with
 `{"ok":false,"error":"replay_detected","verified_at":0}` for replay; other
 verification failures remain generic.
-
-## Durable Public Operations
-
-The optional V7 native-bearer exchange and V7 graph-issuance routes are durable
-Redis-backed operations. Each request carries two independent values:
-
-- `public_operation_id` is a canonical 16-byte, base64url-encoded,
-  non-secret correlation ID. It identifies the operation but does not
-  authorize access to its result.
-- The exchange or graph-issuance status capability is a separate canonical
-  32-byte random bearer value. It is sent only in the corresponding status
-  header and authorizes retries and status reads. It must not be placed in a
-  body, URL, discovery document, or log.
-
-The public operation ID may appear in a status query because it has no
-authority without the separate capability. Status reads are observation-only;
-after an ambiguous response, clients retry the exact original request with the
-same operation ID and capability. See [Public Bearer Exchange](public-bearer-exchange.md)
-and [Public Graph Blind Issuance](public-graph-blind-issuance.md).
 
 ## Metadata
 
 The issuer exposes separate discovery/authority endpoints:
 
 - `/.well-known/issuer`
-- `/.well-known/keys` — strict V7 native-bearer key and graph discovery.
-- `/.well-known/replay-authority` — V4 authority-only metadata for verifier
-  health refresh.
-- `POST /v1/public/graph/replay-authority/probe` — separate V4 authority probe.
 
-The verifier periodically refreshes issuer metadata from `ISSUER_URL` or
-`ISSUER_URLS`; those inputs are normalized to strict V7 `GET /.well-known/keys`
-for V7 trust. Graph participants additionally configure
-`VERIFIER_GRAPH_ISSUANCE_ISSUER_URLS`, which is used only for V4
-`GET /.well-known/replay-authority` metadata and the separate POST probe. The
-graph-authority URL must never replace `ISSUER_URL(S)` for V7 key discovery.
-With `REQUIRE_TLS=true`, all configured issuer URLs must use HTTPS.
+The verifier periodically refreshes V4 issuer metadata from `ISSUER_URL` or
+`ISSUER_URLS`. With `REQUIRE_TLS=true`, configured issuer URLs must use HTTPS.
 
 ## Storage
 
@@ -118,11 +67,8 @@ Issuer storage includes:
 
 - V4 issuer secret key path
 - V4 key rotation state
-  - mandatory V7 native bearer RSA private key, metadata, and append-only registry
 - optional Sybil-state files for invitation, progressive trust,
   proof-of-diversity, and multi-party vouching
-  - optional Redis-backed V7 exchange/graph-issuance operation records, spend
-  markers, budgets, and replay-authority state
 - audit log JSON
 - optional WebAuthn credential storage in Redis
 
@@ -131,9 +77,8 @@ Verifier storage includes:
 - Redis nullifier/replay store, required by default
 - process-local in-memory replay only when `IN_MEMORY_REPLAY_STORE=true` and
   `VERIFIER_ENV=development`; it is not restart-safe and is never suitable for
-  production, exchange, or graph issuance
-  - optional V4 private verification key or keyring; V7 verification uses
-    issuer-published discovery
+  production
+- V4 private verification key or keyring
 
 For public deployments, verifier nullifier/replay storage must be Redis-backed.
 

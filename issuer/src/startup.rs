@@ -16,20 +16,12 @@ use std::{
 use tokio::net::TcpListener;
 use tracing::info;
 
-mod exchange_runtime;
 mod http_runtime;
 mod key_material;
 mod preflight;
 mod sybil_audit_runtime;
-#[cfg(test)]
-mod v7_gate0_fixture_tests;
-#[cfg(test)]
-mod v7_graph_enabled_tests;
 mod webauthn_runtime;
-pub(crate) use exchange_runtime::validate_v7_exchange_inventory;
-pub use exchange_runtime::validate_v7_runtime_config;
-use exchange_runtime::ExchangeRuntime;
-pub use http_runtime::{apply_public_layers, exchange_router, graph_issuance_router, PublicState};
+pub use http_runtime::{apply_public_layers, PublicState};
 use http_runtime::{HttpRuntime, HttpRuntimeInputs};
 use sybil_audit_runtime::SybilAuditRuntime;
 
@@ -59,23 +51,7 @@ impl Application {
             kid,
             pubkey_b64,
             voprf,
-            native_bearer_v7,
-            native_bearer_v7_retained,
-            v7_signer_inventory,
         } = key_material::KeyMaterial::build(&config).await?;
-
-        // The exchange subsystem remains separately staged and receives only
-        // the native V7 signer inventory from startup.
-        let exchange_runtime = ExchangeRuntime::build(&config, v7_signer_inventory).await?;
-        let ExchangeRuntime {
-            native_exchange_v7,
-            native_exchange_v7_discovery,
-            native_graph_issuance_v7,
-            native_graph_issuance_v7_discovery,
-            native_exchange_v7_readiness,
-            native_graph_issuance_v7_readiness,
-            replay_authority,
-        } = exchange_runtime;
 
         // 2. WebAuthn Setup
         let webauthn_state =
@@ -102,18 +78,9 @@ impl Application {
             sybil_checker,
             invitation_system,
             multi_party_vouching_system,
-            native_bearer_v7,
-            native_bearer_v7_retained,
             admin_api_key,
             sybil_replay_store,
             storage_paths,
-            native_exchange_v7,
-            native_exchange_v7_discovery,
-            native_graph_issuance_v7,
-            native_graph_issuance_v7_discovery,
-            native_exchange_v7_readiness,
-            native_graph_issuance_v7_readiness,
-            replay_authority,
             webauthn_state: webauthn_state.clone(),
         })?;
         let HttpRuntime {
@@ -122,9 +89,6 @@ impl Application {
             readiness,
             sybil_replay_store,
             storage_paths,
-            native_exchange_v7_readiness,
-            native_graph_issuance_v7_readiness,
-            replay_authority,
         } = http_runtime;
 
         let listener = TcpListener::bind(config.bind_addr)
@@ -137,9 +101,6 @@ impl Application {
             sybil_replay_store.clone(),
             storage_paths,
             voprf.clone(),
-            native_exchange_v7_readiness,
-            native_graph_issuance_v7_readiness,
-            replay_authority,
         );
 
         info!("🚀 Server ready at {}", config.bind_addr);

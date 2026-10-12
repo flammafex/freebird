@@ -7,17 +7,16 @@ clients **MUST NOT** describe it as supported or select it in configuration.
 
 The current issuance API is **transitional and experimental**. It is not a
 profile, does not meet any planned profile by name, and remains subject to
-replacement during Phase B. The active deployment accepts V4 private tokens
-and V7 native bearer tokens. V5 public bearer and V2 exchange routes are
-retired historical material, not current deployment instructions.
+replacement during Phase B. The active deployment supports V4
+private-verification tokens.
 
 ## Status and permitted claims
 
 | Name | Status | Intended admission and state boundary | Permitted claim when implemented | Not a claim |
 | --- | --- | --- | --- | --- |
-| Current issuance | Transitional / experimental | Current V4 and V7 issuance routes and their configured Sybil gates. Their semantics are not a named profile. | Only implementation-specific statements that are true for the deployed configuration, such as configured replay storage and token-layer behavior. | Production readiness, a profile guarantee, unique-human proof, or anonymity against correlated operational metadata. |
+| Current issuance | Transitional / experimental | Current V4 issuance routes and their configured Sybil gates. Their semantics are not a named profile. | Only implementation-specific statements that are true for the deployed configuration, such as configured replay storage and token-layer behavior. | Production readiness, a profile guarantee, unique-human proof, or anonymity against correlated operational metadata. |
 | `atomic-v1` | **PLANNED** | A durable, atomic admission decision and quota/replay record. Redis is required for this profile. | A token was issued only through the profile's configured, atomic admission path. | That every current route has those semantics, global proof of humanity, or anonymity beyond the token layer. |
-| `ticket-v1` | **PLANNED** | Profile-controlled ticket admission and redemption semantics, with durable shared state where the profile requires it. Redis is required for this profile. | Only the ticket/profile guarantees specified by its eventual implementation and deployment guide. | That the current V4 or V7 routes issue `ticket-v1` tokens, global human uniqueness, or protection from issuer/verifier metadata correlation. |
+| `ticket-v1` | **PLANNED** | Profile-controlled ticket admission and redemption semantics, with durable shared state where the profile requires it. Redis is required for this profile. | Only the ticket/profile guarantees specified by its eventual implementation and deployment guide. | That the current V4 routes issue `ticket-v1` tokens, global human uniqueness, or protection from issuer/verifier metadata correlation. |
 | `enhanced-privacy-v1` | **PLANNED** | A `ticket-v1`-class (or independently reviewed equivalent) admission path plus independently operated relay/gateway paths and minimized identifying logs. Redis is required for this profile. | Carefully qualified anonymous-issuance language only after its relay, logging, and non-collusion requirements are implemented and independently operated. | Anonymity against colluding parties, a guarantee that network metadata is hidden, global proof of humanity, or an audit conclusion. |
 
 The experimental/pre-1.0 notice in [SECURITY.md](https://github.com/flammafex/freebird/blob/main/SECURITY.md) applies to
@@ -122,7 +121,7 @@ separate, explicitly isolated transitional issuer/key trust domain:
 | Consumer | Current touchpoint | Phase B disposition needed |
 | --- | --- | --- |
 | Interface client | `interface/src/main.rs` posts to `/v1/oprf/issue`. | Migrate its local V4 round trip or remove it at cutover. |
-| JavaScript SDK | `sdk/js/src/client.ts` posts to `/v1/oprf/issue`; V7 native bearer transport is a separate cutover surface. | Version/migrate the SDK API and examples to V4/V7. |
+| JavaScript SDK | `sdk/js/src/client.ts` posts to `/v1/oprf/issue`. | Keep the SDK aligned with the supported V4 API. |
 | WebAuthn browser client | `webauthn-client/index.html` participates in the current WebAuthn proof flow used before issuance. | Define how its proof is bound to a replacement admission path; it is not itself a named profile client. |
 | Integration tests | `integration_tests/tests/` retains V4 and retired V5 historical coverage alongside Sybil, replay, and smoke flows. | Add cutover negative-route coverage; remove or migrate transitional coverage at cutover. |
 | README and examples | `README.md`, client-proof docs, and deployment examples document current routes and flows. | Update commands and labels so examples do not imply a planned profile exists. |

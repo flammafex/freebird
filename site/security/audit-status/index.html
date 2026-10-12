@@ -1112,10 +1112,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#audit-related-dependency-exceptions" class="md-nav__link">
+  <a href="#dependency-audit-conditions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Audit-related dependency exceptions
+        Dependency audit conditions
       
     </span>
   </a>
@@ -1709,10 +1709,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#audit-related-dependency-exceptions" class="md-nav__link">
+  <a href="#dependency-audit-conditions" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Audit-related dependency exceptions
+        Dependency audit conditions
       
     </span>
   </a>
@@ -1771,7 +1771,6 @@ privacy review.</p>
 <ul>
 <li>V4 is a bespoke, Freebird-specific P-256 VOPRF-like construction and is not
   RFC 9497 interoperable.</li>
-<li>V7 uses randomized RSA blind signatures and issuer-published discovery.</li>
 <li>Redis-backed verifier nullifiers are the production path. In-memory verifier
   nullifiers are an explicit development option and lose replay state on restart.</li>
 <li>PoW, WebAuthn, multi-party vouching, and social-graph proof replay protection
@@ -1786,13 +1785,13 @@ privacy review.</p>
 <li>Admin APIs depend on admin keys/session cookies and should be isolated by TLS,
   network policy, and proxy/VPN controls.</li>
 </ul>
-<h2 id="audit-related-dependency-exceptions">Audit-related dependency exceptions<a class="headerlink" href="#audit-related-dependency-exceptions" title="Permanent link">&para;</a></h2>
-<p>The repository security policy records temporary maintainer-approved audit
-exceptions for RUSTSEC-2023-0071 through <code>blind-rsa-signatures</code> and
-RUSTSEC-2024-0436 through the optional PKCS#11 feature. These are compatibility
-exceptions, not security sign-offs, and do not waive other advisories. The
-exceptions must be revisited or removed when the documented migration and
-validation conditions are met.</p>
+<h2 id="dependency-audit-conditions">Dependency audit conditions<a class="headerlink" href="#dependency-audit-conditions" title="Permanent link">&para;</a></h2>
+<p>CI runs <code>cargo audit</code> without advisory ignores. It currently reports
+RUSTSEC-2024-0436 (<code>paste</code> 1.0.15, unmaintained) through the optional PKCS#11
+dependency path as an allowed warning under cargo-audit's default warning
+policy. The optional PKCS#11 feature is not enabled by default, and its provider
+has not been validated against real HSM hardware or SoftHSM; see the
+repository-level <code>SECURITY.md</code> (“Dependency Audit Notes”).</p>
 <h2 id="operational-logging">Operational logging<a class="headerlink" href="#operational-logging" title="Permanent link">&para;</a></h2>
 <p>Issuer audit logging records administrative activity such as invitations, user
 state changes, vouching, WebAuthn-related events, and key rotation. Storage is

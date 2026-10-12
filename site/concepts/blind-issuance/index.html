@@ -648,17 +648,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#v7-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        V7 flow
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1664,17 +1653,6 @@
   
 </li>
       
-        <li class="md-nav__item">
-  <a href="#v7-flow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        V7 flow
-      
-    </span>
-  </a>
-  
-</li>
-      
     </ul>
   
 </nav>
@@ -1694,21 +1672,12 @@
 
 <h1 id="blind-issuance">Blind Issuance<a class="headerlink" href="#blind-issuance" title="Permanent link">&para;</a></h1>
 <p>Blind issuance lets the client obtain an issuer response without sending the
-final V4 input or V7 bearer artifact in the clear to the issuer.</p>
+final V4 input in the clear to the issuer.</p>
 <h2 id="v4-flow">V4 flow<a class="headerlink" href="#v4-flow" title="Permanent link">&para;</a></h2>
 <p>The client creates its input, blinds it, and sends the blinded element to
 <code>POST /v1/oprf/issue</code>. After any configured admission proof passes, the issuer
 returns an evaluation. The client unblinds the evaluation and builds the final
 V4 redemption token bound to verifier scope.</p>
-<h2 id="v7-flow">V7 flow<a class="headerlink" href="#v7-flow" title="Permanent link">&para;</a></h2>
-<p>The client constructs the canonical V7 body, including its body nullifier, and
-blinds the message with the randomized RSA suite. It sends the canonical
-384-byte blinded message and explicit key ID to
-<code>POST /v7/native-bearer/issue</code>. The issuer returns one blind signature; the
-client finalizes the V7 token and later presents it to a verifier.</p>
-<p>V7 exchange and graph issuance are optional durable operations, distinct from
-direct blind issuance. Their status capabilities are bearer secrets and must
-remain header-only; see <a href="../../public-bearer-exchange/">Public Bearer Exchange</a>.</p>
 <p>Blindness does not remove operational metadata. IP addresses, timing,
 User-Agent data, logs, or an operator controlling both services can still
 enable correlation. Read the <a href="../../threat-model/">threat model</a> before making

@@ -16,8 +16,7 @@ use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 
 use crate::metadata::refresh_issuer_metadata;
-use crate::readiness::{StoreHealth, TokenFamily};
-use crate::replay_authority::ReplayAuthorityHealth;
+use crate::readiness::StoreHealth;
 use crate::routes::admin::{self, AdminState, VerifierConfig};
 use crate::routes::admin_rate_limit::AdminRateLimiter;
 use crate::routes::public;
@@ -35,13 +34,6 @@ impl Application {
         let store = backend.build().await?;
         let store_health = StoreHealth::new(Arc::clone(&store));
         let loaded = settings.complete_after_store()?;
-
-        let replay_authority_config = loaded.replay_authority_config.clone();
-        let replay_authority = Arc::new(ReplayAuthorityHealth::new(
-            Arc::clone(&store),
-            replay_authority_config.clone(),
-            loaded.scope_digest,
-        )?);
 
         let refresh_interval = Duration::from_secs(loaded.refresh_interval_min.saturating_mul(60));
         let issuer_urls = loaded.issuer_urls;
@@ -67,11 +59,8 @@ impl Application {
             epoch_retention: loaded.epoch_retention,
             issuer_urls: issuer_urls.clone(),
             metadata: Arc::clone(&metadata),
-            accepted_token_families: loaded.accepted_token_families.clone(),
             refresh_interval,
             store_health: store_health.clone(),
-            replay_authority: Arc::clone(&replay_authority),
-            store_is_memory: store_backend_name == "memory",
         });
 
         // Background refresh loop for all issuer URLs. The task is spawned
@@ -106,19 +95,12 @@ impl Application {
             }
         });
 
-        if replay_authority.configured() {
-            let replay_authority_task = Arc::clone(&replay_authority);
-            tokio::spawn(async move {
-                replay_authority_task.run().await;
-            });
-        }
-
         // ---------- Router ----------
         let mut app = public::router(Arc::clone(&state));
 
         // REQUIRE_TLS is intentionally read here for the admin cookie policy,
-        // matching the previous startup stage. Metadata and replay-authority
-        // refreshes continue to reread it in their own refresh paths.
+        // matching the previous startup stage. Metadata refreshes continue to
+        // reread it in their own refresh paths.
         let require_tls = std::env::var("REQUIRE_TLS")
             .map(|v| v == "true" || v == "1")
             .unwrap_or(false);
@@ -140,27 +122,9 @@ impl Application {
                 issuer_urls: issuer_urls.clone(),
                 verifier_id: loaded.verifier_id.clone(),
                 audience: loaded.audience.clone(),
-                accepted_token_versions: loaded
-                    .accepted_token_families
-                    .iter()
-                    .map(|f| match f {
-                        TokenFamily::V4 => "v4",
-                        TokenFamily::V7 => "v7",
-                    })
-                    .map(str::to_string)
-                    .collect(),
-                graph_issuer_urls: replay_authority_config.graph_issuer_urls.clone(),
-                replay_authority_probe_interval_secs: replay_authority_config
-                    .probe_interval
-                    .as_secs(),
-                replay_authority_max_staleness_secs: replay_authority_config
-                    .max_staleness
-                    .as_secs(),
             },
             metadata,
-            accepted_token_families: loaded.accepted_token_families,
             store_health,
-            replay_authority,
         });
 
         let rate_limiter_clone = Arc::clone(&admin_state);

@@ -1,13 +1,15 @@
 # Release Packaging
 
 Freebird releases are tag-driven. CI runs on `main` (and pull requests targeting
-`main`), so push or merge the intended commit to `origin/main` and wait for its
-eight required checks before creating the tag. Do not tag a commit that has not
-first landed on `main`:
+`main`), so push the intended commit to both `origin/main` (Forgejo) and
+`github/main`, then wait for its eight required GitHub checks before creating
+either tag. Do not tag a commit that has not first landed on `main`:
 
 ```bash
-git tag -a v0.10.4 -m "Freebird 0.10.4"
-git push origin v0.10.4
+git tag -a v0.11.0 -m "Freebird 0.11.0"
+git tag -a sdk-v0.11.0 -m "Freebird SDK 0.11.0"
+git push origin v0.11.0 sdk-v0.11.0
+git push github v0.11.0 sdk-v0.11.0
 ```
 
 Pushing a `v*` tag starts two workflows:
@@ -25,15 +27,24 @@ It validates, packs, consumer-tests, and publishes the `@flammafex/freebird` npm
 package. It uses the protected `npm-publish` GitHub Environment and a granular
 npm automation token; it does not use OIDC or npm provenance.
 
+## Current release: v0.11.0 / SDK sdk-v0.11.0
+
+This release removes Freebird V7 bearer issuance and verification, direct
+bearer, exchange, graph-issuance, and their JavaScript SDK surfaces. V4
+admission and verification remain supported. The Scarcity B2 demo depends on
+V7 and is incompatible with this release. The older release records below
+describe their historical source states, not the current supported surface.
+
 ## v0.10.4
 
-- Carries forward the V7 multi-output exchange request/result Merkle-proof
-  soundness correction and patched `rustls` and `cryptoki` dependencies.
-- Before upgrading an issuer, ensure its V7 exchange Redis state is fresh or
-  has been emptied. Pre-v0.10.3 `ResultReady` records may contain copied request
-  proofs and are unsupported; no migration is provided.
-- V4 and V7 are supported; V5 and V2 are retired. The JavaScript SDK requires
-  Node.js 24 or newer.
+This release note records the v0.10.4 source state; its V7 functionality and
+upgrade notes do not describe the current supported service surface.
+
+- Included the V7 multi-output exchange request/result Merkle-proof soundness
+  correction and patched `rustls` and `cryptoki` dependencies.
+- At that release, pre-v0.10.3 `ResultReady` exchange records were unsupported
+  and had no migration path.
+- The JavaScript SDK required Node.js 24 or newer.
 
 ## v0.10.3 source/tag history
 
@@ -43,20 +54,23 @@ the npm publish workflow was blocked because the protected `npm-publish`
 Environment lacked its required `NPM_TOKEN` secret. Neither failure establishes
 that a release tarball or npm package was published. See the root changelog.
 
-## v0.10.0 V7 canonical-descriptor migration
+## Historical v0.10.0 V7 canonical-descriptor migration
+
+The following records the migration guidance that applied to v0.10.0 only. V7
+is no longer part of the current supported service surface; do not use this as
+current deployment guidance.
 
 v0.10.0 derives canonical direct and exchange descriptor IDs from finalized
 signer metadata and the canonical exchange descriptor transcript. Old arbitrary
 descriptor IDs are rejected. The corrected exchange transcript therefore
 invalidates prior exchange, keyset, transition, and graph-policy derived IDs.
 
-Before releasing or upgrading an affected V7 deployment, operators must
-regenerate and rotate the affected signer metadata, then regenerate the V7
-registry and discovery/history from the canonical material. Do not reuse old V7
-signer metadata, registry, discovery, keyset, transition, graph-policy, or other
-derived data. For direct bootstrap, start once without
-`NATIVE_BEARER_V7_DESCRIPTOR_ID`, persist the derived canonical output, and only
-then optionally pin that public expected value for subsequent starts.
+The v0.10.0 migration instructed affected V7 operators to regenerate and rotate
+signer metadata, then regenerate the registry and discovery/history from the
+canonical material. It warned against reusing old V7 signer metadata, registry,
+discovery, keyset, transition, graph-policy, or other derived data. The
+historical direct-bootstrap procedure omitted `NATIVE_BEARER_V7_DESCRIPTOR_ID`
+on first start and only pinned its derived output after persistence.
 
 ## npm SDK publishing
 

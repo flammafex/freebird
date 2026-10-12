@@ -1642,9 +1642,8 @@
 
 
 <h1 id="client-sybil-proofs">Client Sybil Proofs<a class="headerlink" href="#client-sybil-proofs" title="Permanent link">&para;</a></h1>
-<p>Freebird issuance accepts an optional <code>sybil_proof</code> object on V4 and V7 native
-bearer issuance requests. If the issuer is configured with a Sybil mode,
-issuance requires a matching proof. V5 public bearer issuance is retired.</p>
+<p>Freebird V4 issuance accepts an optional <code>sybil_proof</code> object. If the issuer is
+configured with a Sybil mode, issuance requires a matching proof.</p>
 <p>The local <code>freebird-interface</code> binary can attach proofs in two ways:</p>
 <div class="highlight"><pre><span></span><code>cargo<span class="w"> </span>run<span class="w"> </span>-p<span class="w"> </span>freebird-interface<span class="w"> </span>--<span class="w"> </span>--pow-difficulty<span class="w"> </span><span class="m">20</span>
 cargo<span class="w"> </span>run<span class="w"> </span>-p<span class="w"> </span>freebird-interface<span class="w"> </span>--<span class="w"> </span>--sybil-proof-json<span class="w"> </span>proof.json
@@ -1661,10 +1660,6 @@ cargo<span class="w"> </span>run<span class="w"> </span>-p<span class="w"> </spa
 </code></pre></div>
 <p>The interface computes this automatically when <code>--pow-difficulty</code> or
 <code>FREEBIRD_POW_DIFFICULTY</code> is set.</p>
-<p>V7 native bearer issuance uses the same request-bound proof model, but the
-binding is the exact canonical V7 request body and route. A client must mine
-against the bytes it sends to <code>/v7/native-bearer/issue</code>; changing the body,
-token-key ID, or V7 descriptor requires a fresh proof.</p>
 <h2 id="json-proof-input">JSON Proof Input<a class="headerlink" href="#json-proof-input" title="Permanent link">&para;</a></h2>
 <p><code>--sybil-proof-json</code> reads one JSON object matching the common <code>SybilProof</code>
 schema. Examples:</p>

@@ -17,8 +17,6 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use tower::ServiceBuilder;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::set_header::SetResponseHeaderLayer;
-use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
 pub(super) struct HttpRuntimeInputs {
@@ -31,21 +29,9 @@ pub(super) struct HttpRuntimeInputs {
     pub(super) invitation_system: Option<Arc<InvitationSystem>>,
     pub(super) multi_party_vouching_system:
         Option<Arc<crate::sybil_resistance::MultiPartyVouchingSystem>>,
-    pub(super) native_bearer_v7: Arc<crate::native_bearer_v7::NativeBearerV7Issuer>,
-    pub(super) native_bearer_v7_retained: Vec<freebird_common::api::NativeBearerV7KeyInfo>,
-    pub(super) native_exchange_v7: Option<Arc<crate::exchange::v7::V7ExchangeEngine>>,
-    pub(super) native_exchange_v7_discovery:
-        Option<freebird_common::api::NativeExchangeV3Discovery>,
-    pub(super) native_graph_issuance_v7: Option<Arc<crate::graph_issuance::V7GraphIssuanceEngine>>,
-    pub(super) native_graph_issuance_v7_discovery:
-        Option<freebird_common::api::NativeGraphIssuanceV7Discovery>,
     pub(super) admin_api_key: String,
     pub(super) sybil_replay_store: Arc<dyn ReplayStore>,
     pub(super) storage_paths: Vec<(String, PathBuf)>,
-    pub(super) native_exchange_v7_readiness: Option<crate::readiness::V7ExchangeReadinessState>,
-    pub(super) native_graph_issuance_v7_readiness:
-        Option<crate::readiness::V7GraphIssuanceReadinessState>,
-    pub(super) replay_authority: Option<Arc<crate::replay_authority::ReplayAuthority>>,
     pub(super) webauthn_state: Option<Arc<crate::webauthn::WebAuthnState>>,
 }
 
@@ -55,10 +41,6 @@ pub(super) struct HttpRuntime {
     pub(super) readiness: ReadinessState,
     pub(super) sybil_replay_store: Arc<dyn ReplayStore>,
     pub(super) storage_paths: Vec<(String, PathBuf)>,
-    pub(super) native_exchange_v7_readiness: Option<crate::readiness::V7ExchangeReadinessState>,
-    pub(super) native_graph_issuance_v7_readiness:
-        Option<crate::readiness::V7GraphIssuanceReadinessState>,
-    pub(super) replay_authority: Option<Arc<crate::replay_authority::ReplayAuthority>>,
 }
 
 fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
@@ -87,74 +69,6 @@ pub type PublicState = (
     Arc<crate::multi_key_voprf::MultiKeyVoprfCore>,
 );
 
-pub fn exchange_router(body_limit: usize, timeout_secs: u64) -> Router<PublicState> {
-    Router::new()
-        .route(
-            "/v7/public/exchange",
-            post(routes::public_exchange::post_exchange_v7),
-        )
-        .route(
-            "/v7/public/exchange/status",
-            get(routes::public_exchange::get_exchange_status_v7),
-        )
-        .layer(TimeoutLayer::new(Duration::from_secs(timeout_secs)))
-        .layer(DefaultBodyLimit::max(body_limit))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods([
-                    axum::http::Method::GET,
-                    axum::http::Method::POST,
-                    axum::http::Method::OPTIONS,
-                ])
-                .allow_headers([
-                    axum::http::header::CONTENT_TYPE,
-                    routes::public_exchange::IDEMPOTENCY_KEY,
-                ]),
-        )
-        .layer(freebird_common::rate_limit::PublicRateLimitLayer::default())
-        .layer(SetResponseHeaderLayer::if_not_present(
-            axum::http::header::CACHE_CONTROL,
-            axum::http::HeaderValue::from_static("no-store"),
-        ))
-}
-
-pub fn graph_issuance_router(body_limit: usize, timeout_secs: u64) -> Router<PublicState> {
-    Router::new()
-        .route(
-            "/v7/public/graph/issue",
-            post(routes::public_graph_issuance::post_v7),
-        )
-        .route(
-            "/v7/public/graph/issue/status",
-            get(routes::public_graph_issuance::status_v7),
-        )
-        .route(
-            "/v1/public/graph/replay-authority/probe",
-            post(routes::public_graph_issuance::replay_authority_probe),
-        )
-        .layer(TimeoutLayer::new(Duration::from_secs(timeout_secs)))
-        .layer(DefaultBodyLimit::max(body_limit))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods([
-                    axum::http::Method::GET,
-                    axum::http::Method::POST,
-                    axum::http::Method::OPTIONS,
-                ])
-                .allow_headers([
-                    axum::http::header::CONTENT_TYPE,
-                    routes::public_exchange::STATUS_CAPABILITY,
-                ]),
-        )
-        .layer(freebird_common::rate_limit::PublicRateLimitLayer::default())
-        .layer(SetResponseHeaderLayer::if_not_present(
-            axum::http::header::CACHE_CONTROL,
-            axum::http::HeaderValue::from_static("no-store"),
-        ))
-}
-
 pub fn apply_public_layers(app: Router) -> Result<Router> {
     Ok(app.layer(
         ServiceBuilder::new()
@@ -179,21 +93,11 @@ impl HttpRuntime {
             sybil_checker,
             invitation_system,
             multi_party_vouching_system,
-            native_bearer_v7,
-            native_bearer_v7_retained,
-            native_exchange_v7,
-            native_exchange_v7_discovery,
-            native_graph_issuance_v7,
-            native_graph_issuance_v7_discovery,
             admin_api_key,
             sybil_replay_store,
             storage_paths,
-            native_exchange_v7_readiness,
-            native_graph_issuance_v7_readiness,
-            replay_authority,
             webauthn_state,
         } = inputs;
-        let replay_authority_for_readiness = replay_authority.clone();
 
         // 6. App State & Router
         let state = Arc::new(AppStateWithSybil {
@@ -205,13 +109,6 @@ impl HttpRuntime {
             sybil_checker: sybil_checker.clone(),
             admission: Default::default(),
             invitation_system: invitation_system.clone(),
-            native_bearer_v7: native_bearer_v7.clone(),
-            native_bearer_v7_retained,
-            native_exchange_v7,
-            native_exchange_v7_discovery,
-            native_graph_issuance_v7,
-            native_graph_issuance_v7_discovery,
-            replay_authority,
             epoch_duration_sec: config.epoch_duration_sec,
             epoch_retention: config.epoch_retention,
             admin_api_key: Some(admin_api_key.clone()),
@@ -237,24 +134,12 @@ impl HttpRuntime {
                 "/.well-known/issuer",
                 get(routes::metadata::well_known_handler),
             )
-            .route(
-                routes::metadata::REPLAY_AUTHORITY_DISCOVERY_ROUTE,
-                get(routes::metadata::replay_authority_handler),
-            )
             .route("/.well-known/keys", get(routes::metadata::keys_handler))
             .route("/v1/oprf/issue", post(routes::issue::handle))
             .route("/v1/oprf/renew", post(routes::issue::renew))
             .route(
                 "/v1/oprf/issue/batch",
                 post(routes::batch_issue::handle_batch),
-            )
-            .route(
-                "/v7/native-bearer/issue",
-                post(routes::native_bearer_v7::handle),
-            )
-            .route(
-                "/v7/native-bearer/issue/batch",
-                post(routes::native_bearer_v7::handle_batch),
             )
             .layer(
                 CorsLayer::new()
@@ -269,16 +154,6 @@ impl HttpRuntime {
             )
             .layer(DefaultBodyLimit::max(64 * 1024))
             .layer(freebird_common::rate_limit::PublicRateLimitLayer::default());
-
-        let exchange_routes = exchange_router(
-            config.exchange_config.request_body_limit,
-            config.exchange_config.request_timeout_secs,
-        );
-        let graph_issuance_routes = graph_issuance_router(
-            config.exchange_config.request_body_limit,
-            config.exchange_config.request_timeout_secs,
-        );
-        let app = app.merge(exchange_routes).merge(graph_issuance_routes);
 
         // --- CRITICAL FIX: SHADOWING ---
         // Use `let app` to shadow the variable, allowing the type change from Router<S> to Router<()>
@@ -334,9 +209,6 @@ impl HttpRuntime {
             readiness,
             sybil_replay_store,
             storage_paths,
-            native_exchange_v7_readiness,
-            native_graph_issuance_v7_readiness,
-            replay_authority: replay_authority_for_readiness,
         })
     }
 }

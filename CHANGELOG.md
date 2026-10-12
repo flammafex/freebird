@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.11.0
+
+- Breaking change: removes the Freebird V7 bearer issuance and verification,
+  direct bearer, exchange, graph-issuance, and corresponding JavaScript SDK
+  surfaces. V4 admission and verification remain supported. The Scarcity B2
+  demo, which depends on V7, no longer works with this release.
+
 ## v0.10.5
 
 - V7 graph-issuance policy discovery now references one exchange descriptor,
