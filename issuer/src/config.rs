@@ -161,6 +161,11 @@ pub struct WebAuthnConfig {
 
 impl Config {
     pub fn from_env() -> Result<Self> {
+        validate_webauthn_attestation_settings(
+            env_bool("WEBAUTHN_REQUIRE_ATTESTATION"),
+            env::var_os("WEBAUTHN_ATTESTATION_POLICY").as_deref(),
+            env::var_os("WEBAUTHN_ALLOWED_AAGUIDS").as_deref(),
+        )?;
         let issuer_id = env::var("ISSUER_ID").unwrap_or_else(|_| "issuer:freebird:v4".to_string());
 
         let bind_str = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8081".to_string());
@@ -442,6 +447,28 @@ impl WebAuthnConfig {
 }
 
 // Helpers
+/// Reject unsupported trust requirements even when WebAuthn is not configured.
+fn validate_webauthn_attestation_settings(
+    require_attestation: bool,
+    policy: Option<&std::ffi::OsStr>,
+    allowed_aaguids: Option<&std::ffi::OsStr>,
+) -> Result<()> {
+    if require_attestation {
+        anyhow::bail!("WEBAUTHN_REQUIRE_ATTESTATION=true is unsupported: trusted attestation verification is not implemented");
+    }
+    if policy.is_some_and(|value| {
+        !value
+            .to_str()
+            .is_some_and(|value| value.eq_ignore_ascii_case("none"))
+    }) {
+        anyhow::bail!("WEBAUTHN_ATTESTATION_POLICY only supports none: trusted attestation verification is not implemented");
+    }
+    if allowed_aaguids.is_some_and(|value| !value.is_empty()) {
+        anyhow::bail!("WEBAUTHN_ALLOWED_AAGUIDS must be empty: trusted attestation verification is not implemented");
+    }
+    Ok(())
+}
+
 /// Parse the issuer's HSM enable flag without applying the permissive parsing
 /// used by unrelated boolean configuration.
 pub fn parse_hsm_enable() -> Result<bool> {
@@ -480,4 +507,42 @@ fn generate_random_salt() -> String {
     let mut salt = [0u8; 32];
     OsRng.fill_bytes(&mut salt);
     hex::encode(salt)
+}
+
+#[cfg(test)]
+mod attestation_config_tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn unsupported_attestation_settings_are_rejected() {
+        assert!(validate_webauthn_attestation_settings(true, None, None).is_err());
+        for policy in ["indirect", "direct", "enterprise", "unknown", ""] {
+            let error =
+                validate_webauthn_attestation_settings(false, Some(OsStr::new(policy)), None)
+                    .unwrap_err();
+            assert!(error.to_string().contains("WEBAUTHN_ATTESTATION_POLICY"));
+        }
+        let error = validate_webauthn_attestation_settings(
+            false,
+            None,
+            Some(OsStr::new("private-test-value")),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("WEBAUTHN_ALLOWED_AAGUIDS"));
+        assert!(!error.to_string().contains("private-test-value"));
+    }
+
+    #[test]
+    fn ordinary_passkey_settings_are_supported() {
+        assert!(validate_webauthn_attestation_settings(false, None, None).is_ok());
+        for policy in ["none", "NONE", "NoNe"] {
+            assert!(validate_webauthn_attestation_settings(
+                false,
+                Some(OsStr::new(policy)),
+                Some(OsStr::new("")),
+            )
+            .is_ok());
+        }
+    }
 }

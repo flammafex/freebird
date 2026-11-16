@@ -51,9 +51,12 @@ mode means tokens may be easy to farm even if the token cryptography works.
   deployments.
 - `combined` mode with `SYBIL_COMBINED_MODE=or` is only as strong as the
   easiest configured mechanism to satisfy.
-- WebAuthn attestation is not automatic. It must be enabled and configured with
-  `WEBAUTHN_REQUIRE_ATTESTATION`, `WEBAUTHN_ATTESTATION_POLICY`, and, where
-  appropriate, `WEBAUTHN_ALLOWED_AAGUIDS`.
+- WebAuthn passkey registration checks the credential ceremony, **not** hardware
+  provenance or manufacturer trust. Attestation signature and trust-chain
+  verification are not implemented. `WEBAUTHN_REQUIRE_ATTESTATION=true`,
+  non-`none` `WEBAUTHN_ATTESTATION_POLICY`, and nonempty
+  `WEBAUTHN_ALLOWED_AAGUIDS` are unsupported and rejected at startup. Do not
+  use WebAuthn mode as proof of a unique device or human.
 - Admin APIs rely on `ADMIN_API_KEY` or an admin session cookie. Public
   deployments should put admin routes behind TLS, network policy, and a reverse
   proxy or VPN boundary.

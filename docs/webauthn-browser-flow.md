@@ -65,16 +65,12 @@ handles.
 The issuer stores and verifies against an opaque subject hash derived from the
 local handle. Issuance proofs contain the subject hash, not the local label.
 
-## Attestation Policy
+## Attestation is not supported
 
-Hardware/device attestation is optional and policy-driven. To require it:
-
-```bash
-WEBAUTHN_REQUIRE_ATTESTATION=true
-WEBAUTHN_ATTESTATION_POLICY=direct
-WEBAUTHN_ALLOWED_AAGUIDS=<comma-separated-aaguids>
-```
-
-An allowlist can restrict registration to specific authenticator models. Without
-that policy, WebAuthn proves possession of a registered credential, not that the
-credential lives on approved hardware.
+This flow checks the WebAuthn passkey registration and authentication ceremonies,
+but does not verify authenticator attestation signatures or trust chains.
+`WEBAUTHN_REQUIRE_ATTESTATION=true`, a non-`none`
+`WEBAUTHN_ATTESTATION_POLICY`, or a nonempty `WEBAUTHN_ALLOWED_AAGUIDS`
+is rejected at startup. Do not use these settings as a hardware allowlist.
+WebAuthn proves possession of a registered credential, not that the credential
+lives on approved hardware or belongs to a unique person.

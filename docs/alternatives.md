@@ -47,7 +47,7 @@ These use related VOPRF, POPRF, or blind-RSA primitives but are not necessarily
 wire- or protocol-compatible with Freebird. In particular, Freebird V4 is a
 bespoke P-256 construction, not RFC 9497 VOPRF or a Privacy Pass VOPRF suite.
 Freebird's distinguishing value is the service layer (issuer + verifier HTTP
-services, key rotation, nullifier/double-spend storage, admin UI, audit
+services, nullifier/double-spend storage, admin UI, audit
 logging) and the composable Sybil gates on top.
 
 ### Privacy Pass (original)
@@ -314,8 +314,9 @@ Freebird is the only project in the upper-right quadrant of the landscape:
 composable Sybil resistance + self-hostable service layer + open source.**
 
 1. **A bespoke V4 P-256 VOPRF-like construction** — it is not RFC 9497 or
-   Privacy Pass interoperable. It is provided with a complete service layer (issuer +
-   verifier HTTP services, key rotation, admin UI, nullifier storage).
+   Privacy Pass interoperable. It is provided with issuer and verifier HTTP
+   services, an admin UI, and double-spend storage. V4 key rotation is not
+   restart-safe and is disabled outside development.
 2. **Built-in Sybil resistance** with multiple composable gates (`invitation`,
    `pow`, `rate_limit`, `progressive_trust`, `proof_of_diversity`,
    `multi_party_vouching`, `webauthn`, `social_graph`) and combiners

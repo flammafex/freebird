@@ -1614,10 +1614,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#attestation-policy" class="md-nav__link">
+  <a href="#attestation-is-not-supported" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Attestation Policy
+        Attestation is not supported
       
     </span>
   </a>
@@ -1691,15 +1691,14 @@ and deployment-local, not real names, email addresses, phone numbers, or public
 handles.</p>
 <p>The issuer stores and verifies against an opaque subject hash derived from the
 local handle. Issuance proofs contain the subject hash, not the local label.</p>
-<h2 id="attestation-policy">Attestation Policy<a class="headerlink" href="#attestation-policy" title="Permanent link">&para;</a></h2>
-<p>Hardware/device attestation is optional and policy-driven. To require it:</p>
-<div class="highlight"><pre><span></span><code><span class="nv">WEBAUTHN_REQUIRE_ATTESTATION</span><span class="o">=</span><span class="nb">true</span>
-<span class="nv">WEBAUTHN_ATTESTATION_POLICY</span><span class="o">=</span>direct
-<span class="nv">WEBAUTHN_ALLOWED_AAGUIDS</span><span class="o">=</span>&lt;comma-separated-aaguids&gt;
-</code></pre></div>
-<p>An allowlist can restrict registration to specific authenticator models. Without
-that policy, WebAuthn proves possession of a registered credential, not that the
-credential lives on approved hardware.</p>
+<h2 id="attestation-is-not-supported">Attestation is not supported<a class="headerlink" href="#attestation-is-not-supported" title="Permanent link">&para;</a></h2>
+<p>This flow checks the WebAuthn passkey registration and authentication ceremonies,
+but does not verify authenticator attestation signatures or trust chains.
+<code>WEBAUTHN_REQUIRE_ATTESTATION=true</code>, a non-<code>none</code>
+<code>WEBAUTHN_ATTESTATION_POLICY</code>, or a nonempty <code>WEBAUTHN_ALLOWED_AAGUIDS</code>
+is rejected at startup. Do not use these settings as a hardware allowlist.
+WebAuthn proves possession of a registered credential, not that the credential
+lives on approved hardware or belongs to a unique person.</p>
 
 
 

@@ -1743,8 +1743,8 @@ integration exists.</p>
 <li>set <code>WEBAUTHN_RP_ORIGIN</code> to the exact HTTPS origin</li>
 <li>set a high-entropy <code>WEBAUTHN_PROOF_SECRET</code></li>
 <li>expose <code>/webauthn/</code> through the reverse proxy</li>
-<li>consider <code>WEBAUTHN_REQUIRE_ATTESTATION=true</code> and
-  <code>WEBAUTHN_ALLOWED_AAGUIDS</code> for hardware/device policy</li>
+<li>do not configure attestation enforcement or an AAGUID allowlist: authenticator
+  trust verification is not implemented, and the issuer rejects those settings</li>
 </ul>
 <p>The browser flow is served by the issuer at <code>/webauthn/</code>, with distinct
 registration and authentication pages at <code>/webauthn/register</code> and

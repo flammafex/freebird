@@ -33,8 +33,8 @@ WEBAUTHN_PROOF_SECRET=<high-entropy-secret>
 The origin must match the page origin and production should use HTTPS. The
 issuer requires `WEBAUTHN_PROOF_SECRET` whenever WebAuthn is enabled.
 
-Attestation is optional and policy-gated with
-`WEBAUTHN_REQUIRE_ATTESTATION`, `WEBAUTHN_ATTESTATION_POLICY`, and optionally
-`WEBAUTHN_ALLOWED_AAGUIDS`. Attestation can describe an authenticator or chain;
-it does not establish unique-human status. See the [browser flow](../webauthn-browser-flow.md)
+Hardware attestation verification is not implemented. Settings that request
+attestation enforcement or an AAGUID allowlist are rejected at startup.
+Passkey registration validates the credential ceremony, not hardware provenance
+or unique-human status. See the [browser flow](../webauthn-browser-flow.md)
 and [Sybil modes](../sybil-modes.md).

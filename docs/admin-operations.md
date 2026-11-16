@@ -65,15 +65,14 @@ listing or deletion; use the authenticated `/admin/webauthn` routes below.
 
 | Action | Endpoint |
 | --- | --- |
-| Show attestation and AAGUID policy | `GET /admin/webauthn/policy` |
+| Show WebAuthn configuration (attestation is unsupported) | `GET /admin/webauthn/policy` |
 | Show credential count | `GET /admin/webauthn/stats` |
 | List credentials | `GET /admin/webauthn/credentials` |
 | Delete credential | `DELETE /admin/webauthn/credentials/:cred_id` |
 
-The WebAuthn AAGUID allowlist is configuration-managed through
-`WEBAUTHN_ALLOWED_AAGUIDS`; operators can review the active allowlist through
-`GET /admin/webauthn/policy`. Changing the allowlist requires changing
-configuration and restarting the issuer.
+`GET /admin/webauthn/policy` reports the configuration, but it is not evidence
+of attestation trust verification. A nonempty `WEBAUTHN_ALLOWED_AAGUIDS` or
+enforced attestation policy is unsupported and rejected at startup.
 
 ## Audit Coverage
 
@@ -81,4 +80,3 @@ Admin flows write issuer audit entries for invite grants, user bans and unbans,
 bootstrap user creation, owner registration, invitation creation, voucher
 changes, vouch submission, pending vouch cleanup, and key rotation. Audit logs
 are available through `GET /admin/audit` and `GET /admin/export/audit`.
-

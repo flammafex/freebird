@@ -115,8 +115,8 @@ If WebAuthn is used as a recommended Sybil gate:
 - set `WEBAUTHN_RP_ORIGIN` to the exact HTTPS origin
 - set a high-entropy `WEBAUTHN_PROOF_SECRET`
 - expose `/webauthn/` through the reverse proxy
-- consider `WEBAUTHN_REQUIRE_ATTESTATION=true` and
-  `WEBAUTHN_ALLOWED_AAGUIDS` for hardware/device policy
+- do not configure attestation enforcement or an AAGUID allowlist: authenticator
+  trust verification is not implemented, and the issuer rejects those settings
 
 The browser flow is served by the issuer at `/webauthn/`, with distinct
 registration and authentication pages at `/webauthn/register` and

@@ -63,7 +63,7 @@ mkdocs build --strict
 
 | Path | Purpose |
 | --- | --- |
-| `issuer` | Axum issuer service, admin CLI, config validator, key rotation, Sybil gates. |
+| `issuer` | Axum issuer service, admin CLI, config validator, Sybil gates. V4 key rotation is experimental and disabled outside development. |
 | `verifier` | Axum verifier service, issuer metadata refresh, nullifier storage, admin UI. |
 | `interface` | Local V4 token test client. |
 | `crypto` | VOPRF, redemption-token, and provider primitives. |
@@ -289,7 +289,7 @@ Other verification failures remain generic.
 Admin endpoints live under `/admin` and require `X-Admin-Key:
 <ADMIN_API_KEY>` or a login session cookie. The verifier always mounts its admin
 router. The issuer mounts its admin router for all Sybil modes and includes
-operator endpoints for invitation state, user bans, key rotation, audit export,
+operator endpoints for invitation state, user bans, experimental development-only key rotation, audit export,
 WebAuthn credential/policy review, and multi-party vouching state.
 
 Issuer operator workflows:
@@ -300,7 +300,7 @@ Issuer operator workflows:
 | Invitation codes | `GET /admin/invitations`, `POST /admin/invitations/create`, `GET /admin/invitations/:code`, `DELETE /admin/invitations/:code` |
 | Multi-party vouching | `GET/POST /admin/vouching/vouchers`, `DELETE /admin/vouching/vouchers/:user_id`, `POST /admin/vouching/vouches`, `GET/DELETE /admin/vouching/pending`, `POST /admin/vouching/mark-successful`, `POST /admin/vouching/mark-problematic` |
 | WebAuthn | `GET /admin/webauthn/policy`, `GET /admin/webauthn/stats`, `GET /admin/webauthn/credentials`, `DELETE /admin/webauthn/credentials/:cred_id` |
-| Keys and audit | `GET /admin/keys`, `POST /admin/keys/rotate`, `POST /admin/keys/cleanup`, `DELETE /admin/keys/:kid`, `GET /admin/audit`, `GET /admin/export/audit` |
+| Keys and audit | `GET /admin/keys`, `POST /admin/keys/rotate` (disabled outside development; not restart-safe), `POST /admin/keys/cleanup`, `DELETE /admin/keys/:kid`, `GET /admin/audit`, `GET /admin/export/audit` |
 
 ## Configuration Reference
 
@@ -321,7 +321,7 @@ Issuer variables:
 | --- | --- | --- |
 | `ISSUER_ID` | `issuer:freebird:v4` | Embedded in issued tokens and metadata. |
 | `ISSUER_SK_PATH` | `issuer_sk.bin` | V4 issuer secret key path. Created if missing. |
-| `KEY_ROTATION_STATE_PATH` | `key_rotation_state.json` | V4 key rotation state. |
+| `KEY_ROTATION_STATE_PATH` | `key_rotation_state.json` | Experimental V4 rotation metadata; does not persist the new key or make rotation restart-safe. Do not rotate in production. |
 | `KID` | derived from persisted key | Optional compatibility override; it is preserved only when it begins with the persisted key's derived KID. Mismatched values fall back to that stable derived KID. Retain a legacy override while retaining matching legacy rotation state. |
 | `EPOCH_DURATION` | `1d` | Human-readable duration accepted. |
 | `EPOCH_RETENTION` | `2` | Number of previous epochs accepted. |

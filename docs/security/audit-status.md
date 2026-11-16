@@ -22,7 +22,9 @@ privacy review.
   restart-safe or multi-instance issuer behavior.
 - `SYBIL_RESISTANCE=none` has no token-farming resistance.
 - Combined Sybil `or` mode is only as strong as the easiest configured mechanism.
-- WebAuthn attestation is policy-gated and does not prove a unique human.
+- WebAuthn credential verification does not validate hardware attestation.
+  Attestation enforcement and AAGUID allowlists are unsupported and rejected
+  at startup; a passkey does not prove a unique human or device.
 - Audit logs are operational JSON records, not append-only or tamper-evident
   security logs. They can contain identifiers and should be treated as
   sensitive.

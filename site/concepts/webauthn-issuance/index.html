@@ -1716,10 +1716,10 @@ itself, and accepted proofs are replay-protected.</p>
 </code></pre></div>
 <p>The origin must match the page origin and production should use HTTPS. The
 issuer requires <code>WEBAUTHN_PROOF_SECRET</code> whenever WebAuthn is enabled.</p>
-<p>Attestation is optional and policy-gated with
-<code>WEBAUTHN_REQUIRE_ATTESTATION</code>, <code>WEBAUTHN_ATTESTATION_POLICY</code>, and optionally
-<code>WEBAUTHN_ALLOWED_AAGUIDS</code>. Attestation can describe an authenticator or chain;
-it does not establish unique-human status. See the <a href="../../webauthn-browser-flow/">browser flow</a>
+<p>Hardware attestation verification is not implemented. Settings that request
+attestation enforcement or an AAGUID allowlist are rejected at startup.
+Passkey registration validates the credential ceremony, not hardware provenance
+or unique-human status. See the <a href="../../webauthn-browser-flow/">browser flow</a>
 and <a href="../../sybil-modes/">Sybil modes</a>.</p>
 
 

@@ -4,11 +4,8 @@
 
 //! WebAuthn Attestation Policy Enforcement
 //!
-//! This module provides comprehensive attestation validation including:
-//! - Policy levels: none, indirect, direct, enterprise
-//! - AAGUID allowlisting for specific authenticator models
-//! - Attestation format detection (packed, tpm, android-key, etc.)
-//! - Audit logging for compliance
+//! Provides heuristic attestation metadata and audit logging, not signature or
+//! certificate-chain verification. Policies requiring trust are rejected.
 
 use axum::http::StatusCode;
 use base64ct::Encoding;
@@ -136,11 +133,11 @@ impl AttestationConfig {
 pub enum AttestationPolicy {
     /// Accept any attestation including none
     None,
-    /// Accept self-attestation and anonymized attestation
+    /// Reserved indirect-attestation policy; unsupported and rejected.
     Indirect,
-    /// Require verifiable attestation from authenticator
+    /// Reserved direct-attestation policy; unsupported and rejected.
     Direct,
-    /// Require enterprise attestation (for managed devices)
+    /// Reserved enterprise-attestation policy; unsupported and rejected.
     Enterprise,
 }
 
@@ -206,10 +203,10 @@ impl AuthenticatorFlags {
     }
 }
 
-/// Parse attestation information from a RegisterPublicKeyCredential
+/// Extract best-effort, untrusted metadata from a RegisterPublicKeyCredential.
 ///
-/// This extracts the attestation format, AAGUID, and flags from the
-/// attestation object by parsing its CBOR structure.
+/// Uses heuristic byte scans to infer format, AAGUID, and flags; it does not
+/// validate CBOR structure, attestation signatures, or certificate chains.
 pub fn parse_attestation_info(credential: &RegisterPublicKeyCredential) -> AttestationInfo {
     let attestation_bytes = credential.response.attestation_object.to_vec();
     let attestation_size = attestation_bytes.len();
@@ -396,13 +393,15 @@ pub struct PolicyCheckResult {
     pub attestation_info: AttestationInfo,
 }
 
-/// Enforce attestation policy on a credential
+/// Reject unsupported trust policies and extract untrusted metadata.
 ///
-/// Returns Ok(()) if the credential passes policy, or an error with the rejection reason.
+/// Returns metadata only for the None policy with an empty AAGUID allowlist.
+/// Success does not establish attestation trust; all other policies are rejected.
 pub fn enforce_policy(
     credential: &RegisterPublicKeyCredential,
     config: &AttestationConfig,
 ) -> Result<PolicyCheckResult, (StatusCode, String)> {
+    ensure_policy_supported(config.policy, &config.allowed_aaguids)?;
     let info = parse_attestation_info(credential);
 
     // Log for audit if enabled
@@ -418,104 +417,25 @@ pub fn enforce_policy(
         );
     }
 
-    // Check AAGUID allowlist first (if configured)
-    if !config.allowed_aaguids.is_empty() {
-        match &info.aaguid {
-            Some(aaguid) if config.allowed_aaguids.contains(&aaguid.to_lowercase()) => {
-                debug!(aaguid = %aaguid, "AAGUID allowed by allowlist");
-            }
-            Some(aaguid) => {
-                warn!(aaguid = %aaguid, "AAGUID not in allowlist");
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    format!(
-                        "Authenticator not allowed. AAGUID {} is not in the approved list.",
-                        aaguid
-                    ),
-                ));
-            }
-            None => {
-                // No AAGUID available (self/none attestation)
-                // For allowlist mode, this typically means rejection
-                warn!("No AAGUID available but allowlist is configured");
-                return Err((
-                    StatusCode::FORBIDDEN,
-                    "Authenticator attestation required but not provided.".to_string(),
-                ));
-            }
-        }
-    }
+    Ok(PolicyCheckResult {
+        allowed: true,
+        reason: "No attestation policy enforced".to_string(),
+        attestation_info: info,
+    })
+}
 
-    // Check policy level
-    match config.policy {
-        AttestationPolicy::None => {
-            // Accept everything
-            Ok(PolicyCheckResult {
-                allowed: true,
-                reason: "No attestation policy enforced".to_string(),
-                attestation_info: info,
-            })
-        }
-        AttestationPolicy::Indirect => {
-            // Accept self-attestation and indirect
-            // Reject only if we can verify it's a completely invalid format
-            if info.format == "unknown" && info.attestation_size < 100 {
-                Err((
-                    StatusCode::BAD_REQUEST,
-                    "Invalid attestation format".to_string(),
-                ))
-            } else {
-                Ok(PolicyCheckResult {
-                    allowed: true,
-                    reason: format!("Indirect policy: accepted {} attestation", info.format),
-                    attestation_info: info,
-                })
-            }
-        }
-        AttestationPolicy::Direct => {
-            // Require non-self attestation
-            if info.self_attestation && info.format == "none" {
-                Err((
-                    StatusCode::FORBIDDEN,
-                    "Direct attestation required. Self/none attestation not accepted.".to_string(),
-                ))
-            } else if info.attestation_size < 200 {
-                // Heuristic: very small attestation objects are likely "none" format
-                warn!(
-                    size = info.attestation_size,
-                    "Attestation object too small for direct policy"
-                );
-                Err((
-                    StatusCode::FORBIDDEN,
-                    "Hardware authenticator with attestation required.".to_string(),
-                ))
-            } else {
-                Ok(PolicyCheckResult {
-                    allowed: true,
-                    reason: format!("Direct policy: accepted {} attestation", info.format),
-                    attestation_info: info,
-                })
-            }
-        }
-        AttestationPolicy::Enterprise => {
-            // Require attestation with certificate chain
-            if info.cert_subject.is_none() {
-                Err((
-                    StatusCode::FORBIDDEN,
-                    "Enterprise attestation with certificate chain required.".to_string(),
-                ))
-            } else {
-                Ok(PolicyCheckResult {
-                    allowed: true,
-                    reason: format!(
-                        "Enterprise policy: accepted {} attestation with certificate",
-                        info.format
-                    ),
-                    attestation_info: info,
-                })
-            }
-        }
+/// Heuristic metadata parsing cannot establish authenticator trust.
+fn ensure_policy_supported(
+    policy: AttestationPolicy,
+    allowed_aaguids: &HashSet<String>,
+) -> Result<(), (StatusCode, String)> {
+    if policy != AttestationPolicy::None || !allowed_aaguids.is_empty() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Attestation policy and AAGUID restrictions are unsupported: trusted attestation verification is not implemented".to_string(),
+        ));
     }
+    Ok(())
 }
 
 /// Quick check if policy enforcement is enabled
@@ -574,6 +494,28 @@ pub async fn store_audit_metadata(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsupported_attestation_policies_are_rejected() {
+        let empty = HashSet::new();
+        assert!(ensure_policy_supported(AttestationPolicy::None, &empty).is_ok());
+        for policy in [
+            AttestationPolicy::Indirect,
+            AttestationPolicy::Direct,
+            AttestationPolicy::Enterprise,
+        ] {
+            assert!(ensure_policy_supported(policy, &empty).is_err());
+        }
+        let allowlist = HashSet::from([known_aaguids::YUBIKEY_5.to_string()]);
+        for policy in [
+            AttestationPolicy::None,
+            AttestationPolicy::Indirect,
+            AttestationPolicy::Direct,
+            AttestationPolicy::Enterprise,
+        ] {
+            assert!(ensure_policy_supported(policy, &allowlist).is_err());
+        }
+    }
 
     #[test]
     fn test_format_aaguid() {

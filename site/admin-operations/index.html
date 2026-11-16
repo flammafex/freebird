@@ -1768,7 +1768,7 @@ listing or deletion; use the authenticated <code>/admin/webauthn</code> routes b
 </thead>
 <tbody>
 <tr>
-<td>Show attestation and AAGUID policy</td>
+<td>Show WebAuthn configuration (attestation is unsupported)</td>
 <td><code>GET /admin/webauthn/policy</code></td>
 </tr>
 <tr>
@@ -1785,10 +1785,9 @@ listing or deletion; use the authenticated <code>/admin/webauthn</code> routes b
 </tr>
 </tbody>
 </table>
-<p>The WebAuthn AAGUID allowlist is configuration-managed through
-<code>WEBAUTHN_ALLOWED_AAGUIDS</code>; operators can review the active allowlist through
-<code>GET /admin/webauthn/policy</code>. Changing the allowlist requires changing
-configuration and restarting the issuer.</p>
+<p><code>GET /admin/webauthn/policy</code> reports the configuration, but it is not evidence
+of attestation trust verification. A nonempty <code>WEBAUTHN_ALLOWED_AAGUIDS</code> or
+enforced attestation policy is unsupported and rejected at startup.</p>
 <h2 id="audit-coverage">Audit Coverage<a class="headerlink" href="#audit-coverage" title="Permanent link">&para;</a></h2>
 <p>Admin flows write issuer audit entries for invite grants, user bans and unbans,
 bootstrap user creation, owner registration, invitation creation, voucher

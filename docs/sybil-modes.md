@@ -84,18 +84,13 @@ issuance. `WEBAUTHN_PROOF_SECRET` is required when WebAuthn is enabled.
 That requirement applies even when the WebAuthn subsystem is enabled for its
 routes but WebAuthn is not selected as the Sybil mechanism.
 
-Hardware/device attestation is available but policy-gated:
-
-- `WEBAUTHN_REQUIRE_ATTESTATION=true` enables attestation enforcement during
-  registration.
-- `WEBAUTHN_ATTESTATION_POLICY` accepts `none`, `indirect`, `direct`, or
-  `enterprise`.
-- `WEBAUTHN_ALLOWED_AAGUIDS` can restrict registration to specific
-  authenticator models.
-
-Attestation can say something about the authenticator model or attestation
-chain. It does not prove a unique human and does not prevent someone from using
-multiple allowed devices.
+Passkey registration validates the WebAuthn credential ceremony. It does not
+verify authenticator attestation signatures, certificate chains, or trusted
+hardware models. Attestation enforcement is **not supported**:
+`WEBAUTHN_REQUIRE_ATTESTATION=true`, a non-`none`
+`WEBAUTHN_ATTESTATION_POLICY`, or a nonempty `WEBAUTHN_ALLOWED_AAGUIDS`
+causes startup and config validation to fail. WebAuthn does not prove a unique
+human or device.
 
 WebAuthn gate proofs are rejected on replay through the configured Sybil replay
 store. The default store is process-local memory. Use `SYBIL_REPLAY_STORE=redis`
