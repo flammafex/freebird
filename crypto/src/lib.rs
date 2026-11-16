@@ -56,6 +56,7 @@ use voprf as v;
 
 // Cryptographic provider abstraction for software and HSM backends
 pub mod provider;
+pub mod privacy_pass;
 
 #[derive(Debug)]
 pub enum Error {

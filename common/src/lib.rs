@@ -12,6 +12,7 @@
 pub mod api;
 pub mod duration;
 pub mod metrics;
+pub mod privacy_pass;
 pub mod rate_limit;
 pub mod spend_key;
 pub mod tls_enforcement;
