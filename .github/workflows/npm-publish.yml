@@ -32,6 +32,10 @@ jobs:
       sha: ${{ steps.resolve.outputs.sha }}
       version: ${{ steps.resolve.outputs.version }}
     steps:
+      - name: Block V4 SDK publishing during Privacy Pass hard fork
+        run: |
+          echo "::error::SDK publishing is disabled until a Privacy Pass SDK and release gates exist."
+          exit 1
       - name: Check out workflow source
         uses: actions/checkout@v4
         with:

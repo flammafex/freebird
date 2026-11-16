@@ -20,6 +20,10 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       sha: ${{ steps.resolve.outputs.sha }}
     steps:
+      - name: Block V4 releases during Privacy Pass hard fork
+        run: |
+          echo "::error::Release publishing is disabled until the Privacy Pass cutover and security gates are complete."
+          exit 1
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           fetch-depth: 0
