@@ -119,7 +119,7 @@ impl Origin {
         )?;
         tx.execute(
             "INSERT INTO metadata VALUES(1,1,?1,0,NULL)",
-            params![Sha256::digest(secret).as_slice()],
+            params![&Sha256::digest(secret)[..]],
         )?;
         tx.commit()?;
         db_file.sync_all()?;
@@ -156,7 +156,7 @@ impl Origin {
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?;
         ensure!(
-            version == 1 && high >= 0 && hash == Sha256::digest(secret).as_slice(),
+            version == 1 && high >= 0 && hash == Sha256::digest(secret)[..],
             "invalid Origin metadata"
         );
         if let Some(old) = old {

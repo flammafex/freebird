@@ -2,8 +2,8 @@
 
 **Status:** implementation contract; not a production-readiness claim. This
 replaces V4 without wire, key, storage, or client compatibility. No existing
-clients need migration. Until the atomic cutover, the current V4 release is
-legacy and must not be advertised as Privacy Pass.
+clients need migration. Earlier tagged V4 releases are historical and
+unsupported; this new tree is not yet a deployable release.
 
 ## Standards and profile
 

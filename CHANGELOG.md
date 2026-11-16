@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — Privacy Pass hard fork
+
+- Retired V4 issuer, verifier, CLI, JavaScript SDK, and deployment artifacts;
+  no client compatibility or state migration is provided.
+- Added an experimental RFC 9578 type-`0x0002` path with a one-use invitation,
+  public-key-only Origin verification, durable single-instance replay state,
+  and RFC vector/reference-client tests.
+- Disabled release publishing. Key rotation, independent cryptographic review,
+  interoperability, and operational recovery testing remain blockers. This is
+  **not a production release**.
+
+Historical entries below describe their tagged source trees, not the current API.
+
 ## v0.11.0
 
 - Breaking change: removes the Freebird V7 bearer issuance and verification,

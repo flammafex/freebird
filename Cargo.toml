@@ -1,12 +1,8 @@
 [workspace]
 members = [
-  "issuer",
-  "verifier",
-  "interface",
   "crypto",
   "common",
-  "privacy_pass_service",
-  "attester",
-  "integration_tests"   # <-- new
+  "privacy_pass_service"
 ]
+exclude = ["attester"]
 resolver = "2"

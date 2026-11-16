@@ -1,88 +1,17 @@
-name: Release
+name: Privacy Pass release blocked
 
 on:
   push:
-    tags: ["v*"]
+    tags: ['*']
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Release tag (vMAJOR.MINOR.PATCH)"
-        required: true
+
+permissions: {}
 
 jobs:
-  gate:
+  release-blocked:
     runs-on: ubuntu-latest
-    timeout-minutes: 65
-    permissions:
-      contents: read
-      checks: read
-    outputs:
-      tag: ${{ steps.resolve.outputs.tag }}
-      sha: ${{ steps.resolve.outputs.sha }}
     steps:
-      - name: Block V4 releases during Privacy Pass hard fork
+      - name: Fail closed pending independent review and rotation
         run: |
-          echo "::error::Release publishing is disabled until the Privacy Pass cutover and security gates are complete."
+          echo 'Privacy Pass release blocked: key rotation and independent RSA review incomplete' >&2
           exit 1
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          fetch-depth: 0
-      - id: resolve
-        env:
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
-          GITHUB_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "invalid release tag" >&2; exit 1; }
-          [[ "${GITHUB_REF}" == refs/tags/* || "${{ github.event_name }}" == workflow_dispatch ]] || exit 1
-          git fetch --force --no-tags origin \
-            "refs/heads/main:refs/remotes/origin/main" \
-            "refs/tags/${TAG}:refs/tags/${TAG}"
-          sha="$(git rev-parse "refs/tags/${TAG}^{commit}")"
-          [[ "$sha" == "${GITHUB_SHA}" || "${{ github.event_name }}" == workflow_dispatch ]] || { echo "tag SHA differs from event SHA" >&2; exit 1; }
-          git merge-base --is-ancestor "$sha" refs/remotes/origin/main || {
-            echo "release tag must point to a commit already reachable from origin/main" >&2
-            exit 1
-          }
-          python3 scripts/release-gate.py "$sha" "build,test,feature-tests,lint,security,javascript-sdk,repository-hygiene,compose-smoke"
-          printf 'tag=%s\nsha=%s\n' "$TAG" "$sha" >> "$GITHUB_OUTPUT"
-
-  package:
-    needs: gate
-    runs-on: ubuntu-latest
-    timeout-minutes: 50
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ needs.gate.outputs.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-      - name: Build and package
-        env:
-          TAG: ${{ needs.gate.outputs.tag }}
-        run: |
-          set -euo pipefail
-          # Required archive metadata must come from the tagged commit, not generated fallbacks.
-          archive_metadata=(README.md SECURITY.md LICENSE CHANGELOG.md)
-          for file in "${archive_metadata[@]}"; do
-            [[ -s "$file" ]] || {
-              echo "::error::Release ${TAG} is missing required archive metadata: ${file}. Restore it before tagging."
-              exit 1
-            }
-          done
-          rustup update stable --no-self-update
-          cargo build --release -p freebird-issuer --bins -p freebird-verifier -p freebird-interface
-          version="${TAG#v}"; package="freebird-${version}-linux-x86_64"
-          mkdir -p "dist/${package}/bin" "dist/${package}/docs"
-          cp target/release/freebird-{issuer,cli,validate-config,verifier,interface} "dist/${package}/bin/"
-          cp "${archive_metadata[@]}" "dist/${package}/"
-          cp -R docs "dist/${package}/docs/freebird"; cp -R deploy k8s server-configs webauthn-client "dist/${package}/"
-          tar -C dist -czf "dist/${package}.tar.gz" "$package"; sha256sum "dist/${package}.tar.gz" > "dist/${package}.tar.gz.sha256"
-      - name: Create GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.gate.outputs.tag }}
-          TARGET: ${{ needs.gate.outputs.sha }}
-        run: gh release create "$TAG" --target "$TARGET" --generate-notes dist/*.tar.gz dist/*.sha256

@@ -1,104 +1,47 @@
-# Security Policy
+# Security status
 
-Freebird is pre-1.0 software. Treat public deployments as experimental unless
-you have reviewed the code, configuration, and operational controls for your
-own threat model.
+**Experimental; no production release.** Freebird has not had an independent
+security audit or an independent implementation interoperability test. Its
+blind-RSA dependency (`blind-rsa-signatures =0.18.0`) uses an RSA
+release-candidate backend. Passing published RFC test vectors is necessary
+but is not a review of side-channel, fault, parser, operational, or privacy
+behavior.
 
-## Reporting Vulnerabilities
+The current lockfile fails `cargo audit`: `rsa 0.10.0-rc.18` is reported under
+**RUSTSEC-2023-0071** (potential timing-based key recovery; the advisory's
+fixed range starts at stable 0.10.0). The audit also reports warnings for
+`pin-utils`, `rustix`, and `tokio`. We have **not** established that the
+advisory applies or does not apply to the exact blind-signing path; no waiver
+is appropriate without a review. CI deliberately fails its security job.
 
-Use GitHub private vulnerability reporting for this repository if it is
-available. If private reporting is not available, open a public issue asking the
-maintainers for a private security contact and do not include exploit details,
-secrets, logs, or proof-of-concept code in the public issue.
+The Origin holds only an RSA public key. One operator-issued invitation
+authorizes one signing attempt; the admission database commits its consumption
+before signing. A lost response can burn an invitation. The Origin validates
+the signature and accepted challenge before durably recording a unique spend.
+Store errors deny access. Accepted challenge windows are local policy, **not**
+standardized token expiry; spent entries are currently retained indefinitely.
 
-Useful reports include:
+One process per role and a local-loopback HTTP listener are the only supported
+topology. The two stores use SQLite WAL/FULL and separate lifetime OS locks.
+Do not copy only the SQLite main file for backups: a consistent backup must
+include committed WAL state. Restoring an older Origin snapshot requires
+maintenance shutdown and fresh context-secret/store state, invalidating old
+tokens. Restoring the admission store requires rotating its invitation
+generation and invalidating old invitations before service resumes. An
+unannounced rollback of both data and recovery markers cannot be detected
+locally. No automatic failover or multi-replica safety is claimed.
 
-- affected commit or release
-- deployment mode and relevant feature flags
-- reproduction steps
-- expected and actual behavior
-- whether the issue affects issuer, verifier, client SDK, admin routes, or
-  deployment assets
+**Release blockers:** supported key staging/rotation and retirement;
+independent review of the selected RSA backend and protocol integration;
+independent implementation interoperability; parser fuzzing; operational
+backup/recovery tests; and a supported deployment topology. The release,
+container, and SDK publishers remain disabled. See the
+[phase-one contract](docs/protocol/privacy-pass-phase1.md).
 
-## Supported Versions
+## Reporting vulnerabilities
 
-Until tagged stable releases exist, security fixes target the main development
-branch. Operators should pin a reviewed commit and update deliberately after
-reading the changelog or commit diff.
-
-## Known Security Boundaries
-
-Freebird separates three concerns:
-
-- token issuance: the issuer evaluates blinded client requests
-- token redemption: the verifier checks and consumes finalized tokens
-- admission control: optional Sybil-resistance gates decide who may request
-  issuance
-
-The privacy property is about unlinking issuance from redemption. Sybil
-resistance is configurable and local to the issuer. A weak or disabled Sybil
-mode means tokens may be easy to farm even if the token cryptography works.
-
-## Known Limitations
-
-- The project has not had an external security audit.
-- `SYBIL_RESISTANCE=none` is for local testing or fully trusted issuers only.
-- In-memory verifier nullifier storage rejects replay only until the verifier
-  restarts. Use Redis for public deployments.
-- Sybil proof replay protection for proof-of-work, WebAuthn gate proofs, and
-  multi-party vouching defaults to process-local memory. Use
-  `SYBIL_REPLAY_STORE=redis` for restart-safe and multi-instance issuer
-  deployments.
-- `combined` mode with `SYBIL_COMBINED_MODE=or` is only as strong as the
-  easiest configured mechanism to satisfy.
-- WebAuthn passkey registration checks the credential ceremony, **not** hardware
-  provenance or manufacturer trust. Attestation signature and trust-chain
-  verification are not implemented. `WEBAUTHN_REQUIRE_ATTESTATION=true`,
-  non-`none` `WEBAUTHN_ATTESTATION_POLICY`, and nonempty
-  `WEBAUTHN_ALLOWED_AAGUIDS` are unsupported and rejected at startup. Do not
-  use WebAuthn mode as proof of a unique device or human.
-- Admin APIs rely on `ADMIN_API_KEY` or an admin session cookie. Public
-  deployments should put admin routes behind TLS, network policy, and a reverse
-  proxy or VPN boundary.
-- Audit logs are operational records, not tamper-evident security logs.
-
-## Dependency Audit Notes
-
-`cargo audit` currently reports RUSTSEC-2024-0436 (`paste` 1.0.15, unmaintained)
-through the optional PKCS#11 dependency path. Cargo-audit reports it as an
-allowed warning under its default warning policy; CI does not ignore this
-advisory. Recheck the result when dependencies or audit policy change.
-
-The optional `freebird-crypto/pkcs11` feature uses `cryptoki` 0.10.1 or later
-within the 0.10 release line. It is not enabled by default. PKCS#11 provider
-initialization and public-key lookup are implemented, but VOPRF evaluation is
-explicitly unimplemented; enabling this feature does not provide HSM-backed
-VOPRF evaluation. This provider has not been validated against real HSM
-hardware or SoftHSM, and deployments must not treat it as a validated HSM
-integration.
-
-CI runs `cargo audit` without advisory ignores. Review any reported advisory
-against the affected dependency path and enabled features; the PKCS#11 caveats
-above remain applicable regardless of audit results.
-
-## Production Baseline
-
-For an internet-exposed issuer or verifier:
-
-- set `REQUIRE_TLS=true`
-- set a high-entropy `ADMIN_API_KEY`
-- use Redis for verifier nullifier storage
-- use `SYBIL_REPLAY_STORE=redis` for issuer Sybil proof replay protection
-- use protected persistent storage for issuer key material and Sybil state
-- avoid `SYBIL_RESISTANCE=none`
-- document which Sybil mode is configured and what it does not prevent
-- keep admin routes off the public internet where possible
-
-See also:
-
-- [Profile and Claim Matrix](docs/profile-claim-matrix.md) for the authoritative
-  status of planned issuance profiles and limits on profile claims
-- [Architecture](docs/architecture.md)
-- [Threat Model](docs/threat-model.md)
-- [Sybil Modes](docs/sybil-modes.md)
-- [Audit Logging](docs/audit-logging.md)
+Use GitHub private vulnerability reporting for this repository if available.
+Otherwise open a public issue requesting a private security contact, without
+posting exploit details, secrets, logs, or proof-of-concept code. Include the
+affected commit, reproduction, expected and actual behavior, and whether the
+issue concerns the Issuer, Origin, client flow, persistence, or cryptography.
