@@ -13,6 +13,10 @@ fixed range starts at stable 0.10.0). The audit also reports warnings for
 `pin-utils`, `rustix`, and `tokio`. We have **not** established that the
 advisory applies or does not apply to the exact blind-signing path; no waiver
 is appropriate without a review. CI deliberately fails its security job.
+The blind-signing path uses base blinding, and remote key recovery through
+this exact path has **not** been demonstrated. The release candidate also
+lacks private-operation hardening added in stable RSA 0.10.0, so it cannot be
+treated as equivalent or cleared by a version-range argument.
 
 The Origin holds only an RSA public key. One operator-issued invitation
 authorizes one signing attempt; the admission database commits its consumption
