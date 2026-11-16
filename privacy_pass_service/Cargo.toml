@@ -1,0 +1,26 @@
+[package]
+name = "freebird-privacy-pass-service"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Experimental Privacy Pass type-2 issuer and Origin"
+
+[dependencies]
+freebird-common = { path = "../common" }
+freebird-crypto = { path = "../crypto" }
+anyhow = "1"
+axum = "0.7"
+base64ct = { version = "1.8", features = ["alloc"] }
+fs2 = "0.4"
+hmac = "0.12"
+rand = "0.8"
+rusqlite = { version = "=0.41.1", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "sync"] }
+tower = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
