@@ -12,12 +12,13 @@ nonstandard, one-use operator invitation to control issuance quantity.
 ## Status
 
 **Do not deploy as a production authorization system.** GitHub release
-publishing is blocked. The blind-RSA dependency is unaudited and uses a
-release-candidate RSA backend; independent review and interoperability testing
-are outstanding. Key staging/rotation is not implemented. The only supported
-runtime topology is one local-loopback process per role with exclusive,
-crash-durable SQLite state and no automatic failover. Backup restoration
-requires deliberate invalidation of old invitations or challenge contexts.
+publishing is blocked. The RFC 9474 library is pinned to a compatibility fork
+using stable RustCrypto RSA; the fork and signing path still require independent
+review and interoperability testing. Key staging/rotation is not implemented.
+The only supported runtime topology is one local-loopback process per role with
+exclusive, crash-durable SQLite state and no automatic failover. Backup
+restoration requires deliberate invalidation of old invitations or challenge
+contexts. See [security status and dependency provenance](SECURITY.md).
 
 The reference client tests exercise challenge → one admitted blinded request →
 finalization → one redemption through both Axum routers and live loopback HTTP,

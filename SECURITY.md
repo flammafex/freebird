@@ -2,21 +2,39 @@
 
 **Experimental; no production release.** Freebird has not had an independent
 security audit or an independent implementation interoperability test. Its
-blind-RSA dependency (`blind-rsa-signatures =0.18.0`) uses an RSA
-release-candidate backend. Passing published RFC test vectors is necessary
-but is not a review of side-channel, fault, parser, operational, or privacy
-behavior.
+blind-RSA library is not independently audited for this integration. Passing
+published RFC test vectors is necessary but is not a review of side-channel,
+fault, parser, operational, or privacy behavior.
 
-The current lockfile fails `cargo audit`: `rsa 0.10.0-rc.18` is reported under
-**RUSTSEC-2023-0071** (potential timing-based key recovery; the advisory's
-fixed range starts at stable 0.10.0). The audit also reports warnings for
-`pin-utils`, `rustix`, and `tokio`. We have **not** established that the
-advisory applies or does not apply to the exact blind-signing path; no waiver
-is appropriate without a review. CI deliberately fails its security job.
-The blind-signing path uses base blinding, and remote key recovery through
-this exact path has **not** been demonstrated. The release candidate also
-lacks private-operation hardening added in stable RSA 0.10.0, so it cannot be
-treated as equivalent or cleared by a version-range argument.
+## Cryptographic dependency provenance
+
+The lockfile pins `blind-rsa-signatures 0.18.0` to
+[`kixel-ai/rind` commit `13f6c4565d2ac0c7a4488eba35933b2ca85ff317`](https://github.com/kixel-ai/rind/tree/13f6c4565d2ac0c7a4488eba35933b2ca85ff317/thirdparty/blind-rsa-signatures),
+which adapts [upstream commit `45d0abfa829c3623389daae30bc35e9b2f3b550c`](https://github.com/jedisct1/rust-blind-rsa-signatures/tree/45d0abfa829c3623389daae30bc35e9b2f3b550c)
+to stable RustCrypto `rsa 0.10.0` and `pkcs1 0.8.0`. This is a Git-pinned
+third-party fork, **not** an upstream release or an independent audit. The
+upstream MIT license and attribution remain in the fork. The fork adds
+`RIND.md`; the only changed code, manifest, or test files are `Cargo.toml`,
+`src/lib.rs`, `src/pbrsa.rs`, and `tests/vectors.rs`. `src/brsa.rs` (the
+blinding implementation), `src/mgf1.rs`, and the published vector data are
+byte-identical. The `src/pbrsa.rs` changes adapt
+derived-key trait types and CRT parameter access to the stable RSA API;
+source provenance and passing vectors do **not** establish cryptographic
+equivalence, side-channel safety, or fault resistance.
+
+Freebird maintainers own monitoring this pin, reviewing upstream changes and
+advisories, and replacing it with a suitable upstream release when available.
+Until then, changes to this fork or its resolved backend require a new source
+diff, RFC vector and integration tests, and security review; do not silently
+move the Git revision. An upstream compatibility patch has not been accepted.
+
+On 2026-11-16, an unsuppressed `cargo audit` of this lockfile exited 0 with
+**three allowed warnings**: `pin-utils` (RUSTSEC-2026-0441, unmaintained),
+`rustix` (RUSTSEC-2026-0486, unsound xattr functions), and `tokio`
+(RUSTSEC-2026-0386, unsound `AsyncFd` constructors). The previous
+RUSTSEC-2023-0071 finding against the RSA release candidate is absent with
+stable `rsa 0.10.0`. Audit success is not a security waiver or proof that the
+remaining warnings and signing path are harmless.
 
 The Origin holds only an RSA public key. One operator-issued invitation
 authorizes one signing attempt; the admission database commits its consumption

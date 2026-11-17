@@ -6,3 +6,6 @@ members = [
 ]
 exclude = ["attester"]
 resolver = "2"
+
+[patch.crates-io]
+blind-rsa-signatures = { git = "https://github.com/kixel-ai/rind", rev = "13f6c4565d2ac0c7a4488eba35933b2ca85ff317" }

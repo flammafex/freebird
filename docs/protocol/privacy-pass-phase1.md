@@ -151,7 +151,9 @@ adapter, and `common/test-fixtures/privacy-pass/` for **verbatim** RFC 9577
 Appendix A and RFC 9578 Appendix A.2 vectors with source URLs, hashes, and
 the RFC's code-extraction license notice. Never derive expected values from
 the code under test. Pin the selected primitive version and lockfile after
-checking exact SPKI bytes, RFC vectors, and dependency advisories.
+checking exact SPKI bytes, RFC vectors, and dependency advisories. The current
+Git-pinned library fork, stable RSA backend, and review limits are recorded
+in the repository's `SECURITY.md`.
 
 Exit criteria for the end-to-end sketch:
 

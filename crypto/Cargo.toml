@@ -12,9 +12,7 @@ categories = ["cryptography", "authentication"]
 
 [dependencies]
 blind-rsa-signatures = { version = "=0.18.0", default-features = false }
-# Upstream's prerelease range also admits incompatible rsa 0.10.0 stable.
-rsa = { version = "=0.10.0-rc.18", default-features = false }
-pkcs1 = { version = "=0.8.0-rc.4", default-features = false }
+rsa = { version = "=0.10.0", default-features = false }
 sha2 = "0.10"
 
 [dev-dependencies]
