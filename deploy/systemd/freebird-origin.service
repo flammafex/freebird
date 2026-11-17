@@ -1,6 +1,8 @@
 [Unit]
 Description=Freebird Privacy Pass origin
 After=network.target
+# Absent during initialization and recovery; missing permission never serves.
+ConditionPathExists=/etc/freebird/serving-enabled
 StartLimitIntervalSec=60
 StartLimitBurst=3
 

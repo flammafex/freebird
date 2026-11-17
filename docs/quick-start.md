@@ -200,8 +200,8 @@ documented backup/recovery procedure.
 No HSM, no online rotation API, no multi-instance or failover, no zeroization
 of superseded key memory, and no multi-key directory with a not-before field.
 The Issuer advertises exactly one key at a time.
-Release remains blocked by independent cryptographic review and operational
-backup/recovery tests.
+Release remains blocked by independent cryptographic review. See the
+[stopped backup and recovery runbook](recovery.md) before restoring any state.
 
 ## Upgrading older state
 

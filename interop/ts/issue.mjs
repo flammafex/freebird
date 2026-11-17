@@ -128,7 +128,8 @@ export async function main(args) {
   equal(token.authInput.challengeDigest, digest);
   const raw = token.serialize();
   assert.equal(raw.length, 354);
-  for (const [name, data] of [['spki.der', spki], ['challenge.bin', bytes], ['token.bin', raw]]) {
+  for (const [name, data] of [['spki.der', spki], ['challenge.bin', bytes],
+    ['request.bin', serialized], ['token.bin', raw]]) {
     const destination = await open(join(outputDir, name), 'wx', 0o600);
     try { await destination.writeFile(data); } finally { await destination.close(); }
   }

@@ -18,7 +18,8 @@ review. Bidirectional tests against pinned TypeScript and Go implementations
 passed locally. Offline key staging, public-key export,
 activation (rotation, Origin first, with an explicit candidate key ID), and
 retirement are implemented for one local instance per role. **Release remains
-blocked** by independent crypto review and operational backup/recovery tests.
+blocked** only by independent crypto review of the RSA backend and protocol
+integration.
 Unsupported: no HSM, no online rotation API, no multi-instance operation, no zeroization of
 superseded key memory, and no multi-key directory with a not-before field.
 The experimental single-host topology uses nginx TLS in front of one

@@ -1,7 +1,6 @@
 //! Experimental, single-instance Origin. Key activation and retirement are offline
-//! (`install_key`, `retire_key`). Never restore a replay-store snapshot in place:
-//! close the service and provision a fresh store AND separately generated context
-//! secret before reopening.
+//! (`install_key`, `retire_key`). Cold snapshot restoration requires an offline
+//! context invalidation; see `invalidate_context_for_restore`.
 use anyhow::{bail, ensure, Context, Result};
 use axum::{
     extract::State,
@@ -168,6 +167,126 @@ fn sync_parent(path: &Path) -> Result<()> {
             .unwrap_or(Path::new(".")),
     )?
     .sync_all()?;
+    Ok(())
+}
+
+/// OFFLINE maintenance only: stop and hold the systemd services BEFORE restoring
+/// a cold snapshot, and keep that maintenance hold until this operation succeeds.
+/// The ownership lock alone cannot prevent a service restart between restoration
+/// and invalidation. Keys (including retired tombstones) and pinned names survive.
+///
+/// Publication precedes the database commit deliberately. A failure after context
+/// publication leaves a hash mismatch that refuses normal startup; never revert
+/// the new secret or automatically reset state. Before publication, errors leave
+/// the old pair startable, which is why the operator maintenance hold is mandatory.
+pub fn invalidate_context_for_restore(
+    db_path: impl AsRef<Path>,
+    context_secret_path: impl AsRef<Path>,
+    now: u64,
+) -> Result<()> {
+    invalidate_context_for_restore_inner(
+        db_path.as_ref(),
+        context_secret_path.as_ref(),
+        now,
+        #[cfg(test)]
+        || Ok(()),
+    )
+}
+
+fn invalidate_context_for_restore_inner(
+    db_path: &Path,
+    secret_path: &Path,
+    now: u64,
+    #[cfg(test)] after_publish: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let _owner = ownership(db_path, false)?;
+    let secret: [u8; 32] = std::fs::read(secret_path)?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid context secret"))?;
+    let now_i64 = i64::try_from(now)?;
+    require_v2(db_path)?;
+    let mut db = connect(db_path, false)?;
+    integrity(&db)?;
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    require_plain_schema(&tx)?;
+    // Refuse altered key/replay schemas before erasing any evidence. Only the
+    // schema produced by this version's initializer is supported by maintenance.
+    let canonical = Connection::open_in_memory()?;
+    canonical.execute_batch(SCHEMA_V2)?;
+    for table in ["metadata", "origin_keys", "challenges", "spent"] {
+        let sql = |db: &Connection| -> Result<String> {
+            Ok(db.query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name=?1",
+                [table],
+                |r| r.get(0),
+            )?)
+        };
+        ensure!(
+            sql(&tx)? == sql(&canonical)?,
+            "unsupported Origin table schema"
+        );
+    }
+    let (hash, high, names) = read_metadata(&tx)?;
+    ensure!(
+        hash == Sha256::digest(secret)[..],
+        "invalid Origin metadata"
+    );
+    ensure!(now >= high, "Origin clock regression");
+    // Explicitly preserve replay corruption evidence before publishing a secret
+    // or deleting rows, independently of read_keys' current validation.
+    validate_replay(&tx)?;
+    let keys = read_keys(&tx)?;
+    let mut fresh = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut fresh);
+    let mut suffix = [0u8; 16];
+    rand::rngs::OsRng.fill_bytes(&mut suffix);
+    let mut temporary = secret_path.as_os_str().to_os_string();
+    temporary.push(format!(".restore-{:032x}", u128::from_ne_bytes(suffix)));
+    let temporary = Path::new(&temporary);
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(temporary)?;
+    let publish = (|| -> Result<()> {
+        file.write_all(&fresh)?;
+        file.sync_all()?;
+        std::fs::rename(temporary, secret_path)?;
+        Ok(())
+    })();
+    if let Err(error) = publish {
+        let _ = std::fs::remove_file(temporary);
+        return Err(error);
+    }
+    sync_parent(secret_path)?;
+    #[cfg(test)]
+    after_publish()?;
+    ensure!(
+        tx.execute(
+            "UPDATE metadata SET secret_hash=?1 WHERE singleton=1",
+            params![&Sha256::digest(fresh)[..]],
+        )? == 1,
+        "context update did not affect exactly one row"
+    );
+    tx.execute("DELETE FROM spent", [])?;
+    tx.execute("DELETE FROM challenges", [])?;
+    advance_high_water(&tx, now_i64, high)?;
+    ensure!(read_keys(&tx)? == keys, "Origin keys changed");
+    let (hash, floor, pinned) = read_metadata(&tx)?;
+    ensure!(
+        hash == Sha256::digest(fresh)[..] && floor == now && pinned == names,
+        "Origin metadata changed unexpectedly"
+    );
+    let count: i64 = tx.query_row(
+        "SELECT (SELECT count(*) FROM challenges)+(SELECT count(*) FROM spent)",
+        [],
+        |r| r.get(0),
+    )?;
+    ensure!(count == 0, "Origin replay rows remain");
+    tx.commit()?;
     Ok(())
 }
 
@@ -1260,6 +1379,79 @@ mod tests {
             install(&db, next, S, S - HOUR)?;
         }
         Ok((db, secret))
+    }
+
+    #[test]
+    fn restore_invalidation_preserves_manifest_and_invalidates_tokens() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (_, old) = signer()?;
+        let (signer, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &old, Some(&key))?;
+        Origin::retire_key(&db, old.key_id(), S + GRACE + RETIRE_MARGIN)?;
+        let now = S + GRACE + RETIRE_MARGIN;
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        origin.request_at(None, now)?;
+        let (challenge, _) = origin.challenge(now)?;
+        let spent = token(&signer, &key, challenge.digest(), 1)?;
+        let unspent = token(&signer, &key, challenge.digest(), 2)?;
+        assert!(origin.request_at(Some(&spent), now)?.is_none());
+        drop(origin);
+        let before = Origin::status(&db, now)?;
+        assert!(before
+            .keys
+            .iter()
+            .any(|k| k.state == OriginKeyState::Retired));
+        assert!(!challenge_rows(&db)?.is_empty());
+        assert!(!spent_rows(&db)?.is_empty());
+        let names = read_metadata(&raw(&db)?)?.2;
+        invalidate_context_for_restore(&db, &secret, now)?;
+        assert_eq!(Origin::status(&db, now)?, before);
+        assert_eq!(read_metadata(&raw(&db)?)?.2, names);
+        assert!(challenge_rows(&db)?.is_empty());
+        assert!(spent_rows(&db)?.is_empty());
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        assert_ne!(origin.challenge(now)?.0.digest(), challenge.digest());
+        assert!(origin.request_at(Some(&spent), now)?.is_some());
+        assert!(origin.request_at(Some(&unspent), now)?.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn restore_invalidation_refuses_corrupt_replay_without_changes() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (_, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &key, None)?;
+        // A well-shaped replay row referencing an unknown key is corrupt.
+        plant(&db, &[0u8; 32], [1; 32], (HOUR + GRACE) as i64)?;
+        let old_secret = std::fs::read(&secret)?;
+        let metadata = read_metadata(&read_only(&db)?)?;
+        let challenges = challenge_rows(&db)?;
+        let spent = spent_rows(&db)?;
+        let db_bytes = std::fs::read(&db)?;
+        assert!(invalidate_context_for_restore(&db, &secret, 1).is_err());
+        assert_eq!(std::fs::read(&secret)?, old_secret);
+        assert_eq!(std::fs::read(&db)?, db_bytes);
+        assert_eq!(read_metadata(&read_only(&db)?)?, metadata);
+        assert_eq!(challenge_rows(&db)?, challenges);
+        assert_eq!(spent_rows(&db)?, spent);
+        Ok(())
+    }
+
+    #[test]
+    fn restore_invalidation_post_publish_failure_refuses_open() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (_, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &key, None)?;
+        let old_secret = std::fs::read(&secret)?;
+        let before = store_snapshot(&db)?;
+        assert!(invalidate_context_for_restore_inner(&db, &secret, 1, || {
+            bail!("injected after publication")
+        })
+        .is_err());
+        assert_ne!(std::fs::read(&secret)?, old_secret);
+        assert_eq!(store_snapshot(&db)?, before);
+        refused(&db, &secret)?;
+        Ok(())
     }
 
     #[test]

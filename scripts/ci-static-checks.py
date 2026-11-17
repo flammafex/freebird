@@ -74,7 +74,7 @@ def check_tree(files: list[str]) -> list[str]:
         if name.startswith(removed) and (ROOT / name).is_file():
             errors.append(f"legacy tracked source remains: {name}")
     origin = (ROOT / "privacy_pass_service/src/origin.rs").read_text()
-    production = origin.split("#[cfg(test)]", 1)[0]
+    production = origin.split("\n#[cfg(test)]\nmod tests", 1)[0]
     # Deliberately only a tripwire over known API spellings, not semantic proof.
     for marker in ("PublicKey::from_spki(&k.spki)", "key: PublicKey"):
         if marker not in production:
@@ -82,6 +82,10 @@ def check_tree(files: list[str]) -> list[str]:
     for marker in ("SecretKey", "RsaPrivateKey", "from_pkcs8", "BEGIN PRIVATE KEY"):
         if marker in production:
             errors.append(f"Origin production private-key tripwire: {marker}")
+    for role in ("issuer", "origin"):
+        unit = (ROOT / f"deploy/systemd/freebird-{role}.service").read_text()
+        if "ConditionPathExists=/etc/freebird/serving-enabled" not in unit:
+            errors.append(f"{role} unit must require the external serving permission")
     return errors
 
 
@@ -125,6 +129,9 @@ jobs:
         errors.append("CI must pin the single test-only interop npm install")
     if "npm " in ci.replace(allowed_install, ""):
         errors.append("CI contains an unapproved npm command")
+    for marker in ("scripts/test-recovery.py", "scripts/test-recovery-catalog.py"):
+        if marker not in ci:
+            errors.append(f"CI must retain recovery evidence: {marker}")
     if "permissions:\n  contents: read\n" not in ci:
         errors.append("CI must retain read-only permissions")
     return errors

@@ -218,7 +218,11 @@ impl AdmissionStore {
             "DELETE FROM invitations WHERE invite_hash=?1 AND expires_at>?2",
             params![hash.as_slice(), now],
         )?;
+        #[cfg(test)]
+        tests::consume_checkpoint("before-commit");
         tx.commit()?;
+        #[cfg(test)]
+        tests::consume_checkpoint("after-commit");
         Ok(deleted == 1)
     }
 
@@ -279,6 +283,149 @@ mod tests {
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
         rows
+    }
+
+    #[test]
+    fn commit_failure_does_not_consume() {
+        let (_dir, db, generation) = setup();
+        let store = AdmissionStore::open(&db, &generation).unwrap();
+        let code = store.provision(100).unwrap();
+        let before = invitations(&db);
+        let attempted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = attempted.clone();
+        store
+            .state()
+            .unwrap()
+            .db
+            .commit_hook(Some(move || {
+                observed.store(true, std::sync::atomic::Ordering::SeqCst);
+                true
+            }))
+            .unwrap();
+        // The DELETE succeeds; SQLite itself rejects the actual COMMIT.
+        let result = store.consume(&code, 101);
+        assert!(result.is_err());
+        assert!(attempted.load(std::sync::atomic::Ordering::SeqCst));
+        store
+            .state()
+            .unwrap()
+            .db
+            .commit_hook(None::<fn() -> bool>)
+            .unwrap();
+        drop(store);
+        let store = AdmissionStore::open(&db, &generation).unwrap();
+        assert_eq!(invitations(&db), before);
+        assert!(store.consume(&code, 101).unwrap());
+        assert!(!store.consume(&code, 101).unwrap());
+    }
+
+    // Only the explicitly selected subprocess installs a checkpoint. Other tests,
+    // including concurrently running consume tests, see a no-op.
+    std::thread_local! {
+        static CHECKPOINT: std::cell::RefCell<Option<(String, PathBuf)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
+    pub(super) fn consume_checkpoint(stage: &str) {
+        CHECKPOINT.with(|checkpoint| {
+            let checkpoint = checkpoint.borrow();
+            if let Some((selected, marker)) = checkpoint.as_ref() {
+                if selected == stage {
+                    let mut file = OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .mode(0o600)
+                        .open(marker)
+                        .unwrap();
+                    file.write_all(b"ready").unwrap();
+                    file.sync_all().unwrap();
+                    loop {
+                        std::thread::park();
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn consume_crash_child() {
+        let Some(dir) = std::env::var_os("FREEBIRD_ADMISSION_CRASH_DIR") else {
+            return;
+        };
+        let dir = PathBuf::from(dir);
+        let stage = fs::read_to_string(dir.join("stage")).unwrap();
+        let code = fs::read_to_string(dir.join("invitation")).unwrap();
+        let store = AdmissionStore::open(dir.join("admission.db"), dir.join("generation")).unwrap();
+        CHECKPOINT.with(|checkpoint| {
+            *checkpoint.borrow_mut() = Some((stage, dir.join("ready")));
+        });
+        let _ = store.consume(&code, 101);
+        panic!("consume returned without reaching crash checkpoint");
+    }
+
+    fn crash_consume(stage: &str) {
+        use std::process::{Child, Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        struct KillOnDrop(Child);
+        impl Drop for KillOnDrop {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        let (dir, db, generation) = setup();
+        let store = AdmissionStore::open(&db, &generation).unwrap();
+        let code = store.provision(100).unwrap();
+        let before = invitations(&db);
+        drop(store);
+        for (name, contents) in [("stage", stage), ("invitation", code.as_str())] {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(dir.path().join(name))
+                .unwrap();
+            file.write_all(contents.as_bytes()).unwrap();
+        }
+        let mut child = KillOnDrop(
+            Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "admission::tests::consume_crash_child"])
+                .env("FREEBIRD_ADMISSION_CRASH_DIR", dir.path())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let deadline = Instant::now() + Duration::from_secs(20);
+        // Timing bounds a failed test only: killing requires explicit evidence
+        // from the checkpoint, never a guessed transaction duration.
+        while !dir.path().join("ready").exists() {
+            assert!(child.0.try_wait().unwrap().is_none(), "child exited early");
+            assert!(Instant::now() < deadline, "checkpoint timed out");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        let store = AdmissionStore::open(&db, &generation).unwrap();
+        if stage == "before-commit" {
+            assert_eq!(invitations(&db), before);
+            assert!(store.consume(&code, 101).unwrap());
+        } else {
+            assert!(invitations(&db).is_empty());
+        }
+        assert!(!store.consume(&code, 101).unwrap());
+    }
+
+    #[test]
+    fn crash_after_delete_rolls_back() {
+        crash_consume("before-commit");
+    }
+
+    #[test]
+    fn crash_after_commit_never_refunds() {
+        crash_consume("after-commit");
     }
 
     #[test]

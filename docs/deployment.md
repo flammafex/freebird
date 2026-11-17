@@ -128,7 +128,12 @@ servers. Check certificate paths, two names, and ports before activation:
 systemctl daemon-reload
 systemd-analyze verify /etc/systemd/system/freebird-{issuer,origin}.service
 nginx -t
+# Only after both roles are initialized, names/keys agree, and checks pass:
+# Record the external key-history catalog and a cold backup first (recovery guide).
+install -o root -g root -m 0644 /dev/null /etc/freebird/serving-enabled
+sync -f /etc/freebird
 systemctl enable --now freebird-issuer.service freebird-origin.service
+systemctl is-active freebird-issuer.service freebird-origin.service
 systemctl reload nginx
 curl --fail --silent --show-error \
   https://issuer.example.org/.well-known/private-token-issuer-directory
@@ -139,6 +144,12 @@ The directory's `issuer-request-uri` must be
 `https://issuer.example.org/private-token/issue`; the protected route returns
 401 with one `WWW-Authenticate` header. Unknown paths return nginx 404. HTTP
 port 80 redirects normal requests to HTTPS; it never proxies to Freebird.
+Both systemd units require `/etc/freebird/serving-enabled`; if it is absent,
+even a manual start is skipped. A skipped start can exit successfully, so
+check `is-active` and the listener rather than trusting the start exit code.
+Removing the file does not stop an already running process.
+Follow the [recovery guide](recovery.md#the-independent-key-history-record)
+to create the external catalog and first cold backup before enabling serving.
 Test end-to-end with a single fresh invitation (this **consumes** it):
 
 ```sh
@@ -157,19 +168,20 @@ This example cannot connect to a remote host and is not a general-purpose SDK.
 To provision again, stop the Issuer, run `provision` as `freebird-issuer` with
 private stdout redirection, then start it. Key staging, activation, and
 retirement follow the [offline rotation runbook](quick-start.md#offline-key-maintenance):
-stop the affected unit, run the corresponding command as **its** role user,
-check both status outputs and the shared activation time, then start the
-unit. The Origin installs the new public key first. Status commands also
-require the unit to be stopped. A deliberate state/configuration refusal exits
+enter the [two-role serving hold](recovery.md#hold-serving-before-touching-state),
+run each command as **its** role user, compare statuses and activation times,
+update the external key-history catalog and cold backup, then release the
+hold. The Origin installs the new public key first. Status commands also
+require the role to be stopped. A deliberate state/configuration refusal exits
 1 and does not auto-restart; inspect `journalctl -u freebird-issuer -u
 freebird-origin`, fix the cause, then `systemctl reset-failed` and start.
 Never edit SQLite files or roll back the clock.
 
 **Do not restore a provider snapshot, disk image, or database copy and then
-start the services.** A rollback can reopen spent tokens and invitations.
-Backup/restore tests and a runnable recovery procedure are still a release
-blocker. Until that procedure exists, do not claim recovery or failover
-support. An upgrade must retain state and the old binary until validated;
+start the services.** A rollback can reopen spent tokens and invitations. Use
+the explicit [stopped backup and recovery procedure](recovery.md), which
+refuses incompatible key history and invalidates old credentials before
+reopening. It is not automatic failover. An upgrade must retain state and the old binary until validated;
 older experimental schema is refused, not silently migrated.
 
 This topology does not supply live invitations, rate limiting, PoW, WebAuthn,

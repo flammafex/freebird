@@ -22,5 +22,6 @@
   CA-pinned local HTTPS client mode and an end-to-end proxy test.
 - Ran pinned TypeScript and Go implementations bidirectionally against Freebird,
   including independent verification, redemption, replay, and negative cases.
-- Release publishing remains blocked pending independent cryptographic review,
-  and operational backup/recovery tests.
+- Added explicit stopped recovery with credential invalidation and key-history
+  refusal, plus cold restore and commit/crash drills.
+- Release publishing remains blocked pending independent cryptographic review.

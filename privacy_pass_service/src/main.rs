@@ -22,6 +22,7 @@ Experimental Privacy Pass (one process per role; no failover or multi-instance).
 Usage:
   freebird-privacy-pass-service init-issuer <issuer-state-dir>
   freebird-privacy-pass-service provision <issuer-state-dir>
+  freebird-privacy-pass-service recover-issuer-admission <issuer-state-dir>
   freebird-privacy-pass-service stage-issuer-key <issuer-state-dir>
   freebird-privacy-pass-service export-issuer-spki <issuer-state-dir> <key-id-hex> <new-output-path>
   freebird-privacy-pass-service issuer-key-status <issuer-state-dir>
@@ -31,6 +32,7 @@ Usage:
   freebird-privacy-pass-service init-origin <origin-state-dir> <genesis-spki-der-path> <key-id-hex>
   freebird-privacy-pass-service install-origin-key <origin-state-dir> <spki-der-path> <key-id-hex> <activation-unix-seconds>
   freebird-privacy-pass-service origin-key-status <origin-state-dir>
+  freebird-privacy-pass-service recover-origin-context <origin-state-dir>
   freebird-privacy-pass-service retire-origin-key <origin-state-dir> <key-id-hex>
   freebird-privacy-pass-service serve-origin <origin-state-dir> <issuer-name> <origin-name> <loopback-bind>
 Listeners are loopback HTTP ONLY, not production TLS. The HTTPS request URL
@@ -403,6 +405,21 @@ async fn run(args: &[String]) -> Result<()> {
                 })
         }
         [command, dir] if command == "origin-key-status" => origin_key_status(Path::new(dir)),
+        [command, dir] if command == "recover-origin-context" => {
+            let now = unix_now()?;
+            let dir = Path::new(dir);
+            origin::invalidate_context_for_restore(
+                dir.join("origin.sqlite"),
+                dir.join("context"),
+                now,
+            )
+            .map_err(|error| {
+                surface(
+                    &error,
+                    "Origin recovery refused; keep both services stopped",
+                )
+            })
+        }
         [command, dir, key_id] if command == "retire-origin-key" => {
             let key_id = parse_key_id(key_id)?;
             let now = unix_now()?;
@@ -427,6 +444,9 @@ async fn run(args: &[String]) -> Result<()> {
                 .and_then(|()| stdout.flush())
                 .map_err(|_| "invitation output failed; no automatic retry")
         }
+        [command, dir] if command == "recover-issuer-admission" => admission(Path::new(dir))?
+            .rotate_generation_for_restore()
+            .map_err(|_| "admission recovery refused; keep both services stopped"),
         [command, dir, name, request_url, bind] if command == "serve-issuer" => {
             let bind = loopback_bind(bind)?;
             let uri: axum::http::Uri = request_url

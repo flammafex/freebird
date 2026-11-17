@@ -16,7 +16,9 @@ HTTPS authority; transport remains strictly numeric loopback HTTP. Redirects
 and proxy environment variables are not used. Files are exclusively created
 with mode 0600; reruns require a fresh directory. Failed writes may leave
 partial artifacts: discard the private output directory before retrying.
-No redemption is performed here; the Go verifier consumes the three artifacts.
+No redemption is performed here; the Go verifier consumes the SPKI, challenge,
+and token artifacts. The private `request.bin` also supports recovery tests
+that prove old invitations are refused with a valid issuance request.
 
 Installed API confirmed in `lib/src/index.d.ts`, `pub_verif_token.d.ts`,
 `auth_scheme/private_token.d.ts`, and `pub_verif_token.js`:

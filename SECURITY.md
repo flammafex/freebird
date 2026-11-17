@@ -68,13 +68,19 @@ invitation headers/bodies; its error log can still record client IP addresses.
 An operator running both roles can correlate network metadata. Replicas,
 shared hosts, containers, alternative proxies, CDNs, and load balancers are
 not supported.
-Do not copy only the SQLite main file for backups: a consistent backup must
-include committed WAL state. Restoring an older Origin snapshot requires
-maintenance shutdown and fresh context-secret/store state, invalidating old
-tokens. Restoring the admission store requires rotating its invitation
-generation and invalidating old invitations before service resumes. An
-unannounced rollback of both data and recovery markers cannot be detected
-locally. No automatic failover or multi-replica safety is claimed.
+Do not copy only a live SQLite main file for backup: a cold, stopped backup
+must include any committed WAL state and the associated generation/context
+files. The [manual recovery procedure](docs/recovery.md) keeps both roles
+stopped under an external serving-permission hold, checks the complete key
+history against an operator-held catalog outside the restore scope, then
+rotates the Issuer admission generation and the Origin context. Origin
+recovery deletes all old challenges and spends in the same transaction as
+its context-hash update, preserving key tombstones and high-water. Old tokens
+and invitations are invalidated before either role resumes. A crash between
+context publication and database commit leaves a hash mismatch and refuses
+startup. Stale key histories are refused, not reconstructed. An unannounced
+rollback of both data and the external catalog/serving permission cannot be
+detected locally. No automatic failover or multi-replica safety is claimed.
 
 Offline candidate staging, public-only SPKI export, activation/rotation, and
 retirement are implemented, each guarded by its store's lifetime lock, for one
@@ -106,8 +112,13 @@ This campaign satisfies the parser-fuzzing release gate. Property tests for the
 codec targets run in CI on every change; further fuzzing is encouraged but is
 not a release requirement.
 
-**Release blockers:** independent review of the selected RSA backend and
-protocol integration; and operational backup/recovery tests. The
+**Release blocker:** independent review of the selected RSA backend and
+protocol integration. The operational backup/recovery gate is met by
+[stopped partial/full restore drills and fault-injection tests](docs/recovery.md):
+all three databases are backed up and restored, old credentials rejected,
+new credentials single-use, a real SQLite commit rejection rolled back, and
+subprocess crashes before/after admission commit preserve the correct state.
+The
 interoperability gate is met by the
 [bidirectional harnesses](docs/protocol/interop-test-plan.md). The
 deployment-topology gate is met by the
