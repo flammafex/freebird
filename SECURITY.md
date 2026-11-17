@@ -106,16 +106,27 @@ This campaign satisfies the parser-fuzzing release gate. Property tests for the
 codec targets run in CI on every change; further fuzzing is encouraged but is
 not a release requirement.
 
-**Release blockers:** independent review of the selected RSA
-backend and protocol integration;
-independent implementation interoperability (see the
-[interop test plan](docs/protocol/interop-test-plan.md)); operational
-backup/recovery tests. The deployment-topology gate is met by the
+**Release blockers:** independent review of the selected RSA backend and
+protocol integration; and operational backup/recovery tests. The
+interoperability gate is met by the
+[bidirectional harnesses](docs/protocol/interop-test-plan.md). The
+deployment-topology gate is met by the
 [single-host template and automated TLS proxy round trip](docs/deployment.md);
 the systemd units have not yet been exercised under systemd on this macOS
 development host. The release, container, and SDK publishers remain disabled.
 See the
 [phase-one contract](docs/protocol/privacy-pass-phase1.md).
+
+On 2026-11-17, independent implementation interop passed locally in both
+planned directions: `@cloudflare/privacypass-ts` 0.9.0 issued through Freebird
+and its token passed `go.vitalvas.com/kasper` v1.1.0 verification and Freebird
+redemption/replay checks; `pat-go` commit
+`7e6bbd0e4fa84c51ac6a6666d33770a120e68d63` independently issued and
+redeemed through Freebird. The [reproducible harness and byte-level checks](docs/protocol/interop-test-plan.md)
+meet the interoperability gate, not the cryptographic review gate. The pinned
+TypeScript test dependency reports the `sjcl` ECC advisory
+[GHSA-2w8x-224x-785m](https://github.com/advisories/GHSA-2w8x-224x-785m);
+its Type 2 RSA-only test use does not make that advisory safe for other uses.
 
 ## Reporting vulnerabilities
 

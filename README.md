@@ -14,11 +14,11 @@ nonstandard, one-use operator invitation to control issuance quantity.
 **Do not deploy as a production authorization system.** GitHub release
 publishing is blocked. The RFC 9474 library is pinned to a compatibility fork
 using stable RustCrypto RSA; the fork and signing path still require independent
-review and interoperability testing. Offline key staging, public-key export,
+review. Bidirectional tests against pinned TypeScript and Go implementations
+passed locally. Offline key staging, public-key export,
 activation (rotation, Origin first, with an explicit candidate key ID), and
 retirement are implemented for one local instance per role. **Release remains
-blocked** by independent crypto review, independent interop,
-and operational backup/recovery tests.
+blocked** by independent crypto review and operational backup/recovery tests.
 Unsupported: no HSM, no online rotation API, no multi-instance operation, no zeroization of
 superseded key memory, and no multi-key directory with a not-before field.
 The experimental single-host topology uses nginx TLS in front of one

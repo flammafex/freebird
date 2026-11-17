@@ -20,5 +20,7 @@
   replay-state pruning, and an independent-implementation interoperability plan.
 - Added a single-host nginx/TLS and systemd deployment template, plus a
   CA-pinned local HTTPS client mode and an end-to-end proxy test.
+- Ran pinned TypeScript and Go implementations bidirectionally against Freebird,
+  including independent verification, redemption, replay, and negative cases.
 - Release publishing remains blocked pending independent cryptographic review,
-  independent interoperability testing and operational backup/recovery tests.
+  and operational backup/recovery tests.

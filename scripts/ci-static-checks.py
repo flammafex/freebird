@@ -115,9 +115,16 @@ jobs:
         errors.append("only CI and held release workflows are allowed")
     ci = (directory / "ci.yml").read_text()
     for marker in ("packages:", "write", "publish", "upload-artifact", "gh release",
-                   "docker build", "npm ", "release-gate.py"):
+                   "docker build", "release-gate.py"):
         if marker in ci:
             errors.append(f"CI contains forbidden publishing/legacy marker: {marker}")
+    # Test-only interoperability needs one reproducible install, not the old
+    # SDK/publishing workflow. Reject all other npm commands.
+    allowed_install = "npm ci --ignore-scripts"
+    if ci.count(allowed_install) != 1 or "working-directory: interop/ts" not in ci:
+        errors.append("CI must pin the single test-only interop npm install")
+    if "npm " in ci.replace(allowed_install, ""):
+        errors.append("CI contains an unapproved npm command")
     if "permissions:\n  contents: read\n" not in ci:
         errors.append("CI must retain read-only permissions")
     return errors

@@ -205,8 +205,7 @@ not roll back retirement or turn its success into a reported failure. This is
 not a destruction guarantee for journal copies, backups, snapshots, or process
 memory, and no zeroization is claimed. There is no HSM, online rotation API,
 multi-instance operation, or multi-key not-before directory. Release remains
-blocked by independent crypto review, independent interop, and operational
-backup/recovery tests.
+blocked by independent crypto review and operational backup/recovery tests.
 
 ## Verification and release gates
 
@@ -246,10 +245,9 @@ Exit criteria for the end-to-end sketch:
    the new flow before any release is tagged. Intermediate commits are not
    deployable.
 
-**Release blockers, even after a green sketch:** independent implementation
-interop, security review of the selected RSA backend (including timing/fault
-defenses), and an operator-tested backup/recovery procedure for the
-single-host topology. Do not call this
+**Release blockers, even after a green sketch:** security review of the
+selected RSA backend (including timing/fault defenses) and an operator-tested
+backup/recovery procedure for the single-host topology. Do not call this
 production-ready merely because the happy path passes.
 
 Out of scope: token type `0x0001`, batch issuance, draft

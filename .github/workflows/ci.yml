@@ -10,6 +10,29 @@ permissions:
   contents: read
 
 jobs:
+  interop:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+          cache-dependency-path: interop/go/go.sum
+      - run: cargo build --locked -p freebird-privacy-pass-service --bin freebird-privacy-pass-service
+      - run: npm ci --ignore-scripts
+        working-directory: interop/ts
+      - run: go mod download
+        working-directory: interop/go
+      - run: node --test
+        working-directory: interop/ts
+      - run: go test ./...
+        working-directory: interop/go
+      - run: python3 scripts/test-interop.py
+
   deployment-proxy:
     runs-on: ubuntu-24.04
     steps:
