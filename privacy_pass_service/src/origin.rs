@@ -17,7 +17,9 @@ use freebird_crypto::privacy_pass::PublicKey;
 use fs2::FileExt;
 use hmac::{Hmac, Mac};
 use rand::RngCore;
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
+use rusqlite::{
+    params, types::ValueRef, Connection, OpenFlags, OptionalExtension, TransactionBehavior,
+};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{File, OpenOptions},
@@ -33,6 +35,8 @@ const HOUR: u64 = 3600;
 const GRACE: u64 = 300;
 /// Additional safety margin after the superseded key's acceptance deadline.
 const RETIRE_MARGIN: u64 = 120;
+const PRUNE_BATCH: i64 = 256;
+const ORIGIN_CAPACITY: usize = 2;
 const V1_REFUSAL: &str = "origin schema v1 unsupported; no migration — initialize fresh state";
 const SCHEMA_V2: &str = "CREATE TABLE metadata (
         singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -55,6 +59,7 @@ const SCHEMA_V2: &str = "CREATE TABLE metadata (
 
 pub struct Origin {
     db: Mutex<Connection>,
+    workers: Arc<tokio::sync::Semaphore>,
     _ownership: File,
     secret: [u8; 32],
     /// Non-retired keys, ascending by activation hour. Loaded once at open.
@@ -274,61 +279,141 @@ fn read_keys(db: &Connection) -> Result<Vec<StoredKey>> {
             seen_live = true;
         }
     }
-    let count = |sql: &str| -> Result<i64> { Ok(db.query_row(sql, [], |r| r.get(0))?) };
+    validate_replay(db)?;
+    Ok(keys)
+}
+
+/// Validate before expiry can erase evidence. This streams key metadata and
+/// probes replay invariants in SQL; the request path never reparses SPKIs.
+fn validate_replay(db: &Connection) -> Result<()> {
+    let exists = |sql: &str| -> Result<bool> { Ok(db.query_row(sql, [], |r| r.get(0))?) };
+    for sql in [
+        "SELECT EXISTS(SELECT 1 FROM challenges WHERE
+         typeof(key_id)<>'blob' OR length(key_id)<>32 OR
+         typeof(digest)<>'blob' OR length(digest)<>32 OR typeof(deadline)<>'integer')",
+        "SELECT EXISTS(SELECT 1 FROM spent WHERE
+         typeof(key_id)<>'blob' OR length(key_id)<>32 OR
+         typeof(digest)<>'blob' OR length(digest)<>32 OR
+         typeof(nonce)<>'blob' OR length(nonce)<>32 OR typeof(deadline)<>'integer')",
+    ] {
+        ensure!(!exists(sql)?, "corrupt Origin store: malformed replay row");
+    }
     ensure!(
-        count(
-            "SELECT COUNT(*) FROM challenges WHERE key_id NOT IN (SELECT key_id FROM origin_keys)"
-        )? == 0
-            && count(
-                "SELECT COUNT(*) FROM spent WHERE key_id NOT IN (SELECT key_id FROM origin_keys)"
-            )? == 0,
+        !exists(
+            "SELECT EXISTS(SELECT 1 FROM challenges WHERE key_id NOT IN (SELECT key_id FROM origin_keys))
+             OR EXISTS(SELECT 1 FROM spent WHERE key_id NOT IN (SELECT key_id FROM origin_keys))"
+        )?,
         "corrupt Origin store: row references unknown key"
     );
     ensure!(
-        count(
-            "SELECT COUNT(*) FROM challenges WHERE key_id IN (SELECT key_id FROM origin_keys WHERE retired=1)"
-        )? == 0
-            && count(
-                "SELECT COUNT(*) FROM spent WHERE key_id IN (SELECT key_id FROM origin_keys WHERE retired=1)"
-            )? == 0,
+        !exists(
+            "SELECT EXISTS(SELECT 1 FROM challenges WHERE key_id IN (SELECT key_id FROM origin_keys WHERE retired=1))
+             OR EXISTS(SELECT 1 FROM spent WHERE key_id IN (SELECT key_id FROM origin_keys WHERE retired=1))"
+        )?,
         "corrupt Origin store: retired key has rows"
     );
-    // Even the first challenge for a key must come from its activation hour or later.
-    for key in &keys {
-        let earliest = (key.hour + 1) * HOUR + GRACE;
-        let min: Option<i64> = db.query_row(
-            "SELECT MIN(deadline) FROM (
-                SELECT deadline FROM challenges WHERE key_id=?1
-                UNION ALL SELECT deadline FROM spent WHERE key_id=?1)",
-            [key.key_id.as_slice()],
-            |r| r.get(0),
-        )?;
-        if let Some(min) = min {
+    ensure!(
+        !exists(
+            "SELECT EXISTS(SELECT 1 FROM spent s JOIN challenges c
+             ON c.key_id=s.key_id AND c.digest=s.digest WHERE s.deadline<>c.deadline)"
+        )?,
+        "corrupt Origin store: inconsistent replay deadlines"
+    );
+    let mut stmt = db.prepare(
+        "SELECT key_id,activation_hour,retired FROM origin_keys ORDER BY activation_hour",
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut previous: Option<([u8; 32], u64)> = None;
+    let mut live = 0usize;
+    while let Some(row) = rows.next()? {
+        let key_id: [u8; 32] = row.get_ref(0)?.as_blob()?.try_into()?;
+        let hour = u64::try_from(row.get::<_, i64>(1)?)?;
+        let retired: i64 = row.get(2)?;
+        ensure!(hour_fits(hour), "corrupt Origin key");
+        ensure!(retired == 0 || retired == 1, "corrupt Origin key");
+        if retired == 1 {
             ensure!(
-                u64::try_from(min).is_ok_and(|m| m >= earliest),
-                "corrupt Origin store: row predates key activation"
+                live == 0,
+                "corrupt Origin key set: retired key newer than a live key"
             );
+        } else {
+            live += 1;
         }
-    }
-    // Invariant 7: all superseded-key replay rows expire by successor + grace.
-    for pair in keys.windows(2) {
-        let (key, successor) = (&pair[0], &pair[1]);
-        let limit = successor.hour * HOUR + GRACE;
-        let max: Option<i64> = db.query_row(
-            "SELECT MAX(deadline) FROM (
-                SELECT deadline FROM challenges WHERE key_id=?1
-                UNION ALL SELECT deadline FROM spent WHERE key_id=?1)",
-            [key.key_id.as_slice()],
-            |r| r.get(0),
-        )?;
-        if let Some(max) = max {
+        if let Some((previous_id, previous_hour)) = previous {
+            ensure!(hour > previous_hour, "corrupt Origin activation order");
+            // Checked successor deadline: never add margins to SQLite integers.
+            let limit = i64::try_from(
+                hour.checked_mul(HOUR)
+                    .and_then(|s| s.checked_add(GRACE))
+                    .context("successor deadline overflow")?,
+            )?;
+            let outlives: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM challenges WHERE key_id=?1 AND deadline>?2)
+                 OR EXISTS(SELECT 1 FROM spent WHERE key_id=?1 AND deadline>?2)",
+                params![previous_id.as_slice(), limit],
+                |r| r.get(0),
+            )?;
             ensure!(
-                u64::try_from(max).is_ok_and(|m| m <= limit),
+                !outlives,
                 "corrupt Origin store: superseded key replay row outlives successor grace"
             );
         }
+        // A key's first possible challenge expires at activation + hour + grace.
+        // A maximal installable hour may have no representable first deadline;
+        // it is still installable, but cannot have any replay rows.
+        let earliest = hour
+            .checked_add(1)
+            .and_then(|h| h.checked_mul(HOUR))
+            .and_then(|s| s.checked_add(GRACE))
+            .and_then(|s| i64::try_from(s).ok());
+        let predates: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM challenges WHERE key_id=?1 AND (?2 IS NULL OR deadline<?2))
+             OR EXISTS(SELECT 1 FROM spent WHERE key_id=?1 AND (?2 IS NULL OR deadline<?2))",
+            params![key_id.as_slice(), earliest],
+            |r| r.get(0),
+        )?;
+        ensure!(
+            !predates,
+            "corrupt Origin store: row predates key activation"
+        );
+        previous = Some((key_id, hour));
     }
-    Ok(keys)
+    ensure!((1..=3).contains(&live), "corrupt Origin key set");
+    Ok(())
+}
+
+fn advance_high_water(db: &Connection, now: i64, high: u64) -> Result<()> {
+    let changed = db.execute(
+        "UPDATE metadata SET high_water=?1 WHERE singleton=1 AND version=2 AND high_water=?2",
+        params![now, i64::try_from(high)?],
+    )?;
+    ensure!(changed == 1, "clock update did not affect exactly one row");
+    Ok(())
+}
+
+fn prune_replay(db: &Connection, now: i64) -> Result<()> {
+    let Some(cutoff) = now.checked_sub(i64::try_from(RETIRE_MARGIN)?) else {
+        return Ok(());
+    };
+    if cutoff < 0 {
+        return Ok(());
+    }
+    db.execute(
+        "DELETE FROM challenges WHERE (key_id,digest) IN (
+           SELECT c.key_id,c.digest FROM challenges AS c WHERE c.deadline<=?1
+           AND EXISTS(SELECT 1 FROM origin_keys AS k WHERE k.key_id=c.key_id AND k.retired=0)
+           ORDER BY c.key_id,c.digest LIMIT ?2)",
+        params![cutoff, PRUNE_BATCH],
+    )?;
+    db.execute(
+        "DELETE FROM spent WHERE (key_id,digest,nonce) IN (
+           SELECT s.key_id,s.digest,s.nonce FROM spent AS s WHERE s.deadline<=?1
+           AND EXISTS(SELECT 1 FROM origin_keys AS k WHERE k.key_id=s.key_id AND k.retired=0)
+           AND NOT EXISTS(SELECT 1 FROM challenges AS c WHERE c.key_id=s.key_id AND c.digest=s.digest)
+           ORDER BY s.key_id,s.digest,s.nonce LIMIT ?2)",
+        params![cutoff, PRUNE_BATCH],
+    )?;
+    Ok(())
 }
 
 fn key_row_counts(db: &Connection, key_id: [u8; 32]) -> Result<(i64, i64)> {
@@ -340,41 +425,90 @@ fn key_row_counts(db: &Connection, key_id: [u8; 32]) -> Result<(i64, i64)> {
     )?)
 }
 
-type ChallengeRow = (Vec<u8>, Vec<u8>, i64);
-type SpentRow = (Vec<u8>, Vec<u8>, Vec<u8>, i64);
-
 #[derive(Debug, PartialEq, Eq)]
-struct ReplayRows {
-    challenges: Vec<ChallengeRow>,
-    spent: Vec<SpentRow>,
+struct ReplayDigest {
+    challenges: u64,
+    spent: u64,
+    sha256: [u8; 32],
 }
 
-fn other_replay_rows(db: &Connection, target: [u8; 32]) -> Result<ReplayRows> {
-    let challenges = db
-        .prepare(
-            "SELECT key_id,digest,deadline FROM challenges WHERE key_id!=?1
-             ORDER BY key_id,digest,deadline",
-        )?
-        .query_map([target.as_slice()], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    let spent = db
-        .prepare(
-            "SELECT key_id,digest,nonce,deadline FROM spent WHERE key_id!=?1
-             ORDER BY key_id,digest,nonce,deadline",
-        )?
-        .query_map([target.as_slice()], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(ReplayRows { challenges, spent })
+fn hash_lp(hash: &mut Sha256, bytes: &[u8]) -> Result<()> {
+    hash.update(u64::try_from(bytes.len())?.to_be_bytes());
+    hash.update(bytes);
+    Ok(())
 }
 
-fn ensure_other_replay_rows(db: &Connection, target: [u8; 32], before: &ReplayRows) -> Result<()> {
+/// Canonical, constant-memory replay fingerprint. Its preservation check relies
+/// on SHA-256 collision resistance, not literal equality of materialized rows.
+fn replay_digest(db: &Connection, excluded_key: Option<[u8; 32]>) -> Result<ReplayDigest> {
+    let mut hash = Sha256::new();
+    hash_lp(&mut hash, b"freebird-origin-replay-v1")?;
+    match excluded_key {
+        None => hash.update([0]),
+        Some(key) => {
+            hash.update([1]);
+            hash_lp(&mut hash, &key)?;
+        }
+    }
+    let mut counts = [0u64; 2];
+    for (index, (table, columns, sql)) in [
+        (
+            b"challenges".as_slice(),
+            3u32,
+            "SELECT key_id,digest,deadline FROM challenges WHERE (?1 IS NULL OR key_id<>?1)
+             ORDER BY key_id,digest",
+        ),
+        (
+            b"spent".as_slice(),
+            4u32,
+            "SELECT key_id,digest,nonce,deadline FROM spent WHERE (?1 IS NULL OR key_id<>?1)
+             ORDER BY key_id,digest,nonce",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        hash_lp(&mut hash, table)?;
+        hash.update(columns.to_be_bytes());
+        let mut stmt = db.prepare(sql)?;
+        let mut rows = stmt.query([excluded_key.as_ref().map(|key| key.as_slice())])?;
+        while let Some(row) = rows.next()? {
+            hash.update([1]);
+            for column in 0..columns as usize {
+                match row.get_ref(column)? {
+                    ValueRef::Blob(bytes) if column + 1 < columns as usize => {
+                        hash.update([1]);
+                        hash_lp(&mut hash, bytes)?;
+                    }
+                    ValueRef::Integer(value) if column + 1 == columns as usize => {
+                        hash.update([2]);
+                        hash_lp(&mut hash, &value.to_be_bytes())?;
+                    }
+                    _ => bail!("unexpected SQLite replay column type"),
+                }
+            }
+            counts[index] = counts[index]
+                .checked_add(1)
+                .context("replay count overflow")?;
+        }
+        hash.update([0]);
+        hash.update(counts[index].to_be_bytes());
+    }
+    Ok(ReplayDigest {
+        challenges: counts[0],
+        spent: counts[1],
+        sha256: hash.finalize().into(),
+    })
+}
+
+fn ensure_replay_digest(
+    db: &Connection,
+    excluded_key: Option<[u8; 32]>,
+    before: &ReplayDigest,
+) -> Result<()> {
     ensure!(
-        other_replay_rows(db, target)? == *before,
-        "retirement changed another key's replay rows"
+        replay_digest(db, excluded_key)? == *before,
+        "operation changed protected replay rows"
     );
     Ok(())
 }
@@ -512,6 +646,7 @@ impl Origin {
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             db: Mutex::new(db),
+            workers: Arc::new(tokio::sync::Semaphore::new(ORIGIN_CAPACITY)),
             _ownership: owner,
             secret,
             keys,
@@ -564,6 +699,7 @@ impl Origin {
         let (_, high, _) = read_metadata(&tx)?;
         ensure!(now >= high, "clock regression");
         let keys = read_keys(&tx)?;
+        let replay_before = replay_digest(&tx, None)?;
         let hour = now / HOUR;
         match keys.iter().find(|k| k.key_id == expected_key_id) {
             Some(existing) if existing.retired => {
@@ -606,10 +742,7 @@ impl Origin {
                 ensure!(inserted == 1, "installation did not insert exactly one key");
             }
         }
-        tx.execute(
-            "UPDATE metadata SET high_water=?1 WHERE singleton=1",
-            [now_sql],
-        )?;
+        advance_high_water(&tx, now_sql, high)?;
         let after = read_keys(&tx)?;
         let target = after
             .iter()
@@ -630,6 +763,7 @@ impl Origin {
             read_metadata(&tx)?.1 == now,
             "installation did not advance high-water mark"
         );
+        ensure_replay_digest(&tx, None, &replay_before)?;
         tx.commit()?;
         Ok(())
     }
@@ -670,7 +804,7 @@ impl Origin {
             now >= retire_at,
             "origin key retirement safety margin has not elapsed"
         );
-        let other_rows = other_replay_rows(&tx, key_id)?;
+        let other_rows = replay_digest(&tx, Some(key_id))?;
 
         tx.execute("DELETE FROM spent WHERE key_id=?1", [key_id.as_slice()])?;
         tx.execute(
@@ -682,10 +816,7 @@ impl Origin {
             [key_id.as_slice()],
         )?;
         ensure!(changed == 1, "retirement did not update exactly one key");
-        tx.execute(
-            "UPDATE metadata SET high_water=?1 WHERE singleton=1",
-            [now_sql],
-        )?;
+        advance_high_water(&tx, now_sql, high)?;
 
         let after = read_keys(&tx)?;
         let retired = after
@@ -707,11 +838,11 @@ impl Origin {
             key_row_counts(&tx, key_id)? == (0, 0),
             "retirement left target replay rows"
         );
-        ensure_other_replay_rows(&tx, key_id, &other_rows)?;
         ensure!(
             read_metadata(&tx)?.1 == now,
             "retirement did not advance high-water mark"
         );
+        ensure_replay_digest(&tx, Some(key_id), &other_rows)?;
         tx.commit()?;
         Ok(())
     }
@@ -739,30 +870,67 @@ impl Origin {
         ))
     }
 
-    /// All requests, including invalid credentials, advance the durable clock.
+    /// Admitted, committed requests, including invalid credentials, advance the
+    /// durable clock and prune at most 256 rows per replay table after expiry + 120.
     /// A token is verified only with the non-retired key whose exact key_id it
     /// names (no trial verification across keys). Challenges are recorded under
-    /// the advertising key. No pruning: retaining spent rows is conservative.
+    /// the advertising key. Never evict redeemable spends to impose a quota.
+    ///
+    /// Synchronous and outside the HTTP worker semaphore: library callers must
+    /// run it on a blocking thread and bound their own concurrency. The HTTP
+    /// router applies the two-permit admission gate.
     pub fn request_at(&self, token: Option<&Token>, now: u64) -> Result<Option<String>> {
-        let now_sql = i64::try_from(now)?;
+        self.request_with_clock(token, || Ok(now))
+    }
+
+    fn request_now(&self, token: Option<&Token>) -> Result<Option<String>> {
+        self.request_with_clock(token, || {
+            Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
+        })
+    }
+
+    /// Sample only after taking the connection mutex and beginning the
+    /// transaction, so queued blocking jobs do not carry stale clock readings.
+    fn request_with_clock(
+        &self,
+        token: Option<&Token>,
+        clock: impl FnOnce() -> Result<u64>,
+    ) -> Result<Option<String>> {
+        self.request_with_prune_hook(token, clock, |_| Ok(()))
+    }
+
+    // A private transaction seam for failure injection; production always passes
+    // a no-op. It cannot bypass validation, commit, or the high-water check.
+    fn request_with_prune_hook(
+        &self,
+        token: Option<&Token>,
+        clock: impl FnOnce() -> Result<u64>,
+        after_prune: impl FnOnce(&Connection) -> Result<()>,
+    ) -> Result<Option<String>> {
         let mut db = self
             .db
             .lock()
             .map_err(|_| anyhow::anyhow!("store poisoned"))?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let now = clock()?;
+        let now_sql = i64::try_from(now)?;
         require_plain_schema(&tx)?;
-        let high: i64 = tx.query_row(
-            "SELECT high_water FROM metadata WHERE singleton=1",
-            [],
-            |r| r.get(0),
-        )?;
-        if now_sql < high {
-            bail!("clock regression");
-        }
-        tx.execute(
-            "UPDATE metadata SET high_water=?1 WHERE singleton=1",
-            [now_sql],
-        )?;
+        let (hash, high, pinned) = read_metadata(&tx)?;
+        ensure!(
+            hash == Sha256::digest(self.secret)[..]
+                && pinned.as_deref()
+                    == Some(
+                        TokenChallenge::new(&self.issuer, &[], &self.name)?
+                            .serialize()
+                            .as_slice()
+                    ),
+            "invalid Origin metadata"
+        );
+        validate_replay(&tx)?;
+        ensure!(now >= high, "clock regression");
+        advance_high_water(&tx, now_sql, high)?;
+        prune_replay(&tx, now_sql)?;
+        after_prune(&tx)?;
         let mut accepted = false;
         if let Some(token) = token {
             if let Some(live) = self.keys.iter().find(|k| k.key_id == token.token_key_id) {
@@ -814,6 +982,10 @@ impl Origin {
                 deadline - now,
             ))
         };
+        ensure!(
+            read_metadata(&tx)?.1 == now,
+            "request did not advance high-water mark"
+        );
         tx.commit()?;
         Ok(challenge)
     }
@@ -826,6 +998,23 @@ pub fn router(origin: Arc<Origin>) -> Router {
 }
 
 async fn protected(State(origin): State<Arc<Origin>>, headers: HeaderMap) -> Response {
+    protected_with_request(origin, headers, |origin, token| origin.request_now(token)).await
+}
+
+async fn protected_with_request(
+    origin: Arc<Origin>,
+    headers: HeaderMap,
+    request: impl FnOnce(&Origin, Option<&Token>) -> Result<Option<String>> + Send + 'static,
+) -> Response {
+    let permit = match origin.workers.clone().try_acquire_owned() {
+        Ok(permit) => permit,
+        Err(tokio::sync::TryAcquireError::NoPermits) => {
+            return StatusCode::TOO_MANY_REQUESTS.into_response()
+        }
+        Err(tokio::sync::TryAcquireError::Closed) => {
+            return StatusCode::SERVICE_UNAVAILABLE.into_response()
+        }
+    };
     let mut fields = headers.get_all(header::AUTHORIZATION).iter();
     let first = fields.next();
     let token = if fields.next().is_none() {
@@ -835,13 +1024,16 @@ async fn protected(State(origin): State<Arc<Origin>>, headers: HeaderMap) -> Res
     } else {
         None
     };
-    let result = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(anyhow::Error::from)
-        .and_then(|now| origin.request_at(token.as_ref(), now.as_secs()));
+    // Cancellation drops the HTTP future, not the job or its permit. A lost
+    // response may burn a token; never refund a possibly committed redemption.
+    let result = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        request(&origin, token.as_ref())
+    })
+    .await;
     match result {
-        Ok(None) => (StatusCode::OK, "protected resource\n").into_response(),
-        Ok(Some(challenge)) => match HeaderValue::from_str(&challenge) {
+        Ok(Ok(None)) => (StatusCode::OK, "protected resource\n").into_response(),
+        Ok(Ok(Some(challenge))) => match HeaderValue::from_str(&challenge) {
             Ok(value) => (
                 StatusCode::UNAUTHORIZED,
                 [(header::WWW_AUTHENTICATE, value)],
@@ -849,7 +1041,7 @@ async fn protected(State(origin): State<Arc<Origin>>, headers: HeaderMap) -> Res
                 .into_response(),
             Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
         },
-        Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Ok(Err(_)) | Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
 
@@ -862,6 +1054,16 @@ mod tests {
 
     const H: u64 = 500_000;
     const S: u64 = H * HOUR;
+
+    type ChallengeRow = (Vec<u8>, Vec<u8>, i64);
+    type SpentRow = (Vec<u8>, Vec<u8>, Vec<u8>, i64);
+
+    // Only test snapshots materialize rows; production fingerprints stream them.
+    #[derive(Debug, PartialEq, Eq)]
+    struct ReplayRows {
+        challenges: Vec<ChallengeRow>,
+        spent: Vec<SpentRow>,
+    }
 
     /// Schema v1 exactly as the previous release created it.
     const V1_FIXTURE: &str = "CREATE TABLE metadata (
@@ -930,6 +1132,47 @@ mod tests {
             params![key_id, digest.as_slice(), deadline],
         )?;
         Ok(())
+    }
+
+    fn plant_spend(
+        db: &Connection,
+        key_id: [u8; 32],
+        digest: [u8; 32],
+        nonce: [u8; 32],
+        deadline: i64,
+    ) -> Result<()> {
+        db.execute(
+            "INSERT INTO spent VALUES(?1,?2,?3,?4)",
+            params![
+                key_id.as_slice(),
+                digest.as_slice(),
+                nonce.as_slice(),
+                deadline
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn authorization(token: &Token) -> Result<HeaderMap> {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::AUTHORIZATION,
+            HeaderValue::from_str(&freebird_common::privacy_pass::build_authorization_header(
+                token,
+            ))?,
+        );
+        Ok(headers)
+    }
+
+    async fn protected_with_clock(
+        origin: Arc<Origin>,
+        headers: HeaderMap,
+        clock: impl FnOnce() -> Result<u64> + Send + 'static,
+    ) -> Response {
+        protected_with_request(origin, headers, move |origin, token| {
+            origin.request_with_clock(token, clock)
+        })
+        .await
     }
 
     fn challenge_rows(db: &Path) -> Result<Vec<ChallengeRow>> {
@@ -1482,6 +1725,14 @@ mod tests {
         let (db, secret) = fresh(dir.path(), &genesis, reschedule.then_some(&next))?;
         let now = S - HOUR + 1;
         drop(Origin::open(&db, &secret, "issuer", "origin")?);
+        plant(&db, &genesis.key_id(), [1; 32], (S + GRACE) as i64)?;
+        plant_spend(
+            &raw(&db)?,
+            genesis.key_id(),
+            [1; 32],
+            [2; 32],
+            (S + GRACE) as i64,
+        )?;
         let before = Origin::status(&db, now)?;
         let snapshot = store_snapshot(&db)?;
         raw(&db)?.execute_batch(trigger)?;
@@ -1543,6 +1794,20 @@ mod tests {
              BEGIN SELECT RAISE(IGNORE); END;",
             false,
         )
+    }
+
+    #[test]
+    fn install_and_reschedule_replay_rewrite_schema_is_refused() -> Result<()> {
+        for (event, reschedule) in [("INSERT", false), ("UPDATE", true)] {
+            assert_install_trigger_rolls_back(
+                &format!(
+                    "CREATE TRIGGER rewrite_replay AFTER {event} ON origin_keys
+                     BEGIN UPDATE spent SET nonce=zeroblob(32); END;"
+                ),
+                reschedule,
+            )?;
+        }
+        Ok(())
     }
 
     fn assert_retire_refused(
@@ -1816,20 +2081,36 @@ mod tests {
         assert_eq!(store_snapshot(&db)?, before);
         // Some(challenge) is the rejected/401 path, not a successful redemption.
         assert!(origin.request_at(Some(&spent), S + 420)?.is_some());
-        assert_eq!(challenge_rows(&db)?, before.replay.challenges);
-        assert_eq!(spent_rows(&db)?, before.replay.spent);
+        assert_eq!(
+            challenge_rows(&db)?,
+            before
+                .replay
+                .challenges
+                .into_iter()
+                .filter(|row| row.0 == next.key_id())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            spent_rows(&db)?,
+            before
+                .replay
+                .spent
+                .into_iter()
+                .filter(|row| row.0 == next.key_id())
+                .collect::<Vec<_>>()
+        );
         Ok(())
     }
 
     #[test]
-    fn retirement_replay_snapshot_detects_count_preserving_edits() -> Result<()> {
+    fn retirement_replay_digest_detects_count_preserving_edits() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let (_, old) = signer()?;
         let (_, next) = signer()?;
         let (db, _) = fresh(dir.path(), &old, Some(&next))?;
         plant_retirement_rows(&db, &old, &next)?;
         let mut conn = raw(&db)?;
-        let before = other_replay_rows(&conn, old.key_id())?;
+        let before = replay_digest(&conn, Some(old.key_id()))?;
         let counts = key_row_counts(&conn, next.key_id())?;
         for sql in [
             "UPDATE spent SET nonce=zeroblob(32) WHERE key_id!=?1",
@@ -1841,16 +2122,603 @@ mod tests {
             let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
             tx.execute(sql, [old.key_id().as_slice()])?;
             assert_eq!(key_row_counts(&tx, next.key_id())?, counts);
-            let error = ensure_other_replay_rows(&tx, old.key_id(), &before).unwrap_err();
+            let error = ensure_replay_digest(&tx, Some(old.key_id()), &before).unwrap_err();
             assert!(
-                error
-                    .to_string()
-                    .contains("changed another key's replay rows"),
+                error.to_string().contains("changed protected replay rows"),
                 "{error:#}"
             );
             tx.rollback()?;
-            ensure_other_replay_rows(&conn, old.key_id(), &before)?;
+            ensure_replay_digest(&conn, Some(old.key_id()), &before)?;
         }
+        Ok(())
+    }
+
+    #[test]
+    fn pruning_margin_replay_and_clock_floor_survive_restart() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (signer, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &key, None)?;
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        let issued = HOUR + 1;
+        origin.request_at(None, issued)?;
+        let (challenge, deadline) = origin.challenge(issued)?;
+        let spent = token(&signer, &key, challenge.digest(), 1)?;
+        let unspent = token(&signer, &key, challenge.digest(), 2)?;
+        assert!(origin.request_at(Some(&spent), issued)?.is_none());
+        for now in [deadline, deadline + RETIRE_MARGIN - 1] {
+            assert!(origin.request_at(Some(&spent), now)?.is_some());
+            assert!(origin.request_at(Some(&unspent), now)?.is_some());
+            assert!(challenge_rows(&db)?
+                .iter()
+                .any(|r| r.1 == challenge.digest()));
+            assert_eq!(spent_rows(&db)?.len(), 1);
+        }
+        let now = deadline + RETIRE_MARGIN;
+        assert!(origin.request_at(Some(&spent), now)?.is_some());
+        assert!(!challenge_rows(&db)?
+            .iter()
+            .any(|r| r.1 == challenge.digest()));
+        assert!(spent_rows(&db)?.is_empty());
+        let before = store_snapshot(&db)?;
+        assert!(origin.request_at(Some(&unspent), now)?.is_some());
+        assert!(origin.request_at(None, now - 1).is_err());
+        assert_eq!(store_snapshot(&db)?, before);
+        drop(origin);
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        assert!(origin.request_at(None, now - 1).is_err());
+        assert!(origin.request_at(Some(&spent), now)?.is_some());
+        assert!(origin.request_at(Some(&unspent), now)?.is_some());
+        assert_eq!(store_snapshot(&db)?, before);
+        assert!(origin.request_at(None, u64::MAX).is_err());
+        assert_eq!(store_snapshot(&db)?, before);
+        Ok(())
+    }
+
+    #[test]
+    fn many_hours_prune_without_retiring_the_key() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (_, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &key, None)?;
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        for hour in 0..=48 {
+            let now = hour * HOUR + 1;
+            origin.request_at(None, now)?;
+            let (challenge, deadline) = origin.challenge(now)?;
+            plant_spend(
+                &raw(&db)?,
+                key.key_id(),
+                challenge.digest(),
+                [1; 32],
+                deadline as i64,
+            )?;
+            assert!(challenge_rows(&db)?.len() <= 2);
+            assert!(spent_rows(&db)?.len() <= 2);
+        }
+        origin.request_at(None, 48 * HOUR + GRACE + RETIRE_MARGIN)?;
+        assert_eq!(challenge_rows(&db)?.len(), 1);
+        assert_eq!(spent_rows(&db)?.len(), 1);
+        drop(origin);
+        assert_eq!(
+            states(&Origin::status(&db, 48 * HOUR + 420)?),
+            vec![OriginKeyState::Advertising]
+        );
+        Ok(())
+    }
+
+    fn numbered(value: u64) -> [u8; 32] {
+        let mut bytes = [0; 32];
+        bytes[24..].copy_from_slice(&value.to_be_bytes());
+        bytes
+    }
+
+    fn expired_counts(db: &Connection, cutoff: i64) -> Result<(i64, i64)> {
+        Ok(db.query_row(
+            "SELECT (SELECT count(*) FROM challenges WHERE deadline<=?1),
+                    (SELECT count(*) FROM spent WHERE deadline<=?1)",
+            [cutoff],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?)
+    }
+
+    #[test]
+    fn pruning_batches_preserve_unselected_parents_and_drain_orphans() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (signer, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &key, None)?;
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        let mut conn = raw(&db)?;
+        let deadline = (HOUR + GRACE) as i64;
+        let tx = conn.transaction()?;
+        for i in 0..600 {
+            tx.execute(
+                "INSERT INTO challenges VALUES(?1,?2,?3)",
+                params![key.key_id().as_slice(), numbered(i).as_slice(), deadline],
+            )?;
+            plant_spend(&tx, key.key_id(), numbered(i), numbered(0), deadline)?;
+        }
+        for i in 1..=300 {
+            plant_spend(&tx, key.key_id(), numbered(0), numbered(i), deadline)?;
+        }
+        let spent = token(&signer, &key, numbered(0), 250)?;
+        let unspent = token(&signer, &key, numbered(0), 251)?;
+        plant_spend(&tx, key.key_id(), numbered(0), spent.nonce, deadline)?;
+        tx.commit()?;
+        let now = deadline as u64 + RETIRE_MARGIN;
+        origin.request_at(None, now)?;
+        assert_eq!(
+            expired_counts(&conn, deadline)?,
+            (600 - PRUNE_BATCH, 901 - PRUNE_BATCH)
+        );
+        let parent_and_spend: (bool, bool) = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM challenges WHERE digest=?1),
+                    EXISTS(SELECT 1 FROM spent WHERE digest=?1)",
+            [numbered(PRUNE_BATCH as u64).as_slice()],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        assert_eq!(parent_and_spend, (true, true));
+        assert!(!challenge_rows(&db)?.iter().any(|r| r.1 == numbered(0)));
+        assert!(spent_rows(&db)?.iter().any(|r| r.2 == spent.nonce));
+        // A deleted parent with unbatched spends cannot redeem either token.
+        assert!(origin.request_at(Some(&spent), now)?.is_some());
+        assert!(origin.request_at(Some(&unspent), now)?.is_some());
+        for _ in 0..5 {
+            let before = expired_counts(&conn, deadline)?;
+            origin.request_at(None, now)?;
+            let after = expired_counts(&conn, deadline)?;
+            assert!((0..=PRUNE_BATCH).contains(&(before.0 - after.0)));
+            assert!((0..=PRUNE_BATCH).contains(&(before.1 - after.1)));
+        }
+        assert_eq!(expired_counts(&conn, deadline)?, (0, 0));
+        assert_eq!(challenge_rows(&db)?.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn pruning_cutoff_is_checked_and_does_not_overflow_in_sql() -> Result<()> {
+        let db = Connection::open_in_memory()?;
+        db.execute_batch(SCHEMA_V2)?;
+        db.execute("INSERT INTO origin_keys VALUES(zeroblob(32),x'00',0,0)", [])?;
+        for (digest, deadline) in [(numbered(0), 0), (numbered(1), i64::MAX)] {
+            db.execute(
+                "INSERT INTO challenges VALUES(zeroblob(32),?1,?2)",
+                params![digest.as_slice(), deadline],
+            )?;
+        }
+        prune_replay(&db, 119)?;
+        assert_eq!(key_row_counts(&db, [0; 32])?, (2, 0));
+        prune_replay(&db, 120)?;
+        assert_eq!(key_row_counts(&db, [0; 32])?, (1, 0));
+        prune_replay(&db, i64::MAX)?;
+        assert_eq!(key_row_counts(&db, [0; 32])?, (1, 0));
+        Ok(())
+    }
+
+    fn quoted_replay(db: &Connection) -> Result<(Option<String>, Option<String>)> {
+        Ok((
+            db.query_row(
+                "SELECT group_concat(quote(key_id)||quote(digest)||quote(deadline),'|')
+                 FROM (SELECT * FROM challenges ORDER BY key_id,digest)", [], |r| r.get(0),
+            )?,
+            db.query_row(
+                "SELECT group_concat(quote(key_id)||quote(digest)||quote(nonce)||quote(deadline),'|')
+                 FROM (SELECT * FROM spent ORDER BY key_id,digest,nonce)", [], |r| r.get(0),
+            )?,
+        ))
+    }
+
+    #[test]
+    fn expired_corruption_is_refused_before_pruning_can_hide_it() -> Result<()> {
+        let (_, old) = signer()?;
+        let (_, next) = signer()?;
+        for statements in [
+            vec![
+                "UPDATE challenges SET deadline=deadline+1 WHERE key_id=?1",
+                "UPDATE spent SET deadline=deadline+1 WHERE key_id=?1",
+            ],
+            vec!["UPDATE spent SET deadline=deadline-1 WHERE key_id=?1"],
+            vec!["UPDATE challenges SET digest=zeroblob(31) WHERE key_id=?1"],
+            vec!["UPDATE spent SET digest=zeroblob(31) WHERE key_id=?1"],
+            vec!["UPDATE spent SET nonce=zeroblob(31) WHERE key_id=?1"],
+            vec!["UPDATE challenges SET key_id=zeroblob(31) WHERE key_id=?1"],
+            vec!["UPDATE spent SET key_id=zeroblob(31) WHERE key_id=?1"],
+            vec!["UPDATE challenges SET digest='not a blob' WHERE key_id=?1"],
+            vec!["UPDATE spent SET nonce='not a blob' WHERE key_id=?1"],
+            vec!["UPDATE challenges SET deadline='bad' WHERE key_id=?1"],
+            vec!["UPDATE spent SET deadline=3900.5 WHERE key_id=?1"],
+            vec!["UPDATE challenges SET key_id=zeroblob(32) WHERE key_id=?1"],
+            vec!["UPDATE origin_keys SET retired=1 WHERE key_id=?1"],
+            vec![
+                "UPDATE challenges SET deadline=1 WHERE key_id=?1",
+                "UPDATE spent SET deadline=1 WHERE key_id=?1",
+            ],
+        ] {
+            let dir = tempfile::tempdir()?;
+            let (db, secret) = fresh(dir.path(), &old, Some(&next))?;
+            plant_retirement_rows(&db, &old, &next)?;
+            let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+            let conn = raw(&db)?;
+            for sql in statements {
+                conn.execute(sql, [old.key_id().as_slice()])?;
+            }
+            let metadata = read_metadata(&conn)?;
+            let rows = quoted_replay(&conn)?;
+            // Even the invalid successor+301 deadline is already prunable here.
+            assert!(origin.request_at(None, S + HOUR + 1000).is_err());
+            assert_eq!(read_metadata(&conn)?, metadata);
+            assert_eq!(quoted_replay(&conn)?, rows);
+            drop(origin);
+            refused(&db, &secret)?;
+            assert_eq!(quoted_replay(&conn)?, rows);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn pruned_empty_target_still_requires_retirement_margin_and_tombstone() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (_, old) = signer()?;
+        let (_, next) = signer()?;
+        let (db, secret) = fresh(dir.path(), &old, Some(&next))?;
+        plant(&db, &old.key_id(), [1; 32], (S - HOUR + GRACE) as i64)?;
+        plant_spend(
+            &raw(&db)?,
+            old.key_id(),
+            [1; 32],
+            [2; 32],
+            (S - HOUR + GRACE) as i64,
+        )?;
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        origin.request_at(None, S + 419)?;
+        assert_eq!(key_row_counts(&raw(&db)?, old.key_id())?, (0, 0));
+        drop(origin);
+        assert_retire_refused(
+            &db,
+            &secret,
+            old.key_id(),
+            S + 419,
+            "safety margin has not elapsed",
+        )?;
+        let next_rows = replay_digest(&raw(&db)?, Some(old.key_id()))?;
+        Origin::retire_key(&db, old.key_id(), S + 420)?;
+        ensure_replay_digest(&raw(&db)?, Some(old.key_id()), &next_rows)?;
+        assert_eq!(
+            Origin::status(&db, S + 420)?.keys[0].state,
+            OriginKeyState::Retired
+        );
+        assert!(install(&db, &old, S + HOUR, S + 420).is_err());
+        drop(Origin::open(&db, &secret, "issuer", "origin")?);
+        assert_eq!(
+            Origin::status(&db, S + 420)?.keys[0].state,
+            OriginKeyState::Retired
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failure_after_pruning_rolls_back_and_never_returns_200() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (signer, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &key, None)?;
+        let origin = Arc::new(Origin::open(&db, &secret, "issuer", "origin")?);
+        origin.request_at(None, HOUR + 1)?;
+        let redeem = token(&signer, &key, origin.challenge(HOUR + 1)?.0.digest(), 1)?;
+        let old_deadline = (HOUR + GRACE) as i64;
+        plant(&db, &key.key_id(), [0; 32], old_deadline)?;
+        plant_spend(&raw(&db)?, key.key_id(), [0; 32], [2; 32], old_deadline)?;
+        let before = store_snapshot(&db)?;
+        let now = HOUR + GRACE + RETIRE_MARGIN;
+        let response = protected_with_request(
+            origin.clone(),
+            authorization(&redeem)?,
+            move |origin, token| {
+                origin.request_with_prune_hook(
+                    token,
+                    || Ok(now),
+                    |tx| {
+                        assert_eq!(expired_counts(tx, old_deadline)?, (0, 0));
+                        bail!("injected failure after deletion")
+                    },
+                )
+            },
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!response.headers().contains_key(header::WWW_AUTHENTICATE));
+        assert_eq!(store_snapshot(&db)?, before);
+        assert_eq!(
+            protected_with_clock(origin.clone(), authorization(&redeem)?, move || Ok(now))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+        assert!(origin.request_at(Some(&redeem), now)?.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn replay_digest_is_deterministic_scoped_and_covers_every_column_and_row() -> Result<()> {
+        let mut db = Connection::open_in_memory()?;
+        db.execute_batch(SCHEMA_V2)?;
+        for key in [[1; 32], [2; 32]] {
+            db.execute(
+                "INSERT INTO challenges VALUES(?1,?2,?3)",
+                params![key.as_slice(), &[3u8; 32], -1i64],
+            )?;
+            plant_spend(&db, key, [3; 32], [4; 32], i64::MAX)?;
+        }
+        let before = replay_digest(&db, None)?;
+        assert_eq!((before.challenges, before.spent), (2, 2));
+        assert_eq!(replay_digest(&db, None)?, before);
+        let excluded = replay_digest(&db, Some([1; 32]))?;
+        assert_eq!((excluded.challenges, excluded.spent), (1, 1));
+        assert_ne!(excluded.sha256, before.sha256);
+        // Scope itself is domain-separated, even when it excludes no rows.
+        assert_ne!(replay_digest(&db, Some([9; 32]))?.sha256, before.sha256);
+        for sql in [
+            "UPDATE challenges SET key_id=zeroblob(32) WHERE key_id=?1",
+            "UPDATE challenges SET digest=zeroblob(32) WHERE key_id=?1",
+            "UPDATE challenges SET deadline=deadline+1 WHERE key_id=?1",
+            "UPDATE spent SET key_id=zeroblob(32) WHERE key_id=?1",
+            "UPDATE spent SET digest=zeroblob(32) WHERE key_id=?1",
+            "UPDATE spent SET nonce=zeroblob(32) WHERE key_id=?1",
+            "UPDATE spent SET deadline=deadline-1 WHERE key_id=?1",
+            "INSERT INTO challenges VALUES(?1,zeroblob(32),1)",
+            "DELETE FROM challenges WHERE key_id=?1",
+            "INSERT INTO spent VALUES(?1,zeroblob(32),zeroblob(32),1)",
+            "DELETE FROM spent WHERE key_id=?1",
+        ] {
+            let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute(sql, [[1u8; 32].as_slice()])?;
+            assert_ne!(replay_digest(&tx, None)?.sha256, before.sha256, "{sql}");
+            assert!(ensure_replay_digest(&tx, None, &before).is_err(), "{sql}");
+            tx.rollback()?;
+            ensure_replay_digest(&db, None, &before)?;
+        }
+        // Reversing physical insertion order does not affect canonical ordering.
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("DELETE FROM challenges", [])?;
+        tx.execute("DELETE FROM spent", [])?;
+        for key in [[2; 32], [1; 32]] {
+            tx.execute(
+                "INSERT INTO challenges VALUES(?1,?2,?3)",
+                params![key.as_slice(), &[3u8; 32], -1i64],
+            )?;
+            plant_spend(&tx, key, [3; 32], [4; 32], i64::MAX)?;
+        }
+        ensure_replay_digest(&tx, None, &before)?;
+        tx.rollback()?;
+        for sql in [
+            "UPDATE challenges SET key_id='text'",
+            "UPDATE challenges SET digest=42",
+            "UPDATE challenges SET deadline=x'00'",
+            "UPDATE spent SET key_id=3.5",
+            "UPDATE spent SET digest='text'",
+            "UPDATE spent SET nonce=42",
+            "UPDATE spent SET deadline='text'",
+        ] {
+            let tx = db.transaction()?;
+            // Limit the rewrite to one row, avoiding a primary-key collision.
+            tx.execute(&format!("{sql} WHERE key_id=?1"), [[1u8; 32].as_slice()])?;
+            assert!(replay_digest(&tx, None).is_err(), "{sql}");
+            tx.rollback()?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn install_and_reschedule_digest_postcondition_detects_replay_rewrites() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (_, genesis) = signer()?;
+        let (_, next) = signer()?;
+        let (db, _) = fresh(dir.path(), &genesis, None)?;
+        plant(&db, &genesis.key_id(), [1; 32], (S + GRACE) as i64)?;
+        plant_spend(
+            &raw(&db)?,
+            genesis.key_id(),
+            [1; 32],
+            [2; 32],
+            (S + GRACE) as i64,
+        )?;
+        let mut conn = raw(&db)?;
+        for reschedule in [false, true] {
+            if reschedule {
+                install(&db, &next, S, S - HOUR)?;
+            }
+            let before = store_snapshot(&db)?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            let replay_before = replay_digest(&tx, None)?;
+            if reschedule {
+                tx.execute(
+                    "UPDATE origin_keys SET activation_hour=?1 WHERE key_id=?2",
+                    params![(H + 1) as i64, next.key_id().as_slice()],
+                )?;
+            } else {
+                tx.execute(
+                    "INSERT INTO origin_keys VALUES(?1,?2,?3,0)",
+                    params![next.key_id().as_slice(), next.to_spki(), H as i64],
+                )?;
+            }
+            let high = read_metadata(&tx)?.1;
+            advance_high_water(&tx, (S - HOUR + 1) as i64, high)?;
+            // Exercise the actual digest guard, not just schema-trigger refusal.
+            tx.execute("UPDATE spent SET nonce=zeroblob(32)", [])?;
+            read_keys(&tx)?;
+            assert_eq!(replay_digest(&tx, None)?.spent, replay_before.spent);
+            assert!(ensure_replay_digest(&tx, None, &replay_before).is_err());
+            tx.rollback()?;
+            assert_eq!(store_snapshot(&db)?, before);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn saturation_and_worker_errors_fail_closed_without_mutation() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (_, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &key, None)?;
+        let origin = Arc::new(Origin::open(&db, &secret, "issuer", "origin")?);
+        let before = store_snapshot(&db)?;
+        let permits = origin
+            .workers
+            .clone()
+            .acquire_many_owned(ORIGIN_CAPACITY as u32)
+            .await?;
+        let response = protected_with_clock(origin.clone(), HeaderMap::new(), || {
+            panic!("saturated request must not sample the clock")
+        })
+        .await;
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert!(!response.headers().contains_key(header::WWW_AUTHENTICATE));
+        assert_eq!(store_snapshot(&db)?, before);
+        drop(permits);
+        assert_eq!(
+            protected_with_clock(origin.clone(), HeaderMap::new(), || Ok(HOUR + 1))
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let before = store_snapshot(&db)?;
+        assert_eq!(
+            protected_with_clock(origin.clone(), HeaderMap::new(), || bail!(
+                "clock unavailable"
+            ))
+            .await
+            .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(store_snapshot(&db)?, before);
+        assert_eq!(
+            protected_with_clock(origin.clone(), HeaderMap::new(), || panic!(
+                "injected worker panic"
+            ))
+            .await
+            .status(),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        assert_eq!(origin.workers.available_permits(), ORIGIN_CAPACITY);
+        assert_eq!(store_snapshot(&db)?, before);
+        origin.workers.close();
+        let response = protected(State(origin), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(!response.headers().contains_key(header::WWW_AUTHENTICATE));
+        assert_eq!(store_snapshot(&db)?, before);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelling_http_keeps_worker_permit_until_commit_and_burns_token() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (signer, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &key, None)?;
+        let origin = Arc::new(Origin::open(&db, &secret, "issuer", "origin")?);
+        origin.request_now(None)?;
+        let now = read_metadata(&read_only(&db)?)?.1;
+        let redeem = token(&signer, &key, origin.challenge(now)?.0.digest(), 1)?;
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let job = tokio::spawn(protected_with_clock(
+            origin.clone(),
+            authorization(&redeem)?,
+            move || {
+                entered_tx
+                    .send(())
+                    .map_err(|_| anyhow::anyhow!("test cancelled"))?;
+                release_rx.recv()?;
+                Ok(now)
+            },
+        ));
+        entered_rx.await?;
+        assert_eq!(origin.workers.available_permits(), ORIGIN_CAPACITY - 1);
+        let other = origin.workers.clone().acquire_owned().await?;
+        job.abort();
+        assert!(job.await.unwrap_err().is_cancelled());
+        assert_eq!(origin.workers.available_permits(), 0);
+        assert_eq!(
+            protected(State(origin.clone()), HeaderMap::new())
+                .await
+                .status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+        release_tx.send(())?;
+        // Acquiring the job's permit waits for its closure to finish, not merely
+        // for the cancelled HTTP future. The transaction has committed by then.
+        let completed = origin.workers.clone().acquire_owned().await?;
+        assert_eq!(spent_rows(&db)?.len(), 1);
+        assert!(read_metadata(&read_only(&db)?)?.1 >= now);
+        drop(completed);
+        drop(other);
+        assert_eq!(
+            protected(State(origin.clone()), authorization(&redeem)?)
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(spent_rows(&db)?.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn queued_request_samples_clock_only_under_connection_lock() -> Result<()> {
+        use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+
+        let dir = tempfile::tempdir()?;
+        let (_, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &key, None)?;
+        let origin = Arc::new(Origin::open(&db, &secret, "issuer", "origin")?);
+        let clock = Arc::new(AtomicU64::new(HOUR + 1));
+        let sampled = Arc::new(AtomicBool::new(false));
+        let guard = origin.db.lock().unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let queued = origin.clone();
+        let queued_clock = clock.clone();
+        let queued_sampled = sampled.clone();
+        let job = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            queued.request_with_clock(None, || {
+                assert!(queued.db.try_lock().is_err());
+                queued_sampled.store(true, Ordering::SeqCst);
+                Ok(queued_clock.load(Ordering::SeqCst))
+            })
+        });
+        started_rx.recv()?;
+        assert!(!sampled.load(Ordering::SeqCst));
+        clock.store(2 * HOUR + 1, Ordering::SeqCst);
+        drop(guard);
+        assert!(job.join().unwrap()?.is_some());
+        assert_eq!(read_metadata(&read_only(&db)?)?.1, 2 * HOUR + 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_http_redemption_has_at_most_one_success() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (signer, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &key, None)?;
+        let origin = Arc::new(Origin::open(&db, &secret, "issuer", "origin")?);
+        let now = HOUR + 1;
+        origin.request_at(None, now)?;
+        let redeem = token(&signer, &key, origin.challenge(now)?.0.digest(), 1)?;
+        let mut jobs = Vec::new();
+        for _ in 0..8 {
+            jobs.push(tokio::spawn(protected_with_clock(
+                origin.clone(),
+                authorization(&redeem)?,
+                move || Ok(now),
+            )));
+        }
+        let mut successes = 0;
+        for job in jobs {
+            let status = job.await?.status();
+            successes += usize::from(status == StatusCode::OK);
+            assert!([
+                StatusCode::OK,
+                StatusCode::UNAUTHORIZED,
+                StatusCode::TOO_MANY_REQUESTS
+            ]
+            .contains(&status));
+        }
+        assert_eq!(successes, 1);
+        assert_eq!(spent_rows(&db)?.len(), 1);
         Ok(())
     }
 

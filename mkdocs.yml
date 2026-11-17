@@ -8,3 +8,4 @@ nav:
   - Home: index.md
   - Local runner: quick-start.md
   - Protocol contract: protocol/privacy-pass-phase1.md
+  - Interop test plan: protocol/interop-test-plan.md

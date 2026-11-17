@@ -17,7 +17,7 @@ using stable RustCrypto RSA; the fork and signing path still require independent
 review and interoperability testing. Offline key staging, public-key export,
 activation (rotation, Origin first, with an explicit candidate key ID), and
 retirement are implemented for one local instance per role. **Release remains
-blocked** by independent crypto review, independent interop, parser fuzzing,
+blocked** by independent crypto review, independent interop,
 operational backup/recovery tests, and a supported deployment topology.
 Unsupported: no HSM, no online rotation API, no multi-instance operation, no zeroization of
 superseded key memory, and no multi-key directory with a not-before field.

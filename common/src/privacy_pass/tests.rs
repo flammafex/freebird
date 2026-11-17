@@ -1,4 +1,5 @@
 use super::*;
+use proptest::prelude::*;
 use serde_json::Value;
 
 fn field(v: &Value, name: &str) -> Vec<u8> {
@@ -175,5 +176,124 @@ fn http_headers() {
         format!("PrivateToken token=\"{value}=\""),
     ] {
         assert!(parse_authorization_header(&h).is_err(), "{h}");
+    }
+}
+
+// Mix arbitrary inputs with exact-length, valid-type inputs so successful
+// decodes are exercised rather than relying on random bytes to find them.
+fn wire_bytes(length: usize) -> impl Strategy<Value = Vec<u8>> {
+    prop_oneof![
+        4 => proptest::collection::vec(any::<u8>(), 0..=4096),
+        2 => proptest::collection::vec(any::<u8>(), length - 1..=length + 1),
+        2 => proptest::collection::vec(any::<u8>(), length).prop_map(|mut bytes| {
+            bytes[..2].copy_from_slice(&TOKEN_TYPE.to_be_bytes());
+            bytes
+        }),
+    ]
+}
+
+fn challenge_bytes() -> impl Strategy<Value = Vec<u8>> {
+    let structured = (
+        "[a-zA-Z0-9.-]{1,64}(:[0-9]{1,5})?",
+        prop_oneof![
+            Just(Vec::new()),
+            any::<[u8; 32]>().prop_map(|bytes| bytes.to_vec()),
+        ],
+        proptest::collection::vec("[a-zA-Z0-9.-]{1,64}", 0..=3),
+    )
+        .prop_map(|(issuer, context, origins)| {
+            TokenChallenge::from_parts(&issuer, &context, &origins.join(","))
+                .unwrap()
+                .serialize()
+        });
+    prop_oneof![proptest::collection::vec(any::<u8>(), 0..=4096), structured,]
+}
+
+fn authorization_bytes() -> impl Strategy<Value = Vec<u8>> {
+    let structured = (
+        proptest::collection::vec(any::<u8>(), TOKEN_LEN - 2),
+        0..4u8,
+    )
+        .prop_map(|(body, variant)| {
+            let mut bytes = TOKEN_TYPE.to_be_bytes().to_vec();
+            bytes.extend_from_slice(&body);
+            let token = Token::from_bytes(&bytes).unwrap();
+            let value = Base64Url::encode_string(&bytes);
+            match variant {
+                0 => build_authorization_header(&token),
+                1 => format!("pRiVaTeToKeN\tToKeN = \"{value}\""),
+                2 => format!("PrivateToken extra=\"a,b\\\"c\", token=\"{value}\", ignored=yes"),
+                _ => format!("PrivateToken token={value}"),
+            }
+            .into_bytes()
+        });
+    prop_oneof![
+        proptest::collection::vec(any::<u8>(), 0..=4096),
+        any::<String>().prop_map(String::into_bytes),
+        structured,
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(512))]
+
+    #[test]
+    fn arbitrary_token_request_round_trip(bytes in wire_bytes(TOKEN_REQUEST_LEN)) {
+        let decoded = TokenRequest::from_bytes(&bytes);
+        prop_assert_eq!(
+            decoded.is_ok(),
+            bytes.len() == TOKEN_REQUEST_LEN && bytes.starts_with(&TOKEN_TYPE.to_be_bytes())
+        );
+        if let Ok(request) = decoded {
+            let encoded = request.to_bytes();
+            prop_assert_eq!(encoded.as_slice(), bytes.as_slice());
+        }
+    }
+
+    #[test]
+    fn arbitrary_token_response_round_trip(bytes in wire_bytes(TOKEN_RESPONSE_LEN)) {
+        let decoded = TokenResponse::from_bytes(&bytes);
+        prop_assert_eq!(decoded.is_ok(), bytes.len() == TOKEN_RESPONSE_LEN);
+        if let Ok(response) = decoded {
+            let encoded = response.to_bytes();
+            prop_assert_eq!(encoded.as_slice(), bytes.as_slice());
+        }
+    }
+
+    #[test]
+    fn arbitrary_token_round_trip(bytes in wire_bytes(TOKEN_LEN)) {
+        let decoded = Token::from_bytes(&bytes);
+        prop_assert_eq!(
+            decoded.is_ok(),
+            bytes.len() == TOKEN_LEN && bytes.starts_with(&TOKEN_TYPE.to_be_bytes())
+        );
+        if let Ok(token) = decoded {
+            let encoded = token.to_bytes();
+            prop_assert_eq!(encoded.as_slice(), bytes.as_slice());
+        }
+    }
+
+    #[test]
+    fn arbitrary_challenge_round_trip(bytes in challenge_bytes()) {
+        if let Ok(challenge) = TokenChallenge::parse(&bytes) {
+            let encoded = challenge.serialize();
+            prop_assert_eq!(encoded.as_slice(), bytes.as_slice());
+            let digest = challenge.digest();
+            prop_assert_eq!(digest, challenge.digest());
+            let reparsed = TokenChallenge::parse(&bytes).unwrap();
+            prop_assert_eq!(digest, reparsed.digest());
+            prop_assert_eq!(digest, <[u8; 32]>::from(Sha256::digest(&bytes)));
+        }
+    }
+
+    #[test]
+    fn arbitrary_authorization_header_round_trip(bytes in authorization_bytes()) {
+        // The header API accepts strings; non-UTF-8 bytes cannot reach it.
+        if let Ok(header) = std::str::from_utf8(&bytes) {
+            if let Ok(token) = parse_authorization_header(header) {
+                let canonical = build_authorization_header(&token);
+                prop_assert_eq!(parse_authorization_header(&canonical).unwrap(), token);
+            }
+        }
     }
 }

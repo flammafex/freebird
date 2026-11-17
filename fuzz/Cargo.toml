@@ -1,0 +1,62 @@
+[package]
+name = "freebird-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+freebird-common = { path = "../common" }
+freebird-crypto = { path = "../crypto" }
+
+[[bin]]
+name = "token_request"
+path = "fuzz_targets/token_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "token_response"
+path = "fuzz_targets/token_response.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "token"
+path = "fuzz_targets/token.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "token_challenge"
+path = "fuzz_targets/token_challenge.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "authorization_header"
+path = "fuzz_targets/authorization_header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "public_key_spki"
+path = "fuzz_targets/public_key_spki.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "secret_key_pkcs8"
+path = "fuzz_targets/secret_key_pkcs8.rs"
+test = false
+doc = false
+bench = false

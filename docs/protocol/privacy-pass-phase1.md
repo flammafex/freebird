@@ -93,7 +93,7 @@ compares their SHA-256 digests with the token's authenticated
 `challenge_digest`. `max-age` advertises seconds left until the current
 hour's acceptance deadline; it is **not token expiry**. Persist the greatest
 observed Unix **second**, advancing it in the same durable transaction as
-challenge issuance, redemption, and spent-record retirement. If the wall
+challenge issuance, redemption, and bounded replay pruning. If the wall
 clock is earlier than that high-water mark, refuse both challenge issuance
 and redemption until it catches up; at `now >= acceptance_deadline`, reject.
 Once a challenge closes, no restart or clock step can re-open it. Fix these
@@ -104,11 +104,30 @@ Before marking a token spent, the Origin validates the full token, type,
 trusted public key ID, signature, Origin/Issuer/challenge binding, and
 acceptance deadline. It atomically records a spend key from the authenticated
 token's key ID, challenge digest, and nonce. Only one concurrent redemption
-can succeed. Spent state survives restart and is retained until the
-single supported Origin instance has permanently stopped accepting the
-corresponding challenge plus a two-minute clock/request safety margin;
-retirement and high-water advancement must be atomic. A store error denies
-access. No TTL is safe without enforced deadline and rollback rules.
+can succeed. Spent state survives restart. Each admitted request begins an
+IMMEDIATE transaction, validates metadata and replay invariants **before**
+deleting anything, refuses clock regression, and advances the durable high-water
+mark. At `now >= acceptance_deadline + 120`, it prunes at most 256 challenges,
+then at most 256 expired spends whose challenge row is absent. Challenges outside
+the batch keep their spends; partial sweeps may legitimately leave spends without
+challenges. Cutoffs are checked integer arithmetic, never SQLite deadline
+addition. Pruning and redemption or new challenge persistence commit atomically
+with high-water advancement; any failure rolls back and denies access. A 200 or
+401 is returned only after commit. No TTL is safe without these enforced deadline
+and rollback rules, including the no-snapshot-rollback requirement below.
+
+Pruning is independent of offline key retirement: it neither retires a key nor
+deletes its permanent record, and an empty superseded key still cannot retire
+before `S+420`. Installation and retirement do not perform request pruning.
+This is **not an absolute storage quota**: a frozen clock or high volume can
+accumulate unexpired spends. Redeemable spends are never evicted to meet a cap.
+
+The Origin admits at most two blocking jobs for all SQLite and RSA work. It
+samples the clock after acquiring the connection mutex and beginning the
+transaction, not while a job waits. Saturation returns 429 without a challenge or
+state change; store, clock, or worker/join errors return 503. Cancelling an HTTP
+future does not cancel its admitted blocking job or release its permit before
+completion. A lost response may burn a token; never refund an uncertain spend.
 
 **Supported topology is exactly one process per role, with no automatic
 failover.** Each process takes an exclusive lifetime lock on its own local
@@ -171,14 +190,21 @@ a retired ID can never be reinstalled. A second rotation requires retirement of
 the superseded keys. The Issuer never signs with an old key after its successor's
 activation, even before retirement.
 
+Origin installation and rescheduling check streamed canonical SHA-256 replay
+digests before and after all transaction mutations, including high-water changes.
+Retirement uses the same check excluding only its target key. The fingerprints
+include every replay column, canonical row ordering, domain/scope separation, and
+row counts without materializing the replay store. Preservation relies on SHA-256
+collision resistance, not literal equality of row snapshots. Unexpected SQLite
+column types and digest mismatches fail closed; schema-object refusals remain.
+
 Both stores use `secure_delete=ON`; Issuer retirement attempts a post-commit
 `wal_checkpoint(TRUNCATE)`. Cleanup is best effort: a checkpoint failure does
 not roll back retirement or turn its success into a reported failure. This is
 not a destruction guarantee for journal copies, backups, snapshots, or process
 memory, and no zeroization is claimed. There is no HSM, online rotation API,
 multi-instance operation, or multi-key not-before directory. Release remains
-blocked by independent crypto review, independent interop, parser fuzzing,
-operational backup/recovery tests, and a supported deployment topology.
+blocked by independent crypto review, independent interop, operational backup/recovery tests, and a supported deployment topology.
 
 ## Verification and release gates
 
@@ -220,7 +246,7 @@ Exit criteria for the end-to-end sketch:
 
 **Release blockers, even after a green sketch:** independent implementation
 interop, security review of the selected RSA backend (including timing/fault
-defenses), parser fuzzing, durable-state/failover testing for the supported
+defenses), durable-state/failover testing for the supported
 topology, and an operator-tested key/backup procedure. Do not call this
 production-ready merely because the happy path passes.
 

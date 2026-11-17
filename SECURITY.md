@@ -42,8 +42,21 @@ database commits its consumption before signing. A lost response can burn an
 invitation. The Origin validates
 the signature and accepted challenge before durably recording a unique spend.
 Store errors deny access. Accepted challenge windows are local policy, **not**
-standardized token expiry; spent entries are retained until offline retirement
-of their key, after its final acceptance deadline plus a safety margin.
+standardized token expiry. Admitted, committed Origin requests prune expired
+challenges at `now >= deadline+120`, then spends whose challenge is absent, with
+at most 256 deletions per table per request. Validation, pruning, redemption or
+challenge persistence, and high-water advancement share one fail-closed
+transaction. Redeemable spends are never evicted. This is not a storage quota:
+a frozen clock or high request volume can accumulate unexpired rows. Pruning
+does not retire keys or remove their permanent tombstones.
+
+Origin SQLite and RSA work runs in at most two admitted blocking jobs. Saturation
+returns 429 without a challenge or state change; worker/store/clock errors return
+503. Cancellation does not stop an admitted job or release its permit early;
+a lost response may burn a token, which must never be refunded. Offline Origin
+installation/rescheduling preserves all replay rows, and retirement preserves
+other keys' rows, checked with streamed canonical SHA-256 digests. These checks
+rely on SHA-256 collision resistance, not literal row-by-row equality.
 
 One process per role and a local-loopback HTTP listener are the only supported
 topology. The admission, issuer-key, and Origin stores use SQLite WAL/FULL
@@ -78,9 +91,18 @@ Unsupported: HSM-backed keys, an online rotation API, multi-instance
 operation, zeroization of superseded key memory, and multi-key directories
 with a not-before field.
 
+On 2026-11-17, a first local libFuzzer campaign ran each of the seven targets
+in `fuzz/` (wire codecs, challenge, Authorization header, SPKI, PKCS#8) for
+120 seconds without AddressSanitizer (see `fuzz/README.md`): about 520 million
+executions in total, no panics, round-trip mismatches, or saved failures.
+This campaign satisfies the parser-fuzzing release gate. Property tests for the
+codec targets run in CI on every change; further fuzzing is encouraged but is
+not a release requirement.
+
 **Release blockers:** independent review of the selected RSA
 backend and protocol integration;
-independent implementation interoperability; parser fuzzing; operational
+independent implementation interoperability (see the
+[interop test plan](docs/protocol/interop-test-plan.md)); operational
 backup/recovery tests; and a supported deployment topology. The release,
 container, and SDK publishers remain disabled. See the
 [phase-one contract](docs/protocol/privacy-pass-phase1.md).
