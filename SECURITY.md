@@ -58,9 +58,16 @@ installation/rescheduling preserves all replay rows, and retirement preserves
 other keys' rows, checked with streamed canonical SHA-256 digests. These checks
 rely on SHA-256 collision resistance, not literal row-by-row equality.
 
-One process per role and a local-loopback HTTP listener are the only supported
-topology. The admission, issuer-key, and Origin stores use SQLite WAL/FULL
-and separate lifetime OS locks.
+The single supported network topology is one Ubuntu 24.04 host with nginx
+terminating TLS for distinct Issuer and Origin names, proxying only the exact
+routes to one loopback HTTP process per role under separate systemd users.
+See the [deployment guide](docs/deployment.md) and its real-binary nginx/TLS
+test in CI. The admission, issuer-key, and Origin stores use SQLite WAL/FULL
+and separate lifetime OS locks. nginx must not cache, retry, or log token or
+invitation headers/bodies; its error log can still record client IP addresses.
+An operator running both roles can correlate network metadata. Replicas,
+shared hosts, containers, alternative proxies, CDNs, and load balancers are
+not supported.
 Do not copy only the SQLite main file for backups: a consistent backup must
 include committed WAL state. Restoring an older Origin snapshot requires
 maintenance shutdown and fresh context-secret/store state, invalidating old
@@ -103,8 +110,11 @@ not a release requirement.
 backend and protocol integration;
 independent implementation interoperability (see the
 [interop test plan](docs/protocol/interop-test-plan.md)); operational
-backup/recovery tests; and a supported deployment topology. The release,
-container, and SDK publishers remain disabled. See the
+backup/recovery tests. The deployment-topology gate is met by the
+[single-host template and automated TLS proxy round trip](docs/deployment.md);
+the systemd units have not yet been exercised under systemd on this macOS
+development host. The release, container, and SDK publishers remain disabled.
+See the
 [phase-one contract](docs/protocol/privacy-pass-phase1.md).
 
 ## Reporting vulnerabilities

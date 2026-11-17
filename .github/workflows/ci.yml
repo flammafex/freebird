@@ -10,6 +10,18 @@ permissions:
   contents: read
 
 jobs:
+  deployment-proxy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y nginx openssl curl
+      - run: cargo build --locked -p freebird-privacy-pass-service --bin freebird-privacy-pass-service --example loopback_client
+      - name: Exercise TLS deployment proxy
+        run: python3 scripts/test-deployment-proxy.py
+        env:
+          FREEBIRD_NGINX: /usr/sbin/nginx
+
   build:
     runs-on: ubuntu-latest
     steps:

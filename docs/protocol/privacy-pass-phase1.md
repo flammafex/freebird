@@ -129,8 +129,9 @@ state change; store, clock, or worker/join errors return 503. Cancelling an HTTP
 future does not cancel its admitted blocking job or release its permit before
 completion. A lost response may burn a token; never refund an uncertain spend.
 
-**Supported topology is exactly one process per role, with no automatic
-failover.** Each process takes an exclusive lifetime lock on its own local
+**Supported topology is one Ubuntu 24.04 host with nginx TLS in front of
+one loopback-only process per role, with no automatic failover.** See the
+[deployment guide](../deployment.md). Each process takes an exclusive lifetime lock on its own local
 transactional store; a second process fails startup. Transactions must be
 crash-durable (for SQLite: WAL and `synchronous=FULL`) and recoverable after
 restart. Reject or disable multi-replica deployment manifests before cutover.
@@ -204,7 +205,8 @@ not roll back retirement or turn its success into a reported failure. This is
 not a destruction guarantee for journal copies, backups, snapshots, or process
 memory, and no zeroization is claimed. There is no HSM, online rotation API,
 multi-instance operation, or multi-key not-before directory. Release remains
-blocked by independent crypto review, independent interop, operational backup/recovery tests, and a supported deployment topology.
+blocked by independent crypto review, independent interop, and operational
+backup/recovery tests.
 
 ## Verification and release gates
 
@@ -246,8 +248,8 @@ Exit criteria for the end-to-end sketch:
 
 **Release blockers, even after a green sketch:** independent implementation
 interop, security review of the selected RSA backend (including timing/fault
-defenses), durable-state/failover testing for the supported
-topology, and an operator-tested key/backup procedure. Do not call this
+defenses), and an operator-tested backup/recovery procedure for the
+single-host topology. Do not call this
 production-ready merely because the happy path passes.
 
 Out of scope: token type `0x0001`, batch issuance, draft

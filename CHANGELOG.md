@@ -16,6 +16,9 @@
 - Pinned an RFC 9474 compatibility fork against stable RustCrypto RSA 0.10.0;
   the previous release-candidate advisory is no longer reported by
   `cargo audit`. The fork and integration have not been independently reviewed.
+- Added seven parser fuzz targets and an initial clean campaign, bounded Origin
+  replay-state pruning, and an independent-implementation interoperability plan.
+- Added a single-host nginx/TLS and systemd deployment template, plus a
+  CA-pinned local HTTPS client mode and an end-to-end proxy test.
 - Release publishing remains blocked pending independent cryptographic review,
-  independent interoperability testing, parser fuzzing, operational
-  backup/recovery tests, and a supported deployment topology.
+  independent interoperability testing and operational backup/recovery tests.

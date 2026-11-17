@@ -18,13 +18,15 @@ review and interoperability testing. Offline key staging, public-key export,
 activation (rotation, Origin first, with an explicit candidate key ID), and
 retirement are implemented for one local instance per role. **Release remains
 blocked** by independent crypto review, independent interop,
-operational backup/recovery tests, and a supported deployment topology.
+and operational backup/recovery tests.
 Unsupported: no HSM, no online rotation API, no multi-instance operation, no zeroization of
 superseded key memory, and no multi-key directory with a not-before field.
-The only supported runtime topology is one local-loopback process per role with
-exclusive, crash-durable SQLite state and no automatic failover. Backup
+The experimental single-host topology uses nginx TLS in front of one
+loopback-only process per role, with exclusive, crash-durable SQLite state and
+no automatic failover. Backup
 restoration requires deliberate invalidation of old invitations or challenge
-contexts. See [security status and dependency provenance](SECURITY.md).
+contexts. See the [deployment guide](docs/deployment.md) and
+[security status and dependency provenance](SECURITY.md).
 
 The published `freebird-crypto` and `freebird-common` crates predate this
 implementation and do **not** provide the protocol described here. Current
@@ -36,7 +38,7 @@ finalization → one redemption through both Axum routers and live loopback HTTP
 with replay and restart rejection. They are not a general-purpose client SDK.
 There is no batch, renewal, non-consuming token-check endpoint, token
 expiration extension, browser client, Docker image, Kubernetes manifest, or
-production reverse-proxy configuration.
+production authorization deployment.
 
 ## Workspace
 
@@ -57,7 +59,8 @@ python3 scripts/ci-static-checks.py
 
 See the [protocol contract](docs/protocol/privacy-pass-phase1.md), its
 [RFC fixture provenance](common/test-fixtures/privacy-pass/README.md), and
-the [local experimental runner](docs/quick-start.md).
+the [local experimental runner](docs/quick-start.md), and the
+[single-host deployment guide](docs/deployment.md).
 
 ## License and security
 

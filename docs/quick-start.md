@@ -1,6 +1,7 @@
 # Local experimental runner
 
-This is a **loopback-only development probe**, not deployment guidance.
+This is a **loopback-only development probe**. For the experimental nginx/TLS
+topology, see the [single-host deployment guide](deployment.md).
 The binary does not provide TLS, automatic failover, multi-instance operation,
 or backup restoration. It does provide offline key staging, **activation**
 (rotation), and **retirement** for one local instance per role, described below.
@@ -200,8 +201,7 @@ No HSM, no online rotation API, no multi-instance or failover, no zeroization
 of superseded key memory, and no multi-key directory with a not-before field.
 The Issuer advertises exactly one key at a time.
 Release remains blocked by independent cryptographic review, independent
-interoperability testing, operational backup/recovery tests,
-and a supported deployment topology.
+interoperability testing, and operational backup/recovery tests.
 
 ## Upgrading older state
 
@@ -262,6 +262,7 @@ may echo in your terminal, so disable echo or avoid it). Keep the temporary
 state directory private; remove it after stopping both servers and completing
 the experiment.
 
-There is no supported production network client or deployment recipe yet.
+The example also has an opt-in, CA-pinned HTTPS mode for a local TLS proxy;
+see the [deployment guide](deployment.md). It is not a remote or general client.
 See the [protocol contract](protocol/privacy-pass-phase1.md) for the exact
 binary formats, admission policy, challenge windows, and release blockers.

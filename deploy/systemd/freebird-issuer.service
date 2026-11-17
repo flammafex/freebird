@@ -1,0 +1,33 @@
+[Unit]
+Description=Freebird Privacy Pass issuer
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=exec
+User=freebird-issuer
+Group=freebird-issuer
+EnvironmentFile=/etc/freebird/freebird.env
+ExecStart=/usr/local/bin/freebird-privacy-pass-service serve-issuer /var/lib/freebird-issuer/state ${FREEBIRD_ISSUER_NAME} https://${FREEBIRD_ISSUER_NAME}/private-token/issue 127.0.0.1:8081
+StateDirectory=freebird-issuer
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartPreventExitStatus=1
+RestartSec=5s
+TimeoutStopSec=15s
+ProtectSystem=strict
+ProtectHome=true
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictAddressFamilies=AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+CapabilityBoundingSet=
+AmbientCapabilities=
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

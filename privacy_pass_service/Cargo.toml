@@ -25,3 +25,7 @@ tower = "0.4"
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 tempfile = "3"
+
+[[example]]
+name = "loopback_client"
+test = true

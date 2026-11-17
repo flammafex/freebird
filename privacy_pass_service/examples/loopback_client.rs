@@ -6,7 +6,71 @@ use freebird_common::privacy_pass::{
 };
 use freebird_crypto::privacy_pass::PublicKey;
 use reqwest::{header::HeaderMap, Client, Response, Url};
-use std::{io::Read, net::IpAddr, time::Duration};
+use std::{
+    io::Read,
+    net::{IpAddr, SocketAddr},
+    time::Duration,
+};
+
+struct Options {
+    issuer: Url,
+    origin: Url,
+    tls: Option<(String, IpAddr)>,
+}
+
+fn tls_base(value: &str) -> Result<Url> {
+    let url = Url::parse(value)?;
+    ensure!(
+        url.scheme() == "https"
+            && !value
+                .split_once("://")
+                .context("missing scheme")?
+                .1
+                .split(['/', '?', '#'])
+                .next()
+                .context("missing authority")?
+                .contains('@')
+            && url
+                .host_str()
+                .is_some_and(|host| { !host.starts_with('[') && host.parse::<IpAddr>().is_err() })
+            && url.username().is_empty()
+            && url.password().is_none()
+            && url.query().is_none()
+            && url.fragment().is_none()
+            && url.path() == "/",
+        "expected a DNS HTTPS base URL"
+    );
+    Ok(url)
+}
+
+fn options(args: &[String]) -> Result<Options> {
+    match args {
+        [issuer, origin] => Ok(Options {
+            issuer: base(issuer)?,
+            origin: base(origin)?,
+            tls: None,
+        }),
+        [flag, ca, connect, ip, issuer, origin] if flag == "--tls-ca" && connect == "--connect" => {
+            let ip: IpAddr = ip.parse()?;
+            ensure!(ip.is_loopback(), "expected numeric loopback address");
+            Ok(Options {
+                issuer: tls_base(issuer)?,
+                origin: tls_base(origin)?,
+                tls: Some((ca.clone(), ip)),
+            })
+        }
+        _ => anyhow::bail!("invalid arguments"),
+    }
+}
+
+fn authority(url: &Url) -> &str {
+    url.as_str()
+        .split_once("://")
+        .expect("validated scheme")
+        .1
+        .strip_suffix('/')
+        .expect("root base")
+}
 
 fn base(value: &str) -> Result<Url> {
     let url = Url::parse(value)?;
@@ -75,12 +139,12 @@ async fn body(mut response: Response, status: u16, cap: usize) -> Result<Vec<u8>
 
 async fn run() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
-    ensure!(
-        args.len() == 2,
-        "usage: loopback_client ISSUER_BASE ORIGIN_BASE"
-    );
-    let issuer = base(&args[0])?;
-    let origin = base(&args[1])?;
+    let Options {
+        issuer,
+        origin,
+        tls,
+    } = options(&args)?;
+    let tls_mode = tls.is_some();
     // Bounded stdin, never included in errors or output. Interactive input may echo;
     // prefer piping a protected file.
     let mut invitation = String::new();
@@ -95,11 +159,31 @@ async fn run() -> Result<()> {
         decoded.len() == 32 && Base64UrlUnpadded::encode_string(&decoded) == invitation,
         "invalid invitation"
     );
-    let client = Client::builder()
+    let mut builder = Client::builder()
         .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(Duration::from_secs(15))
-        .build()?;
+        .timeout(Duration::from_secs(15));
+    if let Some((ca, ip)) = tls {
+        let mut pem = Vec::new();
+        std::fs::File::open(ca)?.take(65537).read_to_end(&mut pem)?;
+        ensure!(pem.len() <= 65536, "CA file too large");
+        let certificates = reqwest::Certificate::from_pem_bundle(&pem)?;
+        ensure!(!certificates.is_empty(), "empty CA bundle");
+        builder = builder
+            .tls_built_in_root_certs(false)
+            .https_only(true)
+            .min_tls_version(reqwest::tls::Version::TLS_1_2);
+        for certificate in certificates {
+            builder = builder.add_root_certificate(certificate);
+        }
+        for url in [&issuer, &origin] {
+            builder = builder.resolve(
+                url.host_str().context("missing host")?,
+                SocketAddr::new(ip, url.port_or_known_default().context("missing port")?),
+            );
+        }
+    }
+    let client = builder.build()?;
     let response = client
         .get(issuer.join(".well-known/private-token-issuer-directory")?)
         .header("Accept", "application/private-token-issuer-directory")
@@ -115,15 +199,7 @@ async fn run() -> Result<()> {
             .as_str()
             .context("directory URI")?,
     )?;
-    ensure!(
-        matches!(advertised.scheme(), "http" | "https")
-            && advertised.username().is_empty()
-            && advertised.password().is_none()
-            && advertised.query().is_none()
-            && advertised.fragment().is_none()
-            && advertised.path() == "/private-token/issue",
-        "invalid advertised URI"
-    );
+    validate_advertised(&advertised, &issuer, tls_mode)?;
     let keys = directory["token-keys"]
         .as_array()
         .context("directory keys")?;
@@ -150,16 +226,20 @@ async fn run() -> Result<()> {
         challenge_key == spki,
         "challenge key differs from directory"
     );
-    let identity = advertised
-        .as_str()
-        .split_once("://")
-        .context("issuer scheme")?
-        .1
-        .strip_suffix("/private-token/issue")
-        .context("issuer path")?;
     ensure!(
-        challenge.issuer_name() == identity,
+        challenge.issuer_name()
+            == advertised
+                .as_str()
+                .split_once("://")
+                .context("issuer scheme")?
+                .1
+                .strip_suffix("/private-token/issue")
+                .context("issuer path")?,
         "issuer identity mismatch"
+    );
+    ensure!(
+        !tls_mode || challenge.origin_info() == authority(&origin),
+        "origin identity mismatch"
     );
     let mut token = Token {
         nonce: rand::random(),
@@ -209,6 +289,23 @@ async fn run() -> Result<()> {
     Ok(())
 }
 
+fn validate_advertised(advertised: &Url, issuer: &Url, tls_mode: bool) -> Result<()> {
+    ensure!(
+        matches!(advertised.scheme(), "http" | "https")
+            && advertised.username().is_empty()
+            && advertised.password().is_none()
+            && advertised.query().is_none()
+            && advertised.fragment().is_none()
+            && advertised.path() == "/private-token/issue",
+        "invalid advertised URI"
+    );
+    ensure!(
+        !tls_mode || *advertised == issuer.join("private-token/issue")?,
+        "advertised issuer mismatch"
+    );
+    Ok(())
+}
+
 fn challenge_header(headers: &HeaderMap) -> Result<()> {
     challenge(single(headers, "www-authenticate")?)?;
     Ok(())
@@ -226,6 +323,85 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn advertised_policy_preserves_loopback_public_identity() {
+        let local = base("http://127.0.0.1:8081").unwrap();
+        let public = tls_base("https://issuer.test:8443").unwrap();
+        let advertised = public.join("private-token/issue").unwrap();
+        assert!(validate_advertised(&advertised, &local, false).is_ok());
+        assert!(validate_advertised(&advertised, &local, true).is_err());
+        assert!(validate_advertised(&advertised, &public, true).is_ok());
+        for invalid in [
+            "https://issuer.test/wrong",
+            "https://issuer.test/private-token/issue?x",
+            "https://u@issuer.test/private-token/issue",
+        ] {
+            assert!(validate_advertised(&Url::parse(invalid).unwrap(), &local, false).is_err());
+        }
+    }
+    #[test]
+    fn tls_bases_and_arguments() {
+        for value in [
+            "http://issuer.test",
+            "https://127.0.0.1",
+            "https://[::1]",
+            "https://u@issuer.test",
+            "https://@issuer.test",
+            "https://u:p@issuer.test",
+            "https://issuer.test/path",
+            "https://issuer.test/?q",
+            "https://issuer.test/#f",
+        ] {
+            assert!(tls_base(value).is_err(), "{value}");
+        }
+        assert!(tls_base("https://issuer.test:8443/").is_ok());
+        let parse =
+            |args: &[&str]| options(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        for ip in ["127.0.0.1", "::1"] {
+            assert!(parse(&[
+                "--tls-ca",
+                "ca.pem",
+                "--connect",
+                ip,
+                "https://issuer.test:8443",
+                "https://origin.test:9443",
+            ])
+            .is_ok());
+        }
+        for ip in ["localhost", "192.0.2.1", "127.0.0.1:443", "[::1]"] {
+            assert!(parse(&[
+                "--tls-ca",
+                "ca.pem",
+                "--connect",
+                ip,
+                "https://issuer.test",
+                "https://origin.test",
+            ])
+            .is_err());
+        }
+        assert!(parse(&["http://127.0.0.1", "http://[::1]"]).is_ok());
+        assert!(parse(&["--tls-ca", "ca.pem"]).is_err());
+        assert!(parse(&[
+            "--connect",
+            "ca.pem",
+            "--tls-ca",
+            "127.0.0.1",
+            "https://issuer.test",
+            "https://origin.test",
+        ])
+        .is_err());
+        assert!(parse(&[
+            "--tls-ca",
+            "ca.pem",
+            "--connect",
+            "127.0.0.1",
+            "https://issuer.test",
+            "https://origin.test",
+            "extra",
+        ])
+        .is_err());
+    }
+
     #[test]
     fn reject_nonlocal_and_ambiguous_inputs() {
         for url in [
