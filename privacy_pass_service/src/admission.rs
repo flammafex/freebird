@@ -99,6 +99,16 @@ fn configure(db: &Connection, initializing: bool) -> Result<()> {
     Ok(())
 }
 
+fn require_plain_schema(db: &Connection) -> Result<()> {
+    let count: i64 = db.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type IN ('trigger','view')",
+        [],
+        |r| r.get(0),
+    )?;
+    ensure!(count == 0, "unexpected schema objects");
+    Ok(())
+}
+
 impl AdmissionStore {
     /// Creates fresh state only. Partial initialization must be repaired manually,
     /// never by retrying initialization over existing files.
@@ -123,6 +133,7 @@ impl AdmissionStore {
         let mut db = Connection::open(db_path)?;
         configure(&db, true)?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
         tx.execute_batch(SCHEMA)?;
         tx.commit()?;
         db.close().map_err(|(_, e)| e)?;
@@ -139,6 +150,7 @@ impl AdmissionStore {
         ensure!(file.metadata()?.len() == 32, "invalid generation length");
         file.read_exact(&mut generation)?;
         let db = Connection::open_with_flags(db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        require_plain_schema(&db)?;
         configure(&db, false)?;
         let integrity: String = db.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
         ensure!(integrity == "ok", "database integrity check failed");
@@ -179,6 +191,7 @@ impl AdmissionStore {
         let tx = state
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
         tx.execute(
             "INSERT INTO invitations(invite_hash, expires_at) VALUES (?1, ?2)",
             params![hash.as_slice(), expires_at],
@@ -200,6 +213,7 @@ impl AdmissionStore {
         let tx = state
             .db
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
         let deleted = tx.execute(
             "DELETE FROM invitations WHERE invite_hash=?1 AND expires_at>?2",
             params![hash.as_slice(), now],
@@ -213,15 +227,19 @@ impl AdmissionStore {
     pub fn rotate_generation_for_restore(&self) -> Result<()> {
         let mut state = self.state()?;
         let generation = random_secret()?;
-        state.healthy = false;
+        let State {
+            db,
+            generation: current_generation,
+            healthy,
+        } = &mut *state;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
+        *healthy = false;
         write_generation(&self.generation_path, &generation)?;
-        state.generation = generation;
-        let tx = state
-            .db
-            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        *current_generation = generation;
         tx.execute("DELETE FROM invitations", [])?;
         tx.commit()?;
-        state.healthy = true;
+        *healthy = true;
         Ok(())
     }
 }
@@ -245,6 +263,22 @@ mod tests {
         let generation = dir.path().join("generation");
         AdmissionStore::initialize(&db, &generation).unwrap();
         (dir, db, generation)
+    }
+
+    fn invitations(path: &Path) -> Vec<(Vec<u8>, i64)> {
+        let db =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let mut stmt = db
+            .prepare(
+                "SELECT invite_hash,expires_at FROM invitations ORDER BY invite_hash,expires_at",
+            )
+            .unwrap();
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        rows
     }
 
     #[test]
@@ -318,6 +352,59 @@ mod tests {
         let store = AdmissionStore::open(db, generation).unwrap();
         assert!(!store.consume(&old, 0).unwrap());
         assert!(store.consume(&new, 0).unwrap());
+    }
+
+    #[test]
+    fn unexpected_schema_objects_refuse_open_and_live_mutations() {
+        for (object, cleanup) in [
+            (
+                "CREATE TRIGGER ignore_invitation BEFORE DELETE ON invitations
+                 BEGIN SELECT RAISE(IGNORE); END;",
+                "DROP TRIGGER ignore_invitation",
+            ),
+            (
+                "CREATE VIEW extra AS SELECT * FROM invitations",
+                "DROP VIEW extra",
+            ),
+        ] {
+            let (_dir, db, generation) = setup();
+            let store = AdmissionStore::open(&db, &generation).unwrap();
+            let code = store.provision(100).unwrap();
+            let before = invitations(&db);
+            let old_generation = fs::read(&generation).unwrap();
+            store.state().unwrap().db.execute_batch(object).unwrap();
+            for action in 0..3 {
+                let error = match action {
+                    0 => store.provision(101).unwrap_err(),
+                    1 => store.consume(&code, 101).unwrap_err(),
+                    _ => store.rotate_generation_for_restore().unwrap_err(),
+                };
+                assert!(
+                    error.to_string().contains("unexpected schema objects"),
+                    "{error:#}"
+                );
+                assert_eq!(invitations(&db), before);
+                assert_eq!(fs::read(&generation).unwrap(), old_generation);
+                assert_eq!(store.state().unwrap().generation.as_slice(), old_generation);
+            }
+            drop(store);
+            let error = AdmissionStore::open(&db, &generation)
+                .err()
+                .expect("unexpected schema objects must refuse open");
+            assert!(
+                error.to_string().contains("unexpected schema objects"),
+                "{error:#}"
+            );
+            assert_eq!(invitations(&db), before);
+            assert_eq!(fs::read(&generation).unwrap(), old_generation);
+            Connection::open(&db)
+                .unwrap()
+                .execute_batch(cleanup)
+                .unwrap();
+            let store = AdmissionStore::open(&db, &generation).unwrap();
+            assert_eq!(invitations(&db), before);
+            assert!(store.consume(&code, 101).unwrap());
+        }
     }
 
     #[test]

@@ -26,17 +26,21 @@ Usage:
   freebird-privacy-pass-service export-issuer-spki <issuer-state-dir> <key-id-hex> <new-output-path>
   freebird-privacy-pass-service issuer-key-status <issuer-state-dir>
   freebird-privacy-pass-service activate-issuer-key <issuer-state-dir> <key-id-hex> <activation-unix-seconds>
+  freebird-privacy-pass-service retire-issuer-key <issuer-state-dir> <key-id-hex>
   freebird-privacy-pass-service serve-issuer <issuer-state-dir> <issuer-name> <https-request-url> <loopback-bind>
   freebird-privacy-pass-service init-origin <origin-state-dir> <genesis-spki-der-path> <key-id-hex>
   freebird-privacy-pass-service install-origin-key <origin-state-dir> <spki-der-path> <key-id-hex> <activation-unix-seconds>
   freebird-privacy-pass-service origin-key-status <origin-state-dir>
+  freebird-privacy-pass-service retire-origin-key <origin-state-dir> <key-id-hex>
   freebird-privacy-pass-service serve-origin <origin-state-dir> <issuer-name> <origin-name> <loopback-bind>
 Listeners are loopback HTTP ONLY, not production TLS. The HTTPS request URL
 describes an external endpoint; this runner does not provide TLS.
 Offline key maintenance refuses while a process serves the same state: stop the
 issuer or origin first. Activation is whole-hour Unix seconds in the future;
 rotation order is ORIGIN FIRST (install-origin-key), then activate-issuer-key.
-Retirement is not yet supported. Initialization requires a fresh directory;
+Retire the old Issuer key once now >= successor activation; retire the old
+Origin key once now >= successor activation + 420 seconds.
+Initialization requires a fresh directory;
 partial failures are never reset automatically.";
 
 const HOUR: u64 = 3600;
@@ -326,6 +330,16 @@ async fn run(args: &[String]) -> Result<()> {
             export_public(&spki, Path::new(output))
         }
         [command, dir] if command == "issuer-key-status" => issuer_key_status(Path::new(dir)),
+        [command, dir, key_id] if command == "retire-issuer-key" => {
+            let key_id = parse_key_id(key_id)?;
+            let now = unix_now()?;
+            keys(Path::new(dir))?.retire(key_id, now).map_err(|error| {
+                surface(
+                    &error,
+                    "issuer key retirement refused (unknown, already retired, not superseded, or invalid state/clock); no change committed",
+                )
+            })
+        }
         [command, dir, key_id, at] if command == "activate-issuer-key" => {
             let key_id = parse_key_id(key_id)?;
             let at = parse_seconds(at)?;
@@ -389,6 +403,17 @@ async fn run(args: &[String]) -> Result<()> {
                 })
         }
         [command, dir] if command == "origin-key-status" => origin_key_status(Path::new(dir)),
+        [command, dir, key_id] if command == "retire-origin-key" => {
+            let key_id = parse_key_id(key_id)?;
+            let now = unix_now()?;
+            Origin::retire_key(Path::new(dir).join("origin.sqlite"), key_id, now)
+                .map_err(|error| {
+                    surface(
+                        &error,
+                        "origin key retirement refused (unknown, already retired, too early, already owned, or invalid state/clock); no change committed",
+                    )
+                })
+        }
         [command, dir] if command == "provision" => {
             let store = admission(Path::new(dir))?;
             let now = i64::try_from(unix_now()?).map_err(|_| "invalid system clock")?;

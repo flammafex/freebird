@@ -1,5 +1,5 @@
 //! CLI regressions for offline staging, export, and status formatting.
-//! Activation is covered in key_rotation.rs; retirement is not yet supported.
+//! Activation and retirement are covered in key_rotation.rs.
 use freebird_crypto::privacy_pass::PublicKey;
 use std::{
     fs,
@@ -254,12 +254,13 @@ fn legacy_signing_pk8_is_rejected_without_reset() {
     let state_arg = state.to_str().unwrap();
     let export_arg = export.to_str().unwrap();
     let far = far_future().to_string();
-    let commands: [Vec<&str>; 6] = [
+    let commands: [Vec<&str>; 7] = [
         vec!["init-issuer", state_arg],
         vec!["issuer-key-status", state_arg],
         vec!["stage-issuer-key", state_arg],
         vec!["export-issuer-spki", state_arg, ZERO_ID, export_arg],
         vec!["activate-issuer-key", state_arg, ZERO_ID, &far],
+        vec!["retire-issuer-key", state_arg, ZERO_ID],
         vec![
             "serve-issuer",
             state_arg,

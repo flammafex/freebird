@@ -36,12 +36,14 @@ RUSTSEC-2023-0071 finding against the RSA release candidate is absent with
 stable `rsa 0.10.0`. Audit success is not a security waiver or proof that the
 remaining warnings and signing path are harmless.
 
-The Origin holds only an RSA public key. One operator-issued invitation
-authorizes one signing attempt; the admission database commits its consumption
-before signing. A lost response can burn an invitation. The Origin validates
+The Origin holds only RSA public keys, never a signing secret. One
+operator-issued invitation authorizes one signing attempt; the admission
+database commits its consumption before signing. A lost response can burn an
+invitation. The Origin validates
 the signature and accepted challenge before durably recording a unique spend.
 Store errors deny access. Accepted challenge windows are local policy, **not**
-standardized token expiry; spent entries are currently retained indefinitely.
+standardized token expiry; spent entries are retained until offline retirement
+of their key, after its final acceptance deadline plus a safety margin.
 
 One process per role and a local-loopback HTTP listener are the only supported
 topology. The admission, issuer-key, and Origin stores use SQLite WAL/FULL
@@ -54,19 +56,29 @@ generation and invalidating old invitations before service resumes. An
 unannounced rollback of both data and recovery markers cannot be detected
 locally. No automatic failover or multi-replica safety is claimed.
 
-Offline candidate staging, public-only SPKI export, and offline activation exist,
-each guarded by its store's lifetime lock, for one local instance per role.
+Offline candidate staging, public-only SPKI export, activation/rotation, and
+retirement are implemented, each guarded by its store's lifetime lock, for one
+local instance per role.
 Activation is Origin first (`install-origin-key`), then the Issuer schedule
-(`activate-issuer-key`), at the same whole-hour instant. Superseded Issuer key
-material remains stored until retirement exists, and it is never used for signing
-after its successor's activation hour. **Key retirement is pending and is not claimed.**
+(`activate-issuer-key`), at the same whole-hour instant `S`. A superseded Issuer
+key is never used for signing after `S`. `retire-issuer-key` removes its private
+material once `now >= S`; `retire-origin-key` deletes its challenge/spent rows and
+marks it retired once `now >= S+420` (300-second grace plus 120-second margin).
+Both operations advance high-water in the same transaction. Public key records
+are retained permanently: retired IDs can never be reinstalled.
+
+SQLite `secure_delete=ON` and the Issuer's best-effort post-retirement
+`wal_checkpoint(TRUNCATE)` are **not a destruction guarantee**. A failed or busy
+checkpoint does not undo the committed retirement or report it as a failure.
+Journal copies, backups, snapshots, and process memory are out of scope; neither
+zeroization nor forensic erasure is claimed.
 Legacy `signing.pk8` state and schema-v1 key or Origin stores are refused
 without migration or reset; fresh state uses private `issuer-keys.sqlite`.
 Unsupported: HSM-backed keys, an online rotation API, multi-instance
 operation, zeroization of superseded key memory, and multi-key directories
 with a not-before field.
 
-**Release blockers:** key retirement; independent review of the selected RSA
+**Release blockers:** independent review of the selected RSA
 backend and protocol integration;
 independent implementation interoperability; parser fuzzing; operational
 backup/recovery tests; and a supported deployment topology. The release,

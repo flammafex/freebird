@@ -1,8 +1,8 @@
-//! Offline rotation drills (activation only; retirement is not yet supported).
+//! Offline rotation and retirement drills.
 //! - `in_process_rotation_drill_with_injected_clock`: real blind-RSA client code
 //!   against Issuer::directory_at/issue_at and Origin::request_at with an injected clock.
-//! - Subprocess tests drive the real CLI with a far-future activation instant
-//!   (never a sleep) and the loopback example end-to-end.
+//! - Subprocess tests use future activation and past retirement fixtures
+//!   (never a sleep for a time boundary) and the loopback example end-to-end.
 use axum::{
     body::to_bytes,
     http::{header, Request, StatusCode},
@@ -13,7 +13,10 @@ use freebird_common::privacy_pass::{
 };
 use freebird_crypto::privacy_pass::{BlindState, PublicKey, SecretKey};
 use freebird_privacy_pass_service::{
-    admission::AdmissionStore, issuer::Issuer, key_store::KeyStore, origin::Origin,
+    admission::AdmissionStore,
+    issuer::Issuer,
+    key_store::{KeyState, KeyStore},
+    origin::{Origin, OriginKeyState},
 };
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
@@ -274,6 +277,19 @@ async fn in_process_rotation_drill_with_injected_clock() {
     assert_eq!(late_key, genesis_spki);
     assert_eq!(late_age, 301);
 
+    // Offline Issuer retirement is refused before S, allowed exactly at S.
+    // Existing blind signatures remain verifiable after private-key retirement.
+    drop(issuer);
+    let store = KeyStore::open(&keys).unwrap();
+    assert!(store.retire(genesis_id, S - 1).is_err());
+    store.retire(genesis_id, S).unwrap();
+    let manifest = store.manifest(S).unwrap();
+    assert_eq!(manifest.keys[0].state, KeyState::Retired);
+    assert!(!manifest.keys[0].has_private);
+    assert_eq!(store.signing_keys(S).unwrap().len(), 1);
+    drop(store);
+    let issuer = Issuer::open(&keys, admission.clone(), ISSUER, ISSUE_URL, S).unwrap();
+
     // S+1: the next key is advertised; the genesis key is refused from S onward.
     let at = S + 1;
     assert_eq!(advertised(&issuer, at).key_id(), next_id);
@@ -315,6 +331,97 @@ async fn in_process_rotation_drill_with_injected_clock() {
     // Deadline is exclusive: S+299 accepted, S+300 refused.
     assert!(redeem(&origin, &token_c, S + 299));
     assert!(!redeem(&origin, &token_b, S + 300));
+
+    // Offline Origin retirement waits for the 300-second grace plus 120-second
+    // safety margin, then atomically removes the old key's challenge/spent rows.
+    drop(origin);
+    drop(issuer);
+    assert!(Origin::retire_key(&origin_db, genesis_id, S + 419).is_err());
+    Origin::retire_key(&origin_db, genesis_id, S + 420).unwrap();
+    let status = Origin::status(&origin_db, S + 420).unwrap();
+    assert_eq!(status.high_water, S + 420);
+    assert_eq!(status.keys[0].state, OriginKeyState::Retired);
+    assert_eq!(status.keys[1].state, OriginKeyState::Advertising);
+    assert!(Origin::install_key(&origin_db, &genesis_spki, genesis_id, S + 7200, S + 420).is_err());
+    let origin = Origin::open(&origin_db, &context, ISSUER, ORIGIN).unwrap();
+    // Some(challenge) is the HTTP handler's 401 path, never 200 for a retired key.
+    assert!(origin
+        .request_at(Some(&token_b), S + 420)
+        .unwrap()
+        .is_some());
+    drop(origin);
+
+    // A second complete rotation is now possible; retired rows remain as
+    // permanent tombstones but do not block the next candidate.
+    let at = S + 421;
+    let s2 = S + 7200;
+    let store = KeyStore::open(&keys).unwrap();
+    let third_id = store.stage(at).unwrap();
+    let third_spki = store.spki(third_id).unwrap();
+    drop(store);
+    Origin::install_key(&origin_db, &third_spki, third_id, s2, at).unwrap();
+    let store = KeyStore::open(&keys).unwrap();
+    assert_eq!(store.schedule_activation(s2, at).unwrap(), third_id);
+    drop(store);
+    let issuer = Issuer::open(&keys, admission.clone(), ISSUER, ISSUE_URL, at).unwrap();
+    let origin = Origin::open(&origin_db, &context, ISSUER, ORIGIN).unwrap();
+    assert_eq!(advertised(&issuer, s2 - 1).key_id(), next_id);
+    let (pre, key, age) = challenge(&origin, s2 - 1);
+    assert_eq!(key, next_spki);
+    assert_eq!(age, 301);
+    let carried = issue(
+        &issuer,
+        &invite(&admission, s2 - 1),
+        &next_public,
+        pre.digest(),
+        s2 - 1,
+    )
+    .await;
+
+    assert_eq!(advertised(&issuer, s2).key_id(), third_id);
+    let (post, key, _) = challenge(&origin, s2);
+    assert_eq!(key, third_spki);
+    let third_public = PublicKey::from_spki(&third_spki).unwrap();
+    let fresh = issue(
+        &issuer,
+        &invite(&admission, s2),
+        &third_public,
+        post.digest(),
+        s2,
+    )
+    .await;
+    assert!(redeem(&origin, &carried, s2));
+    assert!(!redeem(&origin, &carried, s2));
+    assert!(redeem(&origin, &fresh, s2));
+    assert!(!redeem(&origin, &fresh, s2));
+    drop(issuer);
+    drop(origin);
+    KeyStore::open(&keys).unwrap().retire(next_id, s2).unwrap();
+    Origin::retire_key(&origin_db, next_id, s2 + 420).unwrap();
+    let issuer = Issuer::open(&keys, admission.clone(), ISSUER, ISSUE_URL, s2 + 420).unwrap();
+    assert_eq!(advertised(&issuer, s2 + 420).key_id(), third_id);
+    assert_eq!(
+        Origin::status(&origin_db, s2 + 420)
+            .unwrap()
+            .keys
+            .iter()
+            .filter(|key| key.state == OriginKeyState::Retired)
+            .count(),
+        2
+    );
+    assert!(Origin::install_key(&origin_db, &next_spki, next_id, s2 + 7200, s2 + 420).is_err());
+    let origin = Origin::open(&origin_db, &context, ISSUER, ORIGIN).unwrap();
+    assert!(!redeem(&origin, &carried, s2 + 420));
+    let (post, _, _) = challenge(&origin, s2 + 420);
+    let after_retirement = issue(
+        &issuer,
+        &invite(&admission, s2 + 420),
+        &third_public,
+        post.digest(),
+        s2 + 420,
+    )
+    .await;
+    assert!(redeem(&origin, &after_retirement, s2 + 420));
 }
 
 // ---------------------------------------------------------------------------
@@ -569,6 +676,161 @@ fn example_binary() -> PathBuf {
 // ---------------------------------------------------------------------------
 // CLI runbook.
 // ---------------------------------------------------------------------------
+
+#[test]
+fn cli_retirement_runbook_with_past_activation_and_real_clock() {
+    let temp = tempfile::tempdir().unwrap();
+    let issuer = temp.path().join("issuer");
+    let origin = temp.path().join("origin");
+    fs::create_dir(&issuer).unwrap();
+    fs::create_dir(&origin).unwrap();
+    let keys = issuer.join("issuer-keys.sqlite");
+    let db = origin.join("origin.sqlite");
+    let context = origin.join("context");
+
+    // Build legitimate stores with injected past times through the public APIs;
+    // no SQL schedule edits, clock overrides, or waiting for a time boundary.
+    let started = unix_now();
+    let s = (started / 3600 - 24) * 3600;
+    let then = s - 3600;
+    AdmissionStore::initialize(issuer.join("admission.sqlite"), issuer.join("generation")).unwrap();
+    KeyStore::initialize(&keys).unwrap();
+    let (genesis_spki, genesis_id) = genesis(&keys, then);
+    Origin::initialize(&db, &context, &genesis_spki, genesis_id).unwrap();
+    let store = KeyStore::open(&keys).unwrap();
+    let next_id = store.stage(then).unwrap();
+    let next_spki = store.spki(next_id).unwrap();
+    Origin::install_key(&db, &next_spki, next_id, s, then).unwrap();
+    store.schedule_activation(s, then).unwrap();
+    drop(store);
+    let past_origin = Origin::open(&db, &context, ISSUER, ORIGIN).unwrap();
+    challenge(&past_origin, s - 1);
+    drop(past_origin);
+    assert!(started >= s + 420);
+
+    let genesis_hex: String = genesis_id.iter().map(|b| format!("{b:02x}")).collect();
+    let next_hex: String = next_id.iter().map(|b| format!("{b:02x}")).collect();
+    assert_ne!(genesis_hex, ZERO_ID);
+    assert_ne!(next_hex, ZERO_ID);
+    let before_issuer = issuer_status(&issuer);
+    let before_origin = origin_status(&origin);
+    assert_eq!(before_issuer.rows[0].state, "retired-for-issuance");
+    assert_eq!(before_origin.rows[0].state, "verifying");
+
+    for (command, state, active_id) in [
+        ("retire-issuer-key", &issuer, next_hex.as_str()),
+        ("retire-origin-key", &origin, next_hex.as_str()),
+    ] {
+        for malformed in ["short".to_owned(), "g".repeat(64), "0".repeat(63)] {
+            run_refused_with(&[command, p(state), &malformed], "invalid key ID");
+        }
+        run_refused(&[command, p(state), ZERO_ID]);
+        run_refused(&[command, p(state), active_id]);
+    }
+    assert_eq!(issuer_status(&issuer), before_issuer);
+    assert_eq!(origin_status(&origin), before_origin);
+
+    // Both keys are eligible for retirement, but a serving process must hold
+    // off even these valid maintenance operations.
+    let issuer_addr = free_address();
+    let mut issuer_server = spawn_server(&[
+        "serve-issuer",
+        p(&issuer),
+        ISSUER,
+        ISSUE_URL,
+        &issuer_addr.to_string(),
+    ]);
+    wait_ready(
+        &mut issuer_server,
+        issuer_addr,
+        "/.well-known/private-token-issuer-directory",
+        |text| text.starts_with("HTTP/1.1 200"),
+    );
+    run_refused_with(
+        &["retire-issuer-key", p(&issuer), &genesis_hex],
+        "already owned",
+    );
+    drop(issuer_server);
+    assert_eq!(issuer_status(&issuer), before_issuer);
+    let origin_addr = free_address();
+    let mut origin_server = spawn_server(&[
+        "serve-origin",
+        p(&origin),
+        ISSUER,
+        ORIGIN,
+        &origin_addr.to_string(),
+    ]);
+    wait_ready(
+        &mut origin_server,
+        origin_addr,
+        "/private-token/protected",
+        |text| text.starts_with("HTTP/1.1 401"),
+    );
+    run_refused_with(
+        &["retire-origin-key", p(&origin), &genesis_hex],
+        "already owned",
+    );
+    drop(origin_server);
+    assert_eq!(origin_status(&origin).rows, before_origin.rows);
+
+    for (command, state) in [
+        ("retire-issuer-key", &issuer),
+        ("retire-origin-key", &origin),
+    ] {
+        let output = run_ok(&[command, p(state), &genesis_hex]);
+        assert!(output.stdout.is_empty() && output.stderr.is_empty());
+    }
+    let issuer_output = run_ok(&["issuer-key-status", p(&issuer)]);
+    let origin_output = run_ok(&["origin-key-status", p(&origin)]);
+    let retired_issuer = parse_status(&issuer_output);
+    let retired_origin = parse_status(&origin_output);
+    assert!(retired_issuer.high_water >= started);
+    assert!(retired_origin.high_water >= started);
+    assert_eq!(retired_issuer.rows[0].state, "retired");
+    assert_eq!(retired_origin.rows[0].state, "retired");
+    assert_eq!(retired_issuer.rows[1].state, "active");
+    assert_eq!(retired_origin.rows[1].state, "advertising");
+    assert_eq!(
+        id_and_activation(&retired_issuer),
+        id_and_activation(&retired_origin)
+    );
+    let mut expected_issuer = before_issuer.rows;
+    let mut expected_origin = before_origin.rows;
+    expected_issuer[0].state = "retired".to_owned();
+    expected_origin[0].state = "retired".to_owned();
+    assert_eq!(retired_issuer.rows, expected_issuer);
+    assert_eq!(retired_origin.rows, expected_origin);
+    println!("retire-issuer-key: exit 0; retire-origin-key: exit 0; S={s}");
+    println!(
+        "issuer-key-status:\n{}",
+        String::from_utf8(issuer_output.stdout).unwrap()
+    );
+    println!(
+        "origin-key-status:\n{}",
+        String::from_utf8(origin_output.stdout).unwrap()
+    );
+
+    // Retired IDs remain public/exportable, but cannot be reinstalled or retired again.
+    let genesis_der = temp.path().join("genesis.der");
+    run_ok(&[
+        "export-issuer-spki",
+        p(&issuer),
+        &genesis_hex,
+        p(&genesis_der),
+    ]);
+    assert_eq!(fs::read(&genesis_der).unwrap(), genesis_spki);
+    run_refused(&[
+        "install-origin-key",
+        p(&origin),
+        p(&genesis_der),
+        &genesis_hex,
+        &far_future().to_string(),
+    ]);
+    run_refused(&["retire-issuer-key", p(&issuer), &genesis_hex]);
+    run_refused(&["retire-origin-key", p(&origin), &genesis_hex]);
+    assert_eq!(issuer_status(&issuer), retired_issuer);
+    assert_eq!(origin_status(&origin), retired_origin);
+}
 
 #[test]
 fn cli_runbook_rotates_origin_first_and_status_columns_agree() {
@@ -872,6 +1134,7 @@ fn v1_state_is_refused_by_the_cli_for_both_roles_without_touching_files() {
         vec!["issuer-key-status", p(&issuer)],
         vec!["stage-issuer-key", p(&issuer)],
         vec!["activate-issuer-key", p(&issuer), ZERO_ID, &far_s],
+        vec!["retire-issuer-key", p(&issuer), ZERO_ID],
         vec![
             "export-issuer-spki",
             p(&issuer),
@@ -905,6 +1168,7 @@ fn v1_state_is_refused_by_the_cli_for_both_roles_without_touching_files() {
         .collect();
     for args in [
         vec!["origin-key-status", p(&origin)],
+        vec!["retire-origin-key", p(&origin), ZERO_ID],
         vec!["install-origin-key", p(&origin), p(&next_der), &id, &far_s],
         vec!["serve-origin", p(&origin), ISSUER, ORIGIN, "127.0.0.1:0"],
     ] {

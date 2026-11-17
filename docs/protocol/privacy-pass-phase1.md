@@ -134,9 +134,9 @@ Key state is a schema-v2 SQLite manifest in each role's store: the Issuer keeps
 `issuer-keys.sqlite` and the Origin keeps `origin.sqlite`. Each key row holds
 the full key ID (SHA-256 of its canonical SPKI), the exact SPKI bytes, and an
 activation time in whole UTC hours (Unix seconds divisible by 3600). Activation
-is performed **offline** under the store's lifetime lock, and stores refuse
-while a role serves. Activation is implemented for one local instance per role.
-There is no online rotation API.
+and retirement are performed **offline** under the store's lifetime lock, and
+stores refuse while a role serves. Both are implemented for one local instance
+per role. There is no online rotation API.
 
 Rotation order is **Origin first**. The Origin installs the new public key with
 an activation hour `S`; it advertises that key only from `S` and accepts
@@ -155,16 +155,30 @@ deadline)` combinations. After its successor activates, a superseded Origin key
 is in `verifying` state. It accepts only redemptions whose recorded challenge
 deadline is still open, and the last such deadline is `S + 300` seconds. No
 redemption is accepted for it afterwards. Its state stays `verifying` until
-retirement exists. Verification uses only the key named by the token, with
+the operator retires it. Verification uses only the key named by the token, with
 no trial verification across keys. An installed key with no challenge rows
 cannot redeem. Because the challenge contains no key, digest matching alone
 cannot authorize a key. Suffix collisions among privately held keys are
 rejected.
 
-Retirement (removing a superseded key's private material and its Origin
-challenge rows) is **not yet implemented**. Until it is, a superseded Issuer key's
-private material remains stored and is never used for signing after its
-successor's activation hour. Release remains blocked.
+Offline retirement is implemented: `retire-issuer-key <dir> <old-id>` is allowed
+once `now >= S` (an active successor), and `retire-origin-key <dir> <old-id>` once
+`now >= S+420` (the final `S+300` acceptance deadline plus a 120-second safety
+margin). Issuer retirement atomically sets the old key's `pkcs8=NULL` and advances
+high-water; Origin retirement atomically deletes its challenge/spent rows, sets
+`retired=1`, and advances high-water. Public key records are retained permanently:
+a retired ID can never be reinstalled. A second rotation requires retirement of
+the superseded keys. The Issuer never signs with an old key after its successor's
+activation, even before retirement.
+
+Both stores use `secure_delete=ON`; Issuer retirement attempts a post-commit
+`wal_checkpoint(TRUNCATE)`. Cleanup is best effort: a checkpoint failure does
+not roll back retirement or turn its success into a reported failure. This is
+not a destruction guarantee for journal copies, backups, snapshots, or process
+memory, and no zeroization is claimed. There is no HSM, online rotation API,
+multi-instance operation, or multi-key not-before directory. Release remains
+blocked by independent crypto review, independent interop, parser fuzzing,
+operational backup/recovery tests, and a supported deployment topology.
 
 ## Verification and release gates
 
@@ -196,9 +210,10 @@ Exit criteria for the end-to-end sketch:
    signing secret. No alternative issuance or token-check route bypasses
    admission or redemption.
    Offline staged-key activation (Origin first, then Issuer schedule), status
-   agreement between roles, refusals, and truncated-suffix collisions are
-   tested. Old-key retirement is **not implemented** and remains a release
-   blocker.
+   agreement between roles, refusals, truncated-suffix collisions, and old-key
+   retirement are implemented and tested. The rotation drill covers Issuer
+   retirement at `S`, Origin refusal at `S+419` and success at `S+420`,
+   rejection of retired tokens/IDs, and a second full rotation.
 5. SDK, CLI, CI, deployment files, and public docs describe and exercise only
    the new flow before any release is tagged. Intermediate commits are not
    deployable.

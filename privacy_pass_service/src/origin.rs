@@ -1,5 +1,5 @@
-//! Experimental, single-instance Origin. Key activation is offline (`install_key`);
-//! retirement is not yet supported. Never restore a replay-store snapshot in place:
+//! Experimental, single-instance Origin. Key activation and retirement are offline
+//! (`install_key`, `retire_key`). Never restore a replay-store snapshot in place:
 //! close the service and provision a fresh store AND separately generated context
 //! secret before reopening.
 use anyhow::{bail, ensure, Context, Result};
@@ -31,6 +31,8 @@ const SCHEMA_VERSION: i64 = 2;
 const HOUR: u64 = 3600;
 /// Seconds an advertised challenge stays redeemable after the next key activates.
 const GRACE: u64 = 300;
+/// Additional safety margin after the superseded key's acceptance deadline.
+const RETIRE_MARGIN: u64 = 120;
 const V1_REFUSAL: &str = "origin schema v1 unsupported; no migration — initialize fresh state";
 const SCHEMA_V2: &str = "CREATE TABLE metadata (
         singleton INTEGER PRIMARY KEY CHECK(singleton=1),
@@ -115,6 +117,7 @@ fn connect(path: &Path, initialize: bool) -> Result<Connection> {
         );
     }
     let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    require_plain_schema(&db)?;
     db.busy_timeout(Duration::ZERO)?;
     let mode: String = if initialize {
         db.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?
@@ -186,6 +189,16 @@ fn check_version(version: i64) -> Result<()> {
 fn integrity(db: &Connection) -> Result<()> {
     let integrity: String = db.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
     ensure!(integrity == "ok", "corrupt Origin store");
+    Ok(())
+}
+
+fn require_plain_schema(db: &Connection) -> Result<()> {
+    let count: i64 = db.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type IN ('trigger','view')",
+        [],
+        |r| r.get(0),
+    )?;
+    ensure!(count == 0, "unexpected schema objects");
     Ok(())
 }
 
@@ -297,23 +310,73 @@ fn read_keys(db: &Connection) -> Result<Vec<StoredKey>> {
             );
         }
     }
-    // Invariant 7: a superseded key's last challenge expires by successor + grace.
+    // Invariant 7: all superseded-key replay rows expire by successor + grace.
     for pair in keys.windows(2) {
         let (key, successor) = (&pair[0], &pair[1]);
         let limit = successor.hour * HOUR + GRACE;
         let max: Option<i64> = db.query_row(
-            "SELECT MAX(deadline) FROM challenges WHERE key_id=?1",
+            "SELECT MAX(deadline) FROM (
+                SELECT deadline FROM challenges WHERE key_id=?1
+                UNION ALL SELECT deadline FROM spent WHERE key_id=?1)",
             [key.key_id.as_slice()],
             |r| r.get(0),
         )?;
         if let Some(max) = max {
             ensure!(
                 u64::try_from(max).is_ok_and(|m| m <= limit),
-                "corrupt Origin store: superseded key challenge outlives successor grace"
+                "corrupt Origin store: superseded key replay row outlives successor grace"
             );
         }
     }
     Ok(keys)
+}
+
+fn key_row_counts(db: &Connection, key_id: [u8; 32]) -> Result<(i64, i64)> {
+    Ok(db.query_row(
+        "SELECT (SELECT COUNT(*) FROM challenges WHERE key_id=?1),
+                (SELECT COUNT(*) FROM spent WHERE key_id=?1)",
+        [key_id.as_slice()],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?)
+}
+
+type ChallengeRow = (Vec<u8>, Vec<u8>, i64);
+type SpentRow = (Vec<u8>, Vec<u8>, Vec<u8>, i64);
+
+#[derive(Debug, PartialEq, Eq)]
+struct ReplayRows {
+    challenges: Vec<ChallengeRow>,
+    spent: Vec<SpentRow>,
+}
+
+fn other_replay_rows(db: &Connection, target: [u8; 32]) -> Result<ReplayRows> {
+    let challenges = db
+        .prepare(
+            "SELECT key_id,digest,deadline FROM challenges WHERE key_id!=?1
+             ORDER BY key_id,digest,deadline",
+        )?
+        .query_map([target.as_slice()], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let spent = db
+        .prepare(
+            "SELECT key_id,digest,nonce,deadline FROM spent WHERE key_id!=?1
+             ORDER BY key_id,digest,nonce,deadline",
+        )?
+        .query_map([target.as_slice()], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(ReplayRows { challenges, spent })
+}
+
+fn ensure_other_replay_rows(db: &Connection, target: [u8; 32], before: &ReplayRows) -> Result<()> {
+    ensure!(
+        other_replay_rows(db, target)? == *before,
+        "retirement changed another key's replay rows"
+    );
+    Ok(())
 }
 
 /// Pure derivation of per-key states at `hour` (= now / 3600).
@@ -381,6 +444,7 @@ impl Origin {
         secret_file.sync_all()?;
         let mut db = connect(db_path, true)?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
         tx.execute_batch(SCHEMA_V2)?;
         tx.execute(
             "INSERT INTO metadata VALUES(1,2,?1,0,NULL)",
@@ -418,6 +482,7 @@ impl Origin {
         let mut db = connect(db_path, false)?;
         integrity(&db)?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
         let (hash, _, pinned) = read_metadata(&tx)?;
         ensure!(
             hash == Sha256::digest(secret)[..],
@@ -495,6 +560,7 @@ impl Origin {
         let mut db = connect(db_path, false)?;
         integrity(&db)?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
         let (_, high, _) = read_metadata(&tx)?;
         ensure!(now >= high, "clock regression");
         let keys = read_keys(&tx)?;
@@ -568,6 +634,88 @@ impl Origin {
         Ok(())
     }
 
+    /// Offline retirement, at least 420 seconds after the next live key activates.
+    /// Keeps the key record permanently, but atomically deletes its replay rows.
+    /// Takes the ownership lock and refuses corrupt state or clock regression.
+    pub fn retire_key(db_path: impl AsRef<Path>, key_id: [u8; 32], now: u64) -> Result<()> {
+        let db_path = db_path.as_ref();
+        let now_sql = i64::try_from(now)?;
+        let _owner = ownership(db_path, false)?;
+        require_v2(db_path)?;
+        let mut db = connect(db_path, false)?;
+        integrity(&db)?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
+        let (_, high, _) = read_metadata(&tx)?;
+        ensure!(now >= high, "clock regression");
+        // Validate before deleting anything: invariant-7 corruption must not be
+        // erased by the very operation that would otherwise hide it.
+        let keys = read_keys(&tx)?;
+        let target = keys
+            .iter()
+            .find(|k| k.key_id == key_id)
+            .context("unknown origin key")?;
+        ensure!(!target.retired, "origin key already retired");
+        let successor = keys
+            .iter()
+            .find(|k| !k.retired && k.hour > target.hour && k.hour <= now / HOUR)
+            .context("origin key has no active successor")?;
+        let retire_at = successor
+            .hour
+            .checked_mul(HOUR)
+            .and_then(|s| s.checked_add(GRACE))
+            .and_then(|s| s.checked_add(RETIRE_MARGIN))
+            .context("retirement deadline overflow")?;
+        ensure!(
+            now >= retire_at,
+            "origin key retirement safety margin has not elapsed"
+        );
+        let other_rows = other_replay_rows(&tx, key_id)?;
+
+        tx.execute("DELETE FROM spent WHERE key_id=?1", [key_id.as_slice()])?;
+        tx.execute(
+            "DELETE FROM challenges WHERE key_id=?1",
+            [key_id.as_slice()],
+        )?;
+        let changed = tx.execute(
+            "UPDATE origin_keys SET retired=1 WHERE key_id=?1",
+            [key_id.as_slice()],
+        )?;
+        ensure!(changed == 1, "retirement did not update exactly one key");
+        tx.execute(
+            "UPDATE metadata SET high_water=?1 WHERE singleton=1",
+            [now_sql],
+        )?;
+
+        let after = read_keys(&tx)?;
+        let retired = after
+            .iter()
+            .find(|k| k.key_id == key_id)
+            .context("retired key missing")?;
+        ensure!(
+            retired.retired && retired.spki == target.spki && retired.hour == target.hour,
+            "retirement did not persist retired target"
+        );
+        ensure!(
+            after
+                .iter()
+                .filter(|k| k.key_id != key_id)
+                .eq(keys.iter().filter(|k| k.key_id != key_id)),
+            "retirement changed another key"
+        );
+        ensure!(
+            key_row_counts(&tx, key_id)? == (0, 0),
+            "retirement left target replay rows"
+        );
+        ensure_other_replay_rows(&tx, key_id, &other_rows)?;
+        ensure!(
+            read_metadata(&tx)?.1 == now,
+            "retirement did not advance high-water mark"
+        );
+        tx.commit()?;
+        Ok(())
+    }
+
     fn advertising(&self, hour: u64) -> Option<&LiveKey> {
         self.keys
             .iter()
@@ -602,6 +750,7 @@ impl Origin {
             .lock()
             .map_err(|_| anyhow::anyhow!("store poisoned"))?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
         let high: i64 = tx.query_row(
             "SELECT high_water FROM metadata WHERE singleton=1",
             [],
@@ -756,6 +905,25 @@ mod tests {
         Ok(Connection::open(db)?)
     }
 
+    fn read_only(db: &Path) -> Result<Connection> {
+        Ok(Connection::open_with_flags(
+            db,
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?)
+    }
+
+    fn remove_test_schema_objects(db: &Path) -> Result<()> {
+        let conn = raw(db)?;
+        let objects = conn
+            .prepare("SELECT type,name FROM sqlite_master WHERE type IN ('trigger','view')")?
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (kind, name) in objects {
+            conn.execute_batch(&format!("DROP {kind} \"{}\"", name.replace('"', "\"\"")))?;
+        }
+        Ok(())
+    }
+
     fn plant(db: &Path, key_id: &[u8], digest: [u8; 32], deadline: i64) -> Result<()> {
         raw(db)?.execute(
             "INSERT INTO challenges VALUES(?1,?2,?3)",
@@ -764,16 +932,61 @@ mod tests {
         Ok(())
     }
 
-    type ChallengeRow = (Vec<u8>, Vec<u8>, i64);
-
     fn challenge_rows(db: &Path) -> Result<Vec<ChallengeRow>> {
-        let conn = raw(db)?;
-        let mut stmt =
-            conn.prepare("SELECT key_id,digest,deadline FROM challenges ORDER BY deadline,key_id")?;
+        let conn = read_only(db)?;
+        let mut stmt = conn.prepare(
+            "SELECT key_id,digest,deadline FROM challenges ORDER BY deadline,key_id,digest",
+        )?;
         let rows = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
+    }
+
+    fn spent_rows(db: &Path) -> Result<Vec<SpentRow>> {
+        let conn = read_only(db)?;
+        let mut stmt = conn.prepare(
+            "SELECT key_id,digest,nonce,deadline FROM spent ORDER BY key_id,digest,nonce",
+        )?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    struct StoreSnapshot {
+        metadata: (Vec<u8>, u64, Option<Vec<u8>>),
+        keys: Vec<StoredKey>,
+        replay: ReplayRows,
+    }
+
+    fn store_snapshot(db: &Path) -> Result<StoreSnapshot> {
+        let conn = read_only(db)?;
+        Ok(StoreSnapshot {
+            metadata: read_metadata(&conn)?,
+            keys: read_keys(&conn)?,
+            replay: ReplayRows {
+                challenges: challenge_rows(db)?,
+                spent: spent_rows(db)?,
+            },
+        })
+    }
+
+    fn plant_retirement_rows(db: &Path, old: &PublicKey, next: &PublicKey) -> Result<()> {
+        for (key, deadline) in [(old, S + GRACE), (next, S + HOUR + GRACE)] {
+            plant(db, &key.key_id(), [1; 32], deadline as i64)?;
+            raw(db)?.execute(
+                "INSERT INTO spent VALUES(?1,?2,?3,?4)",
+                params![
+                    key.key_id().as_slice(),
+                    &[1u8; 32],
+                    &[2u8; 32],
+                    deadline as i64
+                ],
+            )?;
+        }
+        Ok(())
     }
 
     fn states(status: &OriginStatus) -> Vec<OriginKeyState> {
@@ -939,6 +1152,10 @@ mod tests {
         assert!(err.to_string().contains("v1 unsupported"));
         assert!(Origin::status(&db, 0).is_err());
         assert!(install(&db, &key, S, 0).is_err());
+        assert!(Origin::retire_key(&db, key.key_id(), S + 420)
+            .unwrap_err()
+            .to_string()
+            .contains("v1 unsupported"));
         assert_eq!(std::fs::read(&db)?, before);
         Ok(())
     }
@@ -1043,6 +1260,15 @@ mod tests {
         let p = dir("superseded-deadline")?;
         let (db, secret) = fresh(&p, &k1, Some(&k2))?;
         plant(&db, &k1.key_id(), [1; 32], (S + GRACE + 1) as i64)?;
+        refused(&db, &secret)?;
+
+        let p = dir("superseded-spent-deadline")?;
+        let (db, secret) = fresh(&p, &k1, Some(&k2))?;
+        plant_retirement_rows(&db, &k1, &k2)?;
+        raw(&db)?.execute(
+            "UPDATE spent SET deadline=?1 WHERE key_id=?2",
+            params![(S + GRACE + 1) as i64, k1.key_id().as_slice()],
+        )?;
         refused(&db, &secret)?;
 
         let p = dir("boundary-ok")?;
@@ -1214,7 +1440,7 @@ mod tests {
         assert!(install(&db, &p3, S + HOUR, S).is_err()); // superseded K1 unretired
         assert_eq!(Origin::status(&db, S)?.high_water, t0);
 
-        // Plant K1 as retired (no retire command in this lane). It is never reinstalled.
+        // A retained retired key record must never be reinstalled.
         raw(&db)?.execute(
             "UPDATE origin_keys SET retired=1 WHERE key_id=?1",
             [p1.key_id().as_slice()],
@@ -1249,24 +1475,27 @@ mod tests {
         Ok(())
     }
 
-    fn assert_install_trigger_rolls_back(
-        trigger: &str,
-        reschedule: bool,
-        expected_error: &str,
-    ) -> Result<()> {
+    fn assert_install_trigger_rolls_back(trigger: &str, reschedule: bool) -> Result<()> {
         let dir = tempfile::tempdir()?;
         let (_, genesis) = signer()?;
         let (_, next) = signer()?;
         let (db, secret) = fresh(dir.path(), &genesis, reschedule.then_some(&next))?;
         let now = S - HOUR + 1;
+        drop(Origin::open(&db, &secret, "issuer", "origin")?);
         let before = Origin::status(&db, now)?;
+        let snapshot = store_snapshot(&db)?;
         raw(&db)?.execute_batch(trigger)?;
         let error = install(&db, &next, S + HOUR, now).unwrap_err();
-        assert!(error.to_string().contains(expected_error), "{error:#}");
-        // Each status/open acquires a fresh connection after the failed transaction.
+        assert!(
+            error.to_string().contains("unexpected schema objects"),
+            "{error:#}"
+        );
+        assert_eq!(store_snapshot(&db)?, snapshot);
+        remove_test_schema_objects(&db)?;
         assert_eq!(Origin::status(&db, now)?, before);
         drop(Origin::open(&db, &secret, "issuer", "origin")?);
         assert_eq!(Origin::status(&db, now)?, before);
+        assert_eq!(store_snapshot(&db)?, snapshot);
         Ok(())
     }
 
@@ -1276,7 +1505,6 @@ mod tests {
             "CREATE TRIGGER ignore_install BEFORE INSERT ON origin_keys
              BEGIN SELECT RAISE(IGNORE); END;",
             false,
-            "did not insert exactly one key",
         )
     }
 
@@ -1286,7 +1514,6 @@ mod tests {
             "CREATE TRIGGER ignore_reschedule BEFORE UPDATE ON origin_keys
              BEGIN SELECT RAISE(IGNORE); END;",
             true,
-            "did not update exactly one key",
         )
     }
 
@@ -1296,7 +1523,6 @@ mod tests {
             "CREATE TRIGGER change_other AFTER INSERT ON origin_keys
              BEGIN UPDATE origin_keys SET activation_hour=1 WHERE key_id!=NEW.key_id; END;",
             false,
-            "changed another key",
         )
     }
 
@@ -1307,7 +1533,6 @@ mod tests {
              BEGIN UPDATE origin_keys SET activation_hour=NEW.activation_hour+1
                    WHERE key_id=NEW.key_id; END;",
             false,
-            "did not persist target",
         )
     }
 
@@ -1317,8 +1542,316 @@ mod tests {
             "CREATE TRIGGER ignore_clock BEFORE UPDATE OF high_water ON metadata
              BEGIN SELECT RAISE(IGNORE); END;",
             false,
-            "did not advance high-water",
         )
+    }
+
+    fn assert_retire_refused(
+        db: &Path,
+        secret: &Path,
+        key_id: [u8; 32],
+        now: u64,
+        expected_error: &str,
+    ) -> Result<()> {
+        // Pin names before taking a complete logical snapshot.
+        drop(Origin::open(db, secret, "issuer", "origin")?);
+        let before = Origin::status(db, now)?;
+        let metadata = read_metadata(&raw(db)?)?;
+        let challenges = challenge_rows(db)?;
+        let spent = spent_rows(db)?;
+        let error = Origin::retire_key(db, key_id, now).unwrap_err();
+        assert!(error.to_string().contains(expected_error), "{error:#}");
+        let unchanged = || -> Result<()> {
+            assert_eq!(Origin::status(db, now)?, before);
+            assert_eq!(read_metadata(&raw(db)?)?, metadata);
+            assert_eq!(challenge_rows(db)?, challenges);
+            assert_eq!(spent_rows(db)?, spent);
+            Ok(())
+        };
+        unchanged()?;
+        drop(Origin::open(db, secret, "issuer", "origin")?);
+        unchanged()
+    }
+
+    #[test]
+    fn retirement_boundary_deletes_only_target_and_reopens() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (k1, p1) = signer()?;
+        let (k2, p2) = signer()?;
+        let (db, secret) = fresh(dir.path(), &p1, Some(&p2))?;
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        let error = Origin::retire_key(&db, p1.key_id(), S + 420).unwrap_err();
+        assert!(error.to_string().contains("already owned"), "{error:#}");
+
+        origin.request_at(None, S - 1)?;
+        let old_digest = origin.challenge(S - 1)?.0.digest();
+        let old_spent = token(&k1, &p1, old_digest, 1)?;
+        let old_unspent = token(&k1, &p1, old_digest, 2)?;
+        assert!(origin.request_at(Some(&old_spent), S - 1)?.is_none());
+        origin.request_at(None, S)?;
+        let next_digest = origin.challenge(S)?.0.digest();
+        let next_spent = token(&k2, &p2, next_digest, 3)?;
+        let next_unspent = token(&k2, &p2, next_digest, 4)?;
+        assert!(origin.request_at(Some(&next_spent), S)?.is_none());
+        drop(origin);
+
+        assert_retire_refused(
+            &db,
+            &secret,
+            p1.key_id(),
+            S + 419,
+            "safety margin has not elapsed",
+        )?;
+        let now = S + 420;
+        let mut expected = Origin::status(&db, now)?;
+        let next_challenges: Vec<_> = challenge_rows(&db)?
+            .into_iter()
+            .filter(|row| row.0 == p2.key_id())
+            .collect();
+        let next_rows: Vec<_> = spent_rows(&db)?
+            .into_iter()
+            .filter(|row| row.0 == p2.key_id())
+            .collect();
+        assert_eq!(next_challenges.len(), 1);
+        assert_eq!(next_rows.len(), 1);
+        Origin::retire_key(&db, p1.key_id(), now)?;
+        expected.high_water = now;
+        expected.keys[0].state = OriginKeyState::Retired;
+        assert_eq!(Origin::status(&db, now)?, expected);
+        assert_eq!(challenge_rows(&db)?, next_challenges);
+        assert_eq!(spent_rows(&db)?, next_rows);
+
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        assert_eq!(origin.keys.len(), 1);
+        assert_eq!(origin.keys[0].key_id, p2.key_id());
+        assert!(origin.request_at(Some(&old_unspent), now)?.is_some());
+        assert!(origin.request_at(Some(&next_spent), now)?.is_some());
+        assert!(origin.request_at(Some(&next_unspent), now)?.is_none());
+        drop(origin);
+        assert_eq!(Origin::status(&db, now)?, expected);
+        let error = install(&db, &p1, S + HOUR, now).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("retired origin key cannot be reinstalled"),
+            "{error:#}"
+        );
+        assert_eq!(Origin::status(&db, now)?, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn retire_key_refusal_table() -> Result<()> {
+        let (_, p1) = signer()?;
+        let (_, p2) = signer()?;
+        let solo = tempfile::tempdir()?;
+        let (db, secret) = fresh(solo.path(), &p1, None)?;
+        assert_retire_refused(&db, &secret, [0; 32], S + 420, "unknown origin key")?;
+        assert_retire_refused(&db, &secret, p1.key_id(), S + 420, "no active successor")?;
+
+        let dir = tempfile::tempdir()?;
+        let (db, secret) = fresh(dir.path(), &p1, Some(&p2))?;
+        plant_retirement_rows(&db, &p1, &p2)?;
+        assert_retire_refused(&db, &secret, p1.key_id(), S - 1, "no active successor")?;
+        assert_retire_refused(&db, &secret, p2.key_id(), S + 420, "no active successor")?;
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        origin.request_at(None, S + 421)?;
+        drop(origin);
+        assert_retire_refused(&db, &secret, p1.key_id(), S + 420, "clock regression")?;
+        Origin::retire_key(&db, p1.key_id(), S + 421)?;
+        assert_retire_refused(&db, &secret, p1.key_id(), S + 422, "already retired")?;
+        Ok(())
+    }
+
+    #[test]
+    fn retirement_refuses_invariant_seven_corruption_without_erasing_it() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (_, p1) = signer()?;
+        let (_, p2) = signer()?;
+        let (db, secret) = fresh(dir.path(), &p1, Some(&p2))?;
+        plant_retirement_rows(&db, &p1, &p2)?;
+        plant(&db, &p1.key_id(), [3; 32], (S + GRACE + 1) as i64)?;
+        let metadata = read_metadata(&raw(&db)?)?;
+        let challenges = challenge_rows(&db)?;
+        let spent = spent_rows(&db)?;
+        let error = Origin::retire_key(&db, p1.key_id(), S + 420).unwrap_err();
+        assert!(
+            error.to_string().contains("outlives successor grace"),
+            "{error:#}"
+        );
+        assert_eq!(read_metadata(&raw(&db)?)?, metadata);
+        assert_eq!(challenge_rows(&db)?, challenges);
+        assert_eq!(spent_rows(&db)?, spent);
+        assert_eq!(
+            raw(&db)?.query_row(
+                "SELECT retired FROM origin_keys WHERE key_id=?1",
+                [p1.key_id().as_slice()],
+                |r| r.get::<_, i64>(0),
+            )?,
+            0
+        );
+        refused(&db, &secret)?;
+        assert_eq!(challenge_rows(&db)?, challenges);
+        Ok(())
+    }
+
+    fn assert_retire_trigger_rolls_back(trigger: &str) -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (_, p1) = signer()?;
+        let (_, p2) = signer()?;
+        let (db, secret) = fresh(dir.path(), &p1, Some(&p2))?;
+        plant_retirement_rows(&db, &p1, &p2)?;
+        drop(Origin::open(&db, &secret, "issuer", "origin")?);
+        let before = store_snapshot(&db)?;
+        raw(&db)?.execute_batch(trigger)?;
+        let error = Origin::retire_key(&db, p1.key_id(), S + 420).unwrap_err();
+        assert!(
+            error.to_string().contains("unexpected schema objects"),
+            "{error:#}"
+        );
+        assert_eq!(store_snapshot(&db)?, before);
+        remove_test_schema_objects(&db)?;
+        drop(Origin::open(&db, &secret, "issuer", "origin")?);
+        assert_eq!(store_snapshot(&db)?, before);
+        Ok(())
+    }
+
+    #[test]
+    fn ignored_retirement_update_rolls_back() -> Result<()> {
+        assert_retire_trigger_rolls_back(
+            "CREATE TRIGGER ignore_retire BEFORE UPDATE OF retired ON origin_keys
+             BEGIN SELECT RAISE(IGNORE); END;",
+        )
+    }
+
+    #[test]
+    fn retirement_trigger_deleting_successor_spent_rows_rolls_back() -> Result<()> {
+        assert_retire_trigger_rolls_back(
+            "CREATE TRIGGER delete_other_spent AFTER DELETE ON spent
+             BEGIN DELETE FROM spent WHERE key_id!=OLD.key_id; END;",
+        )
+    }
+
+    #[test]
+    fn retirement_postcondition_trigger_regressions() -> Result<()> {
+        for trigger in [
+            "CREATE TRIGGER undo_retire AFTER UPDATE OF retired ON origin_keys
+                 WHEN NEW.retired=1 BEGIN
+                   UPDATE origin_keys SET retired=0 WHERE key_id=NEW.key_id; END;",
+            "CREATE TRIGGER change_target AFTER UPDATE OF retired ON origin_keys
+                 BEGIN UPDATE origin_keys SET activation_hour=1 WHERE key_id=NEW.key_id; END;",
+            "CREATE TRIGGER change_other AFTER UPDATE OF retired ON origin_keys
+                 BEGIN UPDATE origin_keys SET activation_hour=activation_hour-1
+                       WHERE key_id!=NEW.key_id; END;",
+            "CREATE TRIGGER delete_other_challenges AFTER DELETE ON challenges
+                 BEGIN DELETE FROM challenges WHERE key_id!=OLD.key_id; END;",
+            "CREATE TRIGGER ignore_clock BEFORE UPDATE OF high_water ON metadata
+                 BEGIN SELECT RAISE(IGNORE); END;",
+        ] {
+            assert_retire_trigger_rolls_back(trigger)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn unexpected_schema_objects_refuse_open_and_live_requests() -> Result<()> {
+        let (_, key) = signer()?;
+        for object in [
+            "CREATE TRIGGER ignore_spent BEFORE INSERT ON spent
+             BEGIN SELECT RAISE(IGNORE); END;",
+            "CREATE VIEW extra AS SELECT * FROM spent;",
+        ] {
+            let dir = tempfile::tempdir()?;
+            let (db, secret) = fresh(dir.path(), &key, None)?;
+            let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+            origin.request_at(None, S)?;
+            let before = store_snapshot(&db)?;
+            origin.db.lock().unwrap().execute_batch(object)?;
+            let error = origin.request_at(None, S + 1).unwrap_err();
+            assert!(
+                error.to_string().contains("unexpected schema objects"),
+                "{error:#}"
+            );
+            assert_eq!(store_snapshot(&db)?, before);
+            drop(origin);
+            let error = Origin::open(&db, &secret, "issuer", "origin")
+                .err()
+                .context("unexpected schema object accepted at open")?;
+            assert!(
+                error.to_string().contains("unexpected schema objects"),
+                "{error:#}"
+            );
+            assert_eq!(store_snapshot(&db)?, before);
+            remove_test_schema_objects(&db)?;
+            drop(Origin::open(&db, &secret, "issuer", "origin")?);
+            assert_eq!(store_snapshot(&db)?, before);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn count_preserving_retirement_trigger_cannot_enable_successor_replay() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (_, old) = signer()?;
+        let (signer, next) = signer()?;
+        let (db, secret) = fresh(dir.path(), &old, Some(&next))?;
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        origin.request_at(None, S - 1)?;
+        origin.request_at(None, S)?;
+        let spent = token(&signer, &next, origin.challenge(S)?.0.digest(), 7)?;
+        assert!(origin.request_at(Some(&spent), S)?.is_none());
+        drop(origin);
+        let before = store_snapshot(&db)?;
+        raw(&db)?.execute_batch(
+            "CREATE TRIGGER rewrite_successor_nonce AFTER UPDATE OF retired ON origin_keys
+             BEGIN UPDATE spent SET nonce=zeroblob(32) WHERE key_id<>NEW.key_id; END;",
+        )?;
+        let error = Origin::retire_key(&db, old.key_id(), S + 420).unwrap_err();
+        assert!(
+            error.to_string().contains("unexpected schema objects"),
+            "{error:#}"
+        );
+        assert_eq!(store_snapshot(&db)?, before);
+        remove_test_schema_objects(&db)?;
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        assert_eq!(store_snapshot(&db)?, before);
+        // Some(challenge) is the rejected/401 path, not a successful redemption.
+        assert!(origin.request_at(Some(&spent), S + 420)?.is_some());
+        assert_eq!(challenge_rows(&db)?, before.replay.challenges);
+        assert_eq!(spent_rows(&db)?, before.replay.spent);
+        Ok(())
+    }
+
+    #[test]
+    fn retirement_replay_snapshot_detects_count_preserving_edits() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (_, old) = signer()?;
+        let (_, next) = signer()?;
+        let (db, _) = fresh(dir.path(), &old, Some(&next))?;
+        plant_retirement_rows(&db, &old, &next)?;
+        let mut conn = raw(&db)?;
+        let before = other_replay_rows(&conn, old.key_id())?;
+        let counts = key_row_counts(&conn, next.key_id())?;
+        for sql in [
+            "UPDATE spent SET nonce=zeroblob(32) WHERE key_id!=?1",
+            "UPDATE spent SET digest=zeroblob(32) WHERE key_id!=?1",
+            "UPDATE spent SET deadline=deadline+1 WHERE key_id!=?1",
+            "UPDATE challenges SET digest=zeroblob(32) WHERE key_id!=?1",
+            "UPDATE challenges SET deadline=deadline+1 WHERE key_id!=?1",
+        ] {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            tx.execute(sql, [old.key_id().as_slice()])?;
+            assert_eq!(key_row_counts(&tx, next.key_id())?, counts);
+            let error = ensure_other_replay_rows(&tx, old.key_id(), &before).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("changed another key's replay rows"),
+                "{error:#}"
+            );
+            tx.rollback()?;
+            ensure_other_replay_rows(&conn, old.key_id(), &before)?;
+        }
+        Ok(())
     }
 
     #[test]

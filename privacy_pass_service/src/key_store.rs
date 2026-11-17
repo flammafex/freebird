@@ -125,6 +125,7 @@ fn connect(path: &Path, initialize: bool) -> Result<Connection> {
         "key database permissions must be 0600"
     );
     let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    require_plain_schema(&db)?;
     let mode: String = if initialize {
         db.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?
     } else {
@@ -141,6 +142,16 @@ fn connect(path: &Path, initialize: bool) -> Result<Connection> {
     let secure: i64 = db.query_row("PRAGMA secure_delete", [], |r| r.get(0))?;
     ensure!(secure == 1, "secure deletion unavailable");
     Ok(db)
+}
+
+fn require_plain_schema(db: &Connection) -> Result<()> {
+    let count: i64 = db.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type IN ('trigger','view')",
+        [],
+        |r| r.get(0),
+    )?;
+    ensure!(count == 0, "unexpected schema objects");
+    Ok(())
 }
 
 /// Probe before write-capable connection setup or permission checks. In
@@ -461,6 +472,49 @@ fn ensure_activation(
     Ok(())
 }
 
+fn ensure_retirement(
+    before: &Snapshot,
+    after: &Snapshot,
+    target: [u8; 32],
+    now: u64,
+) -> Result<()> {
+    ensure!(
+        after.high_water == now,
+        "retirement did not advance high-water mark"
+    );
+    ensure!(
+        after.rows.len() == before.rows.len(),
+        "retirement changed key cardinality"
+    );
+    ensure!(
+        before
+            .rows
+            .iter()
+            .filter(|r| r.key_id != target)
+            .all(|old| after.rows.iter().any(|new| new == old)),
+        "retirement changed another key"
+    );
+    let old = before
+        .rows
+        .iter()
+        .find(|r| r.key_id == target)
+        .context("target key missing")?;
+    let new = after
+        .rows
+        .iter()
+        .find(|r| r.key_id == target)
+        .context("target key missing after retirement")?;
+    ensure!(
+        new.pkcs8.is_none() && new.spki == old.spki && new.hour == old.hour,
+        "retirement did not persist target"
+    );
+    ensure!(
+        active_key_id(after, now) == active_key_id(before, now),
+        "retirement changed active key"
+    );
+    Ok(())
+}
+
 impl KeyStore {
     /// Explicit fresh creation only: genesis key active from hour 0, high-water 0.
     /// A failed initialization leaves its reservation; retry never resets or
@@ -480,6 +534,7 @@ impl KeyStore {
         let public = key.public_key()?;
         let mut db = connect(path, true)?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
         tx.execute_batch(SCHEMA)?;
         tx.execute(
             "INSERT INTO metadata (singleton, version, high_water) VALUES (1, 2, 0)",
@@ -539,6 +594,14 @@ impl KeyStore {
 
     /// Commits one new candidate. Refused while a staged or scheduled key exists.
     pub fn stage(&self, now: u64) -> Result<[u8; 32]> {
+        self.stage_with_generator(now, || Ok(SecretKey::generate()?))
+    }
+
+    fn stage_with_generator(
+        &self,
+        now: u64,
+        mut generate: impl FnMut() -> Result<SecretKey>,
+    ) -> Result<[u8; 32]> {
         let mut db = self.connection()?;
         let before = validate(&db)?;
         ensure!(now >= before.high_water, CLOCK_BEHIND);
@@ -548,7 +611,7 @@ impl KeyStore {
         let suffixes = private_suffixes(&before);
         let mut candidate = None;
         for _ in 0..16 {
-            let key = SecretKey::generate()?;
+            let key = generate()?;
             let public = key.public_key()?;
             if !suffixes.contains(&public.key_id()[31]) {
                 candidate = Some((key, public));
@@ -560,6 +623,7 @@ impl KeyStore {
         let id = public.key_id();
         let pkcs8 = key.to_pkcs8()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
         let snapshot = validate(&tx)?;
         ensure!(
             snapshot == before,
@@ -620,6 +684,7 @@ impl KeyStore {
         let hour_db = to_i64(hour, "activation hour")?;
         let mut db = self.connection()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
         let before = validate(&tx)?;
         ensure!(now >= before.high_water, CLOCK_BEHIND);
         let records = derive(&before, now)?;
@@ -675,7 +740,54 @@ impl KeyStore {
         Ok(target)
     }
 
-    /// Private keys with activation hours (never the staged key), ascending by hour.
+    /// Removes private material only after a private successor is active at `now`.
+    /// After commit, a WAL truncation checkpoint is best effort: errors or busy
+    /// results still return Ok, never implying that committed retirement rolled
+    /// back. This is not a destruction guarantee (including backups or memory).
+    pub fn retire(&self, key_id: [u8; 32], now: u64) -> Result<()> {
+        let mut db = self.connection()?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        require_plain_schema(&tx)?;
+        let before = validate(&tx)?;
+        ensure!(now >= before.high_water, CLOCK_BEHIND);
+        let target = before
+            .rows
+            .iter()
+            .find(|r| r.key_id == key_id)
+            .context("unknown key ID")?;
+        ensure!(target.pkcs8.is_some(), "key is already retired");
+        let hour = target.hour.context("cannot retire a staged key")?;
+        ensure!(
+            before.rows.iter().any(|r| {
+                r.pkcs8.is_some()
+                    && r.hour.is_some_and(|successor| {
+                        successor > hour
+                            && successor
+                                .checked_mul(SECONDS_PER_HOUR)
+                                .is_some_and(|at| at <= now)
+                    })
+            }),
+            "key has not been superseded by the local clock"
+        );
+        let changed = tx.execute(
+            "UPDATE keys SET pkcs8=NULL WHERE key_id=?1",
+            [key_id.as_slice()],
+        )?;
+        ensure!(changed == 1, "retirement did not update exactly one key");
+        tx.execute(
+            "UPDATE metadata SET high_water=?1 WHERE singleton=1",
+            [to_i64(now, "time")?],
+        )?;
+        let after = validate(&tx)?;
+        ensure_retirement(&before, &after, key_id, now)?;
+        tx.commit()?;
+        let _ = db.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+            r.get::<_, i64>(0)
+        });
+        Ok(())
+    }
+
+    /// Private keys with activation hours (never staged or retired), ascending by hour.
     pub fn signing_keys(&self, now: u64) -> Result<Vec<SigningKey>> {
         let db = self.connection()?;
         let snapshot = validate(&db)?;
@@ -712,6 +824,26 @@ mod tests {
         let path = dir.path().join("keys.sqlite");
         KeyStore::initialize(&path).unwrap();
         (dir, path)
+    }
+
+    fn raw_snapshot(path: &Path) -> Snapshot {
+        let db = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        validate(&db).unwrap()
+    }
+
+    fn remove_test_schema_objects(path: &Path) {
+        let db = Connection::open(path).unwrap();
+        let objects = db
+            .prepare("SELECT type,name FROM sqlite_master WHERE type IN ('trigger','view')")
+            .unwrap()
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        for (kind, name) in objects {
+            db.execute_batch(&format!("DROP {kind} \"{}\"", name.replace('"', "\"\"")))
+                .unwrap();
+        }
     }
 
     /// K0 genesis (active from hour 0); K1 staged at T0.
@@ -1082,6 +1214,7 @@ mod tests {
         let (_dir, path) = fresh();
         let store = KeyStore::open(&path).unwrap();
         let before = store.manifest(T0).unwrap();
+        let snapshot = raw_snapshot(&path);
         store
             .connection()
             .unwrap()
@@ -1090,23 +1223,37 @@ mod tests {
                  BEGIN SELECT RAISE(ABORT, 'injected insert failure'); END;",
             )
             .unwrap();
-        assert!(store.stage(T0).is_err());
+        let error = store.stage(T0).unwrap_err();
+        assert!(
+            error.to_string().contains("unexpected schema objects"),
+            "{error:#}"
+        );
         assert_eq!(store.manifest(T0).unwrap(), before);
+        assert!(raw_snapshot(&path) == snapshot);
+        remove_test_schema_objects(&path);
         drop(store);
         assert_eq!(KeyStore::open(&path).unwrap().manifest(T0).unwrap(), before);
+        assert!(raw_snapshot(&path) == snapshot);
     }
 
-    fn assert_trigger_stage_rolls_back(trigger: &str, now: u64, expected_error: &str) {
+    fn assert_trigger_stage_rolls_back(trigger: &str, now: u64) {
         let (_dir, path) = fresh();
         let store = KeyStore::open(&path).unwrap();
         let before = store.manifest(now).unwrap();
+        let snapshot = raw_snapshot(&path);
         store.connection().unwrap().execute_batch(trigger).unwrap();
         let error = store.stage(now).unwrap_err();
-        assert!(error.to_string().contains(expected_error), "{error:#}");
+        assert!(
+            error.to_string().contains("unexpected schema objects"),
+            "{error:#}"
+        );
         assert_eq!(store.manifest(now).unwrap(), before);
+        assert!(raw_snapshot(&path) == snapshot);
+        remove_test_schema_objects(&path);
         drop(store);
         let reopened = KeyStore::open(&path).unwrap();
         assert_eq!(reopened.manifest(now).unwrap(), before);
+        assert!(raw_snapshot(&path) == snapshot);
     }
 
     #[test]
@@ -1115,7 +1262,6 @@ mod tests {
             "CREATE TRIGGER ignore_stage BEFORE INSERT ON keys
              BEGIN SELECT RAISE(IGNORE); END;",
             T0,
-            "staging did not insert exactly one key",
         );
     }
 
@@ -1127,7 +1273,6 @@ mod tests {
              BEGIN UPDATE keys SET activation_hour=(SELECT MAX(activation_hour)+1 FROM keys)
                    WHERE key_id=NEW.key_id; END;",
             7_300,
-            "staging changed active key or failed to persist candidate",
         );
     }
 
@@ -1295,6 +1440,7 @@ mod tests {
         let store = KeyStore::open(&path).unwrap();
         let now = T0 + 9;
         let before = store.manifest(now).unwrap();
+        let snapshot = raw_snapshot(&path);
         store
             .connection()
             .unwrap()
@@ -1307,15 +1453,18 @@ mod tests {
             .schedule_activation(S + SECONDS_PER_HOUR, now)
             .unwrap_err();
         assert!(
-            error.to_string().contains("did not update exactly one key"),
+            error.to_string().contains("unexpected schema objects"),
             "{error:#}"
         );
         assert_eq!(store.manifest(now).unwrap(), before);
+        assert!(raw_snapshot(&path) == snapshot);
+        remove_test_schema_objects(&path);
         drop(store);
         assert_eq!(
             KeyStore::open(&path).unwrap().manifest(now).unwrap(),
             before
         );
+        assert!(raw_snapshot(&path) == snapshot);
     }
 
     #[test]
@@ -1323,6 +1472,7 @@ mod tests {
         let (_dir, path, staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         let before = store.manifest(T0).unwrap();
+        let snapshot = raw_snapshot(&path);
         store
             .connection()
             .unwrap()
@@ -1332,9 +1482,14 @@ mod tests {
             )
             .unwrap();
         let error = store.schedule_activation(S, T0).unwrap_err().to_string();
-        assert!(error.contains("did not persist target"), "{error}");
+        assert!(error.contains("unexpected schema objects"), "{error}");
         assert_eq!(store.manifest(T0).unwrap(), before);
         assert_eq!(state(&before, staged), KeyState::Staged);
+        assert!(raw_snapshot(&path) == snapshot);
+        remove_test_schema_objects(&path);
+        drop(store);
+        assert_eq!(KeyStore::open(&path).unwrap().manifest(T0).unwrap(), before);
+        assert!(raw_snapshot(&path) == snapshot);
     }
 
     #[test]
@@ -1393,6 +1548,7 @@ mod tests {
         let (_dir, path, _staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         let before = store.manifest(T0).unwrap();
+        let snapshot = raw_snapshot(&path);
         store
             .connection()
             .unwrap()
@@ -1401,7 +1557,324 @@ mod tests {
                  BEGIN SELECT RAISE(ABORT, 'injected update failure'); END;",
             )
             .unwrap();
-        assert!(store.schedule_activation(S, T0 + 9).is_err());
+        let error = store.schedule_activation(S, T0 + 9).unwrap_err();
+        assert!(
+            error.to_string().contains("unexpected schema objects"),
+            "{error:#}"
+        );
         assert_eq!(store.manifest(T0).unwrap(), before);
+        assert!(raw_snapshot(&path) == snapshot);
+        remove_test_schema_objects(&path);
+        drop(store);
+        assert_eq!(KeyStore::open(&path).unwrap().manifest(T0).unwrap(), before);
+        assert!(raw_snapshot(&path) == snapshot);
+    }
+
+    fn assert_retire_refused(store: &KeyStore, id: [u8; 32], now: u64, expected_error: &str) {
+        let before = validate(&store.connection().unwrap()).unwrap();
+        let error = store.retire(id, now).unwrap_err();
+        assert!(error.to_string().contains(expected_error), "{error:#}");
+        assert!(
+            validate(&store.connection().unwrap()).unwrap() == before,
+            "refused retirement changed stored state"
+        );
+    }
+
+    #[test]
+    fn retire_refuses_active_staged_and_unknown_keys() {
+        let (_dir, path, staged) = staged_fixture();
+        let store = KeyStore::open(&path).unwrap();
+        let k0 = genesis_id(&store, T0);
+        let before = store.manifest(T0).unwrap();
+        assert_retire_refused(&store, k0, T0, "not been superseded");
+        assert_retire_refused(&store, staged, T0, "staged key");
+        assert_retire_refused(&store, [0; 32], T0, "unknown key ID");
+        drop(store);
+        assert_eq!(KeyStore::open(&path).unwrap().manifest(T0).unwrap(), before);
+    }
+
+    #[test]
+    fn retire_requires_successor_to_be_active_by_local_clock() {
+        let (_dir, path, k1) = scheduled_fixture();
+        let store = KeyStore::open(&path).unwrap();
+        let k0 = genesis_id(&store, S - 1);
+        assert_retire_refused(&store, k0, S - 1, "not been superseded");
+        assert_retire_refused(&store, k1, S - 1, "not been superseded");
+        // The exact successor activation second is sufficient; no grace is needed.
+        store.retire(k0, S).unwrap();
+        assert_eq!(state(&store.manifest(S).unwrap(), k0), KeyState::Retired);
+        assert_retire_refused(&store, k1, S, "not been superseded");
+    }
+
+    #[test]
+    fn retire_refuses_below_high_water_despite_active_successor() {
+        let (_dir, path, _k1) = scheduled_fixture();
+        let store = KeyStore::open(&path).unwrap();
+        let k0 = genesis_id(&store, S);
+        store.stage(S + 1).unwrap();
+        assert_retire_refused(&store, k0, S, "high-water");
+    }
+
+    #[test]
+    fn retirement_preserves_public_row_and_other_keys_across_reopen() {
+        let (_dir, path, k1) = scheduled_fixture();
+        let store = KeyStore::open(&path).unwrap();
+        let k0 = genesis_id(&store, S);
+        let spki = store.spki(k0).unwrap();
+        let mut expected = validate(&store.connection().unwrap()).unwrap();
+        expected.high_water = S;
+        expected
+            .rows
+            .iter_mut()
+            .find(|r| r.key_id == k0)
+            .unwrap()
+            .pkcs8 = None;
+
+        store.retire(k0, S).unwrap();
+        assert!(validate(&store.connection().unwrap()).unwrap() == expected);
+        let manifest = store.manifest(S).unwrap();
+        assert_eq!(manifest.high_water, S);
+        let retired = manifest.keys.iter().find(|k| k.key_id == k0).unwrap();
+        assert_eq!(retired.state, KeyState::Retired);
+        assert!(!retired.has_private);
+        assert_eq!(retired.activation_hour, Some(0));
+        assert_eq!(retired.spki, spki);
+        assert_eq!(retired.issuance_end, Some(S));
+        assert_eq!(retired.acceptance_deadline, Some(S + ACCEPTANCE_GRACE));
+        assert_eq!(store.spki(k0).unwrap(), spki);
+        let signing = store.signing_keys(S).unwrap();
+        assert_eq!(signing.len(), 1);
+        assert_eq!(signing[0].public.key_id(), k1);
+        assert_retire_refused(&store, k0, S + 1, "already retired");
+        drop(store);
+
+        let reopened = KeyStore::open(&path).unwrap();
+        assert!(validate(&reopened.connection().unwrap()).unwrap() == expected);
+        assert_eq!(reopened.manifest(S).unwrap(), manifest);
+        assert_eq!(reopened.signing_keys(S).unwrap()[0].public.key_id(), k1);
+        assert_retire_refused(&reopened, k0, S + 1, "already retired");
+    }
+
+    #[test]
+    fn retirement_frees_suffix_for_staging_and_next_activation() {
+        // Find a birthday collision before choosing genesis, avoiding a costly
+        // targeted RSA-key search for one preselected suffix.
+        let mut seen = std::collections::HashMap::<u8, SecretKey>::new();
+        let (old, candidate, pkcs8) = loop {
+            let key = SecretKey::generate().unwrap();
+            let id = key.public_key().unwrap().key_id();
+            if let Some(old) = seen.remove(&id[31]) {
+                break (old, id, key.to_pkcs8().unwrap());
+            }
+            seen.insert(id[31], key);
+        };
+        let public = old.public_key().unwrap();
+        let k0 = public.key_id();
+        assert_ne!(candidate, k0);
+        let (_dir, path) = fresh();
+        let store = KeyStore::open(&path).unwrap();
+        store
+            .connection()
+            .unwrap()
+            .execute(
+                "UPDATE keys SET key_id=?1, spki=?2, pkcs8=?3 WHERE activation_hour=0",
+                params![k0.as_slice(), public.to_spki(), old.to_pkcs8().unwrap()],
+            )
+            .unwrap();
+        let k1 = store.stage(T0).unwrap();
+        store.schedule_activation(S, T0).unwrap();
+        // Force the colliding candidate through the production staging path.
+        let before = store.manifest(S).unwrap();
+        let error = store
+            .stage_with_generator(S, || Ok(SecretKey::from_pkcs8(&pkcs8)?))
+            .unwrap_err();
+        assert!(error.to_string().contains("after 16 attempts"), "{error:#}");
+        assert_eq!(store.manifest(S).unwrap(), before);
+
+        store.retire(k0, S).unwrap();
+        let staged = store
+            .stage_with_generator(S, || Ok(SecretKey::from_pkcs8(&pkcs8)?))
+            .unwrap();
+        assert_eq!(staged, candidate);
+        assert_eq!(staged[31], k0[31]);
+        assert_eq!(state(&store.manifest(S).unwrap(), staged), KeyState::Staged);
+        assert_eq!(
+            store.schedule_activation(S + SECONDS_PER_HOUR, S).unwrap(),
+            staged
+        );
+        let manifest = store.manifest(S).unwrap();
+        assert_eq!(state(&manifest, k0), KeyState::Retired);
+        assert_eq!(state(&manifest, k1), KeyState::Active);
+        assert_eq!(state(&manifest, staged), KeyState::Scheduled);
+        drop(store);
+        assert_eq!(
+            KeyStore::open(&path).unwrap().manifest(S).unwrap(),
+            manifest
+        );
+    }
+
+    #[test]
+    fn retirement_unblocks_already_staged_rotation() {
+        let (_dir, path, _k1) = scheduled_fixture();
+        let store = KeyStore::open(&path).unwrap();
+        let k0 = genesis_id(&store, S);
+        let staged = store.stage(S).unwrap();
+        let before = store.manifest(S).unwrap();
+        let error = store
+            .schedule_activation(S + SECONDS_PER_HOUR, S)
+            .unwrap_err();
+        assert!(error.to_string().contains("retire it first"), "{error:#}");
+        assert_eq!(store.manifest(S).unwrap(), before);
+        store.retire(k0, S).unwrap();
+        assert_eq!(
+            store.schedule_activation(S + SECONDS_PER_HOUR, S).unwrap(),
+            staged
+        );
+    }
+
+    fn assert_trigger_retire_rolls_back(trigger: &str) {
+        let (_dir, path, _k1) = scheduled_fixture();
+        let store = KeyStore::open(&path).unwrap();
+        let now = S + 9;
+        let k0 = genesis_id(&store, now);
+        let before = validate(&store.connection().unwrap()).unwrap();
+        store.connection().unwrap().execute_batch(trigger).unwrap();
+        assert_retire_refused(&store, k0, now, "unexpected schema objects");
+        assert!(raw_snapshot(&path) == before);
+        remove_test_schema_objects(&path);
+        drop(store);
+        let reopened = KeyStore::open(&path).unwrap();
+        assert!(
+            validate(&reopened.connection().unwrap()).unwrap() == before,
+            "failed retirement changed stored state after reopen"
+        );
+    }
+
+    #[test]
+    fn ignored_retirement_update_rolls_back() {
+        assert_trigger_retire_rolls_back(
+            "CREATE TRIGGER ignore_retire BEFORE UPDATE OF pkcs8 ON keys
+             BEGIN SELECT RAISE(IGNORE); END;",
+        );
+    }
+
+    #[test]
+    fn retirement_trigger_nulling_another_key_rolls_back() {
+        assert_trigger_retire_rolls_back(
+            "CREATE TRIGGER null_another AFTER UPDATE OF pkcs8 ON keys
+             WHEN OLD.activation_hour=0
+             BEGIN UPDATE keys SET pkcs8=NULL WHERE activation_hour=10; END;",
+        );
+    }
+
+    #[test]
+    fn retirement_postconditions_reject_other_valid_changes() {
+        for trigger in [
+            "CREATE TRIGGER change_target AFTER UPDATE OF pkcs8 ON keys
+                 BEGIN UPDATE keys SET activation_hour=1 WHERE key_id=NEW.key_id; END;",
+            "CREATE TRIGGER restore_private AFTER UPDATE OF pkcs8 ON keys
+                 WHEN NEW.pkcs8 IS NULL
+                 BEGIN UPDATE keys SET pkcs8=OLD.pkcs8 WHERE key_id=NEW.key_id; END;",
+            "CREATE TRIGGER change_another AFTER UPDATE OF pkcs8 ON keys
+                 BEGIN UPDATE keys SET activation_hour=11 WHERE activation_hour=10; END;",
+            "CREATE TRIGGER ignore_high_water BEFORE UPDATE ON metadata
+                 BEGIN SELECT RAISE(IGNORE); END;",
+        ] {
+            assert_trigger_retire_rolls_back(trigger);
+        }
+    }
+
+    #[test]
+    fn unexpected_schema_objects_refuse_open_and_live_mutations() {
+        for object in [
+            "CREATE TRIGGER ignore_keys BEFORE INSERT ON keys
+             BEGIN SELECT RAISE(IGNORE); END;",
+            "CREATE VIEW extra AS SELECT key_id FROM keys;",
+        ] {
+            let (_dir, path) = fresh();
+            let store = KeyStore::open(&path).unwrap();
+            let k0 = genesis_id(&store, T0);
+            let before = raw_snapshot(&path);
+            store.connection().unwrap().execute_batch(object).unwrap();
+            for error in [
+                store.stage(T0).unwrap_err(),
+                store.schedule_activation(S, T0).unwrap_err(),
+                store.retire(k0, T0).unwrap_err(),
+            ] {
+                assert!(
+                    error.to_string().contains("unexpected schema objects"),
+                    "{error:#}"
+                );
+                assert!(raw_snapshot(&path) == before);
+            }
+            drop(store);
+            let error = KeyStore::open(&path)
+                .err()
+                .expect("unexpected schema objects must refuse open");
+            assert!(
+                error.to_string().contains("unexpected schema objects"),
+                "{error:#}"
+            );
+            assert!(raw_snapshot(&path) == before);
+            remove_test_schema_objects(&path);
+            drop(KeyStore::open(&path).unwrap());
+            assert!(raw_snapshot(&path) == before);
+        }
+    }
+
+    #[test]
+    fn retirement_postcondition_requires_unchanged_active_key() {
+        let before = Snapshot {
+            high_water: S,
+            rows: vec![row(1, 1, true, Some(0)), row(2, 2, true, Some(H))],
+        };
+        let after = Snapshot {
+            high_water: S,
+            rows: vec![row(1, 1, false, Some(0)), row(2, 2, true, Some(H))],
+        };
+        ensure_retirement(&before, &after, before.rows[0].key_id, S).unwrap();
+        let after = Snapshot {
+            high_water: S,
+            rows: vec![row(1, 1, true, Some(0)), row(2, 2, false, Some(H))],
+        };
+        let error = ensure_retirement(&before, &after, before.rows[1].key_id, S).unwrap_err();
+        assert!(
+            error.to_string().contains("retirement changed active key"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn busy_checkpoint_does_not_fail_committed_retirement() {
+        let (_dir, path, _k1) = scheduled_fixture();
+        let store = KeyStore::open(&path).unwrap();
+        let k0 = genesis_id(&store, S);
+        store
+            .connection()
+            .unwrap()
+            .busy_timeout(std::time::Duration::ZERO)
+            .unwrap();
+        // Pin an older WAL snapshot so TRUNCATE returns busy, without sleeping.
+        let reader = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        reader.execute_batch("BEGIN").unwrap();
+        let count: i64 = reader
+            .query_row("SELECT COUNT(*) FROM keys", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+        store.retire(k0, S).unwrap();
+        let busy: i64 = store
+            .connection()
+            .unwrap()
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(busy, 1);
+        let manifest = store.manifest(S).unwrap();
+        assert_eq!(state(&manifest, k0), KeyState::Retired);
+        drop(reader);
+        drop(store);
+        assert_eq!(
+            KeyStore::open(&path).unwrap().manifest(S).unwrap(),
+            manifest
+        );
     }
 }

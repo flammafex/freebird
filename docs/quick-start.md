@@ -2,8 +2,8 @@
 
 This is a **loopback-only development probe**, not deployment guidance.
 The binary does not provide TLS, automatic failover, multi-instance operation,
-backup restoration, or key **retirement**. It does provide offline key
-**activation** (rotation) for one local instance per role, described below.
+or backup restoration. It does provide offline key staging, **activation**
+(rotation), and **retirement** for one local instance per role, described below.
 Run one process per role with fresh, private state directories.
 
 ```sh
@@ -123,9 +123,9 @@ After step 4 the Issuer shows the current key `active` and the new key
 plus 300 seconds) describe the last issuance window of the old key. The
 Origin's `acceptance-deadline` matches it. Once the new key's activation hour
 arrives, the old key becomes `retired-for-issuance` on the Issuer and
-`verifying` on the Origin. Retirement is not implemented, so the superseded
-key's private material remains in `issuer-keys.sqlite` and it is never used
-for signing after its successor's activation hour.
+`verifying` on the Origin. The superseded key is never used for signing after
+its successor's activation hour; its private material remains in
+`issuer-keys.sqlite` until the operator retires it.
 
 ### Half-done rotation recovery
 
@@ -155,18 +155,53 @@ for signing after its successor's activation hour.
 Never edit the SQLite files, delete a `.lock` sidecar, or copy an Issuer key
 store to the Origin. A process crash releases the lifetime lock automatically.
 
-## Retirement is not yet supported
+## Retire the superseded key
 
-There is no `retire-issuer-key` or `retire-origin-key` command. Superseded
-keys remain stored, and an Origin keeps its retired keys' rows forever so that
-a retired key ID cannot be reinstalled. Release remains blocked until
-retirement is implemented and tested.
+Retirement is offline, under the same lifetime locks as activation. Keep the
+old public key ID (`OLD-ID` below) from the status output. These times refer to
+the **successor's** activation `S`, not the old key's activation:
+
+```sh
+# 6. Once now >= S, stop the Issuer and retire its old private key.
+$bin retire-issuer-key /path/to/new-issuer-state OLD-ID
+$bin issuer-key-status /path/to/new-issuer-state       # old row: retired
+# Restart the Issuer; it signs only with the successor.
+
+# 7. Once now >= S+420, stop the Origin and retire the same old key ID.
+$bin retire-origin-key /path/to/new-origin-state OLD-ID
+$bin origin-key-status /path/to/new-origin-state       # old row: retired
+# Restart the Origin. A new rotation can now follow the same runbook.
+```
+
+The Issuer refuses retirement until a successor is active (`now >= S`). The
+Origin refuses until `now >= S+420`: the last challenge deadline `S+300` plus
+a 120-second safety margin. Retirement before that boundary is refused, not
+queued. Unknown IDs, malformed IDs, an already retired key, the current key
+without an active successor, and a clock behind high-water are also refused.
+
+Issuer retirement atomically removes the old private material (`pkcs8=NULL`)
+and advances high-water. Origin retirement atomically removes that key's
+challenge and spent rows, marks the key retired, and advances high-water.
+Both retain the public key record. **Retired IDs can never be reinstalled**;
+retirement is not a way to reset or reuse an old key. The old status row keeps
+its original activation, issuance-end, and acceptance-deadline values.
+
+SQLite uses `secure_delete=ON`, and Issuer retirement attempts a
+`wal_checkpoint(TRUNCATE)` after committing. This is **best-effort cleanup,
+not a destruction guarantee**. Checkpoint failure or a busy result does not
+undo committed retirement or make the command fail. Journal copies, backups,
+snapshots, and process memory are outside this guarantee; no zeroization or
+forensic erasure is claimed. Never use retirement as a substitute for the
+documented backup/recovery procedure.
 
 ## Unsupported
 
 No HSM, no online rotation API, no multi-instance or failover, no zeroization
 of superseded key memory, and no multi-key directory with a not-before field.
 The Issuer advertises exactly one key at a time.
+Release remains blocked by independent cryptographic review, independent
+interoperability testing, parser fuzzing, operational backup/recovery tests,
+and a supported deployment topology.
 
 ## Upgrading older state
 
