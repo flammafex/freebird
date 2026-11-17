@@ -14,7 +14,8 @@ nonstandard, one-use operator invitation to control issuance quantity.
 **Do not deploy as a production authorization system.** GitHub release
 publishing is blocked. The RFC 9474 library is pinned to a compatibility fork
 using stable RustCrypto RSA; the fork and signing path still require independent
-review and interoperability testing. Key staging/rotation is not implemented.
+review and interoperability testing. Offline key staging and public-key export
+exist, but activation, rotation, and retirement are not implemented.
 The only supported runtime topology is one local-loopback process per role with
 exclusive, crash-durable SQLite state and no automatic failover. Backup
 restoration requires deliberate invalidation of old invitations or challenge

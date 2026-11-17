@@ -95,7 +95,7 @@ async fn http_reference_client_and_durable_single_use() {
     let files = tempfile::tempdir().unwrap();
     let admission_path = files.path().join("admission.sqlite");
     let generation = files.path().join("admission-generation");
-    let signing_key = files.path().join("issuer.pk8");
+    let signing_key = files.path().join("issuer-keys.sqlite");
     let replay_path = files.path().join("origin.sqlite");
     let context = files.path().join("origin-context");
     AdmissionStore::initialize(&admission_path, &generation).unwrap();

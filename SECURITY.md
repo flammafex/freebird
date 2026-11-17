@@ -44,7 +44,8 @@ Store errors deny access. Accepted challenge windows are local policy, **not**
 standardized token expiry; spent entries are currently retained indefinitely.
 
 One process per role and a local-loopback HTTP listener are the only supported
-topology. The two stores use SQLite WAL/FULL and separate lifetime OS locks.
+topology. The admission, issuer-key, and Origin stores use SQLite WAL/FULL
+and separate lifetime OS locks.
 Do not copy only the SQLite main file for backups: a consistent backup must
 include committed WAL state. Restoring an older Origin snapshot requires
 maintenance shutdown and fresh context-secret/store state, invalidating old
@@ -53,7 +54,13 @@ generation and invalidating old invitations before service resumes. An
 unannounced rollback of both data and recovery markers cannot be detected
 locally. No automatic failover or multi-replica safety is claimed.
 
-**Release blockers:** supported key staging/rotation and retirement;
+Offline candidate staging and public-only staged SPKI export exist, guarded by
+the issuer-key store's lifetime lock. They do not activate keys, publish staged
+keys in the directory, or install keys at Origins. Activation, rotation, and
+retirement remain unsupported. Legacy `signing.pk8` state is rejected without
+migration or reset; fresh state uses private `issuer-keys.sqlite`.
+
+**Release blockers:** supported key activation/rotation and retirement;
 independent review of the selected RSA backend and protocol integration;
 independent implementation interoperability; parser fuzzing; operational
 backup/recovery tests; and a supported deployment topology. The release,

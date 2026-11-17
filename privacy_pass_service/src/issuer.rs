@@ -1,5 +1,6 @@
-//! Single-key experimental RFC 9578 issuer. Rotation is deliberately unsupported.
+//! Active-key-only experimental RFC 9578 issuer.
 use crate::admission::AdmissionStore;
+use crate::key_store::KeyStore;
 use anyhow::{bail, Context, Result};
 use axum::{
     body::{to_bytes, Body},
@@ -13,9 +14,6 @@ use base64ct::{Base64Url, Base64UrlUnpadded, Encoding};
 use freebird_common::privacy_pass::TokenRequest;
 use freebird_crypto::privacy_pass::SecretKey;
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
-    os::unix::fs::OpenOptionsExt,
     path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -26,6 +24,7 @@ const REQUEST_MEDIA: &str = "application/private-token-request";
 const SIGNER_CAPACITY: usize = 2;
 
 pub struct Issuer {
+    _key_store: KeyStore,
     key: SecretKey,
     admission: Arc<AdmissionStore>,
     spki: Vec<u8>,
@@ -36,46 +35,8 @@ pub struct Issuer {
 
 impl Issuer {
     /// Explicit initialization only; callers must use a dedicated Privacy Pass path.
-    /// A crash during installation may leave a non-loadable reservation, never a
-    /// silently regenerated or overwritten key.
     pub fn initialize_key(key_path: impl AsRef<Path>) -> Result<()> {
-        let path = key_path.as_ref();
-        let parent = path
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        let reservation = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)
-            .context("reserve fresh Privacy Pass key path")?;
-        let mut temporary = path.as_os_str().to_os_string();
-        temporary.push(format!(
-            ".{}.tmp",
-            Base64UrlUnpadded::encode_string(&rand::random::<[u8; 16]>())
-        ));
-        let temporary = std::path::PathBuf::from(temporary);
-        let result = (|| -> Result<()> {
-            let key = SecretKey::generate()?;
-            let mut file = OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&temporary)?;
-            file.write_all(&key.to_pkcs8()?)?;
-            file.sync_all()?;
-            fs::rename(&temporary, path)?;
-            fs::File::open(parent)?.sync_all()?;
-            Ok(())
-        })();
-        drop(reservation);
-        // Leave the reserved target on any failure: initialization must never
-        // mistake uncertain persisted state for permission to regenerate.
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        result
+        KeyStore::initialize(key_path)
     }
 
     pub fn open(
@@ -101,10 +62,11 @@ impl Issuer {
         {
             bail!("issuer request URI must identify this issuer's issuance endpoint");
         }
-        let key =
-            SecretKey::from_pkcs8(&fs::read(key_path).context("read existing Privacy Pass key")?)?;
+        let key_store = KeyStore::open(key_path)?;
+        let key = key_store.active_key()?;
         let public = key.public_key()?;
         Ok(Self {
+            _key_store: key_store,
             spki: public.to_spki().to_vec(),
             key_id: public.key_id(),
             key,
@@ -222,6 +184,7 @@ mod tests {
     use super::*;
     use freebird_common::privacy_pass::{token_input, token_key_id};
     use freebird_crypto::privacy_pass::PublicKey;
+    use std::fs;
 
     fn fixture() -> (tempfile::TempDir, Arc<Issuer>) {
         let dir = tempfile::tempdir().unwrap();
@@ -229,7 +192,7 @@ mod tests {
         let generation = dir.path().join("generation");
         AdmissionStore::initialize(&db, &generation).unwrap();
         let admission = Arc::new(AdmissionStore::open(&db, &generation).unwrap());
-        let key = dir.path().join("pp-signing.pk8");
+        let key = dir.path().join("pp-signing.sqlite");
         assert!(Issuer::open(
             &key,
             admission.clone(),
@@ -268,6 +231,63 @@ mod tests {
             .header("freebird-admission", code)
             .body(Body::from(body))
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn staged_key_is_not_advertised_or_issued_and_preserves_invitation() {
+        let (_dir, issuer) = fixture();
+        let staged_id = issuer._key_store.stage().expect("stage a key");
+        let staged_spki = issuer._key_store.staged_spki().unwrap().unwrap();
+        let staged = PublicKey::from_spki(&staged_spki).unwrap();
+        let input = token_input(&[7; 32], &[8; 32], &staged_id);
+        let (blinded_msg, _) = staged.blind(&input).unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let code = issuer.admission.provision(now).unwrap();
+        let staged_request = TokenRequest {
+            truncated_token_key_id: staged_id[31],
+            blinded_msg,
+        };
+        assert_eq!(
+            issue(
+                State(issuer.clone()),
+                request(staged_request.to_bytes().to_vec(), &code)
+            )
+            .await
+            .status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+        let response = directory(State(issuer.clone())).await;
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        let document: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(document["token-keys"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            document["token-keys"][0]["token-key"],
+            Base64Url::encode_string(&issuer.spki)
+        );
+        let active = PublicKey::from_spki(&issuer.spki).unwrap();
+        let input = token_input(&[7; 32], &[8; 32], &issuer.key_id);
+        let (blinded_msg, state) = active.blind(&input).unwrap();
+        let active_request = TokenRequest {
+            truncated_token_key_id: issuer.key_id[31],
+            blinded_msg,
+        };
+        let response = issue(
+            State(issuer.clone()),
+            request(active_request.to_bytes().to_vec(), &code),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let signature: [u8; 256] = to_bytes(response.into_body(), 256)
+            .await
+            .unwrap()
+            .as_ref()
+            .try_into()
+            .unwrap();
+        let signature = active.finalize(state, &signature).unwrap();
+        active.verify(&input, &signature).unwrap();
     }
 
     #[tokio::test]

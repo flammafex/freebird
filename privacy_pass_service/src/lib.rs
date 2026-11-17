@@ -2,4 +2,5 @@
 
 pub mod admission;
 pub mod issuer;
+pub mod key_store;
 pub mod origin;

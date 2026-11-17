@@ -27,7 +27,7 @@ curl -fsS http://127.0.0.1:8081/.well-known/private-token-issuer-directory
 ```
 
 The Origin requires the **DER SPKI public key** from that directory,
-base64url-decoded into a file. Do not copy the Issuer's `signing.pk8` to the
+base64url-decoded into a file. Do not copy the Issuer's `issuer-keys.sqlite` to the
 Origin. With a separately obtained `issuer-public-spki.der`:
 
 ```sh
@@ -45,6 +45,33 @@ cargo test --locked -p freebird-privacy-pass-service --tests
 ```
 
 ## Experimental loopback client
+
+### Offline staging only (not rotation)
+
+Fresh Issuer state uses `issuer-keys.sqlite` (private keys, mode 0600).
+Old experimental directories containing `signing.pk8` are explicitly rejected;
+there is no migration, reinterpretation, or automatic reset.
+Stop the Issuer before all key maintenance; its lifetime key-store lock
+refuses concurrent maintenance, including staging while serving.
+
+```sh
+$bin issuer-key-status /path/to/new-issuer-state
+$bin stage-issuer-key /path/to/new-issuer-state
+$bin issuer-key-status /path/to/new-issuer-state
+$bin export-staged-spki /path/to/new-issuer-state /path/to/new-staged-spki.der
+```
+
+Status prints only full public key IDs in hex, labeled active or staged.
+Only one candidate can be staged; a second stage is refused. Export writes
+only the staged public DER SPKI to a **new** mode-0600 file and synchronizes
+the file and parent directory. Existing output is never overwritten.
+Any export error is failure, not partial success: output may remain partial
+or uncertain and requires operator inspection; do not blindly retry or reuse it.
+Staging does not activate the key, publish it in the Issuer directory, or
+install it at an Origin. Do not use this export to replace an Origin's key.
+Activation, rotation, and retirement remain unsupported and release-blocking.
+
+## Experimental loopback client procedure
 
 This example is **local-only**, not a production client or general RFC 9577
 parser. It accepts only this Origin's current three-parameter challenge layout.

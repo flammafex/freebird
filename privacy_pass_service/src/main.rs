@@ -3,13 +3,14 @@
 use freebird_privacy_pass_service::{
     admission::AdmissionStore,
     issuer::{self, Issuer},
+    key_store::KeyStore,
     origin::{self, Origin},
 };
 use std::{
-    fs::{self, DirBuilder, File},
+    fs::{self, DirBuilder, File, OpenOptions},
     io::{self, Write},
     net::SocketAddr,
-    os::unix::fs::DirBuilderExt,
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -21,11 +22,15 @@ Usage:
   freebird-privacy-pass-service init-issuer <state-dir>
   freebird-privacy-pass-service init-origin <state-dir>
   freebird-privacy-pass-service provision <issuer-state-dir>
+  freebird-privacy-pass-service stage-issuer-key <issuer-state-dir>
+  freebird-privacy-pass-service export-staged-spki <issuer-state-dir> <new-output-path>
+  freebird-privacy-pass-service issuer-key-status <issuer-state-dir>
   freebird-privacy-pass-service serve-issuer <issuer-state-dir> <issuer-name> <https-request-url> <loopback-bind>
   freebird-privacy-pass-service serve-origin <origin-state-dir> <issuer-name> <origin-name> <public-spki-der-path> <loopback-bind>
 Listeners are loopback HTTP ONLY, not production TLS. The HTTPS request URL
 describes an external endpoint; this runner does not provide TLS.
-Stop the issuer before provisioning. Initialization requires a fresh directory;
+Stop the issuer before provisioning or key maintenance. Staging is not activation.
+Initialization requires a fresh directory;
 partial failures are never reset automatically.";
 
 type Result<T> = std::result::Result<T, &'static str>;
@@ -55,8 +60,61 @@ fn fresh_directory(path: &Path) -> Result<()> {
 }
 
 fn admission(dir: &Path) -> Result<AdmissionStore> {
+    reject_legacy(dir)?;
     AdmissionStore::open(dir.join("admission.sqlite"), dir.join("generation"))
         .map_err(|_| "cannot open issuer state (missing, invalid, or already owned)")
+}
+
+fn reject_legacy(dir: &Path) -> Result<()> {
+    match fs::symlink_metadata(dir.join("signing.pk8")) {
+        Ok(_) => Err(
+            "unsupported experimental state: signing.pk8 exists; no migration or reset supported",
+        ),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err("cannot inspect issuer state"),
+    }
+}
+
+fn keys(dir: &Path) -> Result<KeyStore> {
+    reject_legacy(dir)?;
+    KeyStore::open(dir.join("issuer-keys.sqlite")).map_err(|_| {
+        "cannot open issuer keys (missing, invalid, or already owned); stop issuer first"
+    })
+}
+
+fn public_id(id: &[u8; 32]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    id.iter()
+        .flat_map(|byte| {
+            [
+                HEX[(byte >> 4) as usize] as char,
+                HEX[(byte & 15) as usize] as char,
+            ]
+        })
+        .collect()
+}
+
+fn export_staged(store: &KeyStore, path: &Path) -> Result<()> {
+    let spki = store
+        .staged_spki()
+        .map_err(|_| "cannot read staged public key")?
+        .ok_or("no staged public key")?;
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|_| "cannot create export (output must not exist); inspect output before retry")?;
+    file.write_all(&spki)
+        .and_then(|()| file.sync_all())
+        .map_err(|_| "export failed; possibly partial output retained for operator inspection")?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    File::open(parent)
+        .and_then(|file| file.sync_all())
+        .map_err(|_| "export persistence failed; output retained for operator inspection")
 }
 
 async fn serve(router: axum::Router, bind: SocketAddr) -> Result<()> {
@@ -73,11 +131,35 @@ async fn run(args: &[String]) -> Result<()> {
     match args {
         [command, dir] if command == "init-issuer" => {
             let dir = Path::new(dir);
+            reject_legacy(dir)?;
             fresh_directory(dir)?;
             AdmissionStore::initialize(dir.join("admission.sqlite"), dir.join("generation"))
                 .map_err(|_| "issuer initialization failed; partial state retained")?;
-            Issuer::initialize_key(dir.join("signing.pk8"))
+            Issuer::initialize_key(dir.join("issuer-keys.sqlite"))
                 .map_err(|_| "signing key initialization failed; partial state retained")
+        }
+        [command, dir] if command == "stage-issuer-key" => {
+            keys(Path::new(dir))?.stage().map(|_| ()).map_err(|_| {
+                "key staging failed (existing staged key or invalid state); no activation performed"
+            })
+        }
+        [command, dir, output] if command == "export-staged-spki" => {
+            let store = keys(Path::new(dir))?;
+            export_staged(&store, Path::new(output))
+        }
+        [command, dir] if command == "issuer-key-status" => {
+            let store = keys(Path::new(dir))?;
+            let status = store
+                .status()
+                .map_err(|_| "cannot read issuer key status")?;
+            let mut stdout = io::stdout().lock();
+            writeln!(stdout, "active {}", public_id(&status.active_key_id))
+                .and_then(|()| match status.staged_key_id {
+                    Some(id) => writeln!(stdout, "staged {}", public_id(&id)),
+                    None => Ok(()),
+                })
+                .and_then(|()| stdout.flush())
+                .map_err(|_| "key status output failed")
         }
         [command, dir] if command == "init-origin" => {
             let dir = Path::new(dir);
@@ -115,7 +197,7 @@ async fn run(args: &[String]) -> Result<()> {
             let dir = Path::new(dir);
             let store = Arc::new(admission(dir)?);
             let issuer = Issuer::open(
-                dir.join("signing.pk8"),
+                dir.join("issuer-keys.sqlite"),
                 store,
                 name.clone(),
                 request_url.clone(),
