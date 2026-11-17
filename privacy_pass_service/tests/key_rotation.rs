@@ -661,10 +661,13 @@ fn id_and_activation(status: &Status) -> Vec<(String, String)> {
 }
 
 fn example_binary() -> PathBuf {
-    let mut path = std::env::current_exe().unwrap();
-    path.pop(); // test binary directory
-    path.pop(); // profile directory
-    let example = path.join("examples").join("loopback_client");
+    // Cargo can run this test from an isolated build directory; the binary
+    // supplied by Cargo identifies the actual profile output directory.
+    let example = Path::new(BIN)
+        .parent()
+        .unwrap()
+        .join("examples")
+        .join("loopback_client");
     assert!(
         example.exists(),
         "build examples first (cargo test --all-targets): {}",

@@ -140,9 +140,9 @@ fn parse_key_id(value: &str) -> Result<[u8; 32]> {
         return Err(INVALID_KEY_ID);
     }
     let mut id = [0; 32];
-    for (slot, pair) in id.iter_mut().zip(digits.chunks_exact(2)) {
-        let high = hex_digit(pair[0]).ok_or(INVALID_KEY_ID)?;
-        let low = hex_digit(pair[1]).ok_or(INVALID_KEY_ID)?;
+    for (index, slot) in id.iter_mut().enumerate() {
+        let high = hex_digit(digits[index * 2]).ok_or(INVALID_KEY_ID)?;
+        let low = hex_digit(digits[index * 2 + 1]).ok_or(INVALID_KEY_ID)?;
         *slot = high << 4 | low;
     }
     Ok(id)

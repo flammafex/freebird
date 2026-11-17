@@ -37,7 +37,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: Test workspace including service reference client
-        run: cargo test --locked --workspace
+        run: |
+          cargo build --locked -p freebird-privacy-pass-service --example loopback_client
+          cargo test --locked --workspace
 
   lint:
     runs-on: ubuntu-latest
