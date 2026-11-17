@@ -37,12 +37,12 @@ $bin serve-origin /path/to/new-origin-state issuer.example origin.example \
 curl -i http://127.0.0.1:8082/private-token/protected
 ```
 
-The response is an RFC 9577 `PrivateToken` challenge. The reference client
-in `privacy_pass_service/tests/roundtrip.rs` performs the complete issuance
-and redemption flow through real Axum routers:
+The response is an RFC 9577 `PrivateToken` challenge. Reference client tests
+in `privacy_pass_service/tests/roundtrip.rs` and `network_roundtrip.rs`
+exercise the complete flow through Axum routers and live loopback TCP:
 
 ```sh
-cargo test --locked -p freebird-privacy-pass-service --test roundtrip
+cargo test --locked -p freebird-privacy-pass-service --tests
 ```
 
 There is no supported network client or production deployment recipe yet.

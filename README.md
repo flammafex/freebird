@@ -21,9 +21,10 @@ runtime topology is one local-loopback process per role with exclusive,
 crash-durable SQLite state and no automatic failover. Backup restoration
 requires deliberate invalidation of old invitations or challenge contexts.
 
-The reference client test exercises challenge → one admitted blinded request →
-finalization → one redemption, with replay and restart rejection. It is not a
-general-purpose client SDK. There is no batch, renewal, V4 `/check`, token
+The reference client tests exercise challenge → one admitted blinded request →
+finalization → one redemption through both Axum routers and live loopback HTTP,
+with replay and restart rejection. They are not a general-purpose client SDK.
+There is no batch, renewal, V4 `/check`, token
 expiration extension, browser client, Docker image, Kubernetes manifest, or
 production reverse-proxy configuration.
 
