@@ -1,9 +1,7 @@
 # Privacy Pass hard fork: phase-one contract
 
 **Status:** implementation contract; not a production-readiness claim. This
-replaces V4 without wire, key, storage, or client compatibility. No existing
-clients need migration. Earlier tagged V4 releases are historical and
-unsupported; this new tree is not yet a deployable release.
+tree is not yet a deployable release.
 
 ## Standards and profile
 
@@ -130,7 +128,7 @@ restored snapshot and invalidate **every** invitation from the old generation
 before reopening. These are documented operator steps; unannounced rollback
 of both store and recovery marker cannot be made safe by local software.
 Signing keys, context secrets, invitation generation, and one-use state have
-separate namespaces from V4; never reinterpret V4 files.
+separate, dedicated storage namespaces.
 
 Key state is a persistent manifest with full key ID, exact SPKI bytes,
 publication/issuance start, last issuance window, and final acceptance
@@ -170,7 +168,8 @@ Exit criteria for the end-to-end sketch:
    invalidation procedure. These establish acceptance policy, not an
    invented token expiration field.
 4. The Origin has no private key path, environment fallback, or mounted
-   signing secret. No V4 public route remains reachable.
+   signing secret. No alternative issuance or token-check route bypasses
+   admission or redemption.
    Staged-key activation, old-key retirement, and truncated-suffix
    collisions are tested.
 5. SDK, CLI, CI, deployment files, and public docs describe and exercise only
@@ -183,7 +182,7 @@ defenses), parser fuzzing, durable-state/failover testing for the supported
 topology, and an operator-tested key/backup procedure. Do not call this
 production-ready merely because the happy path passes.
 
-Out of scope: V4 compatibility, token type `0x0001`, batch issuance, draft
+Out of scope: token type `0x0001`, batch issuance, draft
 expiration or metadata extensions, browser-specific integration, public
 cross-Origin tokens, generic `/check`, and HSM claims. A rollback goes to
-maintenance mode or a compatible Privacy Pass build, never silently to V4.
+maintenance mode or a compatible Privacy Pass build.

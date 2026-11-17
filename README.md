@@ -1,9 +1,7 @@
 # Freebird
 
 Freebird is an **experimental, unreleased** Rust implementation of publicly
-verifiable Privacy Pass tokens. V4 has been retired; its code and deployment
-paths are not part of this workspace. There is no compatibility layer or
-client migration.
+verifiable Privacy Pass tokens.
 
 The current profile is RFC 9578 token type `0x0002`: RSA-2048 blind signatures
 with the RFC 9474 SHA-384/PSS deterministic-message variant. An Origin verifies
@@ -24,7 +22,7 @@ requires deliberate invalidation of old invitations or challenge contexts.
 The reference client tests exercise challenge → one admitted blinded request →
 finalization → one redemption through both Axum routers and live loopback HTTP,
 with replay and restart rejection. They are not a general-purpose client SDK.
-There is no batch, renewal, V4 `/check`, token
+There is no batch, renewal, non-consuming token-check endpoint, token
 expiration extension, browser client, Docker image, Kubernetes manifest, or
 production reverse-proxy configuration.
 
@@ -47,8 +45,7 @@ python3 scripts/ci-static-checks.py
 
 See the [protocol contract](docs/protocol/privacy-pass-phase1.md), its
 [RFC fixture provenance](common/test-fixtures/privacy-pass/README.md), and
-the [local experimental runner](docs/quick-start.md). Historical V4 changes
-remain in Git history and `CHANGELOG.md`; they do not describe the current API.
+the [local experimental runner](docs/quick-start.md).
 
 ## License and security
 

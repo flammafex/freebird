@@ -2,8 +2,7 @@
 
 This is a **loopback-only development probe**, not deployment guidance.
 The binary does not provide TLS, key rotation, automatic failover, or backup
-restoration. Run one process per role. Its state directories must be fresh,
-private, and kept separate from historical V4 state.
+restoration. Run one process per role with fresh, private state directories.
 
 ```sh
 cargo build --locked -p freebird-privacy-pass-service

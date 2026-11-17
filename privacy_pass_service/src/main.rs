@@ -26,7 +26,7 @@ Usage:
 Listeners are loopback HTTP ONLY, not production TLS. The HTTPS request URL
 describes an external endpoint; this runner does not provide TLS.
 Stop the issuer before provisioning. Initialization requires a fresh directory;
-partial failures are never reset automatically. No V4 state is supported.";
+partial failures are never reset automatically.";
 
 type Result<T> = std::result::Result<T, &'static str>;
 
