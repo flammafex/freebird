@@ -130,18 +130,41 @@ of both store and recovery marker cannot be made safe by local software.
 Signing keys, context secrets, invitation generation, and one-use state have
 separate, dedicated storage namespaces.
 
-Key state is a persistent manifest with full key ID, exact SPKI bytes,
-publication/issuance start, last issuance window, and final acceptance
-deadline. Stage and distribute a new public key to the Origin **before**
-activating its signing key at an hour boundary. The Origin accepts only
-persistent `(full key ID, challenge digest, acceptance deadline)` combinations
-for previously advertised key/window pairs. Because the challenge contains
-no key, digest matching alone cannot authorize a key after retirement.
-The old key remains publicly verifiable only until the last challenge issued
-under it closes; no new issuance is routed to it after activation. Reject
-suffix collisions among keys simultaneously eligible for issuance.
-Persistently install the new signing key and Origin policy before any
-rotation API may report success; otherwise leave rotation disabled.
+Key state is a schema-v2 SQLite manifest in each role's store: the Issuer keeps
+`issuer-keys.sqlite` and the Origin keeps `origin.sqlite`. Each key row holds
+the full key ID (SHA-256 of its canonical SPKI), the exact SPKI bytes, and an
+activation time in whole UTC hours (Unix seconds divisible by 3600). Activation
+is performed **offline** under the store's lifetime lock, and stores refuse
+while a role serves. Activation is implemented for one local instance per role.
+There is no online rotation API.
+
+Rotation order is **Origin first**. The Origin installs the new public key with
+an activation hour `S`; it advertises that key only from `S` and accepts
+redemptions for it only against challenges it recorded after `S`. The Issuer is
+then scheduled at the same `S` using
+`activate-issuer-key <issuer-state-dir> <key-id-hex> <S>`; the ID must name its
+staged or scheduled candidate. The Issuer signs each request with exactly one
+key, the greatest activation hour at or before the clock hour, and advertises
+exactly one key. The Issuer latches the greatest hour it has seen in this
+process, so a clock step back does not return it to an older key.
+Directory responses are cached for at most 60 seconds, capped by the seconds
+remaining until the next scheduled activation.
+
+The Origin accepts only persistent `(full key ID, challenge digest, acceptance
+deadline)` combinations. After its successor activates, a superseded Origin key
+is in `verifying` state. It accepts only redemptions whose recorded challenge
+deadline is still open, and the last such deadline is `S + 300` seconds. No
+redemption is accepted for it afterwards. Its state stays `verifying` until
+retirement exists. Verification uses only the key named by the token, with
+no trial verification across keys. An installed key with no challenge rows
+cannot redeem. Because the challenge contains no key, digest matching alone
+cannot authorize a key. Suffix collisions among privately held keys are
+rejected.
+
+Retirement (removing a superseded key's private material and its Origin
+challenge rows) is **not yet implemented**. Until it is, a superseded Issuer key's
+private material remains stored and is never used for signing after its
+successor's activation hour. Release remains blocked.
 
 ## Verification and release gates
 
@@ -172,8 +195,10 @@ Exit criteria for the end-to-end sketch:
 4. The Origin has no private key path, environment fallback, or mounted
    signing secret. No alternative issuance or token-check route bypasses
    admission or redemption.
-   Staged-key activation, old-key retirement, and truncated-suffix
-   collisions are tested.
+   Offline staged-key activation (Origin first, then Issuer schedule), status
+   agreement between roles, refusals, and truncated-suffix collisions are
+   tested. Old-key retirement is **not implemented** and remains a release
+   blocker.
 5. SDK, CLI, CI, deployment files, and public docs describe and exercise only
    the new flow before any release is tagged. Intermediate commits are not
    deployable.

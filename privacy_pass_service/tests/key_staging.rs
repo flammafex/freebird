@@ -1,4 +1,5 @@
-//! CLI regressions for offline staging only; activation/rotation remains unsupported.
+//! CLI regressions for offline staging, export, and status formatting.
+//! Activation is covered in key_rotation.rs; retirement is not yet supported.
 use freebird_crypto::privacy_pass::PublicKey;
 use std::{
     fs,
@@ -8,11 +9,12 @@ use std::{
     path::Path,
     process::{Child, Command, Output, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const BIN: &str = env!("CARGO_BIN_EXE_freebird-privacy-pass-service");
 const TIMEOUT: Duration = Duration::from_secs(60);
+const ZERO_ID: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 
 struct Process(Child);
 
@@ -23,12 +25,10 @@ impl Drop for Process {
     }
 }
 
-fn cli(command: &str, state: &Path, extra: &[&Path]) -> Output {
+fn cli(args: &[&str]) -> Output {
     let mut child = Process(
         Command::new(BIN)
-            .arg(command)
-            .arg(state)
-            .args(extra)
+            .args(args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -37,7 +37,7 @@ fn cli(command: &str, state: &Path, extra: &[&Path]) -> Output {
     );
     let deadline = Instant::now() + TIMEOUT;
     while child.0.try_wait().expect("poll CLI").is_none() {
-        assert!(Instant::now() < deadline, "{command} timed out");
+        assert!(Instant::now() < deadline, "{args:?} timed out");
         thread::sleep(Duration::from_millis(25));
     }
     let mut stdout = Vec::new();
@@ -63,29 +63,91 @@ fn cli(command: &str, state: &Path, extra: &[&Path]) -> Output {
     }
 }
 
-fn success(command: &str, state: &Path, extra: &[&Path]) -> Output {
-    let output = cli(command, state, extra);
-    assert!(output.status.success(), "{command} failed: {:?}", output);
+fn success(args: &[&str]) -> Output {
+    let output = cli(args);
+    assert!(output.status.success(), "{args:?} failed: {output:?}");
     output
 }
 
-fn status(state: &Path) -> Vec<(String, String)> {
-    let output = success("issuer-key-status", state, &[]);
-    assert!(output.stderr.is_empty());
-    String::from_utf8(output.stdout)
+fn refused(args: &[&str]) -> Output {
+    let output = cli(args);
+    assert!(!output.status.success(), "{args:?} unexpectedly succeeded");
+    output
+}
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
         .unwrap()
-        .lines()
+        .as_secs()
+}
+
+/// Hour-aligned instant ten years out, unreachable by any real-clock server here.
+fn far_future() -> u64 {
+    (unix_now() / 3600 + 24 * 365 * 10) * 3600
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Row {
+    state: String,
+    id: String,
+    activation: String,
+    issuance_end: String,
+    acceptance_deadline: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Status {
+    high_water: u64,
+    rows: Vec<Row>,
+}
+
+fn seconds_or_dash(field: &str) -> String {
+    if field == "-" {
+        return field.to_owned();
+    }
+    assert!(
+        !field.is_empty() && field.bytes().all(|b| b.is_ascii_digit()),
+        "time field must be decimal seconds or '-': {field}"
+    );
+    field.to_owned()
+}
+
+/// Parses the frozen format: `now`, `high-water`, then one row per key.
+fn parse_status(output: &Output) -> Status {
+    assert!(output.stderr.is_empty());
+    let text = String::from_utf8(output.stdout.clone()).unwrap();
+    let mut lines = text.lines();
+    let now = lines.next().unwrap().strip_prefix("now ").unwrap();
+    now.parse::<u64>().expect("now is decimal seconds");
+    let high = lines.next().unwrap().strip_prefix("high-water ").unwrap();
+    let high_water = high.parse::<u64>().expect("high-water is decimal seconds");
+    let rows = lines
         .map(|line| {
-            let fields: Vec<_> = line.split_whitespace().collect();
-            assert_eq!(fields.len(), 2, "status must contain only public IDs");
-            assert!(matches!(fields[0], "active" | "staged"));
+            let fields: Vec<_> = line.split(' ').collect();
+            assert_eq!(fields.len(), 5, "row: {line}");
+            assert!(matches!(
+                fields[0],
+                "staged" | "scheduled" | "active" | "retired-for-issuance" | "retired"
+            ));
             assert_eq!(fields[1].len(), 64);
             assert!(fields[1]
                 .bytes()
-                .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()));
-            (fields[0].to_owned(), fields[1].to_owned())
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+            Row {
+                state: fields[0].to_owned(),
+                id: fields[1].to_owned(),
+                activation: seconds_or_dash(fields[2]),
+                issuance_end: seconds_or_dash(fields[3]),
+                acceptance_deadline: seconds_or_dash(fields[4]),
+            }
         })
-        .collect()
+        .collect();
+    Status { high_water, rows }
+}
+
+fn status(state: &Path) -> Status {
+    parse_status(&success(&["issuer-key-status", state.to_str().unwrap()]))
 }
 
 #[test]
@@ -93,23 +155,30 @@ fn offline_staging_exports_public_key_without_activation() {
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("issuer");
     let export = temp.path().join("candidate.der");
-    success("init-issuer", &state, &[]);
+    let state_arg = state.to_str().unwrap();
+    let export_arg = export.to_str().unwrap();
+    success(&["init-issuer", state_arg]);
     let initial = status(&state);
-    assert_eq!(initial.len(), 1);
-    assert_eq!(initial[0].0, "active");
+    assert_eq!(initial.rows.len(), 1);
+    assert_eq!(initial.rows[0].state, "active");
+    assert_eq!(initial.rows[0].activation, "0");
+    assert_eq!(initial.rows[0].issuance_end, "-");
+    assert_eq!(initial.rows[0].acceptance_deadline, "-");
 
-    assert!(!cli("export-staged-spki", &state, &[&export])
-        .status
-        .success());
+    refused(&["export-issuer-spki", state_arg, ZERO_ID, export_arg]);
     assert!(!export.exists());
-    success("stage-issuer-key", &state, &[]);
+    success(&["stage-issuer-key", state_arg]);
     let staged = status(&state);
-    assert_eq!(staged.len(), 2);
-    assert_eq!(staged[0], initial[0]);
-    assert_eq!(staged[1].0, "staged");
-    assert_ne!(staged[1].1, initial[0].1);
+    assert_eq!(staged.rows.len(), 2);
+    assert_eq!(staged.rows[0], initial.rows[0]);
+    assert_eq!(staged.rows[1].state, "staged");
+    assert_eq!(staged.rows[1].activation, "-");
+    assert_ne!(staged.rows[1].id, initial.rows[0].id);
+    assert!(staged.high_water >= initial.high_water);
+    let staged_id = staged.rows[1].id.clone();
 
-    success("export-staged-spki", &state, &[&export]);
+    refused(&["stage-issuer-key", state_arg]);
+    success(&["export-issuer-spki", state_arg, &staged_id, export_arg]);
     assert_eq!(
         fs::metadata(&export).unwrap().permissions().mode() & 0o777,
         0o600
@@ -118,14 +187,60 @@ fn offline_staging_exports_public_key_without_activation() {
     let public = PublicKey::from_spki(&bytes).expect("canonical public SPKI");
     assert_eq!(public.to_spki(), bytes);
     let id: String = public.key_id().iter().map(|b| format!("{b:02x}")).collect();
-    assert_eq!(id, staged[1].1);
-    assert!(!cli("export-staged-spki", &state, &[&export])
-        .status
-        .success());
+    assert_eq!(id, staged_id);
+    // Never overwrite an existing export.
+    refused(&["export-issuer-spki", state_arg, &staged_id, export_arg]);
     assert_eq!(fs::read(&export).unwrap(), bytes);
-    assert!(!cli("stage-issuer-key", &state, &[]).status.success());
+    // The genesis key is also exportable by its public ID.
+    let genesis_id = &initial.rows[0].id;
+    let genesis_export = temp.path().join("genesis.der");
+    success(&[
+        "export-issuer-spki",
+        state_arg,
+        genesis_id,
+        genesis_export.to_str().unwrap(),
+    ]);
+    assert_eq!(
+        PublicKey::from_spki(&fs::read(&genesis_export).unwrap())
+            .unwrap()
+            .key_id()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>(),
+        *genesis_id
+    );
     // Each invocation reopens durable state in a new process.
-    assert_eq!(status(&state), staged);
+    assert_eq!(status(&state).rows, staged.rows);
+}
+
+#[test]
+fn malformed_key_ids_and_times_are_refused_without_state_change() {
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("issuer");
+    let export = temp.path().join("candidate.der");
+    let state_arg = state.to_str().unwrap();
+    success(&["init-issuer", state_arg]);
+    let before = status(&state);
+    let short = "ab".repeat(31);
+    let upper_out_of_set = "G".repeat(64);
+    refused(&[
+        "export-issuer-spki",
+        state_arg,
+        &short,
+        export.to_str().unwrap(),
+    ]);
+    refused(&[
+        "export-issuer-spki",
+        state_arg,
+        &upper_out_of_set,
+        export.to_str().unwrap(),
+    ]);
+    refused(&["activate-issuer-key", state_arg, ZERO_ID, "7200x"]);
+    refused(&["activate-issuer-key", state_arg, ZERO_ID, "-7200"]);
+    refused(&["activate-issuer-key", state_arg, &short, "7200"]);
+    refused(&["activate-issuer-key", state_arg, &upper_out_of_set, "7200"]);
+    assert!(!export.exists());
+    assert_eq!(status(&state), before);
 }
 
 #[test]
@@ -136,19 +251,25 @@ fn legacy_signing_pk8_is_rejected_without_reset() {
     let fixture = b"explicit legacy signing.pk8 fixture";
     fs::write(state.join("signing.pk8"), fixture).unwrap();
     let export = temp.path().join("candidate.der");
-    for command in [
-        "init-issuer",
-        "issuer-key-status",
-        "stage-issuer-key",
-        "export-staged-spki",
-    ] {
-        let extra = if command == "export-staged-spki" {
-            vec![export.as_path()]
-        } else {
-            vec![]
-        };
-        let output = cli(command, &state, &extra);
-        assert!(!output.status.success());
+    let state_arg = state.to_str().unwrap();
+    let export_arg = export.to_str().unwrap();
+    let far = far_future().to_string();
+    let commands: [Vec<&str>; 6] = [
+        vec!["init-issuer", state_arg],
+        vec!["issuer-key-status", state_arg],
+        vec!["stage-issuer-key", state_arg],
+        vec!["export-issuer-spki", state_arg, ZERO_ID, export_arg],
+        vec!["activate-issuer-key", state_arg, ZERO_ID, &far],
+        vec![
+            "serve-issuer",
+            state_arg,
+            "issuer.test",
+            "https://issuer.test/private-token/issue",
+            "127.0.0.1:0",
+        ],
+    ];
+    for args in commands {
+        let output = refused(&args);
         assert!(String::from_utf8_lossy(&output.stderr).contains("signing.pk8 exists"));
         assert_eq!(fs::read(state.join("signing.pk8")).unwrap(), fixture);
         assert_eq!(fs::read_dir(&state).unwrap().count(), 1);
@@ -182,16 +303,17 @@ fn directory_ready(address: SocketAddr) -> bool {
 fn serving_holds_key_store_lock_until_process_stops() {
     let temp = tempfile::tempdir().unwrap();
     let state = temp.path().join("issuer");
-    success("init-issuer", &state, &[]);
+    let state_arg = state.to_str().unwrap();
+    success(&["init-issuer", state_arg]);
     let initial = status(&state);
     let reservation = TcpListener::bind("127.0.0.1:0").expect("loopback test environment");
     let address = reservation.local_addr().unwrap();
     drop(reservation);
     let mut server = Process(
         Command::new(BIN)
-            .arg("serve-issuer")
-            .arg(&state)
             .args([
+                "serve-issuer",
+                state_arg,
                 "issuer.test",
                 "https://issuer.test/private-token/issue",
                 &address.to_string(),
@@ -217,14 +339,20 @@ fn serving_holds_key_store_lock_until_process_stops() {
         );
         thread::sleep(Duration::from_millis(25));
     }
-    let output = cli("stage-issuer-key", &state, &[]);
-    assert!(!output.status.success());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("already owned"));
+    let far = far_future().to_string();
+    for args in [
+        vec!["stage-issuer-key", state_arg],
+        vec!["issuer-key-status", state_arg],
+        vec!["activate-issuer-key", state_arg, ZERO_ID, &far],
+    ] {
+        let output = refused(&args);
+        assert!(String::from_utf8_lossy(&output.stderr).contains("already owned"));
+    }
     drop(server);
-    assert_eq!(status(&state), initial);
-    success("stage-issuer-key", &state, &[]);
+    assert_eq!(status(&state).rows, initial.rows);
+    success(&["stage-issuer-key", state_arg]);
     let staged = status(&state);
-    assert_eq!(staged.len(), 2);
-    assert_eq!(staged[0], initial[0]);
-    assert_eq!(staged[1].0, "staged");
+    assert_eq!(staged.rows.len(), 2);
+    assert_eq!(staged.rows[0], initial.rows[0]);
+    assert_eq!(staged.rows[1].state, "staged");
 }

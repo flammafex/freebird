@@ -14,13 +14,36 @@ use freebird_crypto::privacy_pass::PublicKey;
 use freebird_privacy_pass_service::{
     admission::AdmissionStore,
     issuer::{self, Issuer},
+    key_store::KeyStore,
     origin::{self, Origin},
 };
 use std::{
+    path::Path,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 use tower::Service;
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+/// Genesis SPKI and key ID, read through the key store before any role opens it.
+fn genesis(key_path: &Path) -> (Vec<u8>, [u8; 32]) {
+    let manifest = KeyStore::open(key_path)
+        .unwrap()
+        .manifest(unix_now())
+        .unwrap();
+    let genesis = manifest
+        .keys
+        .iter()
+        .find(|key| key.activation_hour == Some(0))
+        .unwrap();
+    (genesis.spki.clone(), genesis.key_id)
+}
 
 // tower 0.4's optional `util` feature is not enabled in this package.
 // Router is always ready; this is the same single-request dispatch as oneshot.
@@ -100,7 +123,8 @@ async fn http_reference_client_and_durable_single_use() {
     let context = files.path().join("origin-context");
     AdmissionStore::initialize(&admission_path, &generation).unwrap();
     Issuer::initialize_key(&signing_key).unwrap();
-    Origin::initialize(&replay_path, &context).unwrap();
+    let (genesis_spki, genesis_id) = genesis(&signing_key);
+    Origin::initialize(&replay_path, &context, &genesis_spki, genesis_id).unwrap();
     let admission = Arc::new(AdmissionStore::open(&admission_path, &generation).unwrap());
     let issuer_state = Arc::new(
         Issuer::open(
@@ -108,6 +132,7 @@ async fn http_reference_client_and_durable_single_use() {
             admission.clone(),
             "issuer.test",
             "https://issuer.test/private-token/issue",
+            unix_now(),
         )
         .unwrap(),
     );
@@ -136,9 +161,8 @@ async fn http_reference_client_and_durable_single_use() {
     assert_eq!(Base64Url::encode_string(&spki), encoded);
     let public = PublicKey::from_spki(&spki).unwrap();
     // Origin receives only the public directory bytes, never a signing-key path.
-    let origin_state = Arc::new(
-        Origin::open(&replay_path, &context, "issuer.test", "origin.test", &spki).unwrap(),
-    );
+    let origin_state =
+        Arc::new(Origin::open(&replay_path, &context, "issuer.test", "origin.test").unwrap());
     let origin_router = origin::router(origin_state.clone());
     let response = get(&origin_router, "/private-token/protected", None).await;
     let (issued_challenge, advertised_key) = challenge(&response);
@@ -246,16 +270,9 @@ async fn http_reference_client_and_durable_single_use() {
     // A distinct Origin has its own issued contexts, even with the same public key.
     let other_db = files.path().join("other.sqlite");
     let other_context = files.path().join("other-context");
-    Origin::initialize(&other_db, &other_context).unwrap();
+    Origin::initialize(&other_db, &other_context, &spki, public.key_id()).unwrap();
     let other = origin::router(Arc::new(
-        Origin::open(
-            &other_db,
-            &other_context,
-            "issuer.test",
-            "other.test",
-            &spki,
-        )
-        .unwrap(),
+        Origin::open(&other_db, &other_context, "issuer.test", "other.test").unwrap(),
     ));
     let authorization = build_authorization_header(&token);
     empty(
@@ -314,11 +331,12 @@ async fn http_reference_client_and_durable_single_use() {
             admission,
             "issuer.test",
             "https://issuer.test/private-token/issue",
+            unix_now(),
         )
         .unwrap(),
     ));
     let origin_router = origin::router(Arc::new(
-        Origin::open(&replay_path, &context, "issuer.test", "origin.test", &spki).unwrap(),
+        Origin::open(&replay_path, &context, "issuer.test", "origin.test").unwrap(),
     ));
     empty(
         issue(&issuer_router, &wire, &invitation).await,

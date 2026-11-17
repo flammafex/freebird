@@ -76,7 +76,7 @@ def check_tree(files: list[str]) -> list[str]:
     origin = (ROOT / "privacy_pass_service/src/origin.rs").read_text()
     production = origin.split("#[cfg(test)]", 1)[0]
     # Deliberately only a tripwire over known API spellings, not semantic proof.
-    for marker in ("PublicKey::from_spki(pinned_spki)", "key: PublicKey"):
+    for marker in ("PublicKey::from_spki(&k.spki)", "key: PublicKey"):
         if marker not in production:
             errors.append(f"Origin public-SPKI tripwire missing: {marker}")
     for marker in ("SecretKey", "RsaPrivateKey", "from_pkcs8", "BEGIN PRIVATE KEY"):

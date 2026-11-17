@@ -54,14 +54,20 @@ generation and invalidating old invitations before service resumes. An
 unannounced rollback of both data and recovery markers cannot be detected
 locally. No automatic failover or multi-replica safety is claimed.
 
-Offline candidate staging and public-only staged SPKI export exist, guarded by
-the issuer-key store's lifetime lock. They do not activate keys, publish staged
-keys in the directory, or install keys at Origins. Activation, rotation, and
-retirement remain unsupported. Legacy `signing.pk8` state is rejected without
-migration or reset; fresh state uses private `issuer-keys.sqlite`.
+Offline candidate staging, public-only SPKI export, and offline activation exist,
+each guarded by its store's lifetime lock, for one local instance per role.
+Activation is Origin first (`install-origin-key`), then the Issuer schedule
+(`activate-issuer-key`), at the same whole-hour instant. Superseded Issuer key
+material remains stored until retirement exists, and it is never used for signing
+after its successor's activation hour. **Key retirement is pending and is not claimed.**
+Legacy `signing.pk8` state and schema-v1 key or Origin stores are refused
+without migration or reset; fresh state uses private `issuer-keys.sqlite`.
+Unsupported: HSM-backed keys, an online rotation API, multi-instance
+operation, zeroization of superseded key memory, and multi-key directories
+with a not-before field.
 
-**Release blockers:** supported key activation/rotation and retirement;
-independent review of the selected RSA backend and protocol integration;
+**Release blockers:** key retirement; independent review of the selected RSA
+backend and protocol integration;
 independent implementation interoperability; parser fuzzing; operational
 backup/recovery tests; and a supported deployment topology. The release,
 container, and SDK publishers remain disabled. See the

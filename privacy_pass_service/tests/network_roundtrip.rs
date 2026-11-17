@@ -8,14 +8,37 @@ use freebird_crypto::privacy_pass::PublicKey;
 use freebird_privacy_pass_service::{
     admission::AdmissionStore,
     issuer::{self, Issuer},
+    key_store::KeyStore,
     origin::{self, Origin},
 };
 use reqwest::{header, Client, StatusCode};
 use std::{
+    path::Path,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{net::TcpListener, task::JoinHandle};
+
+fn unix_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+/// Genesis SPKI and key ID, read through the key store before any role opens it.
+fn genesis(key_path: &Path) -> (Vec<u8>, [u8; 32]) {
+    let manifest = KeyStore::open(key_path)
+        .unwrap()
+        .manifest(unix_now())
+        .unwrap();
+    let genesis = manifest
+        .keys
+        .iter()
+        .find(|key| key.activation_hour == Some(0))
+        .unwrap();
+    (genesis.spki.clone(), genesis.key_id)
+}
 
 // Abort on unwinding too, so a failed assertion cannot leave a listener running.
 struct Server(JoinHandle<()>);
@@ -64,12 +87,10 @@ async fn loopback_http_roundtrip_and_durable_single_use() {
     let context = files.path().join("origin-context");
     AdmissionStore::initialize(&admission_path, &generation).unwrap();
     Issuer::initialize_key(&signing_key).unwrap();
-    Origin::initialize(&replay_path, &context).unwrap();
+    let (genesis_spki, genesis_id) = genesis(&signing_key);
+    Origin::initialize(&replay_path, &context, &genesis_spki, genesis_id).unwrap();
     let admission = Arc::new(AdmissionStore::open(&admission_path, &generation).unwrap());
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
+    let now = unix_now() as i64;
     let invitation = admission.provision(now).unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let issuer_name = listener.local_addr().unwrap().to_string();
@@ -78,7 +99,14 @@ async fn loopback_http_roundtrip_and_durable_single_use() {
     let server = Server::start(
         listener,
         issuer::router(Arc::new(
-            Issuer::open(&signing_key, admission.clone(), &issuer_name, &issue_url).unwrap(),
+            Issuer::open(
+                &signing_key,
+                admission.clone(),
+                &issuer_name,
+                &issue_url,
+                unix_now(),
+            )
+            .unwrap(),
         )),
     );
     drop(admission);
@@ -118,7 +146,7 @@ async fn loopback_http_roundtrip_and_durable_single_use() {
     let origin_server = Server::start(
         listener,
         origin::router(Arc::new(
-            Origin::open(&replay_path, &context, &issuer_name, "origin.test", &spki).unwrap(),
+            Origin::open(&replay_path, &context, &issuer_name, "origin.test").unwrap(),
         )),
     );
     let response = client.get(&protected_url).send().await.unwrap();
@@ -229,7 +257,14 @@ async fn loopback_http_roundtrip_and_durable_single_use() {
     let server = Server::start(
         listener,
         issuer::router(Arc::new(
-            Issuer::open(&signing_key, admission, &issuer_name, &issue_url).unwrap(),
+            Issuer::open(
+                &signing_key,
+                admission,
+                &issuer_name,
+                &issue_url,
+                unix_now(),
+            )
+            .unwrap(),
         )),
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -240,7 +275,7 @@ async fn loopback_http_roundtrip_and_durable_single_use() {
     let origin_server = Server::start(
         listener,
         origin::router(Arc::new(
-            Origin::open(&replay_path, &context, &issuer_name, "origin.test", &spki).unwrap(),
+            Origin::open(&replay_path, &context, &issuer_name, "origin.test").unwrap(),
         )),
     );
     assert_eq!(
