@@ -5,7 +5,7 @@ and **is not approved for production**.
 
 - [Protocol and release gates](protocol/privacy-pass-phase1.md)
 - [Local experimental runner](quick-start.md)
-- Security status: repository-root `SECURITY.md`
-- RFC fixture provenance: `common/test-fixtures/privacy-pass/README.md`
+- [Security status](https://github.com/flammafex/freebird/blob/main/SECURITY.md)
+- [RFC fixture provenance](https://github.com/flammafex/freebird/blob/main/common/test-fixtures/privacy-pass/README.md)
 
-Publishing stays blocked until the release gates pass.
+Production release publishing stays blocked until the release gates pass.
