@@ -11,7 +11,7 @@ keywords = ["cryptography", "privacy-pass", "privacy", "authentication"]
 categories = ["cryptography", "authentication"]
 
 [dependencies]
-blind-rsa-signatures = { version = "=0.18.0", default-features = false }
+blind-rsa-signatures = { package = "blind-rsa-signatures", git = "https://github.com/kixel-ai/rind", rev = "13f6c4565d2ac0c7a4488eba35933b2ca85ff317", default-features = false }
 rsa = { version = "=0.10.0", default-features = false }
 sha2 = "0.10"
 

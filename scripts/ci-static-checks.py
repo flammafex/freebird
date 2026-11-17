@@ -68,7 +68,7 @@ def check_tree(files: list[str]) -> list[str]:
     workspace = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"]
     if set(workspace["members"]) != {"crypto", "common", "privacy_pass_service"}:
         errors.append("workspace must contain only crypto, common, privacy_pass_service")
-    removed = ("issuer/", "verifier/", "interface/", "integration_tests/", "sdk/js/")
+    removed = ("attester/", "issuer/", "verifier/", "interface/", "integration_tests/", "sdk/js/")
     for name in files:
         # git ls-files includes unstaged deletions; reject surviving tracked paths.
         if name.startswith(removed) and (ROOT / name).is_file():

@@ -20,6 +20,11 @@ exclusive, crash-durable SQLite state and no automatic failover. Backup
 restoration requires deliberate invalidation of old invitations or challenge
 contexts. See [security status and dependency provenance](SECURITY.md).
 
+The published `freebird-crypto` and `freebird-common` crates predate this
+implementation and do **not** provide the protocol described here. Current
+crates have `publish = false`; use this source checkout for experimentation,
+not an older registry release.
+
 The reference client tests exercise challenge → one admitted blinded request →
 finalization → one redemption through both Axum routers and live loopback HTTP,
 with replay and restart rejection. They are not a general-purpose client SDK.
@@ -50,5 +55,5 @@ the [local experimental runner](docs/quick-start.md).
 
 ## License and security
 
-MIT OR Apache-2.0. See [SECURITY.md](SECURITY.md) before testing or reporting
-a vulnerability.
+MIT OR Apache-2.0: [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE). See
+[SECURITY.md](SECURITY.md) before testing or reporting a vulnerability.

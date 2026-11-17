@@ -16,6 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo build --locked --workspace
+      - name: Check independent external crypto consumer
+        run: python3 scripts/check-external-consumer.py
 
   test:
     runs-on: ubuntu-latest
