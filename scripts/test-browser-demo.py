@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -177,8 +178,11 @@ def main():
 
             def start(args, label):
                 with (tmp / f"{label}.diagnostic").open("wb") as stream:
+                    # Own process group: Chrome forks helpers (zygote, crashpad)
+                    # that would otherwise outlive it and keep writing the profile.
                     child = subprocess.Popen([str(arg) for arg in args], cwd=root,
-                                             stdout=stream, stderr=stream)
+                                             stdout=stream, stderr=stream,
+                                             start_new_session=True)
                 children.append(child)
                 return child
 
@@ -242,15 +246,22 @@ def main():
                 print(line, flush=True)
         finally:
             for child in reversed(children):
-                if child.poll() is None:
-                    child.terminate()
+                signal_group(child, signal.SIGTERM)
             for child in reversed(children):
                 try:
                     child.wait(timeout=5)
                 except subprocess.TimeoutExpired:
-                    child.kill()
-                    child.wait()
+                    pass
+                signal_group(child, signal.SIGKILL)
+                child.wait()
     print("browser demo: passed")
+
+
+def signal_group(child, number):
+    try:
+        os.killpg(child.pid, number)
+    except ProcessLookupError:
+        pass
 
 
 if __name__ == "__main__":
@@ -259,6 +270,9 @@ if __name__ == "__main__":
     except RuntimeError as error:
         print(f"browser demo: failed; {error}")
         raise SystemExit(1)
-    except (OSError, subprocess.SubprocessError):
-        print("browser demo: failed; prerequisite/process error (diagnostics suppressed)")
+    except (OSError, subprocess.SubprocessError) as error:
+        # Exception class and errno carry no credentials; messages/paths may.
+        print("browser demo: failed; prerequisite/process error "
+              f"({type(error).__name__} errno={getattr(error, 'errno', None)}; "
+              "diagnostics suppressed)")
         raise SystemExit(1)
