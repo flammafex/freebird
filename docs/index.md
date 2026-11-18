@@ -8,6 +8,7 @@ and **is not approved for production**.
 - [Single-host deployment (experimental)](deployment.md)
 - [Stopped backup and recovery](recovery.md)
 - [Browser demo and proof-of-work admission](demo.md)
+- [Roadmap](roadmap.md)
 - [Interoperability test plan](protocol/interop-test-plan.md)
 - [Security status](https://github.com/flammafex/freebird/blob/main/SECURITY.md)
 - [RFC fixture provenance](https://github.com/flammafex/freebird/blob/main/common/test-fixtures/privacy-pass/README.md)

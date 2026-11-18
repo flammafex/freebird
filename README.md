@@ -43,7 +43,8 @@ solving an ALTCHA proof-of-work puzzle, then obtains and redeems a token in
 JavaScript; proof-of-work raises cost, it does not prove a unique person.
 There is no batch, renewal, non-consuming token-check endpoint, token
 expiration extension, general browser client, Docker image, Kubernetes
-manifest, or production authorization deployment.
+manifest, or production authorization deployment. Planned work, including
+batched issuance once its RFC is published, is in the [roadmap](docs/roadmap.md).
 
 ## Workspace
 
