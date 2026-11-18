@@ -18,8 +18,9 @@ $bin issuer-key-status /path/to/new-issuer-state
 `init-issuer` creates `admission.sqlite`, the invitation generation file, and
 `issuer-keys.sqlite` (a genesis key active from hour 0). `provision` prints a
 24-hour, one-use admission code **once**. Capture it privately; never put a
-code in logs, shell history, or public issue reports. Stop the Issuer before
-provisioning. A failed or partial initialization is never reset automatically.
+code in logs, shell history, or public issue reports. Offline `provision`
+requires the Issuer to be stopped; while it serves, run
+`$bin provision-live <issuer-state-dir>` as the same user instead. A failed or partial initialization is never reset automatically.
 
 `issuer-key-status` prints a frozen format: a `now` line, a `high-water` line,
 then one row per key. Each row is

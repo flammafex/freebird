@@ -3,6 +3,7 @@
 use freebird_crypto::privacy_pass::PublicKey;
 use freebird_privacy_pass_service::{
     admission::AdmissionStore,
+    control::{self, ControlListener},
     issuer::{self, Issuer},
     key_store::{KeyState, KeyStore},
     origin::{self, Origin, OriginKeyState},
@@ -22,6 +23,7 @@ Experimental Privacy Pass (one process per role; no failover or multi-instance).
 Usage:
   freebird-privacy-pass-service init-issuer <issuer-state-dir>
   freebird-privacy-pass-service provision <issuer-state-dir>
+  freebird-privacy-pass-service provision-live <issuer-state-dir>
   freebird-privacy-pass-service recover-issuer-admission <issuer-state-dir>
   freebird-privacy-pass-service stage-issuer-key <issuer-state-dir>
   freebird-privacy-pass-service export-issuer-spki <issuer-state-dir> <key-id-hex> <new-output-path>
@@ -444,6 +446,15 @@ async fn run(args: &[String]) -> Result<()> {
                 .and_then(|()| stdout.flush())
                 .map_err(|_| "invitation output failed; no automatic retry")
         }
+        [command, dir] if command == "provision-live" => {
+            let invitation = control::provision_live(Path::new(dir)).await?;
+            // As with offline provisioning, stdout is the sole intended output.
+            // A failed output write does not undo the durable invitation.
+            let mut stdout = io::stdout().lock();
+            writeln!(stdout, "{invitation}")
+                .and_then(|()| stdout.flush())
+                .map_err(|_| control::LIVE_ERROR)
+        }
         [command, dir] if command == "recover-issuer-admission" => admission(Path::new(dir))?
             .rotate_generation_for_restore()
             .map_err(|_| "admission recovery refused; keep both services stopped"),
@@ -462,7 +473,7 @@ async fn run(args: &[String]) -> Result<()> {
             let store = Arc::new(admission(dir)?);
             let issuer = Issuer::open(
                 dir.join("issuer-keys.sqlite"),
-                store,
+                store.clone(),
                 name.clone(),
                 request_url.clone(),
                 now,
@@ -473,7 +484,13 @@ async fn run(args: &[String]) -> Result<()> {
                     "cannot open issuer (invalid configuration, key, or state; or no active key)",
                 )
             })?;
-            serve(issuer::router(Arc::new(issuer)), bind).await
+            let control =
+                ControlListener::bind(dir).map_err(|_| "cannot bind issuer control socket")?;
+            tokio::select! {
+                result = serve(issuer::router(Arc::new(issuer)), bind) => result,
+                result = control.serve(store) =>
+                    result.map_err(|_| "issuer control server failed"),
+            }
         }
         [command, dir, issuer_name, origin_name, bind] if command == "serve-origin" => {
             let bind = loopback_bind(bind)?;

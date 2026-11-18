@@ -24,4 +24,6 @@
   including independent verification, redemption, replay, and negative cases.
 - Added explicit stopped recovery with credential invalidation and key-history
   refusal, plus cold restore and commit/crash drills.
+- Added `provision-live`: the running Issuer provisions one-use invitations
+  over a UID-restricted local control socket, without downtime.
 - Release publishing remains blocked pending independent cryptographic review.

@@ -32,6 +32,7 @@ jobs:
       - run: go test ./...
         working-directory: interop/go
       - run: python3 scripts/test-interop.py
+      - run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-live-provision.py
       - run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-recovery.py
 
   deployment-proxy:

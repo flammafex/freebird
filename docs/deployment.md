@@ -165,8 +165,19 @@ This example cannot connect to a remote host and is not a general-purpose SDK.
 
 ## Operation and limits
 
-To provision again, stop the Issuer, run `provision` as `freebird-issuer` with
-private stdout redirection, then start it. Key staging, activation, and
+To provision more invitations while the Issuer serves, use its local control
+socket (`control.sock` in the private state directory) as the service user:
+
+```sh
+(umask 077; runuser -u freebird-issuer -- "$bin" provision-live "$issuer") \
+  > /root/freebird-invitation
+```
+
+Only a peer with the Issuer's own UID may connect; root and other users are
+refused. Each successful call durably creates one 24-hour, one-use code before
+replying. If the reply is lost, that code is orphaned until it expires; it is
+never refunded or resent. Offline `provision` still works while the Issuer is
+stopped. Key staging, activation, and
 retirement follow the [offline rotation runbook](quick-start.md#offline-key-maintenance):
 enter the [two-role serving hold](recovery.md#hold-serving-before-touching-state),
 run each command as **its** role user, compare statuses and activation times,

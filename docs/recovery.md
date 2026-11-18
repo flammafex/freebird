@@ -14,6 +14,8 @@ committed changes not yet copied into the main files. **Copy whole state
 directories only while both processes are stopped**, including any `-wal`,
 `-shm`, and `.lock` files. Do not unlink a lock file while a process might
 hold it. Keep ownership and mode 0700 directories / mode 0600 state files.
+The Issuer's `control.sock` is a runtime socket, not state: a backup may omit
+it or copy it as a stale node; the Issuer replaces it at startup.
 
 ## The independent key-history record
 

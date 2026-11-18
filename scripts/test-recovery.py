@@ -16,6 +16,8 @@ ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "target/debug/freebird-privacy-pass-service"
 PHASE = "build"
 PROCESSES = []
+# The Issuer control socket is runtime-only, recreated at startup, never state.
+RUNTIME = shutil.ignore_patterns("control.sock")
 
 
 def require(value):
@@ -152,8 +154,8 @@ def main():
         stop()
         PHASE = "cold snapshot and external catalog"
         snapshot_i, snapshot_o = root / "snapshot-i", root / "snapshot-o"
-        shutil.copytree(issuer, snapshot_i)
-        shutil.copytree(origin, snapshot_o)
+        shutil.copytree(issuer, snapshot_i, ignore=RUNTIME)
+        shutil.copytree(origin, snapshot_o, ignore=RUNTIME)
         require(any(p.stat().st_size for state in (snapshot_i, snapshot_o)
                     for p in state.glob("*.sqlite-wal")))
         external = root / "external"
@@ -171,8 +173,8 @@ def main():
         for case in ("admission", "origin", "issuer-keys", "full"):
             PHASE = "restore " + case
             stage_i, stage_o = root / (case + "-i"), root / (case + "-o")
-            shutil.copytree(issuer, stage_i)
-            shutil.copytree(origin, stage_o)
+            shutil.copytree(issuer, stage_i, ignore=RUNTIME)
+            shutil.copytree(origin, stage_o, ignore=RUNTIME)
             components = {
                 "admission": [(snapshot_i, stage_i, ("admission.sqlite", "generation"))],
                 "origin": [(snapshot_o, stage_o, ("origin.sqlite", "context"))],
@@ -182,7 +184,7 @@ def main():
             for source, target, names in components:
                 if names is None:
                     shutil.rmtree(target)
-                    shutil.copytree(source, target)
+                    shutil.copytree(source, target, ignore=RUNTIME)
                 else:
                     for name in names:
                         for old in target.glob(name + "*"):
