@@ -139,6 +139,15 @@ TypeScript test dependency reports the `sjcl` ECC advisory
 [GHSA-2w8x-224x-785m](https://github.com/advisories/GHSA-2w8x-224x-785m);
 its Type 2 RSA-only test use does not make that advisory safe for other uses.
 
+The optional [proof-of-work admission and browser demo](docs/demo.md) use the
+`altcha` crate 1.1.0 (PBKDF2/SHA-256, HMAC-SHA-256) for challenge signing and
+verification; Freebird adds only a durable spent-challenge record committed
+before provisioning, so one solved challenge yields at most one invitation.
+PoW raises the cost of collecting tokens; it is not Sybil-proof and does not
+establish a unique person. The demo ships the same pinned
+`@cloudflare/privacypass-ts` (and its `sjcl` advisory) to browsers, using its
+RSA path only. PoW and the demo are product features, not release gates.
+
 ## Reporting vulnerabilities
 
 Use GitHub private vulnerability reporting for this repository if available.

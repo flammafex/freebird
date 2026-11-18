@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="freebird-issuer" content="">
+    <meta name="referrer" content="no-referrer">
+    <meta name="color-scheme" content="light dark">
+    <meta name="description" content="Experimental demo: prove a little effort, get a one-use anonymous Privacy Pass, and open a protected page.">
+    <title>Freebird demo · effort, not identity</title>
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./assets/altcha.css">
+    <link rel="stylesheet" href="./assets/demo.css">
+    <script type="module" src="./assets/app.js"></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#flow">Skip to the demo</a>
+    <main id="freebird-demo" class="demo">
+      <header class="demo-header">
+        <div class="brand">
+          <img class="brand-mark" src="./favicon.svg" alt="" width="28" height="28">
+          <span class="brand-name">Freebird</span>
+          <span class="badge">Experimental demo</span>
+        </div>
+        <h1>Get in without saying who you are.</h1>
+        <p class="lead">Your browser solves a small puzzle. In return it gets an anonymous pass that opens a protected page&nbsp;once.</p>
+      </header>
+
+      <section id="flow" class="card" aria-labelledby="flow-heading" tabindex="-1">
+        <div class="card-head">
+          <h2 id="flow-heading">Try it</h2>
+          <p class="card-hint">Takes a few seconds. Nothing is stored.</p>
+        </div>
+
+        <p id="flow-status" role="status" aria-live="polite" aria-atomic="true">Loading…</p>
+        <p id="flow-error" role="alert" hidden></p>
+
+        <ol id="flow-steps" aria-label="Progress">
+          <li id="step-solving" data-state="waiting">
+            <span class="step-marker" aria-hidden="true"></span>
+            <span class="step-body">
+              <span class="step-title">Solving</span>
+              <span class="step-note">Your browser works through a proof-of-work puzzle.</span>
+            </span>
+          </li>
+          <li id="step-admitted" data-state="waiting">
+            <span class="step-marker" aria-hidden="true"></span>
+            <span class="step-body">
+              <span class="step-title">Admitted</span>
+              <span class="step-note">The issuer checks the work and returns a one-use admission code.</span>
+            </span>
+          </li>
+          <li id="step-token" data-state="waiting">
+            <span class="step-marker" aria-hidden="true"></span>
+            <span class="step-body">
+              <span class="step-title">Token obtained</span>
+              <span class="step-note">A blind-signed Privacy Pass token the issuer can’t link to you.</span>
+            </span>
+          </li>
+          <li id="step-access" data-state="waiting">
+            <span class="step-marker" aria-hidden="true"></span>
+            <span class="step-body">
+              <span class="step-title">Access granted</span>
+              <span class="step-note">The protected page accepts the token.</span>
+            </span>
+          </li>
+          <li id="step-replay" data-state="waiting">
+            <span class="step-marker" aria-hidden="true"></span>
+            <span class="step-body">
+              <span class="step-title">Replay refused</span>
+              <span class="step-note">The same token is sent again and turned away.</span>
+            </span>
+          </li>
+        </ol>
+
+        <div id="proof-container"></div>
+
+        <div class="demo-actions">
+          <button id="start-button" class="button button-primary" type="button" disabled>Solve and enter</button>
+          <button id="replay-button" class="button button-secondary" type="button" disabled>Try replay</button>
+        </div>
+      </section>
+
+      <section class="principles" aria-labelledby="principles-heading">
+        <h2 id="principles-heading">What this shows</h2>
+        <ul class="principle-list">
+          <li class="principle">
+            <h3>Effort, not identity</h3>
+            <p>You spend a few seconds of computing. No account, email or cookie is asked for.</p>
+          </li>
+          <li class="principle">
+            <h3>Can’t be linked to you</h3>
+            <p>The issuer signs the token without seeing it, so it can’t tell later whose token it was.</p>
+          </li>
+          <li class="principle">
+            <h3>Works once</h3>
+            <p>Each token opens the page a single time. Use “Try replay” to see a second try refused.</p>
+          </li>
+        </ul>
+      </section>
+
+      <footer class="demo-footer">
+        <p><strong>Experimental demo, not a production service.</strong> The puzzle runs in your browser. Tokens are kept in memory only and discarded when you start again or leave.</p>
+        <p class="footnote">Privacy Pass (RFC&nbsp;9578, type&nbsp;2 blind RSA) · self-hosted ALTCHA proof-of-work · no third-party requests</p>
+      </footer>
+
+      <noscript><p class="noscript">This demo needs JavaScript to solve the puzzle and get a token.</p></noscript>
+    </main>
+  </body>
+</html>

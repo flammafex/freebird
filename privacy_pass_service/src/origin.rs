@@ -1383,6 +1383,7 @@ mod tests {
 
     #[test]
     fn restore_invalidation_preserves_manifest_and_invalidates_tokens() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (_, old) = signer()?;
         let (signer, key) = signer()?;
@@ -1418,6 +1419,7 @@ mod tests {
 
     #[test]
     fn restore_invalidation_refuses_corrupt_replay_without_changes() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (_, key) = signer()?;
         let (db, secret) = fresh(dir.path(), &key, None)?;
@@ -1439,6 +1441,7 @@ mod tests {
 
     #[test]
     fn restore_invalidation_post_publish_failure_refuses_open() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (_, key) = signer()?;
         let (db, secret) = fresh(dir.path(), &key, None)?;
@@ -1456,6 +1459,7 @@ mod tests {
 
     #[test]
     fn durable_redemption_clock_and_ownership() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let db = dir.path().join("origin.db");
         let secret = dir.path().join("context");
@@ -1511,6 +1515,7 @@ mod tests {
 
     #[tokio::test]
     async fn http_challenge_and_concurrent_redemption() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let dir = tempfile::tempdir()?;
         let db = dir.path().join("origin.db");
         let secret = dir.path().join("context");
@@ -1574,6 +1579,7 @@ mod tests {
 
     #[test]
     fn v1_refusal_leaves_file_unchanged() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (db, secret) = paths(dir.path());
         std::fs::write(dir.path().join("origin.db.lock"), b"")?;
@@ -1597,6 +1603,7 @@ mod tests {
 
     #[test]
     fn initialize_refuses_mismatch_and_noncanonical_without_creating_files() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (db, secret) = paths(dir.path());
         let (_, key) = signer()?;
@@ -1613,6 +1620,7 @@ mod tests {
 
     #[test]
     fn connection_requires_private_wal_and_verified_pragmas() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         use std::os::unix::fs::PermissionsExt;
 
         let dir = tempfile::tempdir()?;
@@ -1645,6 +1653,7 @@ mod tests {
 
     #[test]
     fn names_and_secret_pinned_at_first_open() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (db, secret) = paths(dir.path());
         let (_, key) = signer()?;
@@ -1661,6 +1670,7 @@ mod tests {
 
     #[test]
     fn corruption_matrix_refuses_open() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let root = tempfile::tempdir()?;
         let (_, k1) = signer()?;
         let (_, k2) = signer()?;
@@ -1770,6 +1780,7 @@ mod tests {
 
     #[test]
     fn boundary_drill_keys_zero_and_h() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (db, secret) = paths(dir.path());
         let (k1, p1) = signer()?;
@@ -1836,6 +1847,7 @@ mod tests {
 
     #[test]
     fn install_key_refusal_table() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (db, secret) = paths(dir.path());
         let (_, p1) = signer()?;
@@ -1898,6 +1910,7 @@ mod tests {
 
     #[test]
     fn activation_range_matches_issuer_i64_deadline_bound() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (_, genesis) = signer()?;
         let (_, next) = signer()?;
@@ -1944,6 +1957,7 @@ mod tests {
 
     #[test]
     fn ignored_install_insert_rolls_back() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         assert_install_trigger_rolls_back(
             "CREATE TRIGGER ignore_install BEFORE INSERT ON origin_keys
              BEGIN SELECT RAISE(IGNORE); END;",
@@ -1953,6 +1967,7 @@ mod tests {
 
     #[test]
     fn ignored_install_reschedule_rolls_back() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         assert_install_trigger_rolls_back(
             "CREATE TRIGGER ignore_reschedule BEFORE UPDATE ON origin_keys
              BEGIN SELECT RAISE(IGNORE); END;",
@@ -1962,6 +1977,7 @@ mod tests {
 
     #[test]
     fn install_trigger_altering_another_key_rolls_back() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         assert_install_trigger_rolls_back(
             "CREATE TRIGGER change_other AFTER INSERT ON origin_keys
              BEGIN UPDATE origin_keys SET activation_hour=1 WHERE key_id!=NEW.key_id; END;",
@@ -1971,6 +1987,7 @@ mod tests {
 
     #[test]
     fn install_trigger_altering_target_rolls_back() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         assert_install_trigger_rolls_back(
             "CREATE TRIGGER change_target AFTER INSERT ON origin_keys
              BEGIN UPDATE origin_keys SET activation_hour=NEW.activation_hour+1
@@ -1981,6 +1998,7 @@ mod tests {
 
     #[test]
     fn ignored_install_high_water_update_rolls_back() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         assert_install_trigger_rolls_back(
             "CREATE TRIGGER ignore_clock BEFORE UPDATE OF high_water ON metadata
              BEGIN SELECT RAISE(IGNORE); END;",
@@ -1990,6 +2008,7 @@ mod tests {
 
     #[test]
     fn install_and_reschedule_replay_rewrite_schema_is_refused() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         for (event, reschedule) in [("INSERT", false), ("UPDATE", true)] {
             assert_install_trigger_rolls_back(
                 &format!(
@@ -2031,6 +2050,7 @@ mod tests {
 
     #[test]
     fn retirement_boundary_deletes_only_target_and_reopens() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (k1, p1) = signer()?;
         let (k2, p2) = signer()?;
@@ -2098,6 +2118,7 @@ mod tests {
 
     #[test]
     fn retire_key_refusal_table() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_, p1) = signer()?;
         let (_, p2) = signer()?;
         let solo = tempfile::tempdir()?;
@@ -2121,6 +2142,7 @@ mod tests {
 
     #[test]
     fn retirement_refuses_invariant_seven_corruption_without_erasing_it() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (_, p1) = signer()?;
         let (_, p2) = signer()?;
@@ -2174,6 +2196,7 @@ mod tests {
 
     #[test]
     fn ignored_retirement_update_rolls_back() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         assert_retire_trigger_rolls_back(
             "CREATE TRIGGER ignore_retire BEFORE UPDATE OF retired ON origin_keys
              BEGIN SELECT RAISE(IGNORE); END;",
@@ -2182,6 +2205,7 @@ mod tests {
 
     #[test]
     fn retirement_trigger_deleting_successor_spent_rows_rolls_back() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         assert_retire_trigger_rolls_back(
             "CREATE TRIGGER delete_other_spent AFTER DELETE ON spent
              BEGIN DELETE FROM spent WHERE key_id!=OLD.key_id; END;",
@@ -2190,6 +2214,7 @@ mod tests {
 
     #[test]
     fn retirement_postcondition_trigger_regressions() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         for trigger in [
             "CREATE TRIGGER undo_retire AFTER UPDATE OF retired ON origin_keys
                  WHEN NEW.retired=1 BEGIN
@@ -2211,6 +2236,7 @@ mod tests {
 
     #[test]
     fn unexpected_schema_objects_refuse_open_and_live_requests() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_, key) = signer()?;
         for object in [
             "CREATE TRIGGER ignore_spent BEFORE INSERT ON spent
@@ -2247,6 +2273,7 @@ mod tests {
 
     #[test]
     fn count_preserving_retirement_trigger_cannot_enable_successor_replay() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (_, old) = signer()?;
         let (signer, next) = signer()?;
@@ -2296,6 +2323,7 @@ mod tests {
 
     #[test]
     fn retirement_replay_digest_detects_count_preserving_edits() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (_, old) = signer()?;
         let (_, next) = signer()?;
@@ -2327,6 +2355,7 @@ mod tests {
 
     #[test]
     fn pruning_margin_replay_and_clock_floor_survive_restart() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (signer, key) = signer()?;
         let (db, secret) = fresh(dir.path(), &key, None)?;
@@ -2368,6 +2397,7 @@ mod tests {
 
     #[test]
     fn many_hours_prune_without_retiring_the_key() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (_, key) = signer()?;
         let (db, secret) = fresh(dir.path(), &key, None)?;
@@ -2414,6 +2444,7 @@ mod tests {
 
     #[test]
     fn pruning_batches_preserve_unselected_parents_and_drain_orphans() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (signer, key) = signer()?;
         let (db, secret) = fresh(dir.path(), &key, None)?;
@@ -2467,6 +2498,7 @@ mod tests {
 
     #[test]
     fn pruning_cutoff_is_checked_and_does_not_overflow_in_sql() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let db = Connection::open_in_memory()?;
         db.execute_batch(SCHEMA_V2)?;
         db.execute("INSERT INTO origin_keys VALUES(zeroblob(32),x'00',0,0)", [])?;
@@ -2500,6 +2532,7 @@ mod tests {
 
     #[test]
     fn expired_corruption_is_refused_before_pruning_can_hide_it() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_, old) = signer()?;
         let (_, next) = signer()?;
         for statements in [
@@ -2547,6 +2580,7 @@ mod tests {
 
     #[test]
     fn pruned_empty_target_still_requires_retirement_margin_and_tombstone() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (_, old) = signer()?;
         let (_, next) = signer()?;
@@ -2588,6 +2622,7 @@ mod tests {
 
     #[tokio::test]
     async fn failure_after_pruning_rolls_back_and_never_returns_200() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let dir = tempfile::tempdir()?;
         let (signer, key) = signer()?;
         let (db, secret) = fresh(dir.path(), &key, None)?;
@@ -2629,6 +2664,7 @@ mod tests {
 
     #[test]
     fn replay_digest_is_deterministic_scoped_and_covers_every_column_and_row() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let mut db = Connection::open_in_memory()?;
         db.execute_batch(SCHEMA_V2)?;
         for key in [[1; 32], [2; 32]] {
@@ -2699,6 +2735,7 @@ mod tests {
 
     #[test]
     fn install_and_reschedule_digest_postcondition_detects_replay_rewrites() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (_, genesis) = signer()?;
         let (_, next) = signer()?;
@@ -2745,6 +2782,7 @@ mod tests {
 
     #[tokio::test]
     async fn saturation_and_worker_errors_fail_closed_without_mutation() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let dir = tempfile::tempdir()?;
         let (_, key) = signer()?;
         let (db, secret) = fresh(dir.path(), &key, None)?;
@@ -2799,6 +2837,7 @@ mod tests {
 
     #[tokio::test]
     async fn cancelling_http_keeps_worker_permit_until_commit_and_burns_token() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let dir = tempfile::tempdir()?;
         let (signer, key) = signer()?;
         let (db, secret) = fresh(dir.path(), &key, None)?;
@@ -2851,6 +2890,7 @@ mod tests {
 
     #[test]
     fn queued_request_samples_clock_only_under_connection_lock() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
         let dir = tempfile::tempdir()?;
@@ -2883,6 +2923,7 @@ mod tests {
 
     #[tokio::test]
     async fn concurrent_http_redemption_has_at_most_one_success() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let dir = tempfile::tempdir()?;
         let (signer, key) = signer()?;
         let (db, secret) = fresh(dir.path(), &key, None)?;
@@ -2916,6 +2957,7 @@ mod tests {
 
     #[test]
     fn status_states_lock_and_clock() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir()?;
         let (db, secret) = paths(dir.path());
         let (_, p1) = signer()?;

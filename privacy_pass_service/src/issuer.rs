@@ -3,11 +3,13 @@
 //! hour. The key set is loaded once at open; old keys remain in memory until restart.
 use crate::admission::AdmissionStore;
 use crate::key_store::{select_active, KeyStore, SigningKey};
+use crate::pow::{BrowserOrigin, Pow};
 use anyhow::{bail, ensure, Context, Result};
 use axum::{
     body::{to_bytes, Body},
     extract::{Request, State},
-    http::{header, request::Parts, StatusCode},
+    http::{header, request::Parts, HeaderValue, Method, StatusCode},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Router,
@@ -224,6 +226,49 @@ pub fn router(issuer: Arc<Issuer>) -> Router {
         .with_state(issuer)
 }
 
+/// Only the explicitly PoW-enabled runner opts in to browser routes/CORS.
+/// Issuance and admission handling are otherwise exactly the same.
+pub fn router_with_pow(issuer: Arc<Issuer>, pow: Arc<Pow>, origin: BrowserOrigin) -> Router {
+    router(issuer)
+        .merge(crate::pow::router(pow))
+        .route_layer(middleware::from_fn_with_state(origin, browser_cors))
+}
+
+async fn browser_cors(
+    State(origin): State<BrowserOrigin>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let mut origins = request.headers().get_all(header::ORIGIN).iter();
+    let allowed = origins.next() == Some(origin.header()) && origins.next().is_none();
+    let preflight = request.method() == Method::OPTIONS;
+    let mut response = if preflight {
+        StatusCode::NO_CONTENT.into_response()
+    } else {
+        next.run(request).await
+    };
+    let headers = response.headers_mut();
+    headers.append(header::VARY, HeaderValue::from_static("Origin"));
+    if allowed {
+        headers.insert(header::ACCESS_CONTROL_ALLOW_ORIGIN, origin.header().clone());
+        if preflight {
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_METHODS,
+                HeaderValue::from_static("GET, POST"),
+            );
+            headers.insert(
+                header::ACCESS_CONTROL_ALLOW_HEADERS,
+                HeaderValue::from_static("Content-Type, Freebird-Admission"),
+            );
+            headers.insert(
+                header::ACCESS_CONTROL_MAX_AGE,
+                HeaderValue::from_static("600"),
+            );
+        }
+    }
+    response
+}
+
 fn unix_now() -> Option<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -372,6 +417,7 @@ mod tests {
 
     #[test]
     fn open_refuses_missing_corrupt_and_below_high_water() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let key = dir.path().join("pp-signing.sqlite");
@@ -391,6 +437,7 @@ mod tests {
 
     #[test]
     fn open_refuses_when_no_key_is_active() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let key = dir.path().join("pp-signing.sqlite");
@@ -409,6 +456,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_selected_key_yields_503_without_consuming_invitation() {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let key = dir.path().join("pp-signing.sqlite");
@@ -446,6 +494,7 @@ mod tests {
 
     #[tokio::test]
     async fn directory_and_requests_follow_the_scheduled_hour() {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let key = dir.path().join("pp-signing.sqlite");
@@ -490,6 +539,7 @@ mod tests {
 
     #[tokio::test]
     async fn directory_cache_expires_at_next_activation() {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let key = dir.path().join("pp-signing.sqlite");
@@ -519,6 +569,7 @@ mod tests {
 
     #[tokio::test]
     async fn clock_step_back_never_returns_to_an_older_key() {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let dir = tempfile::tempdir().unwrap();
         let adm = admission(dir.path());
         let key = dir.path().join("pp-signing.sqlite");
@@ -550,6 +601,7 @@ mod tests {
 
     #[tokio::test]
     async fn staged_key_is_not_advertised_or_issued_and_preserves_invitation() {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let (_dir, issuer) = fixture();
         let staged_id = issuer._key_store.stage(T0).expect("stage a key");
         let staged_spki = issuer._key_store.spki(staged_id).unwrap();
@@ -581,6 +633,7 @@ mod tests {
 
     #[tokio::test]
     async fn directory_and_one_use_issuance() {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let (_dir, issuer) = fixture();
         let response = directory(State(issuer.clone())).await;
         assert_eq!(

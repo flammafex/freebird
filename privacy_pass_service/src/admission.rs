@@ -287,6 +287,7 @@ mod tests {
 
     #[test]
     fn commit_failure_does_not_consume() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, db, generation) = setup();
         let store = AdmissionStore::open(&db, &generation).unwrap();
         let code = store.provision(100).unwrap();
@@ -352,6 +353,7 @@ mod tests {
         let Some(dir) = std::env::var_os("FREEBIRD_ADMISSION_CRASH_DIR") else {
             return;
         };
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = PathBuf::from(dir);
         let stage = fs::read_to_string(dir.join("stage")).unwrap();
         let code = fs::read_to_string(dir.join("invitation")).unwrap();
@@ -367,6 +369,7 @@ mod tests {
         use std::process::{Child, Command, Stdio};
         use std::time::{Duration, Instant};
 
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_write();
         struct KillOnDrop(Child);
         impl Drop for KillOnDrop {
             fn drop(&mut self) {
@@ -430,6 +433,7 @@ mod tests {
 
     #[test]
     fn init_open_lock_and_restart() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, db, generation) = setup();
         assert!(AdmissionStore::initialize(&db, &generation).is_err());
         let store = AdmissionStore::open(&db, &generation).unwrap();
@@ -446,6 +450,7 @@ mod tests {
 
     #[test]
     fn concurrent_one_winner() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, db, generation) = setup();
         let store = Arc::new(AdmissionStore::open(db, generation).unwrap());
         let code = store.provision(0).unwrap();
@@ -467,6 +472,7 @@ mod tests {
 
     #[test]
     fn expiry_and_malformed() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, db, generation) = setup();
         let store = AdmissionStore::open(db, generation).unwrap();
         let code = store.provision(10).unwrap();
@@ -489,6 +495,7 @@ mod tests {
 
     #[test]
     fn rotation_invalidates_and_persists() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, db, generation) = setup();
         let store = AdmissionStore::open(&db, &generation).unwrap();
         let old = store.provision(0).unwrap();
@@ -503,6 +510,7 @@ mod tests {
 
     #[test]
     fn unexpected_schema_objects_refuse_open_and_live_mutations() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         for (object, cleanup) in [
             (
                 "CREATE TRIGGER ignore_invitation BEFORE DELETE ON invitations
@@ -556,6 +564,7 @@ mod tests {
 
     #[test]
     fn missing_and_corrupt_fail_closed() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (dir, db, generation) = setup();
         assert!(AdmissionStore::open(dir.path().join("missing"), &generation).is_err());
         assert!(AdmissionStore::open(&db, dir.path().join("missing-secret")).is_err());

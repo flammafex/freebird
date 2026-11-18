@@ -47,6 +47,27 @@ jobs:
         env:
           FREEBIRD_NGINX: /usr/sbin/nginx
 
+  browser-demo:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+      - run: sudo apt-get update && sudo apt-get install -y nginx openssl
+      - run: cargo build --locked -p freebird-privacy-pass-service --bin freebird-privacy-pass-service
+      - name: PoW admission against the real Issuer
+        run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-pow.py
+      - name: Headless Chrome through nginx TLS (installs pinned demo deps)
+        run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-browser-demo.py
+        env:
+          FREEBIRD_NGINX: /usr/sbin/nginx
+          FREEBIRD_CHROME: /usr/bin/google-chrome
+      - name: Demo helper tests
+        run: node --test test/helpers.test.mjs
+        working-directory: demo/web
+
   build:
     runs-on: ubuntu-latest
     steps:

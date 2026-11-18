@@ -26,4 +26,9 @@
   refusal, plus cold restore and commit/crash drills.
 - Added `provision-live`: the running Issuer provisions one-use invitations
   over a UID-restricted local control socket, without downtime.
+- Added optional ALTCHA proof-of-work admission (`init-issuer-pow`, six-argument
+  `serve-issuer`): one solved, signed challenge yields at most one invitation,
+  with a durable spent record, single-origin CORS and recovery rotation.
+- Added a self-hosted browser demo (`demo/web/`) and a headless-Chrome TLS
+  end-to-end test; nginx template serves it with a strict CSP and rate-limits PoW.
 - Release publishing remains blocked pending independent cryptographic review.

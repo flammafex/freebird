@@ -9,5 +9,6 @@ nav:
   - Local runner: quick-start.md
   - Single-host deployment: deployment.md
   - Backup and recovery: recovery.md
+  - Browser demo and PoW: demo.md
   - Protocol contract: protocol/privacy-pass-phase1.md
   - Interop test plan: protocol/interop-test-plan.md

@@ -931,6 +931,7 @@ mod tests {
 
     #[test]
     fn initialize_is_genesis_and_fresh_only() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (dir, path) = fresh();
         assert!(KeyStore::initialize(&path).is_err());
         assert!(KeyStore::initialize(dir.path().join("missing/keys")).is_err());
@@ -947,6 +948,7 @@ mod tests {
 
     #[test]
     fn missing_state_is_not_created() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("absent");
         assert!(KeyStore::open(&path).is_err());
@@ -956,6 +958,7 @@ mod tests {
 
     #[test]
     fn missing_lock_is_not_recreated() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (dir, path) = fresh();
         let before = fs::read(&path).unwrap();
         let sidecar = dir.path().join("keys.sqlite.lock");
@@ -967,6 +970,7 @@ mod tests {
 
     #[test]
     fn v1_state_is_refused_and_bytes_are_untouched() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         for (mode, permissions) in [("WAL", 0o600), ("DELETE", 0o644)] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("keys.sqlite");
@@ -1023,6 +1027,7 @@ mod tests {
 
     #[test]
     fn corruption_matrix_fails_closed() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _staged) = staged_fixture();
         let used: Vec<u8> = {
             let store = KeyStore::open(&path).unwrap();
@@ -1095,6 +1100,7 @@ mod tests {
 
     #[test]
     fn newest_fully_retired_key_is_refused() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _k1) = scheduled_fixture();
         let mut db = connect(&path, false).unwrap();
         let tx = db.transaction().unwrap();
@@ -1159,6 +1165,7 @@ mod tests {
 
     #[test]
     fn derived_states_follow_injected_time() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
         let k0 = genesis_id(&store, T0);
@@ -1181,6 +1188,7 @@ mod tests {
 
     #[test]
     fn staged_key_is_listed_last_without_schedule() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         let manifest = store.manifest(T0).unwrap();
@@ -1193,6 +1201,7 @@ mod tests {
 
     #[test]
     fn restart_staging_and_ownership() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         assert!(KeyStore::open(&path).is_err());
@@ -1211,6 +1220,7 @@ mod tests {
 
     #[test]
     fn failed_insert_is_atomic() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path) = fresh();
         let store = KeyStore::open(&path).unwrap();
         let before = store.manifest(T0).unwrap();
@@ -1258,6 +1268,7 @@ mod tests {
 
     #[test]
     fn ignored_insert_is_rejected_and_rolled_back() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         assert_trigger_stage_rolls_back(
             "CREATE TRIGGER ignore_stage BEFORE INSERT ON keys
              BEGIN SELECT RAISE(IGNORE); END;",
@@ -1267,6 +1278,7 @@ mod tests {
 
     #[test]
     fn trigger_activation_is_rejected_and_rolled_back() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         // Hour 1 is already active at 7300s, so the candidate would supersede genesis.
         assert_trigger_stage_rolls_back(
             "CREATE TRIGGER activate_stage AFTER INSERT ON keys
@@ -1278,6 +1290,7 @@ mod tests {
 
     #[test]
     fn stage_refusals_and_high_water() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         let before = store.manifest(T0).unwrap();
@@ -1291,6 +1304,7 @@ mod tests {
 
     #[test]
     fn stage_refused_while_scheduled_and_allowed_when_predecessor_retired_for_issuance() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
         let scheduled = store.stage(T0 + 1).unwrap_err().to_string();
@@ -1305,6 +1319,7 @@ mod tests {
 
     #[test]
     fn signing_keys_refuse_below_high_water_and_exclude_staged() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         assert!(store
@@ -1321,6 +1336,7 @@ mod tests {
 
     #[test]
     fn signing_keys_sorted_by_hour_across_schedule() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
         let keys = store.signing_keys(T0).unwrap();
@@ -1332,6 +1348,7 @@ mod tests {
 
     #[test]
     fn schedule_refusals() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         let before = store.manifest(T0).unwrap();
@@ -1362,6 +1379,7 @@ mod tests {
 
     #[test]
     fn schedule_refused_while_predecessor_still_holds_private_material() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
         // At S: genesis is retired-for-issuance with private material.
@@ -1376,6 +1394,7 @@ mod tests {
 
     #[test]
     fn schedule_refused_after_activation_time_and_reschedule_before_it_allowed() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
         // Before S, the scheduled key may move earlier (still after now).
@@ -1395,6 +1414,7 @@ mod tests {
 
     #[test]
     fn schedule_same_time_is_successful_no_op_that_advances_high_water() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
         assert_eq!(store.schedule_activation(S, T0 + 1).unwrap(), k1);
@@ -1405,6 +1425,7 @@ mod tests {
 
     #[test]
     fn activation_range_matches_origin_i64_deadline_bound() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         let before = store.manifest(T0).unwrap();
@@ -1436,6 +1457,7 @@ mod tests {
 
     #[test]
     fn ignored_reschedule_update_rolls_back() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _scheduled) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
         let now = T0 + 9;
@@ -1469,6 +1491,7 @@ mod tests {
 
     #[test]
     fn schedule_postcondition_rejects_injected_unschedule() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         let before = store.manifest(T0).unwrap();
@@ -1494,6 +1517,7 @@ mod tests {
 
     #[test]
     fn schedule_postcondition_revalidates_structure_and_rolls_back() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _k1) = scheduled_fixture();
         let k0 = genesis_id(&KeyStore::open(&path).unwrap(), T0);
         let (candidate, spki, pkcs8) = {
@@ -1535,6 +1559,7 @@ mod tests {
 
     #[test]
     fn schedule_advances_high_water_only_on_success() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         assert!(store.schedule_activation(S + 1, T0 + 7).is_err());
@@ -1545,6 +1570,7 @@ mod tests {
 
     #[test]
     fn schedule_trigger_failure_rolls_back_all_writes() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         let before = store.manifest(T0).unwrap();
@@ -1582,6 +1608,7 @@ mod tests {
 
     #[test]
     fn retire_refuses_active_staged_and_unknown_keys() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         let k0 = genesis_id(&store, T0);
@@ -1595,6 +1622,7 @@ mod tests {
 
     #[test]
     fn retire_requires_successor_to_be_active_by_local_clock() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
         let k0 = genesis_id(&store, S - 1);
@@ -1608,6 +1636,7 @@ mod tests {
 
     #[test]
     fn retire_refuses_below_high_water_despite_active_successor() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
         let k0 = genesis_id(&store, S);
@@ -1617,6 +1646,7 @@ mod tests {
 
     #[test]
     fn retirement_preserves_public_row_and_other_keys_across_reopen() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
         let k0 = genesis_id(&store, S);
@@ -1657,6 +1687,7 @@ mod tests {
 
     #[test]
     fn retirement_frees_suffix_for_staging_and_next_activation() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         // Find a birthday collision before choosing genesis, avoiding a costly
         // targeted RSA-key search for one preselected suffix.
         let mut seen = std::collections::HashMap::<u8, SecretKey>::new();
@@ -1715,6 +1746,7 @@ mod tests {
 
     #[test]
     fn retirement_unblocks_already_staged_rotation() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
         let k0 = genesis_id(&store, S);
@@ -1752,6 +1784,7 @@ mod tests {
 
     #[test]
     fn ignored_retirement_update_rolls_back() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         assert_trigger_retire_rolls_back(
             "CREATE TRIGGER ignore_retire BEFORE UPDATE OF pkcs8 ON keys
              BEGIN SELECT RAISE(IGNORE); END;",
@@ -1760,6 +1793,7 @@ mod tests {
 
     #[test]
     fn retirement_trigger_nulling_another_key_rolls_back() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         assert_trigger_retire_rolls_back(
             "CREATE TRIGGER null_another AFTER UPDATE OF pkcs8 ON keys
              WHEN OLD.activation_hour=0
@@ -1769,6 +1803,7 @@ mod tests {
 
     #[test]
     fn retirement_postconditions_reject_other_valid_changes() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         for trigger in [
             "CREATE TRIGGER change_target AFTER UPDATE OF pkcs8 ON keys
                  BEGIN UPDATE keys SET activation_hour=1 WHERE key_id=NEW.key_id; END;",
@@ -1786,6 +1821,7 @@ mod tests {
 
     #[test]
     fn unexpected_schema_objects_refuse_open_and_live_mutations() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         for object in [
             "CREATE TRIGGER ignore_keys BEFORE INSERT ON keys
              BEGIN SELECT RAISE(IGNORE); END;",
@@ -1824,6 +1860,7 @@ mod tests {
 
     #[test]
     fn retirement_postcondition_requires_unchanged_active_key() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let before = Snapshot {
             high_water: S,
             rows: vec![row(1, 1, true, Some(0)), row(2, 2, true, Some(H))],
@@ -1846,6 +1883,7 @@ mod tests {
 
     #[test]
     fn busy_checkpoint_does_not_fail_committed_retirement() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
         let k0 = genesis_id(&store, S);

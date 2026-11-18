@@ -210,6 +210,7 @@ mod tests {
 
     #[tokio::test]
     async fn live_provisioning_consumes_exactly_once() {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let (dir, store) = setup();
         let listener = ControlListener::bind(dir.path()).unwrap();
         let metadata = fs::symlink_metadata(dir.path().join(SOCKET)).unwrap();
@@ -247,6 +248,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_socket_is_replaced() {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let (dir, store) = setup();
         let path = dir.path().join(SOCKET);
         let stale = StdUnixListener::bind(&path).unwrap();
@@ -261,6 +263,7 @@ mod tests {
 
     #[tokio::test]
     async fn regular_file_and_symlinks_are_refused_without_changes() {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
         let (dir, _store) = setup();
         let path = dir.path().join(SOCKET);
         fs::write(&path, b"do not remove").unwrap();

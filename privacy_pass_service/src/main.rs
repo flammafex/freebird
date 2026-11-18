@@ -7,6 +7,7 @@ use freebird_privacy_pass_service::{
     issuer::{self, Issuer},
     key_store::{KeyState, KeyStore},
     origin::{self, Origin, OriginKeyState},
+    pow::{self, BrowserOrigin, Pow},
 };
 use std::{
     fs::{self, DirBuilder, File, OpenOptions},
@@ -22,6 +23,7 @@ const USAGE: &str = "\
 Experimental Privacy Pass (one process per role; no failover or multi-instance).
 Usage:
   freebird-privacy-pass-service init-issuer <issuer-state-dir>
+  freebird-privacy-pass-service init-issuer-pow <issuer-state-dir>
   freebird-privacy-pass-service provision <issuer-state-dir>
   freebird-privacy-pass-service provision-live <issuer-state-dir>
   freebird-privacy-pass-service recover-issuer-admission <issuer-state-dir>
@@ -31,6 +33,7 @@ Usage:
   freebird-privacy-pass-service activate-issuer-key <issuer-state-dir> <key-id-hex> <activation-unix-seconds>
   freebird-privacy-pass-service retire-issuer-key <issuer-state-dir> <key-id-hex>
   freebird-privacy-pass-service serve-issuer <issuer-state-dir> <issuer-name> <https-request-url> <loopback-bind>
+  freebird-privacy-pass-service serve-issuer <issuer-state-dir> <issuer-name> <https-request-url> <loopback-bind> <browser-origin>
   freebird-privacy-pass-service init-origin <origin-state-dir> <genesis-spki-der-path> <key-id-hex>
   freebird-privacy-pass-service install-origin-key <origin-state-dir> <spki-der-path> <key-id-hex> <activation-unix-seconds>
   freebird-privacy-pass-service origin-key-status <origin-state-dir>
@@ -316,6 +319,12 @@ async fn run(args: &[String]) -> Result<()> {
             Issuer::initialize_key(dir.join("issuer-keys.sqlite"))
                 .map_err(|_| "signing key initialization failed; partial state retained")
         }
+        [command, dir] if command == "init-issuer-pow" => {
+            let dir = Path::new(dir);
+            reject_legacy(dir)?;
+            pow::initialize(dir)
+                .map_err(|_| "PoW initialization refused or failed; partial state retained")
+        }
         [command, dir] if command == "stage-issuer-key" => {
             let now = unix_now()?;
             keys(Path::new(dir))?.stage(now).map(|_| ()).map_err(|error| {
@@ -455,11 +464,27 @@ async fn run(args: &[String]) -> Result<()> {
                 .and_then(|()| stdout.flush())
                 .map_err(|_| control::LIVE_ERROR)
         }
-        [command, dir] if command == "recover-issuer-admission" => admission(Path::new(dir))?
-            .rotate_generation_for_restore()
-            .map_err(|_| "admission recovery refused; keep both services stopped"),
-        [command, dir, name, request_url, bind] if command == "serve-issuer" => {
+        [command, dir] if command == "recover-issuer-admission" => {
+            let dir = Path::new(dir);
+            let store = admission(dir)?;
+            pow::invalidate_for_restore(dir)
+                .map_err(|_| "PoW recovery refused; keep both services stopped")?;
+            store
+                .rotate_generation_for_restore()
+                .map_err(|_| "admission recovery refused; keep both services stopped")
+        }
+        [command, dir, name, request_url, bind] | [command, dir, name, request_url, bind, _]
+            if command == "serve-issuer" =>
+        {
             let bind = loopback_bind(bind)?;
+            let browser_origin = args
+                .get(5)
+                .map(|origin| {
+                    BrowserOrigin::parse(origin).map_err(|_| {
+                        "invalid browser origin (expected https://host[:port] without a path)"
+                    })
+                })
+                .transpose()?;
             let uri: axum::http::Uri = request_url
                 .parse()
                 .map_err(|_| "invalid HTTPS request URL")?;
@@ -484,10 +509,19 @@ async fn run(args: &[String]) -> Result<()> {
                     "cannot open issuer (invalid configuration, key, or state; or no active key)",
                 )
             })?;
+            let issuer = Arc::new(issuer);
+            let router = match browser_origin {
+                Some(origin) => {
+                    let pow = Pow::open(dir, store.clone())
+                        .map_err(|_| "cannot open PoW state (missing, invalid, or already owned); initialize explicitly")?;
+                    issuer::router_with_pow(issuer, Arc::new(pow), origin)
+                }
+                None => issuer::router(issuer),
+            };
             let control =
                 ControlListener::bind(dir).map_err(|_| "cannot bind issuer control socket")?;
             tokio::select! {
-                result = serve(issuer::router(Arc::new(issuer)), bind) => result,
+                result = serve(router, bind) => result,
                 result = control.serve(store) =>
                     result.map_err(|_| "issuer control server failed"),
             }

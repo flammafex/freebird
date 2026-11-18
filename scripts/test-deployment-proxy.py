@@ -75,14 +75,14 @@ def main():
                 replace(f"/etc/letsencrypt/live/{host}.example.org/fullchain.pem", str(cert), 1)
                 replace(f"/etc/letsencrypt/live/{host}.example.org/privkey.pem", str(key), 1)
                 replace(f"{host}\\.example\\.org", f"{host}\\.test", 2)
-                replace(f"{host}.example.org", f"{host}.test", 5 if host == "issuer" else 4)
+                replace(f"{host}.example.org", f"{host}.test", 6 if host == "issuer" else 4)
             replace("    listen [::]:80;\n", "", 2)
             replace("    listen [::]:443 ssl;\n", "", 2)
             replace("listen 80;", f"listen 127.0.0.1:{http};", 2)
             replace("listen 443 ssl;", f"listen 127.0.0.1:{tls} ssl;", 2)
             replace("(:80)?", f"(:{http})?", 2)
             replace("(:443)?", f"(:{tls})?", 2)
-            replace("127.0.0.1:8081", f"127.0.0.1:{issuer_port}", 2)
+            replace("127.0.0.1:8081", f"127.0.0.1:{issuer_port}", 3)
             replace("127.0.0.1:8082", f"127.0.0.1:{origin_port}", 1)
             replace("/var/log/nginx/freebird-access.log", str(tmp / "access.log"), 1)
             replace("/var/log/nginx/freebird-error.log", str(tmp / "error.log"), 1)
@@ -90,6 +90,8 @@ def main():
             save(tmp / "nginx.conf", f"daemon off;\nmaster_process off;\n"
                  f"pid {tmp}/nginx.pid;\nerror_log {tmp}/error.log warn;\n"
                  f"events {{}}\nhttp {{\nclient_body_temp_path {tmp}/body;\n{config}\n}}")
+            run([nginx, "-t", "-p", str(tmp) + "/", "-c", tmp / "nginx.conf"])
+            print("deployment proxy nginx configuration: passed")
             issuer, origin = tmp / "issuer", tmp / "origin"
             run([binary, "init-issuer", issuer])
             status = run([binary, "issuer-key-status", issuer]).decode()

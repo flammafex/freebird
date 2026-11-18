@@ -32,6 +32,10 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+// This integration test is a separate binary: coordinate its in-process stores
+// with its CLI spawners so transient pre-exec flock inheritance cannot race reopen.
+static SPAWN_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
 const BIN: &str = env!("CARGO_BIN_EXE_freebird-privacy-pass-service");
 const TIMEOUT: Duration = Duration::from_secs(60);
 const ISSUER: &str = "issuer.test";
@@ -203,6 +207,7 @@ fn redeem(origin: &Origin, token: &Token, now: u64) -> bool {
 
 #[tokio::test]
 async fn in_process_rotation_drill_with_injected_clock() {
+    let _spawn_guard = SPAWN_LOCK.read().await;
     let dir = tempfile::tempdir().unwrap();
     let keys = dir.path().join("issuer-keys.sqlite");
     let admission_path = dir.path().join("admission.sqlite");
@@ -682,6 +687,7 @@ fn example_binary() -> PathBuf {
 
 #[test]
 fn cli_retirement_runbook_with_past_activation_and_real_clock() {
+    let _spawn_guard = SPAWN_LOCK.blocking_write();
     let temp = tempfile::tempdir().unwrap();
     let issuer = temp.path().join("issuer");
     let origin = temp.path().join("origin");
@@ -837,6 +843,7 @@ fn cli_retirement_runbook_with_past_activation_and_real_clock() {
 
 #[test]
 fn cli_runbook_rotates_origin_first_and_status_columns_agree() {
+    let _spawn_guard = SPAWN_LOCK.blocking_write();
     let temp = tempfile::tempdir().unwrap();
     let issuer = temp.path().join("issuer");
     let origin = temp.path().join("origin");
@@ -1000,6 +1007,7 @@ fn cli_runbook_rotates_origin_first_and_status_columns_agree() {
 
 #[test]
 fn loopback_example_passes_against_cli_served_roles() {
+    let _spawn_guard = SPAWN_LOCK.blocking_write();
     let temp = tempfile::tempdir().unwrap();
     let issuer = temp.path().join("issuer");
     let origin = temp.path().join("origin");
@@ -1117,6 +1125,7 @@ fn v1_origin(dir: &Path) {
 
 #[test]
 fn v1_state_is_refused_by_the_cli_for_both_roles_without_touching_files() {
+    let _spawn_guard = SPAWN_LOCK.blocking_write();
     let temp = tempfile::tempdir().unwrap();
     let far_s = far_future().to_string();
     let issuer = temp.path().join("issuer");

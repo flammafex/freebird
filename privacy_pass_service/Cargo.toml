@@ -10,10 +10,12 @@ description = "Experimental Privacy Pass type-2 issuer and Origin"
 freebird-common = { path = "../common" }
 freebird-crypto = { path = "../crypto" }
 anyhow = "1"
+altcha = "=1.1.0"
 axum = "0.7"
 base64ct = { version = "1.8", features = ["alloc"] }
 fs2 = "0.4"
 hmac = "0.12"
+libc = "0.2"
 rand = "0.8"
 rusqlite = { version = "=0.41.1", features = ["bundled", "hooks"] }
 serde = { version = "1", features = ["derive"] }
