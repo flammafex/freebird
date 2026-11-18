@@ -221,7 +221,9 @@ def main():
                 chrome_args.insert(1, "--no-sandbox")
             start(chrome_args, "chrome")
             active_port = profile / "DevToolsActivePort"
-            for _ in range(200):
+            # A cold Chrome start on shared CI runners can exceed 10 s.
+            deadline = time.monotonic() + 60
+            while True:
                 require(all(child.poll() is None for child in children),
                         "Chrome/service exited during startup (diagnostics suppressed)")
                 if active_port.is_file():
@@ -229,9 +231,9 @@ def main():
                     if lines and lines[0].isdigit():
                         debugging_port = int(lines[0])
                         break
+                if time.monotonic() > deadline:
+                    raise RuntimeError("Chrome DevTools startup timed out")
                 time.sleep(.05)
-            else:
-                raise RuntimeError("Chrome DevTools startup timed out")
             # The driver emits only fixed statuses, never raw CDP/browser data.
             output = run(["node", web / "test/e2e-cdp.mjs", str(debugging_port), origin_url,
                           issuer_url], "browser CDP flow", timeout=180)
