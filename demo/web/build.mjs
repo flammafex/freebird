@@ -13,6 +13,9 @@ await build({
   entryPoints: ['src/main.mjs'],
   outfile: 'dist/assets/app.js',
   bundle: true,
+  // The shared client lives outside demo/web and has no node_modules of its own.
+  // Its peer dependency must resolve to this one pinned install (single copy).
+  nodePaths: [join(root, 'node_modules')],
   format: 'esm',
   platform: 'browser',
   target: ['chrome120', 'firefox128'],

@@ -34,4 +34,7 @@
 - Added admission for application servers: per-application secret keys
   (stored as hashes), a daily cap per application, management over the control
   socket, a server-only endpoint, and revocation of all keys on recovery.
+- Added an application integration kit: nginx `auth_request` protection of any
+  application route through the Origin, an optional nginx-set scope that binds
+  tokens to one resource, and unpublished browser and server packages.
 - Release publishing remains blocked pending independent cryptographic review.

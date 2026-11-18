@@ -1,9 +1,11 @@
 import 'altcha/external';
-import { publicVerif, TokenChallenge } from '@cloudflare/privacypass-ts';
 import {
-  checkChallenge, checkDirectory, decodePaddedBase64url, encodePaddedBase64url,
-  equalBytes, issuerBaseURL, parsePrivateTokenChallenge, statusMessage,
-} from './helpers.mjs';
+  admissionFromPow, authorizationHeader, FreebirdError, obtainToken,
+} from '../../../packages/freebird-client/src/index.mjs';
+import { issuerBaseURL, statusMessage } from './helpers.mjs';
+
+const networkError = 'Network request failed or timed out. Check HTTPS, Issuer CORS and CSP, then start again.';
+const stageLabels = { directory: 'Directory', admission: 'Admission', issuance: 'Issuance' };
 
 const startButton = document.querySelector('#start-button');
 const replayButton = document.querySelector('#replay-button');
@@ -46,8 +48,19 @@ function fail(error) {
   }
   status.textContent = 'Stopped.';
   // Never print an upstream error/body: it might contain a credential.
-  errorBox.textContent = error instanceof DemoError
-    ? error.message : 'Invalid server data or a cryptographic operation failed. Start again.';
+  let message = 'Invalid server data or a cryptographic operation failed. Start again.';
+  if (error instanceof DemoError) {
+    message = error.message;
+  } else if (error instanceof FreebirdError) {
+    if (error.status !== undefined && stageLabels[error.stage]) {
+      message = statusMessage(stageLabels[error.stage], error.status);
+    } else if (error.reason === 'network' || error.reason === 'timeout') {
+      message = networkError;
+    } else if (error.stage === 'admission') {
+      message = 'Invalid admission response. Start again.';
+    }
+  }
+  errorBox.textContent = message;
   errorBox.hidden = false;
 }
 
@@ -62,7 +75,7 @@ async function request(url, options = {}) {
       signal: AbortSignal.timeout(30_000),
     });
   } catch {
-    throw new DemoError('Network request failed or timed out. Check HTTPS, Issuer CORS and CSP, then start again.');
+    throw new DemoError(networkError);
   }
 }
 
@@ -78,7 +91,7 @@ for (const digest of ['SHA-256', 'SHA-384', 'SHA-512']) {
     () => new Worker(new URL('./workers/sha.js', import.meta.url)));
 }
 
-function mountProof(directory, challenge, spki) {
+function mountProof(resolve, reject) {
   const challengeURL = new URL('/freebird/pow/challenge', issuer);
   let proofUsed = false;
   let proofError = 'Proof-of-work failed or expired. Start again.';
@@ -121,7 +134,7 @@ function mountProof(directory, challenge, spki) {
       document.querySelector('#step-solving').dataset.state = 'active';
     } else if (['error', 'expired'].includes(event.detail.state)) {
       proofUsed = true;
-      fail(new DemoError(proofError));
+      reject(new DemoError(proofError));
     }
   });
   widget.addEventListener('verified', event => {
@@ -129,68 +142,19 @@ function mountProof(directory, challenge, spki) {
     proofUsed = true;
     const payload = event.detail.payload;
     removeWidget();
-    finishFlow(payload, directory, challenge, spki).catch(fail);
+    resolve(payload);
   });
   proofContainer.append(widget);
 }
 
-async function finishFlow(payload, directory, challenge, spki) {
+async function solveForAdmission() {
+  status.textContent = 'Solving proof-of-work in your browser…';
+  const payload = await new Promise(mountProof);
   if (typeof payload !== 'string' || !payload) throw new DemoError('Missing proof-of-work result. Start again.');
   progress('solving', 'Proof solved. Requesting admission…', 'admitted');
-  const admissionResponse = await request(new URL('/freebird/pow/admission', issuer), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify({ payload }),
-  });
-  payload = undefined;
-  expectStatus(admissionResponse, 200, 'Admission');
-  let { admission } = await admissionResponse.json();
-  if (typeof admission !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(admission)
-      || decodePaddedBase64url(`${admission}=`).length !== 32) {
-    throw new DemoError('Invalid admission response. Start again.');
-  }
+  const admission = await admissionFromPow(issuer.origin, payload);
   progress('admitted', 'Admitted. Obtaining a Privacy Pass token…', 'token');
-
-  // Re-check the issuer and the advertised directory key before any issuance.
-  checkChallenge(challenge, spki, directory);
-  const client = new publicVerif.Client(publicVerif.BlindRSAMode.PSS);
-  let issued;
-  try {
-    const tokenRequest = await client.createTokenRequest(challenge, spki);
-    const body = tokenRequest.serialize();
-    if (body.length !== 259) throw new DemoError('Invalid type-2 request length.');
-    issued = await request(directory.requestURL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/private-token-request',
-        Accept: 'application/private-token-response',
-        'Freebird-Admission': admission,
-      },
-      body,
-    });
-  } finally {
-    admission = undefined; // One use; never retry issuance with this admission.
-  }
-  expectStatus(issued, 200, 'Issuance');
-  const responseBytes = new Uint8Array(await issued.arrayBuffer());
-  if (responseBytes.length !== 256) throw new DemoError('Invalid type-2 token response length.');
-  const token = await client.finalize(publicVerif.TokenResponse.deserialize(Uint8Array.from(responseBytes)));
-  const serialized = token.serialize();
-  if (serialized.length !== 354) throw new DemoError('Invalid type-2 token length.');
-  const encoded = encodePaddedBase64url(serialized);
-  progress('token', 'Token obtained. Requesting the protected page…', 'access');
-  const redemption = await request(protectedURL, {
-    headers: { Authorization: `PrivateToken token="${encoded}"` },
-  });
-  expectStatus(redemption, 200, 'Access');
-  // Treat the protected resource as data, never inject its HTML into this page.
-  await redemption.body?.cancel();
-  replayToken = encoded;
-  progress('access', 'Access granted (200).');
-  busy = false;
-  replayButton.disabled = false;
-  startButton.disabled = false;
-  startButton.textContent = 'Start again';
+  return admission;
 }
 
 async function start() {
@@ -205,24 +169,28 @@ async function start() {
   setStep('solving', 'active');
   status.textContent = 'Loading the Issuer directory and Origin challenge…';
 
-  const directoryURL = new URL('/.well-known/private-token-issuer-directory', issuer);
-  const directoryResponse = await request(directoryURL, {
-    headers: { Accept: 'application/private-token-issuer-directory, application/json' },
-  });
-  expectStatus(directoryResponse, 200, 'Directory');
-  const directory = checkDirectory(await directoryResponse.json(), directoryURL);
   const originResponse = await request(protectedURL);
   expectStatus(originResponse, 401, 'Origin challenge');
-  const { bytes, spki } = parsePrivateTokenChallenge(originResponse.headers.get('WWW-Authenticate'));
+  const challengeHeader = originResponse.headers.get('WWW-Authenticate');
   await originResponse.body?.cancel();
-  // Upstream ignores byteOffset. Always give it a standalone backing buffer.
-  const challenge = TokenChallenge.deserialize(Uint8Array.from(bytes));
-  if (!equalBytes(challenge.serialize(), bytes)) {
-    throw new DemoError('The Origin sent a malformed or non-canonical token challenge.');
-  }
-  checkChallenge(challenge, spki, directory);
-  status.textContent = 'Solving proof-of-work in your browser…';
-  mountProof(directory, challenge, spki);
+  // The client validates the challenge and directory before asking for a proof.
+  const token = await obtainToken(challengeHeader, {
+    issuer: issuer.origin,
+    admission: solveForAdmission,
+  });
+  progress('token', 'Token obtained. Requesting the protected page…', 'access');
+  const redemption = await request(protectedURL, {
+    headers: { Authorization: authorizationHeader(token) },
+  });
+  expectStatus(redemption, 200, 'Access');
+  // Treat the protected resource as data, never inject its HTML into this page.
+  await redemption.body?.cancel();
+  replayToken = token;
+  progress('access', 'Access granted (200).');
+  busy = false;
+  replayButton.disabled = false;
+  startButton.disabled = false;
+  startButton.textContent = 'Start again';
 }
 
 async function tryReplay() {
@@ -235,7 +203,7 @@ async function tryReplay() {
   let response;
   try {
     response = await request(protectedURL, {
-      headers: { Authorization: `PrivateToken token="${replayToken}"` },
+      headers: { Authorization: authorizationHeader(replayToken) },
     });
   } finally {
     replayToken = undefined;

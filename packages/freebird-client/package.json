@@ -1,0 +1,23 @@
+{
+  "name": "freebird-client",
+  "version": "0.1.0",
+  "description": "Browser client for Freebird Privacy Pass admission and token redemption. Unpublished: use from a git checkout.",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  },
+  "peerDependencies": {
+    "@cloudflare/privacypass-ts": "0.9.0"
+  }
+}

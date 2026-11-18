@@ -52,6 +52,25 @@ Freebird keeps no user accounts or social graph and never learns who the end
 users are. The application's server then verifies the resulting tokens with
 the Issuer's public key, as any Origin does.
 
+### Application integration kit (available)
+
+See [integrating an application](integration.md).
+
+So an application can adopt Freebird without implementing Privacy Pass itself:
+
+- **Token checking through nginx.** Freebird's Origin checks tokens for any
+  protected application route via nginx `auth_request`. The application sees
+  only requests that carried a valid, unspent token; it writes no
+  cryptography or replay storage. An optional, operator-configured scope (for
+  example a ballot or pool identifier) binds tokens to one resource, so a token
+  obtained for one cannot be spent on another.
+- **A browser client** that performs the challenge, issuance with an admission
+  code, and redemption for a protected URL, packaged from the demo's code.
+- **A server helper** for requesting admission codes from the Issuer.
+
+The packages live in this repository and are not published while release
+publishing is held.
+
 ## Not planned unless a real application needs them
 
 - **Issuer-to-issuer admission**: an Issuer acting as an ordinary Origin for

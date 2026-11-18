@@ -11,6 +11,7 @@ nav:
   - Backup and recovery: recovery.md
   - Browser demo and PoW: demo.md
   - App-server admission: app-admission.md
+  - Integrating an application: integration.md
   - Roadmap: roadmap.md
   - Protocol contract: protocol/privacy-pass-phase1.md
   - Interop test plan: protocol/interop-test-plan.md

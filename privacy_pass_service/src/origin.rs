@@ -973,20 +973,58 @@ impl Origin {
             .max_by_key(|k| k.hour)
     }
 
+    #[cfg(test)]
     fn challenge(&self, now: u64) -> Result<(TokenChallenge, u64)> {
+        self.challenge_scoped(now, None)
+    }
+
+    fn challenge_scoped(&self, now: u64, scope: Option<&[u8]>) -> Result<(TokenChallenge, u64)> {
         let hour = now / HOUR;
         let deadline = hour
             .checked_add(1)
             .and_then(|h| h.checked_mul(HOUR))
             .and_then(|s| s.checked_add(GRACE))
             .context("clock overflow")?;
+        Ok((self.challenge_for(hour, scope)?, deadline))
+    }
+
+    /// The single definition of a challenge for an hour and optional scope. Issuance
+    /// and redemption both call it, so they cannot disagree.
+    ///
+    /// Unscoped challenges keep the v1 context byte-for-byte. Scoped challenges use
+    /// a separate v2 domain, so no v1 input can equal a v2 input. The explicit length
+    /// prefix keeps the encoding unambiguous if fields are ever appended.
+    fn challenge_for(&self, hour: u64, scope: Option<&[u8]>) -> Result<TokenChallenge> {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.secret)?;
-        mac.update(b"freebird-pp-context-v1");
-        mac.update(&hour.to_be_bytes());
-        Ok((
-            TokenChallenge::new(&self.issuer, &mac.finalize().into_bytes(), &self.name)?,
-            deadline,
-        ))
+        match scope {
+            None => {
+                mac.update(b"freebird-pp-context-v1");
+                mac.update(&hour.to_be_bytes());
+            }
+            Some(scope) => {
+                ensure!(valid_scope(scope), "invalid scope");
+                mac.update(b"freebird-pp-context-v2");
+                mac.update(&hour.to_be_bytes());
+                mac.update(&[u8::try_from(scope.len())?]);
+                mac.update(scope);
+            }
+        }
+        Ok(TokenChallenge::new(
+            &self.issuer,
+            &mac.finalize().into_bytes(),
+            &self.name,
+        )?)
+    }
+
+    /// A stored challenge row's deadline pins its issuance hour, so a token must carry
+    /// exactly the digest this Origin would have issued for that hour and scope. This
+    /// is what stops a token for scope A matching a scope-B or unscoped request.
+    fn issued_for(&self, digest: &[u8; 32], deadline: i64, scope: Option<&[u8]>) -> bool {
+        u64::try_from(deadline)
+            .ok()
+            .and_then(issued_hour)
+            .and_then(|hour| self.challenge_for(hour, scope).ok())
+            .is_some_and(|challenge| challenge.digest() == *digest)
     }
 
     /// Admitted, committed requests, including invalid credentials, advance the
@@ -1002,8 +1040,18 @@ impl Origin {
         self.request_with_clock(token, || Ok(now))
     }
 
-    fn request_now(&self, token: Option<&Token>) -> Result<Option<String>> {
-        self.request_with_clock(token, || {
+    /// Like `request_at`, bound to an nginx-set scope (see `scope_header`).
+    pub fn request_scoped_at(
+        &self,
+        token: Option<&Token>,
+        scope: Option<&[u8]>,
+        now: u64,
+    ) -> Result<Option<String>> {
+        self.request_scoped_with_clock(token, scope, || Ok(now))
+    }
+
+    fn request_now(&self, token: Option<&Token>, scope: Option<&[u8]>) -> Result<Option<String>> {
+        self.request_scoped_with_clock(token, scope, || {
             Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs())
         })
     }
@@ -1015,7 +1063,16 @@ impl Origin {
         token: Option<&Token>,
         clock: impl FnOnce() -> Result<u64>,
     ) -> Result<Option<String>> {
-        self.request_with_prune_hook(token, clock, |_| Ok(()))
+        self.request_scoped_with_clock(token, None, clock)
+    }
+
+    fn request_scoped_with_clock(
+        &self,
+        token: Option<&Token>,
+        scope: Option<&[u8]>,
+        clock: impl FnOnce() -> Result<u64>,
+    ) -> Result<Option<String>> {
+        self.request_with_prune_hook(token, scope, clock, |_| Ok(()))
     }
 
     // A private transaction seam for failure injection; production always passes
@@ -1023,9 +1080,11 @@ impl Origin {
     fn request_with_prune_hook(
         &self,
         token: Option<&Token>,
+        scope: Option<&[u8]>,
         clock: impl FnOnce() -> Result<u64>,
         after_prune: impl FnOnce(&Connection) -> Result<()>,
     ) -> Result<Option<String>> {
+        ensure!(scope.is_none_or(valid_scope), "invalid scope");
         let mut db = self
             .db
             .lock()
@@ -1062,6 +1121,7 @@ impl Origin {
                     .optional()?;
                 if let Some(deadline) = deadline {
                     if now_sql < deadline
+                        && self.issued_for(&token.challenge_digest, deadline, scope)
                         && live
                             .key
                             .verify(&token.token_input(), &token.authenticator)
@@ -1086,7 +1146,7 @@ impl Origin {
             let advertising = self
                 .advertising(now / HOUR)
                 .context("no advertising origin key")?;
-            let (challenge, deadline) = self.challenge(now)?;
+            let (challenge, deadline) = self.challenge_scoped(now, scope)?;
             tx.execute(
                 "INSERT OR IGNORE INTO challenges VALUES(?1,?2,?3)",
                 params![
@@ -1116,15 +1176,71 @@ pub fn router(origin: Arc<Origin>) -> Router {
         .with_state(origin)
 }
 
+/// Optional request header that binds a challenge and token to an application scope.
+///
+/// SECURITY: the Origin trusts this header only because it listens on loopback
+/// (`loopback_bind` in main.rs) behind nginx, which sets it on every protected route
+/// (`proxy_set_header Freebird-Scope ...` in deploy/nginx/freebird.conf) and never
+/// forwards the client's value. Never expose this listener directly: a client that
+/// can reach it chooses its own scope.
+const SCOPE_HEADER: &str = "freebird-scope";
+const MAX_SCOPE: usize = 128;
+
+fn valid_scope(scope: &[u8]) -> bool {
+    (1..=MAX_SCOPE).contains(&scope.len()) && scope.iter().all(|b| matches!(b, 0x21..=0x7e))
+}
+
+/// Inverts `deadline = (hour + 1) * HOUR + GRACE`. Returns `None` for any deadline
+/// that no `challenge_scoped` call could have produced.
+fn issued_hour(deadline: u64) -> Option<u64> {
+    let base = deadline.checked_sub(GRACE)?;
+    if base < HOUR || base % HOUR != 0 {
+        return None;
+    }
+    Some(base / HOUR - 1)
+}
+
+/// Absent or empty means unscoped, so an nginx line can be commented out or emptied.
+/// More than one header, or a value outside 1..=128 visible ASCII bytes, is a 400
+/// without a challenge.
+fn scope_header(headers: &HeaderMap) -> std::result::Result<Option<Vec<u8>>, StatusCode> {
+    let mut values = headers.get_all(SCOPE_HEADER).iter();
+    let Some(first) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    let bytes = first.as_bytes();
+    if bytes.is_empty() {
+        return Ok(None);
+    }
+    if !valid_scope(bytes) {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    Ok(Some(bytes.to_vec()))
+}
+
 async fn protected(State(origin): State<Arc<Origin>>, headers: HeaderMap) -> Response {
-    protected_with_request(origin, headers, |origin, token| origin.request_now(token)).await
+    protected_with_request(origin, headers, |origin, token, scope| {
+        origin.request_now(token, scope)
+    })
+    .await
 }
 
 async fn protected_with_request(
     origin: Arc<Origin>,
     headers: HeaderMap,
-    request: impl FnOnce(&Origin, Option<&Token>) -> Result<Option<String>> + Send + 'static,
+    request: impl FnOnce(&Origin, Option<&Token>, Option<&[u8]>) -> Result<Option<String>>
+        + Send
+        + 'static,
 ) -> Response {
+    // Validated before a worker permit and before storage: malformed scope is a
+    // client error, never a challenge and never a capacity cost.
+    let scope = match scope_header(&headers) {
+        Ok(scope) => scope,
+        Err(status) => return status.into_response(),
+    };
     let permit = match origin.workers.clone().try_acquire_owned() {
         Ok(permit) => permit,
         Err(tokio::sync::TryAcquireError::NoPermits) => {
@@ -1147,7 +1263,7 @@ async fn protected_with_request(
     // response may burn a token; never refund a possibly committed redemption.
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        request(&origin, token.as_ref())
+        request(&origin, token.as_ref(), scope.as_deref())
     })
     .await;
     match result {
@@ -1288,8 +1404,8 @@ mod tests {
         headers: HeaderMap,
         clock: impl FnOnce() -> Result<u64> + Send + 'static,
     ) -> Response {
-        protected_with_request(origin, headers, move |origin, token| {
-            origin.request_with_clock(token, clock)
+        protected_with_request(origin, headers, move |origin, token, scope| {
+            origin.request_scoped_with_clock(token, scope, clock)
         })
         .await
     }
@@ -2637,9 +2753,10 @@ mod tests {
         let response = protected_with_request(
             origin.clone(),
             authorization(&redeem)?,
-            move |origin, token| {
+            move |origin, token, scope| {
                 origin.request_with_prune_hook(
                     token,
+                    scope,
                     || Ok(now),
                     |tx| {
                         assert_eq!(expired_counts(tx, old_deadline)?, (0, 0));
@@ -2842,7 +2959,7 @@ mod tests {
         let (signer, key) = signer()?;
         let (db, secret) = fresh(dir.path(), &key, None)?;
         let origin = Arc::new(Origin::open(&db, &secret, "issuer", "origin")?);
-        origin.request_now(None)?;
+        origin.request_now(None, None)?;
         let now = read_metadata(&read_only(&db)?)?.1;
         let redeem = token(&signer, &key, origin.challenge(now)?.0.digest(), 1)?;
         let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
@@ -2989,6 +3106,140 @@ mod tests {
         let origin = Origin::open(&db, &secret, "issuer", "origin")?;
         assert!(Origin::status(&db, S).is_err());
         drop(origin);
+        Ok(())
+    }
+
+    #[test]
+    fn scoped_token_redeems_once_only_at_its_own_scope() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
+        let dir = tempfile::tempdir()?;
+        let (signer, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &key, None)?;
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        let now = HOUR + 1;
+        let ballot_one: &[u8] = b"ballot:1";
+        origin.request_scoped_at(None, Some(ballot_one), now)?;
+        let (scoped, _) = origin.challenge_scoped(now, Some(ballot_one))?;
+        let scoped_token = token(&signer, &key, scoped.digest(), 1)?;
+        origin.request_at(None, now)?;
+        let (unscoped, _) = origin.challenge(now)?;
+        let unscoped_token = token(&signer, &key, unscoped.digest(), 2)?;
+
+        // Another scope and no scope both reject, and a rejection never spends.
+        assert!(origin
+            .request_scoped_at(Some(&scoped_token), Some(b"ballot:2"), now)?
+            .is_some());
+        assert!(origin.request_at(Some(&scoped_token), now)?.is_some());
+        // The matching scope accepts exactly once.
+        assert!(origin
+            .request_scoped_at(Some(&scoped_token), Some(ballot_one), now)?
+            .is_none());
+        assert!(origin
+            .request_scoped_at(Some(&scoped_token), Some(ballot_one), now)?
+            .is_some());
+
+        // An unscoped token never redeems at a scope, and a scoped request never
+        // accepts it; the unscoped route still accepts it exactly once.
+        assert!(origin
+            .request_scoped_at(Some(&unscoped_token), Some(ballot_one), now)?
+            .is_some());
+        assert!(origin.request_at(Some(&unscoped_token), now)?.is_none());
+        assert!(origin.request_at(Some(&unscoped_token), now)?.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn unscoped_context_is_v1_and_scoped_context_is_separate_v2() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
+        let dir = tempfile::tempdir()?;
+        let (_, key) = signer()?;
+        let (db, secret) = fresh(dir.path(), &key, None)?;
+        let origin = Origin::open(&db, &secret, "issuer", "origin")?;
+        let raw: [u8; 32] = std::fs::read(&secret)?.try_into().expect("32-byte secret");
+        let hour = (HOUR + 1) / HOUR;
+        let mut v1 = Hmac::<Sha256>::new_from_slice(&raw)?;
+        v1.update(b"freebird-pp-context-v1");
+        v1.update(&hour.to_be_bytes());
+        let expected_v1 =
+            TokenChallenge::new("issuer", &v1.finalize().into_bytes(), "origin")?.digest();
+        assert_eq!(origin.challenge(HOUR + 1)?.0.digest(), expected_v1);
+
+        let scope = b"ballot:1";
+        let mut v2 = Hmac::<Sha256>::new_from_slice(&raw)?;
+        v2.update(b"freebird-pp-context-v2");
+        v2.update(&hour.to_be_bytes());
+        v2.update(&[scope.len() as u8]);
+        v2.update(scope);
+        let expected_v2 =
+            TokenChallenge::new("issuer", &v2.finalize().into_bytes(), "origin")?.digest();
+        let scoped = origin.challenge_scoped(HOUR + 1, Some(scope))?.0.digest();
+        assert_eq!(scoped, expected_v2);
+        assert_ne!(scoped, expected_v1);
+        assert_ne!(
+            scoped,
+            origin
+                .challenge_scoped(HOUR + 1, Some(b"ballot:2"))?
+                .0
+                .digest()
+        );
+        assert!(origin.challenge_scoped(HOUR + 1, Some(b"")).is_err());
+        assert!(origin
+            .challenge_scoped(HOUR + 1, Some(&[b'x'; 129][..]))
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn stored_deadline_pins_the_issuance_hour() {
+        for hour in [0u64, 1, 1_000_000] {
+            let deadline = (hour + 1) * HOUR + GRACE;
+            assert_eq!(issued_hour(deadline), Some(hour));
+        }
+        for planted in [0u64, 300, HOUR + GRACE - 1, HOUR + GRACE + 1, 2 * HOUR + 7] {
+            assert_eq!(issued_hour(planted), None, "{planted}");
+        }
+        assert!(valid_scope(b"!"));
+        assert!(valid_scope(&[b'~'; MAX_SCOPE]));
+        for invalid in [&b""[..], b"a b", b"a\tb", b"\x7f", b"\x80", &[b'x'; 129]] {
+            assert!(!valid_scope(invalid));
+        }
+    }
+
+    #[tokio::test]
+    async fn scope_header_rules_are_enforced_before_storage() -> Result<()> {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
+        let dir = tempfile::tempdir()?;
+        let db = dir.path().join("origin.db");
+        let secret = dir.path().join("context");
+        let signer = SecretKey::generate()?;
+        let key = signer.public_key()?;
+        Origin::initialize(&db, &secret, key.to_spki(), key.key_id())?;
+        let origin = Arc::new(Origin::open(&db, &secret, "issuer", "origin")?);
+        let before = store_snapshot(&db)?;
+        let scoped_header = |value: &[u8]| -> Result<HeaderMap> {
+            let mut headers = HeaderMap::new();
+            headers.insert(SCOPE_HEADER, HeaderValue::from_bytes(value)?);
+            Ok(headers)
+        };
+
+        for value in [&b"a b"[..], b"a\tb", b"\x80", &[b'x'; 129]] {
+            let response = protected(State(origin.clone()), scoped_header(value)?).await;
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{value:?}");
+            assert!(!response.headers().contains_key(header::WWW_AUTHENTICATE));
+        }
+        let mut twice = scoped_header(b"ballot:1")?;
+        twice.append(SCOPE_HEADER, HeaderValue::from_static("ballot:1"));
+        let response = protected(State(origin.clone()), twice).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(!response.headers().contains_key(header::WWW_AUTHENTICATE));
+        assert_eq!(store_snapshot(&db)?, before);
+
+        // Maximum length is accepted; empty is unscoped, so both reach a challenge.
+        for value in [&[b'x'; 128][..], b""] {
+            let response = protected(State(origin.clone()), scoped_header(value)?).await;
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+            assert!(response.headers().contains_key(header::WWW_AUTHENTICATE));
+        }
         Ok(())
     }
 }

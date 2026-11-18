@@ -156,6 +156,13 @@ which code; blinding still keeps that code unlinkable to the redeemed token.
 Recovery revokes every application key. This is a product feature, not a
 release gate.
 
+The Origin accepts an optional `Freebird-Scope` header, mixed with the hour
+into its HMAC-derived redemption context under a separate domain label, so a
+token obtained for one scope is refused at another. The Origin trusts this
+header only because it listens on loopback behind nginx, which sets it and
+never forwards a client's value; see the
+[integration guide](docs/integration.md).
+
 ## Reporting vulnerabilities
 
 Use GitHub private vulnerability reporting for this repository if available.

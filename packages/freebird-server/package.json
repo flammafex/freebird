@@ -1,0 +1,22 @@
+{
+  "name": "freebird-server",
+  "version": "0.1.0",
+  "description": "Application-server client for Freebird app admission (one admission code per request). Unpublished: use from a git checkout.",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "main": "./src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test"
+  }
+}

@@ -83,7 +83,8 @@ def main():
             replace("(:80)?", f"(:{http})?", 2)
             replace("(:443)?", f"(:{tls})?", 2)
             replace("127.0.0.1:8081", f"127.0.0.1:{issuer_port}", 4)
-            replace("127.0.0.1:8082", f"127.0.0.1:{origin_port}", 1)
+            # Origin upstream: one live location plus two in the commented app-protection example.
+            replace("127.0.0.1:8082", f"127.0.0.1:{origin_port}", 3)
             replace("/var/log/nginx/freebird-access.log", str(tmp / "access.log"), 1)
             replace("/var/log/nginx/freebird-error.log", str(tmp / "error.log"), 1)
             replace("/var/lib/letsencrypt", str(tmp / "acme"), 2)

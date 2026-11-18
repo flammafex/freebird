@@ -40,7 +40,9 @@ with replay and restart rejection. They are not a general-purpose client SDK.
 Operators can provision invitations while the Issuer runs (`provision-live`),
 and [application servers](docs/app-admission.md) can request one-use codes for
 their own users under a daily cap, so an application's own policy decides who
-gets access.
+gets access. An [integration guide](docs/integration.md) covers protecting any
+application route through nginx, optionally bound to one resource, plus
+unpublished browser and server packages.
 An optional [browser demo](docs/demo.md) lets anyone earn one admission by
 solving an ALTCHA proof-of-work puzzle, then obtains and redeems a token in
 JavaScript; proof-of-work raises cost, it does not prove a unique person.

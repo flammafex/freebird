@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  checkChallenge, checkDirectory, decodePaddedBase64url, encodePaddedBase64url,
-  issuerBaseURL, parsePrivateTokenChallenge, statusMessage,
-} from '../src/helpers.mjs';
+  decodePaddedBase64url, encodePaddedBase64url,
+} from '../../../packages/freebird-client/src/encoding.mjs';
+import {
+  checkChallenge, checkDirectory, parsePrivateTokenChallenge,
+} from '../../../packages/freebird-client/src/protocol.mjs';
+import { issuerBaseURL, statusMessage } from '../src/helpers.mjs';
 
 const key = 'AAECAw==';
 const directoryURL = 'https://issuer.example:8443/.well-known/private-token-issuer-directory';

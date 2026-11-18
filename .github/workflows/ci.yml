@@ -42,9 +42,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get update && sudo apt-get install -y nginx openssl curl
-      - run: cargo build --locked -p freebird-privacy-pass-service --bin freebird-privacy-pass-service --example loopback_client
+      - run: cargo build --locked -p freebird-privacy-pass-service --bin freebird-privacy-pass-service --example loopback_client --example sidecar_client
       - name: Exercise TLS deployment proxy
         run: python3 scripts/test-deployment-proxy.py
+        env:
+          FREEBIRD_NGINX: /usr/sbin/nginx
+      - name: Protect an application route through nginx auth_request
+        run: PYTHONDONTWRITEBYTECODE=1 python3 scripts/test-app-sidecar.py
         env:
           FREEBIRD_NGINX: /usr/sbin/nginx
 
@@ -68,6 +72,12 @@ jobs:
       - name: Demo helper tests
         run: node --test test/helpers.test.mjs
         working-directory: demo/web
+      - name: Freebird client package tests
+        run: node --test
+        working-directory: packages/freebird-client
+      - name: Freebird server package tests
+        run: node --test
+        working-directory: packages/freebird-server
 
   build:
     runs-on: ubuntu-latest

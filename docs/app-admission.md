@@ -98,6 +98,10 @@ the [browser demo](demo.md) is enabled, and the application's key must never be
 sent to a browser. The nginx template limits it to POST, 1 KiB bodies and 60
 requests per minute per client address with a burst of 20.
 
+For the complete application flow, including protecting routes through nginx
+and the browser and server packages, see
+[integrating an application](integration.md).
+
 ## Recovery
 
 `recover-issuer-admission` revokes **every** application and clears their
