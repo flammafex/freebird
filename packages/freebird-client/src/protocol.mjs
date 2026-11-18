@@ -1,6 +1,6 @@
-// Protocol validation. This module has no peer dependency, so it runs under
-// plain `node --test`. Every rejection is a FreebirdError with a stage, except
-// configuration mistakes, which are TypeErrors.
+// Invalid protocol data produces a `FreebirdError` with a stage. An invalid Issuer setting
+// produces a `TypeError`.
+// The module does not import the Privacy Pass library, so the checks can run with `node --test`.
 import { protocolError } from './errors.mjs';
 import { decodePaddedBase64url, equalBytes } from './encoding.mjs';
 
@@ -8,8 +8,7 @@ export const DIRECTORY_PATH = '/.well-known/private-token-issuer-directory';
 
 const ADMISSION_CODE = /^[A-Za-z0-9_-]{43}$/;
 
-// HTTPS everywhere. Plain HTTP is only allowed for 127.0.0.1 and only when the
-// caller opts in (tests and local development).
+// Require HTTPS unless the caller enables plain HTTP on `127.0.0.1` for tests or local development.
 export function transportAllowed(url, allowInsecureLoopback = false) {
   if (url.protocol === 'https:') return true;
   return allowInsecureLoopback === true && url.protocol === 'http:' && url.hostname === '127.0.0.1';
@@ -45,8 +44,9 @@ function decodeOr(stage, value, message) {
   }
 }
 
-// The Origin contract has one PrivateToken challenge, not a list of schemes.
-// Parameter names/order are flexible; ambiguity, duplicates and folding are not.
+// Parse one `PrivateToken` challenge so that the token request uses a single set of parameters.
+// Parameter names are case-insensitive and may appear in any order.
+// Reject duplicates, other schemes, and line breaks.
 export function parsePrivateTokenChallenge(header) {
   if (typeof header !== 'string' || /[\r\n]/.test(header)) {
     throw protocolError('challenge', 'Missing or invalid PrivateToken challenge.');
@@ -84,8 +84,8 @@ export function checkDirectory(json, directoryURL, { allowInsecureLoopback = fal
   if (!json || typeof json !== 'object' || typeof json['issuer-request-uri'] !== 'string') {
     throw protocolError('directory', 'Invalid Issuer directory.');
   }
-  // Never send an admission to a host selected by a directory: the request URI
-  // must be an absolute URL on the same origin the directory was fetched from.
+  // Require an absolute issuance URL on the directory's origin so that the admission code
+  // is sent only to the configured Issuer.
   let requestURL;
   try {
     requestURL = new URL(json['issuer-request-uri']);
@@ -118,7 +118,7 @@ export function checkChallenge(challenge, spki, directory) {
   }
 }
 
-// Canonical 43-character unpadded base64url for a 32-byte admission code.
+// Check that the 43-character unpadded base64url value is the canonical encoding of a 32-byte admission code.
 export function isAdmissionCode(value) {
   if (typeof value !== 'string' || !ADMISSION_CODE.test(value)) return false;
   try {
@@ -128,7 +128,7 @@ export function isAdmissionCode(value) {
   }
 }
 
-// Exactly one `Authorization: PrivateToken token="…"` for a 354-byte type-2 token.
+// Format one `PrivateToken` authorization value after checking that the type-2 token decodes to 354 bytes.
 export function authorizationHeader(token) {
   let bytes;
   try {
@@ -140,7 +140,7 @@ export function authorizationHeader(token) {
   return `PrivateToken token="${token}"`;
 }
 
-// Delta seconds or an IMF-fixdate. Anything else is ignored rather than guessed.
+// Parse `Retry-After` as seconds or an IMF-fixdate and return `undefined` for other formats.
 export function parseRetryAfter(value, now = Date.now()) {
   if (typeof value !== 'string') return undefined;
   const text = value.trim();

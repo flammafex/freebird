@@ -1,45 +1,50 @@
-# Single-host deployment (experimental)
+# One Ubuntu host runs both experimental services.
 
-**Not approved for production authorization.** This is the one supported
-*network topology* for testing Freebird: one Ubuntu 24.04 host, nginx terminating
-HTTPS, and one loopback-only Issuer and one loopback-only Origin under systemd.
-The [remaining release gates](https://github.com/flammafex/freebird/blob/main/SECURITY.md)
-still apply. No replicas, failover, containers, CDN, or load balancer are
-supported. The host must be single-tenant: other local accounts can connect
-directly to the loopback HTTP ports.
+Run Freebird for testing only on one Ubuntu 24.04 host. This is the only
+supported network topology. nginx terminates HTTPS, and systemd runs one Issuer
+and one Origin that listen only on loopback. Use a single-tenant host because
+other local accounts can connect directly to the loopback HTTP ports.
+
+Do not use this deployment for production authorization. It does not support
+replicas, failover, containers, a CDN, or a load balancer. The
+[release gates](https://github.com/flammafex/freebird/blob/main/SECURITY.md)
+apply, including independent cryptographic review.
 
 ```text
 client ── HTTPS ── nginx ── 127.0.0.1:8081 ── Issuer (private key, invitations)
                     └───── 127.0.0.1:8082 ── Origin (public key, spent tokens)
 ```
 
-The services do not read `Host`, forwarding headers, or client addresses. They
-take their public identities from the operator's configuration. nginx must
-restrict hostnames and routes, carry admission and authorization headers
-unchanged, never cache or retry requests, and never log those headers or
-bodies. Its warning/error log can still contain client IP addresses. The
-operator of both roles can correlate issuance and redemption using network
-metadata; blind signing alone does not prevent that.
+Set public identities in the service configuration. The services do not read
+`Host`, forwarding headers, or client addresses. Restrict hostnames and
+routes in nginx, and pass admission and authorization headers unchanged.
+Disable request caching and retries. Keep those headers and request bodies
+out of logs, although warnings and errors can contain client IP addresses.
 
-## Prepare the host
+An operator who runs both roles can correlate issuance and redemption by using
+network metadata. Blind signing does not prevent that correlation.
 
-Use local storage (not NFS) for `/var/lib`; the state relies on exclusive
-process locks and SQLite durability. Synchronize the system clock before
-starting the services (`timedatectl status`); a clock behind durable state is
-refused. Install nginx, systemd, a compiler toolchain to build the checked-out
-source, and certificates for **two distinct lowercase DNS names**. The examples
-below use `issuer.example.org` and `origin.example.org`; replace both in the
-nginx template and in the environment file. Names must have no trailing dot or
-port. Configure DNS to point to this host.
+## Prepare the host for local state and HTTPS.
 
-The nginx template expects certificates at
-`/etc/letsencrypt/live/<name>/fullchain.pem` and `privkey.pem`. Obtain them
-using your ACME provider before enabling the TLS server blocks (a temporary
-HTTP-only ACME configuration may be needed); install a renewal hook that runs
-`nginx -t && systemctl reload nginx`. Never log invitation or token headers in
-your existing nginx configuration; do not enable nginx debug logging.
+Put `/var/lib` on local storage to support exclusive process locks and durable
+SQLite writes. Do not use NFS. Synchronize the system clock and check it
+with `timedatectl status` before starting either service. Startup is refused
+if the clock is behind the time recorded in durable state.
 
-From a reviewed checkout, as root:
+Install nginx, systemd, and a compiler toolchain that can build the checked-out
+source. Configure two distinct lowercase DNS names that point to this host.
+Names cannot include a trailing dot or a port. Replace `issuer.example.org`
+and `origin.example.org` in the nginx template and the environment file.
+
+Obtain certificates for both names from your ACME provider before enabling
+the TLS server blocks. You may need a temporary HTTP-only configuration for
+ACME. The nginx template uses `/etc/letsencrypt/live/<name>/fullchain.pem` and
+`privkey.pem`. Install a renewal hook that runs
+`nginx -t && systemctl reload nginx`. Keep invitation and token headers out of
+your nginx logs, and leave debug logging disabled.
+
+Build and install the binary from a reviewed checkout as root. Create separate
+service accounts and state directories for the two roles:
 
 ```sh
 cargo build --release --locked -p freebird-privacy-pass-service \
@@ -58,22 +63,22 @@ install -d -o freebird-issuer -g freebird-issuer -m 0700 /var/lib/freebird-issue
 install -d -o freebird-origin -g freebird-origin -m 0700 /var/lib/freebird-origin
 ```
 
-The service binary must be readable by the two role users. Confirm that
-`FREEBIRD_ISSUER_NAME` and `FREEBIRD_ORIGIN_NAME` in the environment file
-exactly match the two nginx `server_name` directives and the certificate DNS
-names. **Check before initializing the Origin:** its two names are pinned in
-its database at first open; changing them later is refused. The Issuer's
-directory must advertise exactly
-`https://<FREEBIRD_ISSUER_NAME>/private-token/issue`, not a loopback URL.
-No proxy-supplied header changes these identities.
+Make the service binary readable by both role users. Before initializing the
+Origin, confirm that `FREEBIRD_ISSUER_NAME` and `FREEBIRD_ORIGIN_NAME` exactly
+match the nginx `server_name` directives and the certificate DNS names. The
+database pins the Origin's two names when it is first opened. A later change
+is refused. Configure the Issuer directory to advertise exactly
+`https://<FREEBIRD_ISSUER_NAME>/private-token/issue`, not a loopback URL. Proxy
+headers cannot change these identities.
 
-## Initialize and provision
+## Initialize both roles and create the first invitation.
 
-All maintenance commands, including status and provisioning, take exclusive
-locks and **must run as the role user with its unit stopped**. A root-run command
-can leave root-owned SQLite or lock files and prevent the service from starting.
-Never delete `.lock` files. Before the first start, initialize fresh
-`state` subdirectories; initialization refuses an existing state directory:
+Run offline maintenance commands, including status and provisioning, as the
+role user with its unit stopped. Each command takes an exclusive lock.
+Running it as root can leave root-owned SQLite or lock files that prevent
+startup. Do not delete `.lock` files. Before the first start, initialize
+fresh `state` subdirectories. Initialization refuses a directory that already
+exists:
 
 ```sh
 bin=/usr/local/bin/freebird-privacy-pass-service
@@ -97,32 +102,37 @@ runuser -u freebird-origin -- "$bin" origin-key-status "$origin"
 rm /var/lib/freebird-issuer/transfer/genesis.der /var/lib/freebird-origin/transfer/genesis.der
 ```
 
-The root-operated copy above transfers only the **public** SPKI, never the
-Issuer's database. Verify that the Origin status shows the same key ID as the
-Issuer's active key. Keep the original transfer directories private, and do
-not overwrite a failed/partial initialization.
+Transfer only the public SPKI as root. Do not transfer the Issuer's database.
+Verify that the Origin status shows the same key ID as the Issuer's active key.
+Keep the original transfer directories private. Preserve a failed or partial
+initialization for inspection rather than overwriting it.
 
-Create one invitation in a private file, not in the journal or a shell
-argument:
+Create one invitation and capture it in a private file so that it does not
+appear in the journal or in shell arguments:
 
 ```sh
 (umask 077; runuser -u freebird-issuer -- "$bin" provision "$issuer") \
   > /root/freebird-invitation
 ```
 
-An invitation is single-use and expires in 24 hours. Treat the output file as
-a bearer secret. If output fails after provisioning, the invitation may be
-irretrievable; do not infer that a retry is safe.
+Protect the output file as a bearer secret. An invitation expires in 24 hours
+and can be used once. If output fails after provisioning, the invitation may
+be irretrievable. Do not assume that it is safe to retry.
 
-## Start and verify
+## Start both services and verify access through nginx.
 
 Install the two units from
 [`deploy/systemd/`](https://github.com/flammafex/freebird/tree/main/deploy/systemd)
-under `/etc/systemd/system/`. Put the edited
+in `/etc/systemd/system/` so that systemd can start the services. Put the edited
 [`deploy/nginx/freebird.conf`](https://github.com/flammafex/freebird/blob/main/deploy/nginx/freebird.conf)
-in `/etc/nginx/conf.d/` (included within nginx's `http` context). Keep an
-existing default vhost; Freebird blocks are intentionally **not** default
-servers. Check certificate paths, two names, and ports before activation:
+in `/etc/nginx/conf.d/`, which is included in nginx's `http` context. Keep an
+existing default virtual host because the Freebird blocks are not default
+servers.
+
+Create the [external key catalog](recovery.md#the-catalog-checks-both-key-histories)
+and first cold backup before enabling serving. Confirm that both roles are
+initialized and their names and keys agree. Check the certificate paths, names,
+and ports before activation:
 
 ```sh
 systemctl daemon-reload
@@ -140,17 +150,17 @@ curl --fail --silent --show-error \
 curl -i https://origin.example.org/private-token/protected
 ```
 
-The directory's `issuer-request-uri` must be
-`https://issuer.example.org/private-token/issue`; the protected route returns
-401 with one `WWW-Authenticate` header. Unknown paths return nginx 404. HTTP
-port 80 redirects normal requests to HTTPS; it never proxies to Freebird.
-Both systemd units require `/etc/freebird/serving-enabled`; if it is absent,
-even a manual start is skipped. A skipped start can exit successfully, so
-check `is-active` and the listener rather than trusting the start exit code.
-Removing the file does not stop an already running process.
-Follow the [recovery guide](recovery.md#the-independent-key-history-record)
-to create the external catalog and first cold backup before enabling serving.
-Test end-to-end with a single fresh invitation (this **consumes** it):
+Verify that the directory's `issuer-request-uri` is
+`https://issuer.example.org/private-token/issue`. The protected route returns
+401 with one `WWW-Authenticate` header. nginx returns 404 for unknown paths.
+Port 80 redirects normal requests to HTTPS and does not proxy them to Freebird.
+
+Keep `/etc/freebird/serving-enabled` present to allow systemd starts for both
+roles. If the file is absent, even a manual start is skipped. Check `is-active`
+and the listener because a skipped start can exit successfully. Removing the
+file does not stop running processes.
+
+Run the end-to-end test with one fresh invitation. The test consumes it:
 
 ```sh
 target/release/examples/loopback_client --tls-ca /path/to/trusted-ca.pem \
@@ -158,50 +168,55 @@ target/release/examples/loopback_client --tls-ca /path/to/trusted-ca.pem \
   https://origin.example.org/ < /root/freebird-invitation
 ```
 
-The pinned CA must validate both DNS names. The client prints only status
+Use a pinned CA that can validate both DNS names. The client prints only status
 codes: `issuance: 200; redemption: 200; replay: 401; invitation retry: 403`.
-Its original numeric-loopback HTTP mode remains available for local tests.
-This example cannot connect to a remote host and is not a general-purpose SDK.
+For local tests, the client also accepts numeric loopback HTTP addresses. It
+cannot connect to a remote host and is not a general-purpose SDK.
 
-## Operation and limits
+## Provision invitations without stopping the Issuer.
 
-To provision more invitations while the Issuer serves, use its local control
-socket (`control.sock` in the private state directory) as the service user:
+Run `provision-live` as the Issuer's service user to create invitations while
+the Issuer serves. The command uses the local control socket:
 
 ```sh
 (umask 077; runuser -u freebird-issuer -- "$bin" provision-live "$issuer") \
   > /root/freebird-invitation
 ```
 
-Only a peer with the Issuer's own UID may connect; root and other users are
-refused. Each successful call durably creates one 24-hour, one-use code before
-replying. If the reply is lost, that code is orphaned until it expires; it is
-never refunded or resent. Offline `provision` still works while the Issuer is
-stopped. The socket path is `<state-dir>/control.sock`; Unix socket paths are
-limited to about 100 bytes, so keep the state directory path short (the
-default `/var/lib/freebird-issuer/state` is fine), or the Issuer refuses to start.
-To offer open admission through a browser puzzle, see the
-[browser demo and PoW guide](demo.md); to let your own application servers
-request codes for their users, see
-[admission for application servers](app-admission.md). Key staging, activation, and
-retirement follow the [offline rotation runbook](quick-start.md#offline-key-maintenance):
-enter the [two-role serving hold](recovery.md#hold-serving-before-touching-state),
-run each command as **its** role user, compare statuses and activation times,
-update the external key-history catalog and cold backup, then release the
-hold. The Origin installs the new public key first. Status commands also
-require the role to be stopped. A deliberate state/configuration refusal exits
-1 and does not auto-restart; inspect `journalctl -u freebird-issuer -u
-freebird-origin`, fix the cause, then `systemctl reset-failed` and start.
-Never edit SQLite files or roll back the clock.
+Connect as the Issuer's UID. Connections from root and other users are refused.
+Each successful call durably creates one single-use code before sending the
+reply. The code expires in 24 hours. If the reply is lost, the code remains
+unclaimed until it expires. It is not refunded or resent. Use offline
+`provision` while the Issuer is stopped.
 
-**Do not restore a provider snapshot, disk image, or database copy and then
-start the services.** A rollback can reopen spent tokens and invitations. Use
-the explicit [stopped backup and recovery procedure](recovery.md), which
-refuses incompatible key history and invalidates old credentials before
-reopening. It is not automatic failover. An upgrade must retain state and the old binary until validated;
-older experimental schema is refused, not silently migrated.
+Keep `<state-dir>/control.sock` within the Unix socket path limit of about
+100 bytes to allow Issuer startup. The default state path,
+`/var/lib/freebird-issuer/state`, fits.
 
-Live invitations, admission for application servers, and an optional browser
-PoW demo are available; WebAuthn,
-vouching, and multi-instance operation are not. PoW raises cost, not
-uniqueness. Nothing here waives the independent cryptographic review.
+Use the optional [browser puzzle](demo.md) for open admission or
+[app admission](app-admission.md) to let application servers request codes for
+their users. Proof-of-work raises the cost of collecting tokens. It does not
+prove that each visitor is unique. WebAuthn, vouching, and multi-instance
+operation are unsupported.
+
+## Stop both roles to rotate keys or restore state.
+
+Use the [offline rotation procedure](quick-start.md#stop-each-role-before-changing-its-keys)
+to stage, activate, or retire keys. [Stop both services](recovery.md#disable-starts-and-stop-both-services-before-copying-state)
+and run each command as its role user. Install the successor's public key on
+the Origin first. Compare statuses and activation times, then update the
+external key catalog and cold backup before releasing the hold. Status
+commands also require the role to be stopped.
+
+Check `journalctl -u freebird-issuer -u freebird-origin` if a unit refuses to
+start. A state or configuration refusal exits with status 1 and does not
+trigger an automatic restart. Correct the cause, then run
+`systemctl reset-failed` and start the unit. Do not edit SQLite files or roll
+back the clock.
+
+Use [stopped recovery](recovery.md) because a provider snapshot, disk image, or
+database copy can reopen spent tokens and invitations if you restart without
+invalidating them. The procedure checks key history for compatibility and
+invalidates old credentials before you restart. It is not automatic failover.
+Retain the state and the old binary until you validate an upgrade. Startup
+rejects older experimental schemas and does not migrate them.

@@ -1,8 +1,10 @@
-//! Experimental RFC 9578 type-2 service path. Not a production release.
+//! This experimental service issues and redeems RFC 9578 tokens of type 2.
+//! Use it for testing the protocol.
 
-// Spawning can briefly retain even CLOEXEC flock descriptors before exec.
-// Store tests hold a read guard across initialize/open/drop/reopen; process
-// spawners take a write guard. Tokio's lock also supports async test lifetimes.
+// Use this lock to keep a child from inheriting a store's file lock while another test reopens the store.
+// A child can hold the descriptor until `exec` even with `CLOEXEC` set. Take a read guard
+// from initialization through reopening, and a write guard around process spawning.
+// Tokio's lock supports guards in async tests.
 #[cfg(test)]
 pub(crate) static SPAWN_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 

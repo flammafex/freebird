@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Exercise application admission against the real loopback Issuer binary.
+"""Run application admission requests against the Issuer on loopback to check its admission rules.
 
-Keys and admission codes are captured privately and never printed; every
-diagnostic is scanned for them before the script reports success.
+Capture keys and admission codes privately, then scan all captured diagnostics
+for those values to check that they were not exposed.
 """
 import http.client
 import os
@@ -91,7 +91,7 @@ def main():
             require(match is not None, "missing public key ID")
             key_id = match[1].decode()
             phase = "disabled state"
-            # Feature off: no store, so every app command refuses; nothing is created.
+            # Disable admission to check that app commands fail and leave the store absent.
             run(["app-list", issuer], succeeds=False)
             run(["app-add", issuer, "clienta", 2], succeeds=False)
             require(not (issuer / "app-clients.sqlite").exists(), "store created implicitly")
@@ -171,8 +171,7 @@ def main():
                     and 1 <= int(headers["retry-after"]) <= 86400, "invalid Retry-After")
 
             phase = "issuance admission"
-            # Same not-403 check as test-live-provision: the one-use code must
-            # advance past admission, and a second use must be refused.
+            # Use the same code twice to verify that only the first request passes admission.
             body = b"\x00\x02" + bytes([int(key_id[-2:], 16)]) + bytes(256)
             require(len(body) == 259, "invalid request length")
             require(issue(number, code_one, body) in (200, 500),
@@ -207,8 +206,8 @@ def main():
             child.terminate()
             child.wait(timeout=10)
             child = None
-            # Socket file may remain after exit: connection refusal must still
-            # fall back to offline maintenance, which needs the store lock.
+            # A refused connection must fall back to offline maintenance under the store lock,
+            # even if the socket file remains after the Issuer stops.
             listing = app_list(issuer)
             require(b"app clienta 5 4 active\n" in listing, "offline listing mismatch")
             key_line = run(["app-add", issuer, "clientb", 1])

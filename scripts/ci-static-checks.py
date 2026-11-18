@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Bounded repository consistency checks, not a security review or Rust parser.
+"""Check local Markdown paths, recorded fixture hashes, and required configuration text.
 
-Checks local Markdown path existence (not anchors or remote URLs), recorded
-fixture hashes (not independent provenance authentication), and explicit policy
-markers. Rust integration tests and independent review remain necessary.
+Link checks cover path existence only. Hash checks compare fixtures against the
+recorded digests and do not verify provenance. Run the Rust integration tests
+to check behavior and use independent review to assess security.
 """
 
 from __future__ import annotations
@@ -31,8 +31,9 @@ def check_links(files: list[str]) -> list[str]:
     errors = []
     for name in files:
         document = ROOT / name
+        # Check files on disk because `git ls-files` includes unstaged deletions.
         if document.suffix.lower() != ".md" or not document.is_file():
-            continue  # Unstaged deletions are deliberately absent from the new tree.
+            continue
         text = document.read_text(encoding="utf-8")
         targets = re.findall(r"!?\[[^]]*\]\(([^)\n]+)\)", text)
         targets += re.findall(r"(?m)^\s*\[[^]]+\]:\s*(\S+)", text)
@@ -70,12 +71,13 @@ def check_tree(files: list[str]) -> list[str]:
         errors.append("workspace must contain only crypto, common, privacy_pass_service")
     removed = ("attester/", "issuer/", "verifier/", "interface/", "integration_tests/", "sdk/js/")
     for name in files:
-        # git ls-files includes unstaged deletions; reject surviving tracked paths.
+        # Ignore paths that are missing on disk because `git ls-files` includes unstaged deletions.
         if name.startswith(removed) and (ROOT / name).is_file():
             errors.append(f"legacy tracked source remains: {name}")
     origin = (ROOT / "privacy_pass_service/src/origin.rs").read_text()
     production = origin.split("\n#[cfg(test)]\nmod tests", 1)[0]
-    # Deliberately only a tripwire over known API spellings, not semantic proof.
+    # Match known API names to flag possible changes in how the Origin handles keys.
+    # Text matching cannot verify how the code uses those keys.
     for marker in ("PublicKey::from_spki(&k.spki)", "key: PublicKey"):
         if marker not in production:
             errors.append(f"Origin public-SPKI tripwire missing: {marker}")
@@ -92,8 +94,7 @@ def check_tree(files: list[str]) -> list[str]:
 def check_workflows() -> list[str]:
     errors = []
     release = (ROOT / ".github/workflows/release.yml").read_text()
-    # Exact allowlist keeps the release workflow tiny and fail closed without
-    # pretending to implement a dependency-free YAML interpreter.
+    # Compare the whole file so that any change to the blocking workflow fails this check.
     expected = """name: Privacy Pass release blocked
 
 on:
@@ -122,8 +123,7 @@ jobs:
                    "docker build", "release-gate.py"):
         if marker in ci:
             errors.append(f"CI contains forbidden publishing/legacy marker: {marker}")
-    # Test-only interoperability needs one reproducible install, not the old
-    # SDK/publishing workflow. Reject all other npm commands.
+    # Require one locked dependency install in `interop/ts` and reject other `npm` commands.
     allowed_install = "npm ci --ignore-scripts"
     if ci.count(allowed_install) != 1 or "working-directory: interop/ts" not in ci:
         errors.append("CI must pin the single test-only interop npm install")

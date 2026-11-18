@@ -1,15 +1,16 @@
-# Freebird browser demo
+# The Freebird browser demo redeems type-2 tokens
 
-The Origin serves this static page. JavaScript explicitly performs type-2
-Privacy Pass; it does not depend on native Chrome/Firefox `PrivateToken` support.
-Requires a modern browser, HTTPS/Web Crypto, and the configured Issuer's CORS
-support. No CDN, analytics, remote fonts, cookies, or browser storage.
+The Origin serves a static page that uses JavaScript for type-2 Privacy Pass.
+The demo works independently of native `PrivateToken` support in Chrome and
+Firefox. It requires a modern browser, HTTPS, Web Crypto, and CORS support from
+the configured Issuer. It uses local assets and does not use a CDN, analytics,
+remote fonts, cookies, or browser storage.
 
-## Build and configure
+## A build and an Issuer URL prepare the demo for deployment
 
-Use Node **24+** and npm (`blindrsa-ts`, a pinned transitive dependency, requires
-Node 24). All three direct devDependencies have exact versions; retain
-`package-lock.json` in source control.
+Use **Node 24 or later** and npm to build the demo because the pinned transitive
+dependency `blindrsa-ts` requires Node 24. Keep `package-lock.json` in source
+control. All three direct `devDependencies` have exact version pins.
 
 ```sh
 cd demo/web
@@ -19,103 +20,121 @@ node --test
 npm audit
 ```
 
-Set this tag in `public/index.html` **before building**, or edit the generated
-`dist/index.html` when deploying:
+Set the Issuer URL in `public/index.html` **before building** or edit the same
+tag in the generated `dist/index.html` when deploying.
 
 ```html
 <meta name="freebird-issuer" content="https://issuer.example">
 ```
 
-Use the actual Issuer HTTPS origin, including its port if non-default; no path,
-credentials, query or fragment. The empty default deliberately disables the demo.
-Deploy **only the contents of `dist/`**, including third-party license notices in
-`dist/licenses/`, not source files or `node_modules/`.
-Assets use relative URLs so the page can live at `/demo/` or another subpath.
-The protected resource is always `/private-token/protected` on the page's Origin.
+Set the value to the Issuer's HTTPS origin, with its non-default port if it has
+one. Omit the path, credentials, query, and fragment. An empty value disables
+the demo.
 
-`dist/` and `node_modules/` are generated local artifacts (ignored by the
-repository's root `.gitignore`); **do not commit them**.
-The end-to-end browser test is `python3 scripts/test-browser-demo.py`.
+Deploy **only the contents of `dist/`**, which include the third-party license
+notices in `dist/licenses/`. Keep source files and `node_modules/` out of the
+deployment. Relative asset URLs allow the page to run at `/demo/` or another
+subpath. The protected resource is always `/private-token/protected` on the
+page's Origin.
 
-## Flow and boundaries
+Keep the generated `dist/` and `node_modules/` out of source control. The root
+`.gitignore` excludes both directories. Run `python3 scripts/test-browser-demo.py`
+for the end-to-end browser test.
 
-1. **Solve and enter** fetches the Issuer directory and the Origin's 401
-   `WWW-Authenticate` challenge, then runs ALTCHA locally in static Web Workers.
-2. Before solving/issuing, the challenge must be type 2, name the directory URI's
-   exact host (including port), and advertise a key present in the directory.
+## A proof enables one token redemption
+
+The demo solves a proof of work, obtains a token, and checks that the Origin
+refuses to redeem the token twice.
+
+1. Click **Solve and enter** to fetch the Issuer directory and the Origin's
+   `401` response with a `WWW-Authenticate` challenge. Static Web Workers run
+   ALTCHA locally.
+2. Solving and issuance require a **type-2 challenge** that names the directory
+   URI's exact host, including its port, and advertises a key in the directory.
    The issuance URI must remain on the configured Issuer's HTTPS origin.
-3. The widget's unchanged payload is posted as `{"payload":"…"}` to
-   `/freebird/pow/admission`. The returned 43-character admission is held only
-   in memory.
-4. `publicVerif.Client(publicVerif.BlindRSAMode.PSS)` creates the 259-byte
-   request. The admission is sent once as `Freebird-Admission` with
-   `Content-Type: application/private-token-request`. A 256-byte response is
-   deserialized and finalized; the 354-byte serialized token is padded base64url.
+3. Posting the **unchanged widget payload** as `{"payload":"…"}` to
+   `/freebird/pow/admission` returns a 43-character admission code. The code is
+   held only in memory.
+4. `publicVerif.Client(publicVerif.BlindRSAMode.PSS)` creates the
+   **259-byte issuance request**. It is sent with the admission code in
+   `Freebird-Admission` and with `Content-Type: application/private-token-request`.
+   The code is sent once. The browser deserializes and finalizes a 256-byte
+   response, then encodes the 354-byte serialized token as padded base64url.
    `TokenChallenge.deserialize` and `TokenResponse.deserialize` receive
    standalone `Uint8Array.from(...)` copies to avoid upstream byte-offset bugs.
-5. The token is redeemed at the protected resource with
-   `Authorization: PrivateToken token="…"`. The response is never inserted as
-   HTML. **Access granted (200)** is a status, not a navigation.
-6. **Try replay** sends the spent token once more and expects **Replay refused
-   (401)**. A replay returning 200 is explicitly reported as a protection failure.
+5. Sending `Authorization: PrivateToken token="…"` to the protected resource
+   redeems the token. The page displays **Access granted (200)** as a status.
+   It does not navigate or insert the response as HTML.
+6. Click **Try replay** to send the spent token once more and check for
+   **Replay refused (401)**. If the replay returns `200`, the demo reports a
+   protection failure.
 
-Visible stages are solving → admitted → token obtained → access granted → replay
-refused. Admission/proof rejection (403), key mismatch (422), busy (429), and
-redemption refusal (401) have distinct messages. No automatic credential retries:
-**Start again** obtains a fresh challenge/proof. Requests omit cookies, reject
-redirects, bypass caches and have a 30-second timeout; PoW has the widget's
-90-second timeout.
+The page displays five stages in order: solving, admitted, token obtained,
+access granted, and replay refused. Each failure has a distinct message:
+admission or proof rejection (`403`), key mismatch (`422`), busy (`429`), and
+redemption refusal (`401`). Click **Start again** to obtain a fresh challenge
+and proof. The demo does not retry credentials automatically. Requests omit
+cookies, reject redirects, bypass caches, and time out after 30 seconds. The
+widget allows up to 90 seconds for proof of work.
 
-Only fixed statuses/errors are shown. Admission codes/tokens are never printed,
-placed in the DOM, URLs, storage or console. One spent token stays in memory for
-the replay demonstration, then is discarded (also on restart/pagehide). As with
-any browser protocol, visitors can inspect their own requests in developer tools.
-ALTCHA debug/HIS collection and server-side widget verification are disabled.
+The page displays only fixed status and error messages. It keeps admission
+codes and tokens out of the DOM, URLs, browser storage, and the console. One
+spent token stays in memory until replay, restart, or `pagehide`. Visitors
+can inspect their own requests in browser developer tools. ALTCHA debug
+mode, HIS collection, and server-side widget verification are disabled.
 
-## Verified ALTCHA pairing
+## The pinned ALTCHA libraries exchange v2 proofs
 
-**Widget: `altcha` npm 3.6.0. Server: Rust `altcha` 1.1.0,
-`altcha-lib-rs` commit `208ac08290b6f6ad35c093e9bf611eb574f40089`.**
-The configured pairing is **PBKDF2/SHA-256, HMAC-SHA-256, Uint32**.
-This is PoW **v2**; the older v1 challenge/solution format is not interchangeable.
+The `altcha` npm widget at version `3.6.0` and Rust `altcha` at version `1.1.0`
+use the same proof format. The Rust pin is `altcha-lib-rs` commit
+`208ac08290b6f6ad35c093e9bf611eb574f40089`. The pairing uses **PBKDF2/SHA-256**,
+HMAC-SHA-256, and `Uint32`. The v1 challenge and solution format is incompatible
+with v2.
 
-Evidence inspected directly, not inferred from version numbers:
+The pinned Rust and npm sources agree on the wire details for the server
+defaults.
 
 | Wire detail | Rust at the pinned commit | Shipped npm 3.6.0 source |
 | --- | --- | --- |
-| Challenge | `src/types.rs`: `Challenge { parameters, signature }`; camelCase `keyLength`, `keyPrefix`, `expiresAt` | `dist/types/index.d.ts`: matching `Challenge`/`ChallengeParameters`; `dist/external/altcha.js` accepts this JSON |
-| Algorithm | `src/algorithms/mod.rs`: `PBKDF2/SHA-256`, `/SHA-384`, `/SHA-512` | `dist/workers/pbkdf2.js`: exactly these names; Web Crypto PBKDF2 with `cost` iterations and `keyLength * 8` bits |
-| Counter | `src/types.rs`: default `CounterMode::Uint32`; `src/helpers.rs` `build_password`: decoded nonce followed by `counter.to_be_bytes()` | `dist/external/altcha.js` `verify`: v2 selects `"uint32"`; `dist/workers/pbkdf2.js` `PasswordBuffer`: `setUint32(nonce.length, n, false)` |
-| Solution/payload | `src/types.rs`: `Payload { challenge, solution }`, `Solution { counter, derivedKey, time? }` | `dist/external/altcha.js` `verify`: `btoa(JSON.stringify({ challenge: { parameters, signature }, solution }))`; solution counter numeric, derived key hex, optional time in ms |
-| Signature | `src/pow.rs`: HMAC of canonical parameters, signature is hex | Widget forwards parameters/signature unchanged; signing and verification remain server-side |
+| Challenge | `src/types.rs` defines `Challenge { parameters, signature }` with the camelCase fields `keyLength`, `keyPrefix`, and `expiresAt`. | `dist/types/index.d.ts` defines matching `Challenge` and `ChallengeParameters` types. `dist/external/altcha.js` accepts this JSON. |
+| Algorithm | `src/algorithms/mod.rs` defines `PBKDF2/SHA-256`, `PBKDF2/SHA-384`, and `PBKDF2/SHA-512`. | `dist/workers/pbkdf2.js` uses the same names. It runs Web Crypto PBKDF2 with `cost` iterations and `keyLength * 8` bits. |
+| Counter | `src/types.rs` defaults to `CounterMode::Uint32`. In `src/helpers.rs`, `build_password` appends `counter.to_be_bytes()` to the decoded nonce. | In `dist/external/altcha.js`, `verify` selects `"uint32"` for v2. In `dist/workers/pbkdf2.js`, `PasswordBuffer` writes the counter with `setUint32(nonce.length, n, false)`. |
+| Solution payload | `src/types.rs` defines `Payload { challenge, solution }` and `Solution { counter, derivedKey, time? }`. | In `dist/external/altcha.js`, `verify` encodes the payload with `btoa(JSON.stringify({ challenge: { parameters, signature }, solution }))`. The counter is numeric, the derived key is hex, and the optional time is in milliseconds. |
+| Signature | `src/pow.rs` computes the HMAC of the canonical parameters and encodes the signature as hex. | The widget forwards the parameters and signature unchanged, so signing and verification remain server-side. |
 
-Upstream references:
+The pinned source files and changelog document the format and compatibility
+fixes.
 
-- [Rust types](https://github.com/altcha-org/altcha-lib-rs/blob/208ac08290b6f6ad35c093e9bf611eb574f40089/src/types.rs)
-- [Rust counter encoding](https://github.com/altcha-org/altcha-lib-rs/blob/208ac08290b6f6ad35c093e9bf611eb574f40089/src/helpers.rs)
-- [Rust PoW](https://github.com/altcha-org/altcha-lib-rs/blob/208ac08290b6f6ad35c093e9bf611eb574f40089/src/pow.rs)
-- [Widget changelog, tag v3.6.0](https://github.com/altcha-org/altcha/blob/v3.6.0/CHANGELOG.md):
-  v3.3.0 specifically fixes iterative SHA truncation and arbitrary PBKDF2
-  `keyLength` to match server ports. The chosen 3.6.0 includes these fixes.
-- Reproduce the widget inspection from `node_modules/altcha/dist/` after `npm ci`;
-  its tarball/integrity are pinned in the lockfile.
+- The [Rust types](https://github.com/altcha-org/altcha-lib-rs/blob/208ac08290b6f6ad35c093e9bf611eb574f40089/src/types.rs)
+  define the **challenge and solution fields**.
+- The [Rust counter encoding](https://github.com/altcha-org/altcha-lib-rs/blob/208ac08290b6f6ad35c093e9bf611eb574f40089/src/helpers.rs)
+  shows how **the nonce and counter** form the password.
+- The [Rust PoW implementation](https://github.com/altcha-org/altcha-lib-rs/blob/208ac08290b6f6ad35c093e9bf611eb574f40089/src/pow.rs)
+  defines how **the server signs and verifies proofs**.
+- The [widget changelog for v3.6.0](https://github.com/altcha-org/altcha/blob/v3.6.0/CHANGELOG.md)
+  records the **v3.3.0 fixes** that align iterative SHA truncation and
+  arbitrary PBKDF2 `keyLength` with server ports. Version 3.6.0 includes
+  both fixes.
+- Run `npm ci` to inspect **the shipped widget code** in `node_modules/altcha/dist/`.
+  The lockfile pins the tarball and its integrity hash.
 
-Compatibility limits: widget v3 calls the old `challengeurl` setting **`challenge`**;
-the demo uses the new API with the exact `/freebird/pow/challenge` URL. The Rust
-library also accepts empty prefixes, case-insensitive algorithm spellings, or
-non-Latin-1 metadata that this widget's strict algorithm registry / nonempty-prefix
-check / direct `btoa(JSON.stringify(...))` cannot handle. Use the configured
-uppercase algorithm and normal nonempty hexadecimal prefix, with no such metadata.
-There is no identified wire-format mismatch for the confirmed server defaults.
-Only PBKDF2 and iterative SHA workers are shipped; SCRYPT/ARGON2ID are deliberately
-unsupported here.
+The demo sets the v3 widget's `challenge` option to the exact
+`/freebird/pow/challenge` URL. This option corresponds to `challengeurl`
+in the earlier API. Use the configured uppercase algorithm name and a
+nonempty hexadecimal prefix, with metadata limited to Latin-1.
 
-## nginx and CSP
+The Rust library accepts case-insensitive algorithm names and empty prefixes,
+but the widget requires exact names and a nonempty prefix. The widget uses
+`btoa(JSON.stringify(...))` directly, so it cannot handle non-Latin-1 metadata
+that the Rust library accepts. The demo ships workers for PBKDF2 and iterative
+SHA only. It does not support SCRYPT or ARGON2ID.
 
-Example on the **Origin HTTPS host**, after copying `dist/` contents to
-`/srv/freebird-demo/`. Substitute the actual Issuer origin in both the meta tag
-and CSP. Keep the existing Origin proxy/location for `/private-token/protected`;
-do not put the static demo on the Issuer or another origin.
+## nginx serves the demo on the Origin's HTTPS host
+
+Copy the contents of `dist/` to `/srv/freebird-demo/` on the Origin's HTTPS
+host so that the demo and protected resource share an origin. Keep the Origin
+proxy location for `/private-token/protected`. Substitute the Issuer's HTTPS
+origin in the meta tag and the example CSP.
 
 ```nginx
 location = /demo {
@@ -133,48 +152,56 @@ location ^~ /demo/ {
 }
 ```
 
-Use nginx's normal `mime.types` so `.js` is served as JavaScript, `.css` as CSS.
-If adding location-level headers overrides server-level security headers, repeat
-the existing required headers in this location.
+Use nginx's standard `mime.types` so that nginx serves `.js` as JavaScript
+and `.css` as CSS. If location-level headers override server-level security
+headers, repeat the required headers in this location.
 
-The build imports **`altcha/external`**, not its default CSS-injecting/inline-worker
-bundle, and copies `altcha.css` and the two self-contained workers locally.
-It statically rejects `eval`, `Function` constructors, WebAssembly, inline HTML
-scripts/styles/handlers, and CSS asset URLs in the shipped files. No
-`'unsafe-inline'`, `'unsafe-eval'`, `'wasm-unsafe-eval'`, `blob:` or `data:` CSP
-allowance is required. The external widget contains optional floating-layout
-CSSOM positioning code; this demo uses its standard layout, not floating mode.
-This static check is not a browser CSP integration test.
+The build imports **`altcha/external`** and copies `altcha.css` and both
+self-contained workers as local files. The default bundle injects CSS and uses
+inline workers. The external widget includes optional CSSOM positioning code
+for floating mode, but the demo uses the standard layout.
 
-Issuer deployment must allow the exact Origin via CORS for directory and PoW
-GETs plus admission/issuance POSTs, including preflight for `Content-Type` and
-`Freebird-Admission`. Credentials are not included. `WWW-Authenticate` is read
-from a **same-origin** response; no cross-origin expose-header setting is needed
-for that challenge. Do not configure access logs to capture admission or
-Authorization header values.
+The build's static checks reject `eval`, `Function` constructors, and
+WebAssembly in the shipped files. They also reject inline HTML scripts,
+styles, and handlers, and CSS asset URLs. The page does not require
+`'unsafe-inline'`, `'unsafe-eval'`, `'wasm-unsafe-eval'`, `blob:`, or `data:`
+in its CSP. The static checks do not test CSP in a browser.
 
-## Validation and dependency advisory
+Configure Issuer CORS to allow the exact Origin for directory and proof of work
+`GET` requests and admission and issuance `POST` requests. Allow preflight
+requests for `Content-Type` and `Freebird-Admission`. The browser sends no
+credentials and receives `WWW-Authenticate` from a **same-origin** response.
+The challenge does not require a cross-origin header exposure setting.
+Keep admission codes and `Authorization` header values out of access logs.
 
-Focused `node --test` tests cover canonical padded base64url (including unused pad
-bits and offset views), unambiguous `WWW-Authenticate` parsing, HTTPS directory URI
-boundaries, key rotation/membership and exact issuer host checks, plus fixed HTTP
-status messages.
+## Local checks passed and the dependency audit reported an advisory
 
-At implementation time: `npm ci --ignore-scripts`, `npm run build` (including CSP
-static guards), and all **14** Node tests passed. `npm audit --json` exited **1**:
-**3 high-severity affected packages**, 0 critical, all from
-[GHSA-2w8x-224x-785m](https://github.com/advisories/GHSA-2w8x-224x-785m)
-(`sjcl` 1.0.8 → `@cloudflare/blindrsa-ts` 0.4.5 →
-`@cloudflare/privacypass-ts` 0.9.0), with no fix offered for the required pins.
-The advisory concerns ECC point validation; this demo uses public-verification
-RSA, but the dependency finding is not suppressed or represented as resolved.
-These dependencies are build-time devDependencies **and their code ships in the
-browser bundle**.
+The `node --test` suite covers canonical padded base64url, including unused
+pad bits and offset views. It checks unambiguous `WWW-Authenticate` parsing,
+HTTPS directory URI boundaries, key rotation, key membership, exact Issuer
+host matching, and fixed HTTP status messages.
 
-Live Issuer/Origin and Chrome/Firefox end-to-end/CSP checks were not run here.
-Deployment smoke check: configure the meta/CSP/CORS, click **Solve and enter**,
-observe each stage and 200 redemption, then **Try replay** and observe 401. Verify
-the network panel has only Origin/Issuer requests and no CSP violations.
+The install with `npm ci --ignore-scripts`, the build with `npm run build`,
+and all **14** Node tests passed. The build included static CSP checks.
+`npm audit --json` exited with code **1** and reported **3 high-severity
+affected packages** and 0 critical findings. All three affected packages trace to
+[GHSA-2w8x-224x-785m](https://github.com/advisories/GHSA-2w8x-224x-785m).
+`@cloudflare/privacypass-ts` 0.9.0 depends on `@cloudflare/blindrsa-ts` 0.4.5,
+which brings in `sjcl` 1.0.8.
 
-For visual polish, use **@designer** with `public/index.html` and
-`public/demo.css`; preserve element IDs, live-region semantics and flow behavior.
+The advisory affects ECC point validation. The demo uses public-verification
+RSA, but the dependency finding remains unresolved and is reported by the
+audit. The audit offered no fix for the required pins. These packages are
+build-time `devDependencies`, and their code ships in the browser bundle.
+
+## A browser smoke test checks redemption and replay refusal
+
+The recorded results do not cover live Issuer and Origin checks or
+end-to-end and CSP checks in Chrome or Firefox. Configure the meta tag, CSP,
+and CORS to test the deployed demo. Click **Solve and enter** and check each
+stage through `200` redemption. Click **Try replay** and check for `401`.
+Verify that the network panel lists only Origin and Issuer requests and
+that the browser reports no CSP violations.
+
+Preserve element IDs, live-region semantics, and token flow when editing
+`public/index.html` or `public/demo.css`.

@@ -1,6 +1,6 @@
-// Demo-only helpers: configuration check and fixed status copy. Protocol logic
-// (challenge, directory, admission, issuance, redemption) lives in
-// packages/freebird-client and is imported by main.mjs.
+// Use these helpers to check demo settings and format status messages.
+// `main.mjs` imports the protocol steps from `packages/freebird-client` so that the demo uses
+// the same checks as other clients.
 
 export function issuerBaseURL(value) {
   if (typeof value !== 'string' || !value.trim()) {

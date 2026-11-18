@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check dependency pins from an independent consumer, without the root lockfile."""
+"""Resolve dependencies in a separate workspace to check the pins without the root lockfile."""
 
 import json
 import os
@@ -15,7 +15,6 @@ EXPECTED_SOURCE = f"git+https://github.com/kixel-ai/rind?rev={REVISION}#{REVISIO
 
 def main():
     crypto = Path(__file__).resolve().parents[1] / "crypto"
-    # Respect TMPDIR (including the approved session temp directory on macOS).
     with tempfile.TemporaryDirectory(prefix="freebird-external-consumer-") as temp:
         consumer = Path(temp)
         (consumer / "src").mkdir()
@@ -31,7 +30,7 @@ def main():
             "fn main() { let _: Option<PublicKey> = None; }\n",
             encoding="utf-8",
         )
-        # Do not inherit a caller's workspace-specific target override.
+        # Clear `CARGO_TARGET_DIR` so that Cargo uses the consumer's own target directory.
         env = os.environ.copy()
         env.pop("CARGO_TARGET_DIR", None)
         metadata = subprocess.run(

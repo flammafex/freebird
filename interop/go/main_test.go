@@ -47,7 +47,7 @@ func TestPublicIdentityLocalTransport(t *testing.T) {
 			w.WriteHeader(401)
 		case "/private-token/issue":
 			issued.Store(true)
-			// Stop after proving that issuance uses local transport.
+			// Return an error so that the test stops after proving that issuance uses loopback.
 			w.WriteHeader(400)
 		default:
 			w.WriteHeader(404)

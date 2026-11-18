@@ -1,5 +1,5 @@
-//! RFC 9577/9578 type 0x0002 wire formats. Parsing does not verify signatures
-//! or validate an advertised SPKI's algorithm; those are the crypto consumer's job.
+//! This module encodes and parses token type `0x0002` messages defined by RFC 9577 and RFC 9578.
+//! Callers must verify signatures and validate the algorithm in the advertised SPKI separately.
 use base64ct::{Base64Url, Encoding};
 use sha2::{Digest, Sha256};
 
@@ -18,7 +18,7 @@ impl std::fmt::Display for Error {
 }
 impl std::error::Error for Error {}
 
-/// Hash the exact advertised RFC 9578 RSA-PSS SPKI (never re-encode it).
+/// Derive the key ID by hashing the exact bytes of the RSA-PSS SPKI advertised under RFC 9578.
 pub fn token_key_id(advertised_spki: &[u8]) -> [u8; 32] {
     Sha256::digest(advertised_spki).into()
 }
@@ -113,8 +113,8 @@ pub struct TokenChallenge {
     redemption_context: Vec<u8>,
     origin_info: String,
 }
-// RFC server names exclude userinfo, whitespace and non-ASCII. Restrict to
-// URI authority host/port characters, including bracketed IP literals.
+// Allow only ASCII host and port characters to reject userinfo and whitespace.
+// The allowed characters include brackets for IP literals.
 fn server_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -122,7 +122,7 @@ fn server_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b".-_:[]".contains(&b))
 }
 impl TokenChallenge {
-    /// Application policy constructor: exactly one Origin name.
+    /// Build a challenge that names exactly one Origin, as required by application policy.
     pub fn new(
         issuer_name: &str,
         redemption_context: &[u8],
@@ -157,7 +157,7 @@ impl TokenChallenge {
     pub fn origin_info(&self) -> &str {
         &self.origin_info
     }
-    /// Core RFC parser permits empty and comma-separated Origin names.
+    /// Parse a challenge whose Origin field may be empty, a single name, or a comma-separated list.
     pub fn parse(bytes: &[u8]) -> Result<Self, Error> {
         let mut r = Reader(bytes);
         if r.u16()? != TOKEN_TYPE {
@@ -226,8 +226,8 @@ pub fn build_challenge_header(
 fn tchar(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
 }
-/// Parse one credentials field, ignoring syntactically valid unknown parameters.
-/// Canonical padded base64url is required (padding is absent when unnecessary).
+/// Extract a token from one credentials field and skip unknown parameters that are well formed.
+/// Require canonical base64url with padding only where needed.
 pub fn parse_authorization_header(header: &str) -> Result<Token, Error> {
     if !header.is_ascii() || header.bytes().any(|b| b < 32 && b != b'\t' || b == 127) {
         return Err(Error);

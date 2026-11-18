@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Operator-controlled key-history catalog for stopped, single-host restores.
+"""Record and check key history for a single-host restore while both services are stopped.
 
-Usage: recovery-catalog.py {record,check} ISSUER_STATE ORIGIN_STATE CATALOG
-State arguments are SQLite database files. Stop both services first.
-Keep the newest catalog OUTSIDE any VPS/state snapshot restore scope (not merely
-outside the state directories). This is NOT automatic rollback detection: an old
-catalog restored with old state defeats the check. After a successful check,
-perform the separate explicit restore-context invalidation before restarting.
-Never resets or regenerates keys. High-water/context/generation are not compared.
+Run `recovery-catalog.py {record,check} ISSUER_STATE ORIGIN_STATE CATALOG`.
+Pass the SQLite database files as the two state arguments.
+
+Keep the latest catalog outside all snapshot restore paths because restoring
+an older catalog with the matching state defeats the rollback check.
+After the check passes, invalidate the restore context before restarting.
+
+The tool compares key history and leaves keys unchanged. It does not compare
+the high-water value, context, or generation.
 """
 
 import hashlib
@@ -37,7 +39,7 @@ def blob(value, length=None):
 
 
 def history(path, issuer):
-    # mode=ro, not immutable=1: committed WAL contents must remain visible.
+    # Use `mode=ro` so that committed changes in the write-ahead log stay visible.
     connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
     try:
         connection.execute("BEGIN")
@@ -118,7 +120,7 @@ def run(action, issuer, origin, catalog):
             data = source.read(16 * 1024 * 1024 + 1)
         require(len(data) <= 16 * 1024 * 1024)
         actual = json.loads(data, object_pairs_hook=no_duplicates)
-        # Canonical JSON comparison also distinguishes booleans from integers.
+        # Compare canonical JSON to distinguish `true` from `1`, which compare equal in Python.
         require(json.dumps(actual, sort_keys=True) == json.dumps(expected, sort_keys=True))
 
 

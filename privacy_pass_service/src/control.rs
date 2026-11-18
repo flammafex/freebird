@@ -1,6 +1,5 @@
-//! Operator-only management over the Issuer's local socket: live invitation
-//! provisioning and application-admission administration. Requests are exact
-//! single lines; anything else is answered with `error`.
+//! Operators use the issuer's local socket to provision invitations and manage application admission.
+//! A request that does not match the single-line format gets an `error` reply.
 
 use crate::admission::AdmissionStore;
 use crate::app_admission::{self, AppClients, AppRow, MAX_DAILY_CAP};
@@ -19,9 +18,9 @@ use tokio::{
 
 const SOCKET: &str = "control.sock";
 const REQUEST: &[u8] = b"provision\n";
-/// Longest accepted request line, including the newline (an `app-add` line is <= 80).
+/// Caps request reads at 128 bytes, enough for the longest `app-add` line of 80 bytes including its newline.
 const REQUEST_LIMIT: usize = 128;
-/// Bounds any reply; the largest `app-list` reply (256 rows) is well below this.
+/// Caps reply reads at 65,536 bytes, enough for an `app-list` reply with all 256 rows.
 const RESPONSE_LIMIT: u64 = 65_536;
 const ERROR: &str = "error\n";
 const TIMEOUT: Duration = Duration::from_secs(5);
@@ -36,8 +35,7 @@ pub struct ControlListener {
 }
 
 impl ControlListener {
-    /// The caller must already hold the admission store's lifetime lock, so
-    /// another Issuer cannot own the socket being replaced.
+    /// Hold the admission store's lock before binding so that the socket of a running issuer is not replaced.
     pub fn bind(dir: &Path) -> io::Result<Self> {
         let path = dir.join(SOCKET);
         match fs::symlink_metadata(&path) {
@@ -56,8 +54,8 @@ impl ControlListener {
         if !metadata.file_type().is_socket() {
             return Err(io::Error::other("control path is not a socket"));
         }
-        // State directories are private (0700), so setting 0600 after bind
-        // cannot expose the socket to other users in the intervening window.
+        // The state directory's `0700` permissions block other users from reaching the socket
+        // between binding it and setting its mode to `0600`.
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
         Ok(Self {
             listener,
@@ -65,9 +63,9 @@ impl ControlListener {
         })
     }
 
-    /// Sequential handling bounds provisioning work and connection resources.
-    /// Listener errors are fatal; individual protocol/store/write errors are not.
-    /// `apps` is `None` when application admission is not enabled.
+    /// Handles one connection at a time to limit the number of open connections and provisioning jobs.
+    /// Accept errors stop the server. Errors in a request, store operation, or reply leave it running.
+    /// Pass `None` for `apps` to disable application commands.
     pub async fn serve(
         self,
         store: Arc<AdmissionStore>,
@@ -75,7 +73,7 @@ impl ControlListener {
     ) -> io::Result<()> {
         loop {
             let (stream, _) = self.listener.accept().await?;
-            // No root bypass. Failure to obtain credentials also fails closed.
+            // Accept only a verified UID that matches the socket owner, even for root.
             if !matches!(stream.peer_cred(), Ok(cred) if cred.uid() == self.owner_uid) {
                 continue;
             }
@@ -88,7 +86,7 @@ fn valid_request(bytes: &[u8]) -> bool {
     bytes == REQUEST
 }
 
-/// One management command. Names and caps are validated during parsing.
+/// Represents a management command whose name and cap, when present, are validated during parsing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AppCommand {
     Add { name: String, cap: i64 },
@@ -97,7 +95,7 @@ pub enum AppCommand {
     List,
 }
 
-/// Canonical decimal cap: no sign, no leading zeros, range 1..=MAX_DAILY_CAP.
+/// Accepts decimal caps in `1..=MAX_DAILY_CAP` with no sign or leading zeros.
 fn parse_cap(text: &str) -> Option<i64> {
     if text.is_empty()
         || text.len() > 6
@@ -110,7 +108,7 @@ fn parse_cap(text: &str) -> Option<i64> {
     (1..=MAX_DAILY_CAP).contains(&cap).then_some(cap)
 }
 
-/// Exact grammar: one line, single spaces, terminated by a single `\n`.
+/// Accepts one command line that separates fields with single spaces and ends in one `\n`.
 pub fn parse_app(bytes: &[u8]) -> Option<AppCommand> {
     let line = std::str::from_utf8(bytes.strip_suffix(b"\n")?).ok()?;
     if line.contains('\n') {
@@ -135,8 +133,8 @@ pub fn parse_app(bytes: &[u8]) -> Option<AppCommand> {
     }
 }
 
-/// Executes one command and renders its exact reply. `None` means `error`.
-/// The `add` reply carries the key itself; it is the only secret-bearing reply.
+/// Runs the command and formats its reply, or returns `None` to signal `error`.
+/// Only a successful `app-add` includes a secret in its reply.
 pub fn run_app(clients: &AppClients, command: AppCommand, now: i64) -> Option<String> {
     match command {
         AppCommand::Add { name, cap } => clients
@@ -172,7 +170,7 @@ pub fn run_app(clients: &AppClients, command: AppCommand, now: i64) -> Option<St
     }
 }
 
-/// Reads one line of at most REQUEST_LIMIT bytes, stopping at the first newline.
+/// Stops reading after a chunk contains a newline or after `REQUEST_LIMIT` bytes.
 async fn read_request(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
     let mut buffer = [0; REQUEST_LIMIT];
     let mut length = 0;
@@ -202,8 +200,8 @@ async fn respond(
         .await
         .ok()
         .and_then(Result::ok);
-        // Provisioning is already durable. A failed/timed-out write orphans the
-        // invitation until its 24h expiry: never retry, undo, or refund it.
+        // Provisioning commits before the reply is written, so a failed or timed-out write
+        // leaves the invitation valid until it expires after 24 hours. Let it expire.
         return invitation.map_or_else(|| ERROR.to_owned(), |code| format!("ok {code}\n"));
     }
     let (Some(apps), Some(command)) = (apps, parse_app(&request)) else {
@@ -241,7 +239,7 @@ fn validate_response(bytes: &[u8]) -> Option<&str> {
     std::str::from_utf8(code).ok()
 }
 
-/// Exact reply shapes per command; anything else is refused, never displayed.
+/// Checks the reply format for the command so that unexpected responses are not displayed.
 fn valid_app_response(command: &AppCommand, bytes: &[u8]) -> bool {
     match command {
         AppCommand::Add { .. } => {
@@ -301,8 +299,7 @@ async fn live_app(
     String::from_utf8(response).map_err(|_| APP_ERROR)
 }
 
-/// Offline maintenance under the store's lifetime lock. Refuses while an
-/// issuer holds the lock, so it never races a serving process.
+/// Takes the store's lock for offline maintenance so that it cannot run while an issuer holds the store open.
 fn offline_app(dir: &Path, command: AppCommand) -> Result<String, &'static str> {
     if !app_admission::enabled(dir).map_err(|_| APP_ERROR)? {
         return Err(APP_ERROR);
@@ -312,9 +309,8 @@ fn offline_app(dir: &Path, command: AppCommand) -> Result<String, &'static str> 
     run_app(&clients, command, now).ok_or(APP_ERROR)
 }
 
-/// Runs one management line. The live socket is tried first. Offline execution
-/// happens only when no socket exists or it refuses connections. A live reply,
-/// including `error`, is never retried offline.
+/// Sends the command to the live socket and only runs it offline if the socket is missing
+/// or refuses the connection. Once connected, return the live result, including any error.
 pub async fn app_command(dir: &Path, line: &str) -> Result<String, &'static str> {
     let command = parse_app(line.as_bytes()).ok_or(APP_ERROR)?;
     match timeout(TIMEOUT, UnixStream::connect(dir.join(SOCKET))).await {
@@ -331,7 +327,7 @@ pub async fn app_command(dir: &Path, line: &str) -> Result<String, &'static str>
     }
 }
 
-/// Returns the sole invitation, never including protocol text or diagnostics.
+/// Requests one invitation from the live issuer and returns only the validated code.
 pub async fn provision_live(dir: &Path) -> Result<String, &'static str> {
     let mut stream = timeout(TIMEOUT, UnixStream::connect(dir.join(SOCKET)))
         .await
@@ -342,7 +338,7 @@ pub async fn provision_live(dir: &Path) -> Result<String, &'static str> {
         .map_err(|_| LIVE_ERROR)?
         .map_err(|_| LIVE_ERROR)?;
     let mut response = Vec::with_capacity(128);
-    // Read to EOF (the server closes after its one reply), capped at 128 bytes.
+    // Read until the server closes the connection after its reply, up to 128 bytes.
     timeout(TIMEOUT, stream.take(128).read_to_end(&mut response))
         .await
         .map_err(|_| LIVE_ERROR)?
@@ -428,7 +424,7 @@ mod tests {
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
         let server = tokio::spawn(listener.serve(store.clone(), None));
 
-        // An unknown request must fail without taking down the listener.
+        // An unknown request returns an error and leaves the listener open for the next request.
         let mut stream = UnixStream::connect(dir.path().join(SOCKET)).await.unwrap();
         stream.write_all(b"unknown\n").await.unwrap();
         let mut response = Vec::new();
@@ -625,8 +621,8 @@ mod tests {
         app_admission::initialize(dir.path()).unwrap();
         let listener = ControlListener::bind(dir.path()).unwrap();
         let server = tokio::spawn(listener.serve(store, None));
-        // The store exists on disk, but this server has not enabled it. A live
-        // `error` must NOT trigger an offline retry that would succeed.
+        // The server returns `error` because application admission is disabled. An offline retry
+        // could run against the store on disk, so the client must return the live error.
         let mut stream = UnixStream::connect(dir.path().join(SOCKET)).await.unwrap();
         stream.write_all(b"app-list\n").await.unwrap();
         let mut response = Vec::new();
@@ -638,7 +634,7 @@ mod tests {
         assert_eq!(app_command(dir.path(), "app-list\n").await, Err(APP_ERROR));
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());
-        // With the socket gone, the same command runs offline under the lock.
+        // Removing the socket allows the same command to run offline under the store's lock.
         assert_eq!(
             app_command(dir.path(), "app-list\n").await.unwrap(),
             "end\n"
@@ -676,7 +672,7 @@ mod tests {
             app_command(dir.path(), "app-list x\n").await,
             Err(APP_ERROR)
         );
-        // A raw malformed line over the socket is answered with an exact error.
+        // Sending a malformed line over the socket returns exactly `error\n`.
         let mut stream = UnixStream::connect(dir.path().join(SOCKET)).await.unwrap();
         stream.write_all(b"app-add Bad 1\n").await.unwrap();
         let mut response = Vec::new();
@@ -688,7 +684,7 @@ mod tests {
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());
         drop(clients);
-        // Offline after shutdown: the lock is free and the same state is visible.
+        // Shutdown releases the lock, so offline commands can read the same stored state.
         assert_eq!(
             app_command(dir.path(), "app-list\n").await.unwrap(),
             "app alpha 5 0 revoked\nend\n"

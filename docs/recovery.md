@@ -1,40 +1,44 @@
-# Stopped backup and recovery
+# Stop both services to back up or recover state.
 
-**Experimental single-host procedure.** Read the
-[deployment guide](deployment.md) first. Never restore a provider snapshot,
-SQLite main file, or copied state directory and simply restart: an older copy
-can reopen used invitations and tokens. These commands require root on the
-supported Ubuntu host, the reviewed service binary, and the matching source
-checkout for `scripts/recovery-catalog.py`. They are not automatic failover.
+Stop both services before copying or restoring their state. Restarting from a
+provider snapshot, SQLite main file, or copied state directory can reopen
+used invitations and tokens. This experimental procedure applies to the
+[single-host Ubuntu deployment](deployment.md) and does not provide automatic
+failover. Run the commands as root with the reviewed service binary and a
+matching source checkout for `scripts/recovery-catalog.py`.
 
-The three SQLite stores are `issuer/admission.sqlite`,
-`issuer/issuer-keys.sqlite`, and `origin/origin.sqlite`. The Issuer also has a
-`generation` file (and, if enabled, `pow-key`, `pow.sqlite` and
-`app-clients.sqlite`) and the
-Origin a `context` file. SQLite WAL files may contain
-committed changes not yet copied into the main files. **Copy whole state
-directories only while both processes are stopped**, including any `-wal`,
-`-shm`, and `.lock` files. Do not unlink a lock file while a process might
-hold it. Keep ownership and mode 0700 directories / mode 0600 state files.
-The Issuer's `control.sock` is a runtime socket, not state: a backup may omit
-it or copy it as a stale node; the Issuer replaces it at startup.
+Copy whole state directories while both processes are stopped. Include any
+`-wal`, `-shm`, and `.lock` files. The WAL files may contain committed changes
+that have not reached the main SQLite files. Preserve ownership and modes:
+0700 for directories and 0600 for state files. Do not unlink a lock file that
+a process might hold.
 
-## The independent key-history record
+The state directories contain three SQLite stores: `issuer/admission.sqlite`,
+`issuer/issuer-keys.sqlite`, and `origin/origin.sqlite`. The Issuer stores a
+`generation` file. Its optional features add `pow-key`, `pow.sqlite`, and
+`app-clients.sqlite`. The Origin stores a `context` file. A backup may omit
+`control.sock` or leave it as a stale node. The Issuer replaces this runtime
+socket at startup.
 
-The restore check compares complete public key histories for both roles:
-IDs, SPKI hashes, activation hours, whether the Issuer still has each private
-key, and Origin retirement flags. This prevents an older backup from
-silently restoring a retired signing key or forgetting a key tombstone. It
-cannot reconstruct lost keys or safely recover an arbitrary old rotation
-snapshot. Keep the **newest** catalog outside the VPS/provider-snapshot and
-application-state restore scope (for example, on separate operator-controlled
-storage). Update it after **every** key staging, activation, rescheduling, or
-retirement, before serving again. A lost, older, or mismatching catalog is a
-reason to stay stopped and investigate, not to record the restored state as
-the new authority. The catalog is an operational record, **not** an automatic
-or cryptographically authenticated rollback detector.
+## The catalog checks both key histories.
 
-The script's arguments are the **database files**, not their parent directories:
+Check both roles against the external catalog to avoid restoring a retired
+signing key or losing a key tombstone. The check compares complete public key
+histories. It covers IDs, SPKI hashes, activation hours, the presence of
+private keys on the Issuer, and retirement flags on the Origin. This record
+does not reconstruct lost keys or make arbitrary old rotation snapshots safe
+to restore. It does not detect rollback automatically and is not
+cryptographically authenticated.
+
+Keep the latest catalog outside the VPS instance, provider snapshots, and
+application state that you might restore. Separate storage that you control
+can keep it outside the restore scope. Update the catalog after every key
+staging, activation, rescheduling, or retirement, before you resume serving.
+If the catalog is missing, outdated, or mismatched, keep both services stopped
+and investigate. Do not replace the authoritative record with restored state.
+
+Pass the database file paths to the script so that it can record and check
+the catalog. Do not pass the paths to their parent directories:
 
 ```sh
 repo=/path/to/reviewed/freebird
@@ -48,17 +52,17 @@ python3 "$repo/scripts/recovery-catalog.py" check \
   "$issuer/issuer-keys.sqlite" "$origin/origin.sqlite" "$catalog"
 ```
 
-Do not place the catalog only under `/var/lib`, `/root`, or another directory
-included in a whole-VPS snapshot you might restore. The same restriction
-applies to the operator's record of which backup/catalog is current.
+Keep a copy of the catalog and the record of which backup and catalog are
+current outside any whole-VPS snapshot that you might restore. Do not keep
+the only copies under `/var/lib`, `/root`, or another directory in that
+snapshot.
 
-## Hold serving before touching state
+## Disable starts and stop both services before copying state.
 
-The shipped systemd units require
-`/etc/freebird/serving-enabled`. Keep that permission file **outside the
-restored application state**. Removal prevents later systemd starts; it does
-*not* stop processes already running. Therefore every backup, restore, and
-key-history catalog update begins:
+Remove `/etc/freebird/serving-enabled` to block systemd from starting either
+service. Keep that permission file outside the restored application state.
+Removing the file does not stop running processes. Disable starts and stop
+both units before every backup, restore, and update to the key catalog:
 
 ```sh
 rm -f /etc/freebird/serving-enabled
@@ -68,16 +72,17 @@ systemctl show freebird-issuer.service freebird-origin.service \
   -p Id -p ActiveState -p SubState -p MainPID
 ```
 
-Require **both** units inactive/dead with `MainPID=0`, and verify no other
-maintenance command holds their locks. A condition-skipped `systemctl start`
-can itself exit 0; do not interpret that exit code as a running service.
-Do not put this positive permission file in an auto-recreating boot script or
-restore it in a cleanup trap. Keep it absent on every failure.
+Verify that both units report inactive/dead with `MainPID=0` and that no
+maintenance command holds their locks. A `systemctl start` that skips a unit
+because its condition is unmet can exit 0. Check the unit status to verify
+that it started. Do not recreate the permission file in a boot script or
+cleanup trap. Keep it absent on every failure.
 
-## Make a cold backup
+## Copy both stopped services to private storage.
 
-With the hold above confirmed, use a new private directory on storage you
-control. The backup contains signing keys and bearer-secret generations:
+After confirming that both units are stopped and cannot start, create a
+private backup directory on storage that you control. The backup contains
+signing keys and the generation values for bearer secrets:
 
 ```sh
 umask 077
@@ -91,13 +96,13 @@ python3 "$repo/scripts/recovery-catalog.py" check \
   "$backup/origin-state/origin.sqlite" "$catalog"
 ```
 
-If any copy or check fails, discard the incomplete **new backup** after
-inspection, not the live state. Keep the backup and external catalog
-separately; do not claim that a backup alone will prevent rollback.
-Back up again after any key lifecycle change, and retain a compatible binary.
+If a copy or check fails, inspect and discard the incomplete backup. Leave
+the live state intact. Keep the external catalog and backup separate because
+the backup alone cannot prevent rollback. Back up again after any change to
+the keys and retain a compatible binary.
 
-For a routine backup with no restore, release the hold only after checking
-the current live key history against the catalog:
+For a backup that does not involve a restore, resume serving only after the
+live key history matches the catalog:
 
 ```sh
 python3 "$repo/scripts/recovery-catalog.py" check \
@@ -109,12 +114,13 @@ systemctl start freebird-issuer.service freebird-origin.service
 systemctl is-active freebird-issuer.service freebird-origin.service
 ```
 
-## Restore a compatible cold backup
+## Check and invalidate staged state before restoring it.
 
-Enter the hold again, check synchronized time (`timedatectl status`), and
-leave the existing live directories intact until the replacement is
-validated. Stage **both** copies in fresh sibling directories on the same
-filesystem; refuse existing staging names:
+Disable starts and stop both units before staging a restore. Confirm that
+the clock is synchronized with `timedatectl status`. Leave the live
+directories intact until the replacements have passed their checks. Stage
+both copies in fresh sibling directories on the same filesystem. Stop if
+either staging name already exists:
 
 ```sh
 test ! -e /var/lib/freebird-issuer/state.recovering
@@ -127,13 +133,15 @@ python3 "$repo/scripts/recovery-catalog.py" check \
   "$next_issuer/issuer-keys.sqlite" "$next_origin/origin.sqlite" "$catalog"
 ```
 
-The check **must pass before invalidation**. A backup from before a later
-rotation or retirement is incompatible; do not use `init-*`, reinstall a
-retired key, or change the catalog to make it pass. Recover a newer compatible
-backup or handle a new deployment/trust epoch as a separate decision.
+Require a successful catalog check before invalidating credentials. A backup
+that predates a rotation or retirement is incompatible. Do not run `init-*`,
+reinstall a retired key, or change the catalog to make the check pass. Find a
+compatible backup or consider a separate deployment with a separate trust
+epoch.
 
-Run each explicit maintenance command as its service user on the **staged**
-state, while both units remain stopped:
+Invalidate credentials in both staged directories before you let either unit
+serve. Run each maintenance command as its service user while both units are
+stopped:
 
 ```sh
 bin=/usr/local/bin/freebird-privacy-pass-service
@@ -145,21 +153,26 @@ runuser -u freebird-issuer -- "$bin" issuer-key-status "$next_issuer"
 runuser -u freebird-origin -- "$bin" origin-key-status "$next_origin"
 ```
 
-The Issuer command publishes a new invitation generation and removes every
-restored invitation; if PoW is enabled it also rotates `pow-key` and clears
-the spent-challenge table; if app admission is enabled it revokes every
-application key, so run `app-add` again for each application afterward. The Origin command publishes a new context secret and
-atomically clears **all** restored challenges and spent rows while keeping
-the full key/tombstone history, pinned names, and clock floor. If interrupted
-between secret publication and database commit, the hash mismatch refuses
-normal startup; **restage from the intact backup and repeat**, never manually
-edit a hash or reuse the secret. Both commands must finish before either
-unit can serve. Old invitations and old-context tokens, whether used or
-unused at snapshot time, are invalid. New invitations must be provisioned
-offline after recovery.
+`recover-issuer-admission` changes the invitation generation and removes
+every restored invitation. If proof-of-work is enabled, it also rotates
+`pow-key` and clears the table of spent challenges. If app admission is
+enabled, it revokes every application key. Run `app-add` for each application
+after recovery to give it a replacement key.
 
-Only when all checks pass, retain the old live state in private quarantine and
-swap the staged directories into their expected locations while still held:
+`recover-origin-context` replaces the context secret and clears all restored
+challenges and spent rows in one transaction. It preserves the key history,
+retired key records, pinned names, and minimum clock time. If recovery stops
+between publication of the secret and the database commit, a hash mismatch
+blocks normal startup. Stage both copies again from the intact backup and
+repeat the procedure. Do not edit a hash or reuse the secret.
+
+Complete both commands before either unit serves. This invalidates all old
+invitations and old-context tokens, including those that were unused at
+snapshot time. Provision replacement invitations offline after recovery.
+
+When all checks pass, move the old live directories into private quarantine
+and put the staged directories in their expected locations. Keep both units
+stopped and prevent starts while you move the directories:
 
 ```sh
 test ! -e /var/lib/freebird-issuer/state.pre-restore
@@ -173,23 +186,24 @@ python3 "$repo/scripts/recovery-catalog.py" check \
   "$issuer/issuer-keys.sqlite" "$origin/origin.sqlite" "$catalog"
 ```
 
-Any partial move or failed status check leaves the serving permission
-**absent**. Inspect and repair the staged/quarantined directories under the
-hold; never automatically retry with a different key history. Release the
-hold with the `install … serving-enabled` and `systemctl start` sequence
-above only after the recovered states pass their checks and the two names,
-key IDs, and activation times agree. Verify the directory, a fresh 401
-challenge, one fresh issuance/redemption, and replay 401 through nginx.
+Keep the serving permission absent if a move is incomplete or a status check
+fails. Inspect and repair the staged and quarantined directories while both
+units are stopped. Do not retry automatically with a different key history.
+Run the `install … serving-enabled` and `systemctl start` sequence only
+after the recovered states pass their checks and the names, key IDs, and
+activation times agree. Through nginx, verify the directory, a fresh 401
+challenge, one fresh issuance and redemption, and a 401 on replay.
 
-If only one store was damaged, preserve the healthy stores rather than rolling
-them back: copy their current complete directories into staging, then replace
-only the damaged store's database **and its matching secret and WAL sidecars**
-from the cold backup while stopped. Check key history and run **both**
-invalidation commands on the staged pair as above. Never combine a database
-main file with WAL from a different copy. The automated restore drill tests
-admission-only, Origin-only, Issuer-key-only, and full-bundle cases.
+If only one store was damaged, preserve the healthy stores by copying their
+complete live directories into staging while both services are stopped.
+Replace only the damaged store's database and its matching secret and WAL
+sidecars from the cold backup. Do not combine a main database file and WAL
+files from different copies. Check key history and run both invalidation
+commands on the staged pair. The automated restore drill tests recovery of
+admission state, Origin state, Issuer keys, and the full bundle.
 
-An entire machine-image rollback that also restores the serving permission
-and external catalog is **not detectable by this local software**. Do not
-describe this procedure as power-loss proof, arbitrary historical restore,
-automatic failover, or independent cryptographic review.
+The local software cannot detect a machine-image rollback that also restores
+the serving permission and the external catalog. The procedure does not
+guarantee recovery after power loss or support arbitrary historical restores.
+It does not provide automatic failover or replace independent cryptographic
+review.

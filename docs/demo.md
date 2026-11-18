@@ -1,52 +1,59 @@
-# Browser demo and proof-of-work admission
+# The browser demo exchanges a solved puzzle for an invitation.
 
-**Experimental demo, not a production service.** Read the
-[deployment guide](deployment.md) first. This page adds an optional, open way to
-obtain one admission: a visitor solves an [ALTCHA](https://altcha.org/)
-proof-of-work puzzle in the browser, the Issuer exchanges the solved puzzle for
-one invitation, and the page uses that invitation to obtain and redeem one
-RFC 9578 type-2 token. Operator invitations (`provision`, `provision-live`)
-keep working unchanged.
+Solve an [ALTCHA](https://altcha.org/) proof-of-work puzzle in the browser to
+request one invitation. The Issuer exchanges the proof for the invitation,
+and the page uses it to obtain and redeem one RFC 9578 type-2 token. This
+experimental demo offers optional open admission on the
+[single-host deployment](deployment.md). Do not use it in production.
+Operators can also issue invitations with `provision` and `provision-live`.
 
-Proof-of-work raises the cost of collecting many tokens. **It does not prove a
-unique person**, and a well-resourced client can still solve many puzzles.
-Treat it as rate limiting with a price, not identity.
+Proof-of-work raises the cost of collecting tokens by requiring a puzzle
+for each invitation. A client with enough computing power can solve many
+puzzles. Use proof-of-work to raise the cost of repeated requests, not to
+establish a person's identity or uniqueness.
 
-## What runs where
+## nginx serves the page and the Issuer verifies proofs.
 
-| Piece | Role |
+The browser uses the page and these routes to obtain and spend a token:
+
+| Page or route | Behavior |
 |---|---|
-| `demo/web/` | Static page served by nginx on the **Origin** host. Runs the ALTCHA widget (3.6.0, self-hosted) and `@cloudflare/privacypass-ts` 0.9.0 in the browser. |
-| `GET /freebird/pow/challenge` | Issuer: signed ALTCHA v2 challenge (PBKDF2/SHA-256, HMAC-SHA-256), valid 300 s. |
-| `POST /freebird/pow/admission` | Issuer: verifies `{"payload": …}`, records the challenge as spent, then provisions **one** invitation. 403 for invalid, expired or reused proofs; 429 when busy. |
-| `/private-token/issue` | Unchanged issuance; the page sends the invitation as `Freebird-Admission`. |
-| `/private-token/protected` | Unchanged Origin redemption; replay returns 401. |
+| `demo/web/` | nginx serves the static page on the Origin host. The page runs the self-hosted ALTCHA widget 3.6.0 and `@cloudflare/privacypass-ts` 0.9.0 in the browser. |
+| `GET /freebird/pow/challenge` | The Issuer returns a signed ALTCHA v2 challenge that is valid for 300 seconds. The challenge uses PBKDF2/SHA-256 and HMAC-SHA-256. |
+| `POST /freebird/pow/admission` | The Issuer verifies `{"payload": …}`, records the challenge as spent, and provisions one invitation. It returns 403 for invalid, expired, or reused proofs and 429 when busy. |
+| `/private-token/issue` | The page uses the standard issuance route and sends the invitation as `Freebird-Admission`. |
+| `/private-token/protected` | The page uses the standard Origin redemption route, which returns 401 on replay. |
 
-The Issuer commits the spent challenge **before** creating the invitation. If
-creating the invitation fails, the proof is burned, not refunded. A solved
-challenge yields at most one invitation, and an invitation still permits at
-most one signing attempt.
+The Issuer commits the record of the spent challenge before it creates an
+invitation. If creation fails, the proof remains spent. Each solved challenge
+yields at most one invitation, and each invitation permits at most one
+signing attempt.
 
-Browsers do not speak Privacy Pass natively, so the page performs the protocol
-in JavaScript. The Issuer allows cross-origin requests from exactly one
-configured browser origin. The pinned TypeScript library carries the `sjcl`
-ECC advisory
-[GHSA-2w8x-224x-785m](https://github.com/advisories/GHSA-2w8x-224x-785m); the
-demo uses only its type-2 RSA path. That does not make the advisory safe for
-other uses of the library.
+The page runs Privacy Pass in JavaScript because browsers do not implement
+it natively. The Issuer allows cross-origin requests from exactly one
+configured browser origin.
 
-## Enable it
+The demo uses only the pinned TypeScript library's type-2 RSA path.
+The library carries the `sjcl` ECC advisory
+[GHSA-2w8x-224x-785m](https://github.com/advisories/GHSA-2w8x-224x-785m),
+which can affect other uses of the library.
 
-1. Initialize PoW state once, with the Issuer stopped or running (it creates
-   `pow-key` and `pow.sqlite` and refuses if either exists):
+## Enable the puzzle routes and serve the demo page.
+
+Set up proof-of-work on the Issuer and deploy the static page on the Origin:
+
+1. **Initialize proof-of-work state** to create `pow-key` and `pow.sqlite`.
+   Run the command once with the Issuer stopped or running. It fails if
+   either file already exists:
 
     ```sh
     runuser -u freebird-issuer -- "$bin" init-issuer-pow "$issuer"
     ```
 
-2. Start the Issuer with a sixth argument, the exact browser origin of the
-   demo page (`https://host[:port]`, no path). With the shipped unit, add a
-   drop-in such as `/etc/systemd/system/freebird-issuer.service.d/60-pow.conf`:
+2. **Set the sixth `serve-issuer` argument** to the demo page's exact browser
+   origin to enable the puzzle routes and CORS. Use `https://host[:port]`
+   with no path. For the packaged unit, add a drop-in such as
+   `/etc/systemd/system/freebird-issuer.service.d/60-pow.conf`:
 
     ```ini
     [Service]
@@ -54,11 +61,13 @@ other uses of the library.
     ExecStart=/usr/local/bin/freebird-privacy-pass-service serve-issuer /var/lib/freebird-issuer/state ${FREEBIRD_ISSUER_NAME} https://${FREEBIRD_ISSUER_NAME}/private-token/issue 127.0.0.1:8081 https://${FREEBIRD_ORIGIN_NAME}
     ```
 
-    Without the sixth argument the PoW routes return 404 and no CORS headers
-    are sent. A missing or malformed `pow-key`/`pow.sqlite` refuses startup;
-    nothing is created implicitly.
+    If you omit the sixth argument, the puzzle routes return 404 and the
+    Issuer sends no CORS headers. With the argument set, startup fails if
+    `pow-key` or `pow.sqlite` is missing or malformed. Startup does not
+    create the files.
 
-3. Build the page and copy only `dist/` to the Origin's web root:
+3. **Build and install the static page** so that nginx can serve it from
+   the Origin's web root. Copy only the contents of `dist/`:
 
     ```sh
     cd demo/web
@@ -68,28 +77,35 @@ other uses of the library.
     cp -R dist/. /var/www/freebird-demo/
     ```
 
-4. In [`deploy/nginx/freebird.conf`](https://github.com/flammafex/freebird/blob/main/deploy/nginx/freebird.conf),
-   replace `https://issuer.example.org` in the Origin's
-   `Content-Security-Policy` with your Issuer origin. The template already
-   rate-limits `/freebird/pow/` (10 requests per minute per client address,
-   burst 5) and forwards the CORS headers the Issuer checks. Run `nginx -t`,
-   then reload.
+4. **Allow the Issuer in the Origin's `Content-Security-Policy`** so that
+   the page can contact it. Replace `https://issuer.example.org` with your
+   Issuer origin in
+   [`deploy/nginx/freebird.conf`](https://github.com/flammafex/freebird/blob/main/deploy/nginx/freebird.conf).
+   The template limits `/freebird/pow/` to 10 requests per minute per
+   client address with a burst of 5. It forwards the CORS headers that the
+   Issuer checks. Run `nginx -t`, then reload nginx.
 
-The page sends no requests to third parties, uses no cookies or browser
-storage, and keeps the invitation and token in memory only.
+The page keeps the invitation and token in memory only. It uses no cookies
+or browser storage and sends no requests to third parties.
 
-## Recovery
+## Recovery invalidates outstanding puzzles.
 
-`pow-key` and `pow.sqlite` live in the Issuer state directory and are backed up
-with it. `recover-issuer-admission` also rotates `pow-key` and clears the spent
-table, so challenges issued before a restore can no longer be exchanged. See
-[stopped backup and recovery](recovery.md).
+Back up `pow-key` and `pow.sqlite` with the Issuer state directory. During
+[stopped recovery](recovery.md), `recover-issuer-admission` rotates `pow-key`
+and clears the table of spent challenges. The Issuer then rejects exchanges
+for challenges issued before the restore.
 
-## Tests
+## Tests check proof exchange and token replay.
 
-- `python3 scripts/test-pow.py` — real Issuer: challenge, solve, one
-  admission, replay 403, CORS for the configured origin only.
-- `python3 scripts/test-browser-demo.py` — headless Chrome through nginx TLS
-  against real Issuer and Origin: PoW, issuance, access 200, replay 401, with
-  no console errors, no CSP violations, and no requests outside the two hosts.
-  Requires nginx, Chrome/Chromium, Node 26 and npm.
+Run these tests to check the Issuer and browser flows:
+
+- Run `python3 scripts/test-pow.py` to check **one invitation per solved
+  challenge** against a real Issuer. The test requests and solves a challenge,
+  checks that replay returns 403, and verifies CORS for the configured origin
+  only.
+- Run `python3 scripts/test-browser-demo.py` to check **issuance and
+  redemption in Chrome** through nginx TLS with a real Issuer and Origin.
+  The test runs headless, solves a puzzle, and checks for access 200 and
+  replay 401. It verifies that there are no console errors, CSP violations,
+  or requests outside the two hosts. It requires nginx, Chrome or Chromium,
+  Node 26, and npm.

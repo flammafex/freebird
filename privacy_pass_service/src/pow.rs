@@ -1,5 +1,5 @@
-//! Optional ALTCHA v2 gate: a spent proof is committed before provisioning.
-//! Like admission state, unannounced rollback requires offline recovery.
+//! The optional ALTCHA v2 gate records a proof as spent before issuing an admission code.
+//! If the database is rolled back, run offline recovery to invalidate old proofs.
 use crate::admission::AdmissionStore;
 use altcha::{
     create_challenge, verify_solution, Challenge, CreateChallengeOptions, Payload,
@@ -32,16 +32,16 @@ use std::{
 use tokio::sync::Semaphore;
 
 const EXPIRY_SECONDS: i64 = 300;
-// Target roughly 1–5 seconds on a typical laptop widget, not a timing guarantee:
-// 256 trials on average, each doing 20,000 PBKDF2/SHA-256 iterations. Device
-// speed, worker count and the geometric search tail affect actual solve time.
+// This cost targets one to five seconds in a laptop browser at an average of 256 trials.
+// Each trial runs 20,000 iterations of PBKDF2 with SHA-256. Solve time depends on device
+// speed, worker count, and how many trials it takes to find a match.
 const POW_COST: u32 = 20_000;
 const POW_KEY_PREFIX: &str = "00";
 const VERIFY_CAPACITY: usize = 2;
 const BODY_LIMIT: usize = 8192;
 const SCHEMA: &str = "CREATE TABLE spent (challenge_id BLOB PRIMARY KEY NOT NULL CHECK(typeof(challenge_id)='blob' AND length(challenge_id)=32), expires_at INTEGER NOT NULL)";
 
-/// Validated, single browser origin; never wildcard or credentials.
+/// Stores one validated HTTPS origin for CORS and excludes wildcards and credentials.
 #[derive(Clone)]
 pub struct BrowserOrigin(HeaderValue);
 
@@ -156,8 +156,8 @@ fn read_key(dir: &Path) -> Result<String> {
     );
     let mut key = [0; 32];
     file.read_exact(&mut key)?;
-    // The crate accepts a UTF-8 string secret, so injectively encode the 32
-    // random bytes. This retains all 256 bits of entropy; no custom crypto.
+    // Encode the random bytes as base64url to pass the secret to ALTCHA as UTF-8
+    // while preserving all 256 bits of entropy.
     Ok(Base64UrlUnpadded::encode_string(&key))
 }
 
@@ -233,7 +233,8 @@ fn open_db(dir: &Path) -> Result<Connection> {
     Ok(db)
 }
 
-/// Explicit, non-resetting initialization. No admission lock is needed.
+/// Creates PoW state only if its files are absent, so existing state is preserved.
+/// Initialization takes the PoW lock and does not require the admission lock.
 pub fn initialize(dir: &Path) -> Result<()> {
     let _lock = lock(dir)?;
     require_absent(&dir.join("pow-key"))?;
@@ -255,9 +256,9 @@ pub fn initialize(dir: &Path) -> Result<()> {
     sync_dir(dir)
 }
 
-/// Offline restore hook. Call while holding admission ownership; absent PoW
-/// files preserve old behavior. Rotate before clearing, so a crash never makes
-/// old proofs valid against an empty spent table.
+/// Rotates the key before clearing spent proofs so that a crash cannot leave old proofs
+/// valid against an empty table. Call during offline recovery while holding the admission lock.
+/// If both PoW files are absent, recovery succeeds without changing PoW state.
 pub fn invalidate_for_restore(dir: &Path) -> Result<()> {
     match fs::symlink_metadata(dir.join("pow-key")) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -331,10 +332,8 @@ impl Pow {
         if !verified.verified {
             return Err(StatusCode::FORBIDDEN);
         }
-        // Hash the authenticated signature BYTES, not the solution/counter:
-        // a challenge may have many solutions but must yield only one admission.
-        // Every challenge signs fresh random nonce+salt. HMAC authenticates that
-        // identity; decoding avoids textual encodings becoming new identities.
+        // Hash the decoded signature so that different solutions or encodings of the same
+        // challenge share one ID. The HMAC covers a fresh random nonce and salt for each challenge.
         let signature = payload
             .challenge
             .signature
@@ -373,9 +372,8 @@ impl Pow {
                 return Err(StatusCode::FORBIDDEN);
             }
         }
-        // Invariant: one solved challenge yields at most one admission. Commit
-        // the spent proof FIRST; provisioning failure/cancellation burns it,
-        // without refunds or any change to existing admission semantics.
+        // Commit the spent proof before provisioning so that each challenge yields at most
+        // one admission code. The proof stays spent if provisioning fails or the request is cancelled.
         self.admission
             .provision(now)
             .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)
@@ -434,7 +432,7 @@ async fn admission(State(pow): State<Arc<Pow>>, request: Request) -> Response {
         Ok(permit) => permit,
         Err(_) => return no_store(StatusCode::TOO_MANY_REQUESTS),
     };
-    // Hold capacity even if the HTTP future is cancelled.
+    // Move the permit into the blocking job so that cancelling the request cannot free it before the job ends.
     match tokio::task::spawn_blocking(move || {
         let _permit = permit;
         pow.redeem(&submission.payload)

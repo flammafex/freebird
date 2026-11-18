@@ -1,8 +1,8 @@
-//! Authoritative issuer key schedule (schema v2). Offline mutators take an
-//! injected clock (`now`, Unix seconds) and never read the system clock.
-//! The persistent sidecar must never be unlinked: its OS lock is held for the
-//! lifetime of this store, and is released automatically after process death.
-//! Restoring an older database cannot be detected here.
+//! The issuer selects a signing key from the schedule in the v2 database.
+//! Offline changes use the supplied `now` in Unix seconds, so the system clock is not read.
+//! Keep the lock file in place so that all processes lock the same inode.
+//! The operating system holds the lock while the store is open and releases it if the process exits.
+//! There is no check for rollback to an older database snapshot.
 
 use anyhow::{bail, ensure, Context, Result};
 use freebird_crypto::privacy_pass::{PublicKey, SecretKey};
@@ -34,7 +34,8 @@ const V1_REFUSAL: &str = "key schema v1 unsupported; no migration — initialize
 const CLOCK_BEHIND: &str = "clock is behind the key store high-water mark";
 const SECONDS_PER_HOUR: u64 = 3600;
 const ACCEPTANCE_GRACE: u64 = 300;
-/// Same bound as Origin: activation seconds plus grace must fit in SQLite i64.
+/// Use the Origin's bound so that the activation time in seconds plus grace fits
+/// in a SQLite `i64`.
 const MAX_HOUR: u64 = (i64::MAX as u64 - ACCEPTANCE_GRACE) / SECONDS_PER_HOUR;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,7 +58,7 @@ pub struct KeyRecord {
     pub acceptance_deadline: Option<u64>,
 }
 
-/// Staged last; all other keys ordered by activation hour.
+/// The manifest lists keys in ascending order by activation hour and puts the staged key last.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Manifest {
     pub now: u64,
@@ -65,14 +66,14 @@ pub struct Manifest {
     pub keys: Vec<KeyRecord>,
 }
 
-/// Secret material deliberately has no Debug implementation.
+/// Omit `Debug` so that this type cannot expose private key material through debug formatting.
 pub struct SigningKey {
     pub secret: SecretKey,
     pub public: PublicKey,
     pub activation_hour: u64,
 }
 
-/// One validated row. Holds private material, so it has no Debug implementation.
+/// Omit `Debug` because a validated row can contain private key material.
 #[derive(PartialEq, Eq)]
 struct Row {
     key_id: [u8; 32],
@@ -87,7 +88,7 @@ struct Snapshot {
     rows: Vec<Row>,
 }
 
-/// Owns an exclusive lifetime lock independent of admission state.
+/// An exclusive lock is held while the store is open, even when no requests are in progress.
 pub struct KeyStore {
     db: Mutex<Connection>,
     _lock: File,
@@ -154,8 +155,8 @@ fn require_plain_schema(db: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Probe before write-capable connection setup or permission checks. In
-/// particular a legacy DELETE-journal database must get the explicit v1 refusal.
+/// Check the schema version with a read-only connection before checking journal
+/// mode or permissions so that a v1 database in `DELETE` mode gets the v1 error.
 fn require_v2(path: &Path) -> Result<()> {
     let probe = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let legacy: i64 = probe.query_row(
@@ -196,10 +197,10 @@ fn parse_row(
     );
     let digest: [u8; 32] = Sha256::digest(&spki).into();
     ensure!(digest == key_id, "key ID does not match SPKI digest");
-    // from_spki accepts only the canonical fixed-profile encoding.
+    // `PublicKey::from_spki` rejects encodings outside the required canonical profile.
     let public = PublicKey::from_spki(&spki)?;
     if let Some(pkcs8) = &pkcs8 {
-        // from_pkcs8 accepts only canonical PKCS#8 DER.
+        // `SecretKey::from_pkcs8` rejects private keys that are not in canonical PKCS#8 DER.
         let secret = SecretKey::from_pkcs8(pkcs8)?;
         ensure!(
             secret.public_key()?.to_spki() == public.to_spki(),
@@ -214,8 +215,8 @@ fn parse_row(
     })
 }
 
-/// Time-independent structural invariants 1-7 over validated rows. Row-level
-/// canonicality and key-ID binding are checked by `parse_row` before this runs.
+/// Check rules that apply across the rows and do not depend on the clock.
+/// `parse_row` checks canonical key encodings and matching IDs before these checks run.
 fn check_structure(rows: &[Row]) -> Result<()> {
     let mut ids = HashSet::new();
     for row in rows {
@@ -225,25 +226,26 @@ fn check_structure(rows: &[Row]) -> Result<()> {
         rows.iter().all(|r| r.hour.is_none_or(|h| h <= MAX_HOUR)),
         "activation hour out of range"
     );
-    // 4: at most one staged key, and it is privately held.
+    // The store allows at most one staged key, which must have private material.
     let staged: Vec<&Row> = rows.iter().filter(|r| r.hour.is_none()).collect();
     ensure!(staged.len() <= 1, "more than one staged key");
     ensure!(
         staged.iter().all(|r| r.pkcs8.is_some()),
         "staged key lacks private material"
     );
-    // 3: private cardinality.
+    // The store must contain at least one and at most three keys with private material.
     let private: Vec<&Row> = rows.iter().filter(|r| r.pkcs8.is_some()).collect();
     ensure!(
         (1..=3).contains(&private.len()),
         "invalid private key cardinality"
     );
-    // 5: at most two scheduled, active, or retiring keys among private rows.
+    // At most two keys with private material may have activation hours.
     ensure!(
         private.iter().filter(|r| r.hour.is_some()).count() <= 2,
         "more than two scheduled, active, or retiring keys"
     );
-    // 6: distinct activation hours; the newest belongs to a private row.
+    // Each activation hour must be distinct, and the latest must belong to a key
+    // with private material.
     let mut hours = HashSet::new();
     for hour in rows.iter().filter_map(|r| r.hour) {
         ensure!(hours.insert(hour), "duplicate activation hour");
@@ -257,7 +259,7 @@ fn check_structure(rows: &[Row]) -> Result<()> {
         newest.pkcs8.is_some(),
         "newest activation belongs to a fully retired key"
     );
-    // 7: truncated IDs are distinct across private rows only.
+    // The last byte of each key ID must be unique among keys with private material.
     let mut suffixes = HashSet::new();
     for row in &private {
         ensure!(
@@ -311,7 +313,8 @@ fn validate(db: &Connection) -> Result<Snapshot> {
     Ok(Snapshot { high_water, rows })
 }
 
-/// Index of the greatest activation hour that is <= `hour`, or None.
+/// Return the index of the latest activation hour at or before `hour`, or `None`
+/// if no activation qualifies.
 pub fn select_active(activation_hours: &[u64], hour: u64) -> Option<usize> {
     activation_hours
         .iter()
@@ -321,7 +324,7 @@ pub fn select_active(activation_hours: &[u64], hour: u64) -> Option<usize> {
         .map(|(index, _)| index)
 }
 
-/// Row index of the active private key at `now`.
+/// Return the row index of the private key that is active at `now`, if there is one.
 fn active_index(snapshot: &Snapshot, now: u64) -> Option<usize> {
     let candidates: Vec<(usize, u64)> = snapshot
         .rows
@@ -355,7 +358,7 @@ fn private_suffixes(snapshot: &Snapshot) -> Vec<u8> {
         .collect()
 }
 
-/// Pure derivation of every key's state at `now`; never stored.
+/// Use the schedule and `now` to report each key's state without writing it to the store.
 fn derive(snapshot: &Snapshot, now: u64) -> Result<Vec<KeyRecord>> {
     let hour = now / SECONDS_PER_HOUR;
     let active = active_index(snapshot, now);
@@ -369,7 +372,7 @@ fn derive(snapshot: &Snapshot, now: u64) -> Result<Vec<KeyRecord>> {
             Some(_) if active == Some(index) => KeyState::Active,
             Some(_) => KeyState::RetiredForIssuance,
         };
-        // The successor is the next scheduled activation of any key.
+        // Use the next activation hour to find the successor, even if that key is retired.
         let successor = row
             .hour
             .and_then(|h| hours.iter().copied().filter(|&o| o > h).min());
@@ -516,9 +519,9 @@ fn ensure_retirement(
 }
 
 impl KeyStore {
-    /// Explicit fresh creation only: genesis key active from hour 0, high-water 0.
-    /// A failed initialization leaves its reservation; retry never resets or
-    /// regenerates uncertain state. Parent must already exist.
+    /// Create a store with its first key active from hour 0 and its high-water mark set to 0.
+    /// The parent directory must exist. If setup fails after reserving files, those
+    /// files remain so that retrying cannot replace uncertain state.
     pub fn initialize(path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
         let _lock = lock(path, true)?;
@@ -580,8 +583,8 @@ impl KeyStore {
             .map_err(|_| anyhow::anyhow!("key store mutex poisoned"))
     }
 
-    /// Read-only status at `now`. Deliberately not refused below the high-water
-    /// mark so operators can inspect a skewed clock; it never advances state.
+    /// Report the state at `now` even if it is below the high-water mark, so that
+    /// operators can diagnose clock skew. This call leaves the store unchanged.
     pub fn manifest(&self, now: u64) -> Result<Manifest> {
         let db = self.connection()?;
         let snapshot = validate(&db)?;
@@ -592,7 +595,7 @@ impl KeyStore {
         })
     }
 
-    /// Commits one new candidate. Refused while a staged or scheduled key exists.
+    /// Commit a candidate only when no staged or scheduled key exists.
     pub fn stage(&self, now: u64) -> Result<[u8; 32]> {
         self.stage_with_generator(now, || Ok(SecretKey::generate()?))
     }
@@ -606,8 +609,9 @@ impl KeyStore {
         let before = validate(&db)?;
         ensure!(now >= before.high_water, CLOCK_BEHIND);
         ensure_stageable(&before, now)?;
-        // Generation stays outside the transaction; the store lock and mutex
-        // keep the snapshot valid. Never persist a colliding candidate.
+        // Generate candidates before starting the transaction. The store lock and
+        // mutex protect the snapshot during generation.
+        // Skip any candidate whose truncated ID matches that of a private key.
         let suffixes = private_suffixes(&before);
         let mut candidate = None;
         for _ in 0..16 {
@@ -657,7 +661,7 @@ impl KeyStore {
         Ok(id)
     }
 
-    /// Public-only canonical SPKI export for any key in the store.
+    /// Export the public part of any stored key as canonical SPKI, even after retirement.
     pub fn spki(&self, key_id: [u8; 32]) -> Result<Vec<u8>> {
         let db = self.connection()?;
         validate(&db)?;
@@ -670,9 +674,11 @@ impl KeyStore {
         .context("unknown key ID")
     }
 
-    /// Schedules the staged key (or reschedules an already scheduled key) to
-    /// activate at `at` (Unix seconds, hour-aligned). Same-time requests are a
-    /// successful no-op. Every call that passes its checks advances high-water.
+    /// Schedule the staged key to activate at `at`, or change a scheduled key's
+    /// activation if there is no staged key. Supply `at` in Unix seconds on a future
+    /// hour boundary.
+    /// Every successful call records `now` as the high-water mark, even if the
+    /// schedule is unchanged.
     pub fn schedule_activation(&self, at: u64, now: u64) -> Result<[u8; 32]> {
         ensure!(
             at.is_multiple_of(SECONDS_PER_HOUR),
@@ -740,10 +746,11 @@ impl KeyStore {
         Ok(target)
     }
 
-    /// Removes private material only after a private successor is active at `now`.
-    /// After commit, a WAL truncation checkpoint is best effort: errors or busy
-    /// results still return Ok, never implying that committed retirement rolled
-    /// back. This is not a destruction guarantee (including backups or memory).
+    /// Remove private material only after a successor with private material has
+    /// activated by `now`.
+    /// Try to truncate the WAL after committing retirement. The function still returns
+    /// `Ok(())` if the checkpoint fails or reports that the database is busy.
+    /// Retirement does not guarantee that private material is erased from backups or memory.
     pub fn retire(&self, key_id: [u8; 32], now: u64) -> Result<()> {
         let mut db = self.connection()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -787,7 +794,8 @@ impl KeyStore {
         Ok(())
     }
 
-    /// Private keys with activation hours (never staged or retired), ascending by hour.
+    /// Return only keys that have both private material and an activation hour,
+    /// in ascending order by activation hour.
     pub fn signing_keys(&self, now: u64) -> Result<Vec<SigningKey>> {
         let db = self.connection()?;
         let snapshot = validate(&db)?;
@@ -846,14 +854,14 @@ mod tests {
         }
     }
 
-    /// K0 genesis (active from hour 0); K1 staged at T0.
+    /// Create a store with the first key active from hour 0 and a second key staged at `T0`.
     fn staged_fixture() -> (tempfile::TempDir, PathBuf, [u8; 32]) {
         let (dir, path) = fresh();
         let id = KeyStore::open(&path).unwrap().stage(T0).unwrap();
         (dir, path, id)
     }
 
-    /// K0 active; K1 staged at T0, then scheduled for S.
+    /// Schedule the second key to activate at `S`, leaving the first key active until then.
     fn scheduled_fixture() -> (tempfile::TempDir, PathBuf, [u8; 32]) {
         let (dir, path, id) = staged_fixture();
         let scheduled = KeyStore::open(&path)
@@ -883,7 +891,7 @@ mod tests {
         bytes.iter().map(|b| format!("{b:02x}")).collect()
     }
 
-    /// Fresh key material whose truncated ID avoids every listed suffix.
+    /// Generate a key whose truncated ID does not match any suffix in `used`.
     fn material_avoiding(used: &[u8]) -> ([u8; 32], Vec<u8>, Vec<u8>) {
         loop {
             let key = SecretKey::generate().unwrap();
@@ -898,8 +906,8 @@ mod tests {
         }
     }
 
-    /// Drops every structural constraint so corruption can be injected directly.
-    /// Used only inside transactions that are rolled back.
+    /// Replace the tables with versions that allow tests to insert invalid
+    /// metadata and key rows. Roll back the transaction after checking validation.
     fn unconstrain(tx: &Transaction) {
         tx.execute_batch(
             "ALTER TABLE metadata RENAME TO old_metadata;
@@ -915,8 +923,8 @@ mod tests {
         .unwrap();
     }
 
-    /// Synthetic row for structural checks; `tag` keeps IDs distinct and
-    /// `suffix` controls the truncated ID that invariant 7 compares.
+    /// Build a row with `tag` as the first byte so that full IDs can differ even
+    /// when `suffix` gives them the same truncated ID.
     fn row(tag: u8, suffix: u8, pkcs8: bool, hour: Option<u64>) -> Row {
         let mut key_id = [0; 32];
         key_id[0] = tag;
@@ -1009,8 +1017,8 @@ mod tests {
                 )
                 .unwrap();
             }
-            // Legacy state is diagnosed before both the WAL and permissions checks,
-            // even without an existing sidecar. Nothing is created by the probe.
+            // The read-only probe reports the v1 error before checking WAL mode
+            // or permissions, and it leaves the missing lock file absent.
             fs::set_permissions(&path, fs::Permissions::from_mode(permissions)).unwrap();
             let before = fs::read(&path).unwrap();
             let error = KeyStore::open(&path).err().expect("v1 must be refused");
@@ -1057,22 +1065,24 @@ mod tests {
             vec!["UPDATE metadata SET high_water=-1".into()],
             vec!["INSERT INTO metadata VALUES (2, 2, 0)".into()],
             vec!["UPDATE metadata SET singleton=2".into()],
-            // Two staged keys.
+            // Inserting a second staged key exceeds the limit of one.
             vec![extra_staged],
-            // Three hour-bearing private keys (genesis, staged@5, extra@6).
+            // Scheduling the staged key at hour 5 and adding a key at hour 6
+            // creates three keys with both private material and activation hours.
             vec![
                 "UPDATE keys SET activation_hour=5 WHERE activation_hour IS NULL".into(),
                 extra_hour6,
             ],
-            // Duplicate activation hour.
+            // Scheduling the staged key at hour 0 duplicates the first key's activation hour.
             vec!["UPDATE keys SET activation_hour=0 WHERE activation_hour IS NULL".into()],
-            // Staged key with neither private material nor an hour.
+            // Removing private material from the staged key leaves it with neither
+            // private material nor an activation hour.
             vec!["UPDATE keys SET pkcs8=NULL WHERE activation_hour IS NULL".into()],
-            // Key ID no longer matches SHA256(SPKI).
+            // Overwriting the key ID makes it differ from the SHA-256 hash of the SPKI.
             vec!["UPDATE keys SET key_id=zeroblob(32) WHERE activation_hour=0".into()],
             vec!["UPDATE keys SET spki=x'00' WHERE activation_hour=0".into()],
             vec!["UPDATE keys SET activation_hour=-1 WHERE activation_hour=0".into()],
-            // Private material belonging to a different public key.
+            // Replacing the private key breaks its match with the stored public key.
             vec![format!(
                 "UPDATE keys SET pkcs8=x'{}' WHERE activation_hour IS NULL",
                 hex(&extra_pkcs8)
@@ -1090,7 +1100,7 @@ mod tests {
             tx.rollback().unwrap();
         }
         validate(&db).unwrap();
-        // Corruption that survives the real constraints must still fail closed.
+        // The table permits malformed private key bytes, but validation must reject them.
         db.execute("UPDATE keys SET pkcs8=x'00' WHERE activation_hour=0", [])
             .unwrap();
         drop(db);
@@ -1114,24 +1124,24 @@ mod tests {
 
     #[test]
     fn structural_invariants_on_synthetic_rows() {
-        // Positive control: distinct suffixes, distinct hours.
+        // Two private keys with distinct suffixes and activation hours pass validation.
         assert!(check_structure(&[row(1, 1, true, Some(0)), row(2, 2, true, Some(H))]).is_ok());
-        // 7: suffix collision among private rows is refused...
+        // Matching suffixes on two keys with private material cause validation to fail.
         assert!(check_structure(&[row(1, 9, true, Some(0)), row(2, 9, true, Some(H))]).is_err());
-        // ...but a collision with a fully retired row is accepted.
+        // Validation allows a suffix match when one of the keys is fully retired.
         assert!(check_structure(&[row(1, 9, true, Some(H)), row(2, 9, false, Some(0))]).is_ok());
-        // 6: newest activation must be private.
+        // A key with the latest activation hour fails validation if it lacks private material.
         assert!(check_structure(&[row(1, 1, true, Some(0)), row(2, 2, false, Some(H))]).is_err());
-        // 6: duplicate hours.
+        // Keys with the same activation hour fail validation.
         assert!(check_structure(&[row(1, 1, true, Some(0)), row(2, 2, true, Some(0))]).is_err());
-        // 5: three hour-bearing private rows.
+        // Three keys with private material and activation hours exceed the limit of two.
         assert!(check_structure(&[
             row(1, 1, true, Some(0)),
             row(2, 2, true, Some(5)),
             row(3, 3, true, Some(6)),
         ])
         .is_err());
-        // 4: two staged rows, and a staged row without private material.
+        // Validation rejects a second staged key or a staged key that lacks private material.
         assert!(check_structure(&[
             row(1, 1, true, Some(0)),
             row(2, 2, true, None),
@@ -1139,7 +1149,7 @@ mod tests {
         ])
         .is_err());
         assert!(check_structure(&[row(1, 1, true, Some(0)), row(2, 2, false, None)]).is_err());
-        // 3: cardinality of private rows.
+        // Validation rejects a store with more than three private keys or no private keys.
         assert!(check_structure(&[
             row(1, 1, true, None),
             row(2, 2, true, None),
@@ -1148,7 +1158,7 @@ mod tests {
         ])
         .is_err());
         assert!(check_structure(&[row(1, 1, false, Some(0))]).is_err());
-        // 6: an activation hour must exist; out-of-range hours are refused.
+        // Validation requires at least one activation hour and rejects hours above `MAX_HOUR`.
         assert!(check_structure(&[row(1, 1, true, None)]).is_err());
         assert!(check_structure(&[row(1, 1, true, Some(u64::MAX))]).is_err());
     }
@@ -1279,7 +1289,8 @@ mod tests {
     #[test]
     fn trigger_activation_is_rejected_and_rolled_back() {
         let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
-        // Hour 1 is already active at 7300s, so the candidate would supersede genesis.
+        // At 7,300 seconds, a candidate that was scheduled for hour 1 would
+        // already have superseded the first key.
         assert_trigger_stage_rolls_back(
             "CREATE TRIGGER activate_stage AFTER INSERT ON keys
              BEGIN UPDATE keys SET activation_hour=(SELECT MAX(activation_hour)+1 FROM keys)
@@ -1309,7 +1320,8 @@ mod tests {
         let store = KeyStore::open(&path).unwrap();
         let scheduled = store.stage(T0 + 1).unwrap_err().to_string();
         assert!(scheduled.contains("a scheduled key exists"), "{scheduled}");
-        // At S the genesis key is retired-for-issuance but still holds private material.
+        // At `S`, the second key takes over issuance, so another key can be staged
+        // even though the first key retains its private material.
         let id = store.stage(S).unwrap();
         let manifest = store.manifest(S).unwrap();
         assert_eq!(manifest.high_water, S);
@@ -1352,7 +1364,8 @@ mod tests {
         let (_dir, path, staged) = staged_fixture();
         let store = KeyStore::open(&path).unwrap();
         let before = store.manifest(T0).unwrap();
-        // Non-aligned, equal to now, and before now.
+        // Scheduling fails if the activation time is not on an hour boundary
+        // or is at or before `now`.
         assert!(store.schedule_activation(S + 1, T0).is_err());
         assert!(store
             .schedule_activation(SECONDS_PER_HOUR, SECONDS_PER_HOUR)
@@ -1360,17 +1373,17 @@ mod tests {
         assert!(store
             .schedule_activation(SECONDS_PER_HOUR, 2 * SECONDS_PER_HOUR)
             .is_err());
-        // Behind the high-water mark (checked before the candidate is considered).
+        // A time below the high-water mark blocks scheduling before the candidate is checked.
         let behind = store
             .schedule_activation(S, T0 - 1)
             .unwrap_err()
             .to_string();
         assert!(behind.contains("high-water"), "{behind}");
-        // Every refusal leaves high-water and the candidate untouched.
+        // Rejected requests leave the high-water mark unchanged and the candidate staged.
         assert_eq!(store.manifest(T0).unwrap(), before);
         assert_eq!(state(&before, staged), KeyState::Staged);
         drop(store);
-        // No candidate at all.
+        // Scheduling also fails in a store with neither a staged nor a scheduled key.
         let (_dir2, path2) = fresh();
         let store2 = KeyStore::open(&path2).unwrap();
         let none = store2.schedule_activation(S, T0).unwrap_err().to_string();
@@ -1382,7 +1395,8 @@ mod tests {
         let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, _k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
-        // At S: genesis is retired-for-issuance with private material.
+        // The first key retains its private material after `S`, so the staged
+        // key cannot be scheduled.
         let id = store.stage(S + 1).unwrap();
         let error = store
             .schedule_activation(S + SECONDS_PER_HOUR, S + 1)
@@ -1397,18 +1411,20 @@ mod tests {
         let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
         let (_dir, path, k1) = scheduled_fixture();
         let store = KeyStore::open(&path).unwrap();
-        // Before S, the scheduled key may move earlier (still after now).
+        // Before `S`, moving activation to an earlier hour succeeds if that
+        // hour is still in the future.
         let earlier = 5 * SECONDS_PER_HOUR;
         assert_eq!(store.schedule_activation(earlier, T0).unwrap(), k1);
         assert_eq!(store.manifest(T0).unwrap().keys[1].activation_hour, Some(5));
-        // Reschedule back to S. At S the key is active, so it can no longer move.
+        // Move activation back to `S` so that the test can check that
+        // rescheduling fails once the key has activated.
         assert_eq!(store.schedule_activation(S, T0).unwrap(), k1);
         let refused = store
             .schedule_activation(S + SECONDS_PER_HOUR, S)
             .unwrap_err()
             .to_string();
         assert!(refused.contains("retire it first"), "{refused}");
-        // A refused call never advances high-water.
+        // The failed request leaves the high-water mark at `T0`.
         assert_eq!(store.manifest(S).unwrap().high_water, T0);
     }
 
@@ -1526,8 +1542,8 @@ mod tests {
             let used: Vec<u8> = manifest.keys.iter().map(|k| k.key_id[31]).collect();
             material_avoiding(&used)
         };
-        // Structurally valid but unreachable through the API: a staged candidate
-        // beside a scheduled key. Stage refuses this, so inject it directly.
+        // Insert a staged key directly because `stage` rejects it when a scheduled
+        // key exists, even though that combination passes structural validation.
         {
             let db = connect(&path, false).unwrap();
             db.execute(
@@ -1539,14 +1555,14 @@ mod tests {
         let store = KeyStore::open(&path).unwrap();
         let before = store.manifest(T0).unwrap();
         assert_eq!(before.keys.len(), 3);
-        // The staged key cannot precede the scheduled key's activation.
+        // Scheduling fails if the staged key would activate at or before the scheduled key.
         let order = store.schedule_activation(S, T0).unwrap_err().to_string();
         assert!(
             order.contains("must follow every existing activation"),
             "{order}"
         );
-        // Activating after the scheduled key yields three hour-bearing private
-        // rows, which only the post-update revalidation can reject.
+        // Scheduling after that hour gives three keys with private material an
+        // activation hour, so validation after the update must reject the change.
         let error = store
             .schedule_activation(S + SECONDS_PER_HOUR, T0)
             .unwrap_err()
@@ -1628,7 +1644,7 @@ mod tests {
         let k0 = genesis_id(&store, S - 1);
         assert_retire_refused(&store, k0, S - 1, "not been superseded");
         assert_retire_refused(&store, k1, S - 1, "not been superseded");
-        // The exact successor activation second is sufficient; no grace is needed.
+        // The issuer allows retirement at the exact second that the successor activates.
         store.retire(k0, S).unwrap();
         assert_eq!(state(&store.manifest(S).unwrap(), k0), KeyState::Retired);
         assert_retire_refused(&store, k1, S, "not been superseded");
@@ -1688,8 +1704,8 @@ mod tests {
     #[test]
     fn retirement_frees_suffix_for_staging_and_next_activation() {
         let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
-        // Find a birthday collision before choosing genesis, avoiding a costly
-        // targeted RSA-key search for one preselected suffix.
+        // Choose the first key from a pair that has matching suffixes so that
+        // the test does not have to search for a particular suffix.
         let mut seen = std::collections::HashMap::<u8, SecretKey>::new();
         let (old, candidate, pkcs8) = loop {
             let key = SecretKey::generate().unwrap();
@@ -1714,7 +1730,8 @@ mod tests {
             .unwrap();
         let k1 = store.stage(T0).unwrap();
         store.schedule_activation(S, T0).unwrap();
-        // Force the colliding candidate through the production staging path.
+        // Use a fixed generator so that every staging attempt gets the candidate
+        // with the colliding suffix.
         let before = store.manifest(S).unwrap();
         let error = store
             .stage_with_generator(S, || Ok(SecretKey::from_pkcs8(&pkcs8)?))
@@ -1892,7 +1909,8 @@ mod tests {
             .unwrap()
             .busy_timeout(std::time::Duration::ZERO)
             .unwrap();
-        // Pin an older WAL snapshot so TRUNCATE returns busy, without sleeping.
+        // Hold a read transaction open so that the `TRUNCATE` checkpoint
+        // returns busy immediately.
         let reader = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
         reader.execute_batch("BEGIN").unwrap();
         let count: i64 = reader

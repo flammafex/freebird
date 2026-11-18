@@ -1,4 +1,4 @@
-/* Freebird demo: calm, document-like. System fonts only; no external assets. */
+/* Use system fonts so that text renders without requests for font files. */
 
 :root {
   color-scheme: light dark;
@@ -127,7 +127,7 @@ p {
   inset-block-start: 1rem;
 }
 
-/* ---------- Layout ---------- */
+/* Center the grid and cap its width so that text lines stay readable on wide screens. */
 
 .demo {
   width: min(100% - 2rem, 44rem);
@@ -137,7 +137,7 @@ p {
   gap: clamp(1.75rem, 4vw, 2.5rem);
 }
 
-/* ---------- Header ---------- */
+/* Let the brand row wrap so that the badge fits even when the screen is narrow. */
 
 .demo-header {
   display: grid;
@@ -200,7 +200,7 @@ p {
   font-size: clamp(1.0625rem, 1rem + 0.3vw, 1.1875rem);
 }
 
-/* ---------- Card ---------- */
+/* Use a separate surface and border to distinguish the interactive demo from the rest of the page. */
 
 .card {
   background: var(--surface);
@@ -230,7 +230,7 @@ p {
   font-size: 0.875rem;
 }
 
-/* ---------- Status & error ---------- */
+/* Give the status area a minimum height to limit layout shifts as the text changes. */
 
 #flow-status {
   display: flex;
@@ -254,13 +254,13 @@ p {
   background: var(--line-strong);
 }
 
-/* Working: something is active and nothing has failed. */
+/* Pulse the status dot while a step is active to indicate that work is in progress. */
 #flow:has(#flow-steps [data-state="active"]) #flow-status::before {
   background: var(--accent);
   animation: pulse 1.6s ease-in-out infinite;
 }
 
-/* Finished well: access granted (and possibly replay refused). */
+/* Use success colors when access is granted and no step is active or failed. */
 #flow:has(#step-access[data-state="complete"]):not(:has([data-state="active"], [data-state="failed"])) #flow-status {
   background: var(--ok-soft);
   border-color: var(--ok-line);
@@ -271,7 +271,7 @@ p {
   background: var(--ok);
 }
 
-/* Stopped: the alert below carries the detail. */
+/* Stop the pulse when the alert is visible so that a failure does not look like work in progress. */
 #flow:has(#flow-error:not([hidden])) #flow-status {
   color: var(--muted);
 }
@@ -308,7 +308,7 @@ p {
   line-height: 1;
 }
 
-/* ---------- Steps ---------- */
+/* Use a counter to number the steps in list order. */
 
 #flow-steps {
   list-style: none;
@@ -331,7 +331,7 @@ p {
   padding-block-end: 0;
 }
 
-/* Connector line between markers */
+/* Draw the connector between markers and omit it after the last step. */
 #flow-steps li:not(:last-child)::before {
   content: "";
   position: absolute;
@@ -347,7 +347,7 @@ p {
   background: var(--ok-line);
 }
 
-/* The last connector leads to an optional step: draw it dashed. */
+/* Use a dashed connector to distinguish the optional replay from required steps. */
 #step-access:not(:last-child)::before {
   background: repeating-linear-gradient(to bottom, var(--line-strong) 0 4px, transparent 4px 8px) !important;
 }
@@ -391,7 +391,7 @@ p {
   font-size: 0.9375rem;
 }
 
-/* State label, also read by assistive technology as part of the item. */
+/* Add a text label so that assistive technology can report the step state as part of the item. */
 .step-title::after {
   font-size: 0.6875rem;
   font-weight: 700;
@@ -411,7 +411,7 @@ p {
   color: var(--muted);
 }
 
-/* Active */
+/* Add an outline and an `In progress` label so that color is not the only cue for the active step. */
 #flow-steps li[data-state="active"] .step-marker {
   border-color: var(--accent);
   color: var(--accent);
@@ -424,7 +424,7 @@ p {
   background: var(--accent-soft);
 }
 
-/* Complete */
+/* Replace the number with a check mark and add a `Done` label to indicate completion. */
 #flow-steps li[data-state="complete"] .step-marker {
   border-color: var(--ok);
   background: var(--ok);
@@ -447,7 +447,7 @@ p {
   background: var(--ok-soft);
 }
 
-/* Failed (the step that was in progress when the flow stopped) */
+/* Mark the step that stopped with an exclamation point and a `Failed` label. */
 #flow-steps li[data-state="failed"] .step-marker {
   border-color: var(--bad);
   background: var(--bad);
@@ -464,12 +464,12 @@ p {
   background: var(--bad-soft);
 }
 
-/* Replay refused is the expected outcome: show it as a success. */
+/* Keep the success styling when the spent token is refused because the replay test passed. */
 #flow-steps #step-replay[data-state="complete"] .step-title::after {
   content: "Refused, as expected";
 }
 
-/* ---------- ALTCHA widget ---------- */
+/* Use the demo's colors and focus style for the ALTCHA widget so that it matches the rest of the page. */
 
 #proof-container {
   --altcha-color-base: var(--surface-2);
@@ -491,7 +491,7 @@ p {
   display: none;
 }
 
-/* ---------- Buttons ---------- */
+/* Let the buttons wrap on narrow screens so that they do not overflow the card. */
 
 .demo-actions {
   display: flex;
@@ -545,7 +545,7 @@ p {
   color: var(--muted);
 }
 
-/* ---------- Principles ---------- */
+/* Fit as many columns as the page can hold so that each principle has room for its text. */
 
 .principles {
   display: grid;
@@ -591,7 +591,7 @@ p {
   font-size: 0.9375rem;
 }
 
-/* ---------- Footer ---------- */
+/* Separate the footer with a border so that the deployment disclaimer is distinct from the principles. */
 
 .demo-footer {
   display: grid;
@@ -620,7 +620,7 @@ p {
   background: var(--bad-soft);
 }
 
-/* ---------- Small screens ---------- */
+/* Give buttons a full row and use smaller step markers to make room for text on narrow screens. */
 
 @media (max-width: 30rem) {
   .demo {
@@ -641,7 +641,7 @@ p {
   }
 }
 
-/* ---------- Motion ---------- */
+/* Disable animations and transitions when the user prefers reduced motion. */
 
 @keyframes pulse {
   0%, 100% { opacity: 1; transform: scale(1); }

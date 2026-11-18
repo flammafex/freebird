@@ -1,5 +1,5 @@
-// Privacy Pass type-2 issuance and redemption. Depends on the peer dependency
-// through ./privacypass.mjs only.
+// Route Privacy Pass operations through `./privacypass.mjs` so that type-2 issuance and redemption
+// use the same library.
 import { FreebirdError, protocolError } from './errors.mjs';
 import { encodePaddedBase64url, equalBytes } from './encoding.mjs';
 import { publicVerif, TokenChallenge } from './privacypass.mjs';
@@ -19,12 +19,12 @@ const FORBIDDEN_METHODS = ['CONNECT', 'TRACE', 'TRACK'];
 export { authorizationHeader };
 
 /**
- * Obtains one Privacy Pass token for the Origin challenge in `challengeHeader`.
+ * Check the Issuer directory and Origin challenge before using an admission code to obtain
+ * a Privacy Pass token.
  *
- * Order matters: the directory and challenge are checked before `admission` is
- * called, so a proof-of-work or admission is never spent on a challenge the
- * Issuer does not vouch for. `admission` may be a string or a function returning
- * the code (called at most once). Resolves to the padded base64url token.
+ * Rejecting an unverified challenge prevents the client from solving a proof or spending a code for it.
+ * Pass `admission` as a code or as a function that returns a code. The function is called at most once.
+ * On success, the promise resolves to a token encoded as padded base64url.
  */
 export async function obtainToken(challengeHeader, options = {}) {
   const config = configure(options);
@@ -63,7 +63,7 @@ export async function obtainToken(challengeHeader, options = {}) {
       body,
     }, config);
   } finally {
-    // One admission buys one issuance request. Never retry with it.
+    // Clear the code after the request because the Issuer may have spent it even if the request fails.
     code = undefined;
   }
   if (issued.status !== 200) throw await refusal('issuance', issued);
@@ -85,10 +85,11 @@ export async function obtainToken(challengeHeader, options = {}) {
 }
 
 /**
- * Requests a protected URL. On 401 with a PrivateToken challenge it obtains one
- * token (one admission) and retries the same request exactly once with
- * `Authorization: PrivateToken`. Resolves to the Response; a 401 after the token
- * is thrown as a FreebirdError with stage 'access'.
+ * If the protected URL returns a `401` with a `PrivateToken` challenge, use one admission code
+ * to obtain a token and retry once.
+ * The retry adds the `Authorization: PrivateToken` header.
+ * A second `401` produces a `FreebirdError` with stage `'access'`.
+ * Responses with other statuses are returned unchanged.
  */
 export async function fetchWithToken(url, options = {}) {
   const config = configure(options);
@@ -119,7 +120,7 @@ function notify(config, stage) {
 function parseChallenge(bytes) {
   let challenge;
   try {
-    // Upstream ignores byteOffset. Always give it a standalone backing buffer.
+    // Copy the bytes because `TokenChallenge.deserialize` starts at offset zero in the backing buffer.
     challenge = TokenChallenge.deserialize(Uint8Array.from(bytes));
   } catch {
     throw protocolError('challenge', 'The Origin sent a malformed token challenge.');
@@ -127,7 +128,7 @@ function parseChallenge(bytes) {
   if (!equalBytes(challenge.serialize(), bytes)) {
     throw protocolError('challenge', 'The Origin sent a non-canonical token challenge.');
   }
-  // Rejected before any network request: the directory is not even fetched.
+  // Reject unsupported token types before making a request to the Issuer.
   if (challenge.tokenType !== 2) {
     throw protocolError('challenge', 'Expected an RFC 9578 type-2 challenge.');
   }
@@ -159,8 +160,7 @@ function protectedURL(value, allowInsecureLoopback) {
   return url;
 }
 
-// Only body types that can be resent unchanged are accepted, because the single
-// retry repeats the request.
+// Accept a string or `Uint8Array` body so that the same bytes can be sent on the retry.
 function requestInit(init = {}) {
   if (init === null || typeof init !== 'object') throw new TypeError('init must be an object.');
   const headers = new Headers(init.headers);

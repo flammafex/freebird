@@ -15,7 +15,7 @@ const proofContainer = document.querySelector('#proof-container');
 const protectedURL = new URL('/private-token/protected', location.origin);
 let issuer;
 let widget;
-let replayToken; // Memory only; retained solely for the explicit replay demonstration.
+let replayToken; // Keep the spent token in memory for the optional replay.
 let busy = false;
 
 class DemoError extends Error {}
@@ -47,7 +47,7 @@ function fail(error) {
     step.dataset.state = 'failed';
   }
   status.textContent = 'Stopped.';
-  // Never print an upstream error/body: it might contain a credential.
+  // Use fixed messages so that credentials in upstream errors or response bodies do not appear on the page.
   let message = 'Invalid server data or a cryptographic operation failed. Start again.';
   if (error instanceof DemoError) {
     message = error.message;
@@ -83,7 +83,8 @@ function expectStatus(response, expected, stage) {
   if (response.status !== expected) throw new DemoError(statusMessage(stage, response.status));
 }
 
-// Static, same-origin classic workers: no inline worker, blob URL, CDN or WASM.
+// Load the proof-of-work scripts as classic workers from the demo's own origin so that they work
+// under its Content Security Policy.
 for (const digest of ['SHA-256', 'SHA-384', 'SHA-512']) {
   globalThis.$altcha.algorithms.set(`PBKDF2/${digest}`,
     () => new Worker(new URL('./workers/pbkdf2.js', import.meta.url)));
@@ -96,7 +97,6 @@ function mountProof(resolve, reject) {
   let proofUsed = false;
   let proofError = 'Proof-of-work failed or expired. Start again.';
   globalThis.$altcha.defaults.set({
-    // ALTCHA 3 calls the former challengeurl setting "challenge".
     challenge: challengeURL.href,
     auto: 'onload',
     type: 'native',
@@ -121,7 +121,7 @@ function mountProof(resolve, reject) {
         return response;
       } catch (error) {
         proofError = error instanceof DemoError ? error.message : proofError;
-        throw new Error(proofError); // A fixed status only; safe for widget diagnostics.
+        throw new Error(proofError); // Use fixed text to keep request details out of widget diagnostics.
       }
     },
   });
@@ -173,7 +173,8 @@ async function start() {
   expectStatus(originResponse, 401, 'Origin challenge');
   const challengeHeader = originResponse.headers.get('WWW-Authenticate');
   await originResponse.body?.cancel();
-  // The client validates the challenge and directory before asking for a proof.
+  // Pass `solveForAdmission` as a callback so that the browser solves a proof only after
+  // the challenge and directory are validated.
   const token = await obtainToken(challengeHeader, {
     issuer: issuer.origin,
     admission: solveForAdmission,
@@ -183,7 +184,7 @@ async function start() {
     headers: { Authorization: authorizationHeader(token) },
   });
   expectStatus(redemption, 200, 'Access');
-  // Treat the protected resource as data, never inject its HTML into this page.
+  // Discard the body so that HTML from the protected resource cannot run on this page.
   await redemption.body?.cancel();
   replayToken = token;
   progress('access', 'Access granted (200).');
@@ -221,7 +222,7 @@ async function tryReplay() {
 
 startButton.addEventListener('click', () => start().catch(fail));
 replayButton.addEventListener('click', () => tryReplay().catch(fail));
-// Do not leave the replay credential alive in a back/forward cache.
+// Clear the token on `pagehide` so that it is not retained if the page enters the back-forward cache.
 window.addEventListener('pagehide', () => {
   replayToken = undefined;
   replayButton.disabled = true;

@@ -1,4 +1,4 @@
-// Pure protocol tests: no peer dependency, so these run with plain `node --test`.
+// The protocol checks use no Privacy Pass library, so these tests run with `node --test` on its own.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { decodePaddedBase64url, encodePaddedBase64url } from '../src/encoding.mjs';
@@ -163,7 +163,7 @@ test('admission codes: exactly 43 canonical base64url characters for 32 bytes', 
   assert.equal(isAdmissionCode(canonical), true);
   for (const value of [
     undefined, 42, '', 'A'.repeat(42), 'A'.repeat(44), 'A'.repeat(42) + '+', 'A'.repeat(42) + '=',
-    'A'.repeat(42) + 'B', // Nonzero unused pad bits.
+    'A'.repeat(42) + 'B', // The final `B` sets a padding bit, so the code is not canonical.
     `${'A'.repeat(42)}/`,
   ]) {
     assert.equal(isAdmissionCode(value), false, String(value));

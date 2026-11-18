@@ -1,88 +1,56 @@
-# Roadmap
+# Freebird plans to add batched issuance after standardization
 
-Freebird remains experimental. The only release blocker is the independent
-cryptographic review described in
-[SECURITY.md](https://github.com/flammafex/freebird/blob/main/SECURITY.md);
-nothing on this page is a release gate.
+Freebird is experimental. The independent cryptographic review described in [SECURITY.md](https://github.com/flammafex/freebird/blob/main/SECURITY.md) is the sole release blocker. None of these features is a release gate.
 
-## Planned
+## Generic batch support depends on publication of the RFC
 
-### Generic batched issuance (after the RFC is published)
+Freebird plans to implement generic batching after [draft-ietf-privacypass-batched-tokens](https://datatracker.ietf.org/doc/draft-ietf-privacypass-batched-tokens/) is published as an RFC.
+Draft-10 from November 2026 is in IESG evaluation. Freebird does not implement the draft because the wire format may change.
 
-**Trigger:** publication of
-[draft-ietf-privacypass-batched-tokens](https://datatracker.ietf.org/doc/draft-ietf-privacypass-batched-tokens/)
-as an RFC (draft-10, November 2026, is in IESG evaluation). Nothing is built
-against the draft; the wire format may still change.
+Generic batching applies to type `0x0002` tokens. It combines ordinary RFC 9578 requests in one HTTP request with media type `application/private-token-generic-batch-request`.
+The Issuer returns one response per accepted entry and omits refused entries. Batching adds no cryptography, and signing cost stays linear.
+Amortized batching applies only to VOPRF token types and is outside Freebird's scope because Freebird does not implement type 1.
 
-**Scope:** the draft's *generic* variant only, for type `0x0002` tokens. It
-bundles ordinary RFC 9578 token requests into one HTTP request
-(`application/private-token-generic-batch-request`) and returns one response per
-entry, with refused entries absent. It adds no new cryptography and signing cost
-stays linear. The *amortized* variant applies only to VOPRF token types and is
-out of scope while Freebird does not implement type 1.
+One invitation or solved proof-of-work challenge would permit at most **N** signing attempts, where the operator sets the fixed batch size N.
+The Issuer would commit admission consumption before any signing and reject batches that exceed N or mix key IDs.
+A failed or lost response would consume the admission, and the Issuer would not refund it.
 
-**Admission change:** one admission will authorize at most **N** signing
-attempts instead of one, where N is a fixed, operator-configured batch size.
-The admission (invitation or solved PoW challenge) is still consumed and
-committed before any signing, and a failed or lost response still burns it;
-nothing is refunded. A batch larger than N, or mixing key IDs, is refused.
+The Origin needs no changes because it records spends per key, challenge, and nonce. Each token from a batch can redeem once before the challenge closes five minutes past the end of its hour.
+Tokens from a batch cannot be stockpiled past that window.
 
-**Origin:** no change required. A challenge is valid until five minutes past
-the end of its hour, and spends are recorded per key, challenge and nonce, so
-each token from one batch redeems once within that window. Batched tokens
-cannot be stockpiled beyond it.
+The Issuer can observe which requests arrive together and how many the batch contains. A fixed batch size prevents client-selected sizes from distinguishing clients. Document this privacy limit when adding batching.
 
-**Privacy:** the Issuer sees which requests arrive together and how many. A
-fixed batch size, rather than client-chosen sizes, keeps batches from
-distinguishing clients. This will be documented with the feature.
+Validate batching before releasing it. Apply the same fuzzing approach as for the non-batch wire codecs to both batch request and response codecs.
+Test interoperability with the pinned `@cloudflare/privacypass-ts` and the Rust `privacypass` crate, which both implement generic batching.
+Extend the browser demo to yield N tokens per solved proof-of-work challenge and include batching in the independent review.
 
-**Before release:** fuzz the batch request/response codec like the existing
-wire formats; interop-test against the pinned `@cloudflare/privacypass-ts` and
-the Rust `privacypass` crate, which both implement generic batching; extend the
-browser demo so one PoW yields N tokens; and include the change in the
-independent review scope.
+## Application servers can request one-use codes
 
-### Admission requests from app servers (available)
+An [application server](app-admission.md) authenticates with its own secret key and requests one-use codes up to a fixed daily cap that the operator sets for that server.
+The application uses its own policy to decide which users receive codes. Freebird stores no user accounts or social graph and receives no identities for end users.
+The application server can act as an Origin and verify the resulting tokens with the Issuer's public key.
 
-See [admission for application servers](app-admission.md). An application
-server authenticates with its own secret key and receives
-one-use admission codes, up to a fixed daily cap per server set by the
-operator. The application's own policy decides which of its users get a code;
-Freebird keeps no user accounts or social graph and never learns who the end
-users are. The application's server then verifies the resulting tokens with
-the Issuer's public key, as any Origin does.
+## The integration kit protects application routes through nginx
 
-### Application integration kit (available)
+The [integration kit](integration.md) lets an application protect routes and request codes without implementing Privacy Pass. Each part handles a distinct job:
 
-See [integrating an application](integration.md).
+- **nginx `auth_request`** sends checks for any protected application route to Freebird's Origin. Only requests with a valid, unspent token reach the application. The application does not implement cryptography or replay storage.
+- **An optional scope** that the operator configures binds tokens to one resource, such as a ballot or pool identifier. A token obtained for one resource cannot be spent on another.
+- **The browser client** uses code from the demo to obtain a challenge, request a token with an admission code, and redeem it at the protected URL.
+- **The server helper** requests admission codes from the Issuer.
 
-So an application can adopt Freebird without implementing Privacy Pass itself:
+The browser and server packages are in this repository. They are not published while release publishing is blocked.
 
-- **Token checking through nginx.** Freebird's Origin checks tokens for any
-  protected application route via nginx `auth_request`. The application sees
-  only requests that carried a valid, unspent token; it writes no
-  cryptography or replay storage. An optional, operator-configured scope (for
-  example a ballot or pool identifier) binds tokens to one resource, so a token
-  obtained for one cannot be spent on another.
-- **A browser client** that performs the challenge, issuance with an admission
-  code, and redemption for a protected URL, packaged from the demo's code.
-- **A server helper** for requesting admission codes from the Issuer.
+## Application demand would justify other admission models
 
-The packages live in this repository and are not published while release
-publishing is held.
+Freebird does not plan to implement these models unless an application needs them:
 
-## Not planned unless a real application needs them
+- **Issuer-to-issuer admission** would let one Issuer act as an Origin for another Issuer's tokens and exchange each token for one local admission. An application that trusts another community can usually request codes on its behalf.
+- **Trust in multiple Issuers** would let one Origin accept tokens from more than one Issuer. A single Issuer can serve many independent applications.
 
-- **Issuer-to-issuer admission**: an Issuer acting as an ordinary Origin for
-  another Issuer's tokens, exchanging each for one local admission. An
-  application that trusts another community can usually request admission
-  codes on its behalf instead.
-- **Origins trusting more than one Issuer.** One Issuer can already serve many
-  independent applications.
+## Two proposals have no implementation commitment
 
-## Under consideration (not committed)
+Neither of these options is committed:
 
-- **A memory-hard PoW option** (Argon2id or scrypt) to narrow GPU advantage,
-  at the cost of WebAssembly and a looser browser security policy.
-- **Post-quantum tokens**, once a standard successor to RSA blind signatures
-  exists.
+- **Memory-hard proof-of-work** with Argon2id or scrypt would reduce the advantage of GPUs but require WebAssembly and a less restrictive browser security policy.
+- **Post-quantum tokens** would require a standard successor to RSA blind signatures.

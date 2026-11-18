@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise real service binaries through the shipped TLS nginx boundary."""
+"""Run both services behind nginx TLS to check routing and token redemption."""
 import os
 from pathlib import Path
 import re
@@ -63,7 +63,7 @@ def main():
             run(["openssl", "x509", "-req", "-in", tmp / "leaf.csr", "-CA", ca,
                  "-CAkey", tmp / "ca.key", "-CAcreateserial", "-out", cert,
                  "-days", "1", "-extfile", tmp / "extensions"])
-            # Deliberately literal substitutions: template drift must fail closed.
+            # Count matches before substituting so that unexpected template changes fail the test.
             config = (root / "deploy/nginx/freebird.conf").read_text()
 
             def replace(old, new, count):
@@ -83,7 +83,7 @@ def main():
             replace("(:80)?", f"(:{http})?", 2)
             replace("(:443)?", f"(:{tls})?", 2)
             replace("127.0.0.1:8081", f"127.0.0.1:{issuer_port}", 4)
-            # Origin upstream: one live location plus two in the commented app-protection example.
+            # Replace one Origin address in active rules and two in the app-protection example.
             replace("127.0.0.1:8082", f"127.0.0.1:{origin_port}", 3)
             replace("/var/log/nginx/freebird-access.log", str(tmp / "access.log"), 1)
             replace("/var/log/nginx/freebird-error.log", str(tmp / "error.log"), 1)
@@ -156,7 +156,7 @@ def main():
                           invitation + b"\n")
             require(output == b"issuance: 200; redemption: 200; replay: 401; invitation retry: 403\n",
                      "reference client status mismatch")
-            # The original numeric-loopback mode must remain usable without TLS.
+            # Redeem a token over direct HTTP to verify that numeric loopback works without TLS.
             legacy = run([client, f"http://127.0.0.1:{issuer_port}",
                           f"http://127.0.0.1:{origin_port}"], legacy_invitation + b"\n")
             require(legacy == output, "legacy loopback client status mismatch")

@@ -1,8 +1,8 @@
-//! Crash-durable, single-process invitation admission.
+//! An exclusive lock limits access to one process, and committed invitation changes persist after a crash.
 //!
-//! Restore procedure: stop the issuer before restoring the database, then open
-//! the store for maintenance and rotate its generation before reopening the
-//! issuer. Unannounced database rollback cannot be detected by this store.
+//! Rotate the generation before restarting the issuer so that invitations from the restored database
+//! cannot be used. Stop the issuer before restoring the database. Rolling back the database alone
+//! does not trigger any check that would invalidate those invitations.
 
 use anyhow::{ensure, Context, Result};
 use base64ct::{Base64UrlUnpadded, Encoding};
@@ -28,7 +28,8 @@ struct State {
     healthy: bool,
 }
 
-/// Holds the exclusive OS lock until dropped. Deliberately does not implement Debug.
+/// Keeps the OS lock until drop, so only one process can use the invitation store.
+/// Omits `Debug` to keep the generation secret out of debug output.
 pub struct AdmissionStore {
     state: Mutex<State>,
     generation_path: PathBuf,
@@ -110,8 +111,8 @@ fn require_plain_schema(db: &Connection) -> Result<()> {
 }
 
 impl AdmissionStore {
-    /// Creates fresh state only. Partial initialization must be repaired manually,
-    /// never by retrying initialization over existing files.
+    /// Creates state only when both files are absent, so a retry cannot replace existing state.
+    /// Repair a partial initialization manually.
     pub fn initialize(db_path: impl AsRef<Path>, generation_path: impl AsRef<Path>) -> Result<()> {
         let db_path = db_path.as_ref();
         let generation_path = generation_path.as_ref();
@@ -121,7 +122,8 @@ impl AdmissionStore {
             !db_path.try_exists()? && !generation_path.try_exists()?,
             "admission state already exists"
         );
-        // Reserve the database before writing either piece of usable state.
+        // Create and sync the empty database first so that an interrupted setup leaves a file
+        // that blocks another attempt to initialize the store.
         OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -226,8 +228,9 @@ impl AdmissionStore {
         Ok(deleted == 1)
     }
 
-    /// Maintenance only; caller must keep the issuer stopped during restore.
-    /// A failed rotation disables this instance, including ambiguous fsync failures.
+    /// Rotates the generation to invalidate invitations from a restored database.
+    /// Keep the issuer stopped during the restore. Once rotation starts writing state, the
+    /// store stays disabled until both the generation update and the database commit succeed.
     pub fn rotate_generation_for_restore(&self) -> Result<()> {
         let mut state = self.state()?;
         let generation = random_secret()?;
@@ -303,7 +306,7 @@ mod tests {
                 true
             }))
             .unwrap();
-        // The DELETE succeeds; SQLite itself rejects the actual COMMIT.
+        // The commit hook makes SQLite reject `COMMIT` after `DELETE` succeeds.
         let result = store.consume(&code, 101);
         assert!(result.is_err());
         assert!(attempted.load(std::sync::atomic::Ordering::SeqCst));
@@ -320,8 +323,8 @@ mod tests {
         assert!(!store.consume(&code, 101).unwrap());
     }
 
-    // Only the explicitly selected subprocess installs a checkpoint. Other tests,
-    // including concurrently running consume tests, see a no-op.
+    // Only the crash-test subprocess sets a checkpoint, so other tests can consume invitations
+    // concurrently without pausing here.
     std::thread_local! {
         static CHECKPOINT: std::cell::RefCell<Option<(String, PathBuf)>> =
             const { std::cell::RefCell::new(None) };
@@ -402,8 +405,8 @@ mod tests {
                 .unwrap(),
         );
         let deadline = Instant::now() + Duration::from_secs(20);
-        // Timing bounds a failed test only: killing requires explicit evidence
-        // from the checkpoint, never a guessed transaction duration.
+        // Wait for the checkpoint file before killing the child so that the test interrupts the
+        // transaction at the selected stage. The deadline only limits how long the test can wait.
         while !dir.path().join("ready").exists() {
             assert!(child.0.try_wait().unwrap().is_none(), "child exited early");
             assert!(Instant::now() < deadline, "checkpoint timed out");

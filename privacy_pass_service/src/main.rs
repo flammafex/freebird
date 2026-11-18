@@ -1,5 +1,5 @@
-//! Local-only experimental runner; TLS termination and production deployment
-//! are deliberately not implemented here.
+//! This experimental runner serves plain HTTP on loopback addresses for local testing.
+//! Use a separate proxy to terminate TLS.
 use freebird_crypto::privacy_pass::PublicKey;
 use freebird_privacy_pass_service::{
     admission::AdmissionStore,
@@ -112,8 +112,8 @@ fn reject_legacy(dir: &Path) -> Result<()> {
     }
 }
 
-/// Only the two explicit schema refusals are surfaced verbatim; every other
-/// failure keeps its generic, secret-free message.
+/// Returns the two schema-version errors verbatim so that operators can identify unsupported state.
+/// Uses the supplied generic message for other errors to avoid exposing secrets.
 fn surface(error: &anyhow::Error, generic: &'static str) -> &'static str {
     match error.to_string().as_str() {
         KEY_V1 => KEY_V1,
@@ -132,7 +132,7 @@ fn keys(dir: &Path) -> Result<KeyStore> {
     })
 }
 
-/// Opens the app store only when it exists. `Ok(None)` is the disabled state.
+/// Opens the application store if its file exists and returns `Ok(None)` if it is absent.
 fn app_clients(dir: &Path) -> Result<Option<Arc<AppClients>>> {
     if !app_admission::enabled(dir).map_err(|_| APP_STATE)? {
         return Ok(None);
@@ -202,8 +202,8 @@ fn public_id(id: &[u8; 32]) -> String {
         .collect()
 }
 
-/// Reads a canonical SPKI DER file whose SHA-256 is the operator-supplied ID.
-/// Checked before any state directory is created.
+/// Rejects a public key file if it is not canonical SPKI DER or its SHA-256 digest differs from the supplied ID.
+/// Run this check before creating a state directory so that invalid input leaves no directory behind.
 fn read_checked_spki(path: &str, key_id: [u8; 32]) -> Result<Vec<u8>> {
     let spki = fs::read(path).map_err(|_| "cannot read public SPKI DER")?;
     let key = PublicKey::from_spki(&spki).map_err(|_| "public SPKI is not canonical")?;
@@ -213,7 +213,7 @@ fn read_checked_spki(path: &str, key_id: [u8; 32]) -> Result<Vec<u8>> {
     Ok(spki)
 }
 
-/// Creates a brand-new output file with mode 0600, never overwriting an existing path.
+/// Creates the export with mode `0600` and refuses an existing path so that no file is overwritten.
 fn export_public(spki: &[u8], path: &Path) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
@@ -233,7 +233,7 @@ fn export_public(spki: &[u8], path: &Path) -> Result<()> {
         .map_err(|_| "export persistence failed; output retained for operator inspection")
 }
 
-/// One printed key row. Times are Unix seconds, `None` renders as `-`.
+/// Provides the fields for one key in the status output, which prints times in Unix seconds and `None` as `-`.
 struct StatusRow {
     state: &'static str,
     key_id: [u8; 32],
@@ -487,7 +487,7 @@ async fn run(args: &[String]) -> Result<()> {
         [command, dir, name, cap] if command == "app-add" => {
             let reply =
                 control::app_command(Path::new(dir), &format!("app-add {name} {cap}\n")).await?;
-            // Only the key leaves the process: the protocol's `ok ` prefix is dropped.
+            // Strip the protocol's `ok ` prefix so that stdout contains just the key.
             print_app(reply.strip_prefix("ok ").ok_or(control::APP_ERROR)?)
         }
         [command, dir, name] if command == "app-revoke" => {
@@ -510,8 +510,8 @@ async fn run(args: &[String]) -> Result<()> {
             let invitation = store
                 .provision(now)
                 .map_err(|_| "invitation provisioning failed")?;
-            // The invitation is intentionally emitted only here, never in errors
-            // or diagnostics. A failed write does not undo durable provisioning.
+            // Print the invitation only to stdout to keep it out of diagnostics.
+            // Provisioning has committed, so a failed write leaves the invitation valid until it expires.
             let mut stdout = io::stdout().lock();
             writeln!(stdout, "{invitation}")
                 .and_then(|()| stdout.flush())
@@ -519,8 +519,8 @@ async fn run(args: &[String]) -> Result<()> {
         }
         [command, dir] if command == "provision-live" => {
             let invitation = control::provision_live(Path::new(dir)).await?;
-            // As with offline provisioning, stdout is the sole intended output.
-            // A failed output write does not undo the durable invitation.
+            // Print the live invitation only to stdout to keep it out of diagnostics.
+            // A failed write leaves the committed invitation valid until it expires.
             let mut stdout = io::stdout().lock();
             writeln!(stdout, "{invitation}")
                 .and_then(|()| stdout.flush())
@@ -529,7 +529,7 @@ async fn run(args: &[String]) -> Result<()> {
         [command, dir] if command == "recover-issuer-admission" => {
             let dir = Path::new(dir);
             let store = admission(dir)?;
-            // Revoke first: a restored app database could resurrect old keys.
+            // Revoke application keys first so that keys from the restored database cannot be used.
             if app_admission::enabled(dir)
                 .map_err(|_| "app admission recovery refused; keep both services stopped")?
             {
@@ -592,7 +592,7 @@ async fn run(args: &[String]) -> Result<()> {
                 }
                 None => issuer::router(issuer),
             };
-            // Merged last: app admission is server-to-server and never gets CORS.
+            // Merge the application route after browser CORS so that server-to-server replies have no CORS headers.
             let router = issuer::with_app_admission(router, app);
             let control =
                 ControlListener::bind(dir).map_err(|_| "cannot bind issuer control socket")?;
@@ -607,8 +607,8 @@ async fn run(args: &[String]) -> Result<()> {
             let dir = Path::new(dir);
             let db = dir.join("origin.sqlite");
             let now = unix_now()?;
-            // Origin::open takes no clock, so refuse here: a clock behind the
-            // durable high-water mark, or no advertising key, would only 503 later.
+            // Check the clock and the advertising key before startup so that requests do not
+            // fail with HTTP 503. `Origin::open` does not take a clock value.
             let status = Origin::status(&db, now).map_err(|error| {
                 surface(
                     &error,
@@ -650,7 +650,7 @@ async fn main() {
         Err(_) => Err("invalid arguments"),
     };
     if let Err(message) = result {
-        // Never display underlying errors, paths, key material, or arguments.
+        // Print only the selected message and usage text to keep request and state details out of diagnostics.
         eprintln!("{message}\n\n{USAGE}");
         std::process::exit(1);
     }

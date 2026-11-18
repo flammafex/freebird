@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed, loopback-only interoperability test using real service state."""
+"""Check that independent clients can obtain and redeem tokens over loopback."""
 import base64
 import http.client
 import os
@@ -173,6 +173,6 @@ if __name__ == "__main__":
     try:
         main()
     except (RuntimeError, OSError, subprocess.SubprocessError) as error:
-        # Only our fixed messages are safe; OS/subprocess messages may contain paths/arguments.
+        # Print a fixed diagnostic because OS and subprocess messages can expose paths or arguments.
         print(str(error) if type(error) is RuntimeError else "interop failed; diagnostics suppressed")
         raise SystemExit(1)

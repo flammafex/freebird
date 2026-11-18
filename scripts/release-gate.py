@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail closed unless the required checks passed for one exact commit."""
+"""Permit release only when every required check has passed for the specified commit."""
 
 # SPDX-License-Identifier: Apache-2.0 OR MIT
 
@@ -40,11 +40,11 @@ PENDING_STATUSES = {"queued", "in_progress", "requested", "waiting", "pending"}
 
 
 class ReleaseGateError(Exception):
-    """An API or response error that must fail the release gate."""
+    """Raise this error to block release when an API request or response is invalid."""
 
 
 class PollDeadlineExceeded(Exception):
-    """The bounded polling deadline elapsed while fetching check runs."""
+    """Raise this error to stop fetching check runs when the polling deadline expires."""
 
 
 def _validate_run(run: Any, sha: str) -> dict[str, Any]:
@@ -110,7 +110,7 @@ def fetch_check_runs(
     deadline: float | None = None,
     clock: Callable[[], float] | None = None,
 ) -> list[dict[str, Any]]:
-    """Fetch and validate every check-run page for ``sha``."""
+    """Fetch all check-run pages and reject invalid entries or entries for a commit other than `sha`."""
 
     urlopen = urlopen or urllib.request.urlopen
     clock = clock or time.monotonic
@@ -141,7 +141,7 @@ def fetch_check_runs(
 
 
 def newest_runs(runs: Iterable[dict[str, Any]], required: Iterable[str]) -> dict[str, dict[str, Any]]:
-    """Select the newest check run by GitHub's monotonically increasing run ID."""
+    """Select the latest run for each required check by taking the highest run ID."""
 
     required_set = set(required)
     selected: dict[str, dict[str, Any]] = {}
@@ -182,7 +182,7 @@ def run_gate(
     sleeper: Callable[[float], None] | None = None,
     clock: Callable[[], float] | None = None,
 ) -> int:
-    """Poll until all required checks pass or the gate fails closed."""
+    """Poll GitHub for the required checks and return success only if they all pass."""
 
     sleeper = sleeper or time.sleep
     clock = clock or time.monotonic

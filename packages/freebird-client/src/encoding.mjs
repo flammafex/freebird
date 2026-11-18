@@ -1,5 +1,5 @@
-// Canonical padded base64url, as used by the Privacy Pass headers and the
-// Issuer directory. Browser and Node >= 16 APIs only.
+// Privacy Pass headers and the Issuer directory use canonical padded base64url.
+// The encoding and decoding use APIs that are available in browsers and Node.js 16 or later.
 
 const CANONICAL = /^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2}==|[A-Za-z0-9_-]{3}=)?$/;
 
@@ -15,7 +15,7 @@ export function decodePaddedBase64url(value) {
   }
   const bytes = Uint8Array.from(atob(value.replaceAll('-', '+').replaceAll('_', '/')),
     character => character.charCodeAt(0));
-  // Reject nonzero unused pad bits as well as missing/excess padding.
+  // Re-encoding rejects nonzero padding bits that `atob` accepts.
   if (encodePaddedBase64url(bytes) !== value) {
     throw new RangeError('Expected canonical padded base64url.');
   }

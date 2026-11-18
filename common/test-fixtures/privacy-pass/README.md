@@ -1,27 +1,30 @@
-# RFC Privacy Pass test vectors
+# RFC vectors provide independent expectations for Privacy Pass tests
 
-These JSON files are **source fixtures**, not Freebird-generated expected
-outputs. They copy the hexadecimal fields of:
+The JSON fixtures copy hexadecimal fields from the RFCs so that tests can
+check Freebird's output against independent expected values. Each field is
+stored as continuous lowercase hex with RFC line wrapping removed.
 
 | Fixture | Source | SHA-256 of downloaded RFC text | SHA-256 of fixture |
 | --- | --- | --- | --- |
 | `rfc9577-a1.json` | [RFC 9577 Appendix A.1](https://www.rfc-editor.org/rfc/rfc9577#appendix-A.1) | `cbd637959c3ed5b260fb38db525f39c3d228c90ff48af46b80dc1dbc9b3707b4` | `1c4c53541963640352dbf941ed913fad46a488b2ef62d9011233902e80cfe492` |
 | `rfc9578-a2.json` | [RFC 9578 Appendix A.2](https://www.rfc-editor.org/rfc/rfc9578#appendix-A.2) | `bc3cb0d503f6998813ea6c9815031865beb255e00cb194d725a5c4012c3f2c83` | `94e26faf369c979f0aa5997784318c51318f1e23b0c874a9a2d183ff47f7e3ef` |
 
-The RFC 9578 fixture includes published private test keys **only for
-conformance tests**; never use them in a deployment. The RFC 9577 fixture
-includes the reserved greasing vector; it is a parser/unsupported-type test,
-not a valid type-2 token. Each field is copied as continuous lowercase hex,
-with RFC line wrapping removed. Automated extraction checked five type-2
-request/response/token lengths (259/256/354 bytes), nonce and SHA-256
-challenge/key binding. Tests must compare implementation output with these
-independent expected values, not regenerate expected values from Freebird.
+Use the published private keys in the RFC 9578 fixture only for
+**conformance tests**. Never use them in a deployment. Use the reserved
+greasing vector in the RFC 9577 fixture to test that the parser handles an
+unsupported type. It is not a valid type-2 token.
+
+The automated extraction checked five type-2 vectors for requests of 259
+bytes, responses of 256 bytes, and tokens of 354 bytes. It also checked the
+nonce and the bindings to the challenge and key through SHA-256. Compare
+implementation output with the fixtures, and do not regenerate the expected
+values from Freebird.
 
 Copyright (c) 2024 IETF Trust and the persons identified as the document
 authors. All rights reserved.
 
-Code components extracted from the RFCs are provided under the Revised BSD
-License per the [IETF Trust Legal Provisions](https://trustee.ietf.org/license-info/):
+The extracted code components are distributed under the Revised BSD License
+in the [IETF Trust Legal Provisions](https://trustee.ietf.org/license-info/).
 
 > Redistribution and use in source and binary forms, with or without
 > modification, are permitted provided that the following conditions are met:

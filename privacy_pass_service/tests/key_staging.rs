@@ -1,5 +1,5 @@
-//! CLI regressions for offline staging, export, and status formatting.
-//! Activation and retirement are covered in key_rotation.rs.
+//! These CLI tests check that offline staging and export leave the active key unchanged
+//! and that status output reports both the active and staged keys.
 use freebird_crypto::privacy_pass::PublicKey;
 use std::{
     fs,
@@ -82,7 +82,7 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
-/// Hour-aligned instant ten years out, unreachable by any real-clock server here.
+/// Picks an hour about ten years ahead so that the activation time stays in the future during the test.
 fn far_future() -> u64 {
     (unix_now() / 3600 + 24 * 365 * 10) * 3600
 }
@@ -113,7 +113,7 @@ fn seconds_or_dash(field: &str) -> String {
     field.to_owned()
 }
 
-/// Parses the frozen format: `now`, `high-water`, then one row per key.
+/// Checks that the status output starts with `now` and `high-water` and then contains one row per key.
 fn parse_status(output: &Output) -> Status {
     assert!(output.stderr.is_empty());
     let text = String::from_utf8(output.stdout.clone()).unwrap();
@@ -188,10 +188,10 @@ fn offline_staging_exports_public_key_without_activation() {
     assert_eq!(public.to_spki(), bytes);
     let id: String = public.key_id().iter().map(|b| format!("{b:02x}")).collect();
     assert_eq!(id, staged_id);
-    // Never overwrite an existing export.
+    // Exporting to an existing path fails and leaves the original bytes intact.
     refused(&["export-issuer-spki", state_arg, &staged_id, export_arg]);
     assert_eq!(fs::read(&export).unwrap(), bytes);
-    // The genesis key is also exportable by its public ID.
+    // Exporting by the initial key's public ID returns its public key.
     let genesis_id = &initial.rows[0].id;
     let genesis_export = temp.path().join("genesis.der");
     success(&[
@@ -209,7 +209,7 @@ fn offline_staging_exports_public_key_without_activation() {
             .collect::<String>(),
         *genesis_id
     );
-    // Each invocation reopens durable state in a new process.
+    // Run status in a separate process to verify that the staged key persists on disk.
     assert_eq!(status(&state).rows, staged.rows);
 }
 

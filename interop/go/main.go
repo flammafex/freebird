@@ -1,4 +1,5 @@
-// Independent RFC 9577/9578 interoperability checks. Never prints credentials.
+// This program checks interoperability with an independent implementation of RFC 9577 and RFC 9578.
+// It limits diagnostic output to avoid exposing credentials.
 package main
 
 import (
@@ -245,7 +246,7 @@ func client(issuer, origin, invitation string) error {
 	if len(request) != 259 {
 		return errors.New("request length")
 	}
-	// The advertised public identity is not a transport destination.
+	// Send the request to the validated loopback address to keep issuance local.
 	status, _, response, e := get("POST", i.String()+"/private-token/issue", request, map[string]string{"Freebird-Admission": string(admission), "Content-Type": "application/private-token-request"})
 	if e != nil {
 		return e

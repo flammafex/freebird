@@ -1,6 +1,5 @@
-// Test-only resolve hook. It maps the bare specifier `@cloudflare/privacypass-ts`
-// to one explicit file path. Registered only by test/support/peer.mjs, and only
-// when this package has no install of its own.
+// If the client has no local install, `./peer.mjs` registers this hook so that
+// `@cloudflare/privacypass-ts` resolves to the demo's copy.
 import { pathToFileURL } from 'node:url';
 
 let peerEntry;
@@ -9,8 +8,8 @@ export function setPeerEntry(entry) {
   peerEntry = entry;
 }
 
-// Synchronous, so it also works with module.registerHooks(); for the older
-// module.register() fallback, a plain return value is accepted too.
+// Return the result synchronously so that the hook works with both `module.registerHooks()`
+// and `module.register()`.
 export function resolve(specifier, context, nextResolve) {
   if (specifier === '@cloudflare/privacypass-ts' && peerEntry) {
     return { url: pathToFileURL(peerEntry).href, shortCircuit: true };
@@ -18,7 +17,7 @@ export function resolve(specifier, context, nextResolve) {
   return nextResolve(specifier, context);
 }
 
-// Used only by the module.register() fallback.
+// Read the entry provided by `module.register()` so that its loader resolves the same copy of the peer.
 export function initialize(data) {
   peerEntry = data?.entry;
 }

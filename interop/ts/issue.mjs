@@ -7,8 +7,8 @@ import { pathToFileURL } from 'node:url';
 import { publicVerif, TokenChallenge } from '@cloudflare/privacypass-ts';
 
 export function loopbackBase(value) {
-  // Validate the spelling too: URL normalization must not admit integer,
-  // hexadecimal, shortened IPv4, credentials, or alternate hosts.
+  // Check the URL before normalization to reject integer, hexadecimal, and shortened IPv4 forms.
+  // The same check rejects credentials and hosts other than numeric loopback addresses.
   assert.match(value, /^http:\/\/(127(?:\.(?:0|[1-9]\d{0,2})){3}|\[::1\])(?::[1-9]\d{0,4})?\/?$/);
   const url = new URL(value);
   assert.ok(url.hostname === '[::1]' || url.hostname.split('.').every(x => Number(x) <= 255));
@@ -34,8 +34,9 @@ export function parseChallenge(header) {
 const hash = bytes => createHash('sha256').update(bytes).digest();
 const equal = (a, b) => assert.deepEqual(Buffer.from(a), Buffer.from(b));
 
-// Core http, agent:false and numeric addresses deliberately bypass proxy
-// environment variables. Redirects are returned, never followed.
+// Use a numeric loopback address and `http.request` with `agent: false` to bypass proxy settings
+// from the environment.
+// Return redirect responses to the caller without following them.
 async function request(base, path, limit, headers = {}, payload) {
   return new Promise((resolvePromise, reject) => {
     const req = http.request(new URL(path, base), {
@@ -97,7 +98,8 @@ export async function main(args) {
   console.log('challenge: 401');
   const { bytes, spki: challengeKey } = parseChallenge(response.headers['www-authenticate']);
   equal(spki, challengeKey);
-  // The upstream deserializer reads the backing ArrayBuffer from offset zero.
+  // Copy the bytes into a standalone buffer because the deserializer reads the backing
+  // `ArrayBuffer` from offset zero.
   const challenge = TokenChallenge.deserialize(Uint8Array.from(bytes));
   equal(challenge.serialize(), bytes);
   assert.equal(challenge.tokenType, 2);

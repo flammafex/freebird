@@ -1,5 +1,6 @@
-// requestAdmission against a real HTTP listener on 127.0.0.1 (Node built-ins only).
-// Plain HTTP is reachable only through the explicit allowInsecureLoopback option.
+// A local HTTP listener lets this test check that `requestAdmission` reaches `127.0.0.1` when
+// `allowInsecureLoopback` is enabled.
+// The listener uses only Node.js built-ins.
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import { createServer } from 'node:http';

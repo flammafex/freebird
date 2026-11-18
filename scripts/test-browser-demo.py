@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
-"""Build and test the real browser demo through the shipped TLS nginx boundary.
+"""Build the browser demo and test token redemption and replay through the nginx TLS configuration.
 
-Requires cargo, Node 26+, npm, openssl, nginx, and Chrome/Chromium. Optional
-FREEBIRD_NGINX and FREEBIRD_CHROME select executables. All state, certificates,
-the deployed dist copy, and the browser profile are temporary. Only fixed
-statuses are printed; subprocess/browser diagnostics can contain credentials.
+Install `cargo`, Node 26 or later, `npm`, `openssl`, `nginx`, and Chrome or Chromium.
+Use `FREEBIRD_NGINX` and `FREEBIRD_CHROME` to select specific executables.
+
+The test keeps service state, certificates, the build copy, and the browser
+profile in a temporary directory. It prints only fixed statuses because
+subprocess and browser diagnostics can contain credentials.
 """
 import base64
 import hashlib
@@ -56,7 +58,7 @@ def main():
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"{label}: timed out (diagnostics suppressed)") from None
         if result.returncode and label == "browser CDP flow":
-            # Only forward known fixed failure statuses, never arbitrary stderr.
+            # Pass through only fixed failure statuses to keep credentials out of the output.
             for status in (
                 "Chrome page target unavailable", "CDP connection timed out",
                 "CDP connection failed", "CDP command timed out", "CDP command rejected",
@@ -90,9 +92,8 @@ def main():
     binary = root / "target/debug/freebird-privacy-pass-service"
     children = []
 
-    # Use the session's approved temporary base when available.
     preferred = Path(tempfile.gettempdir()) / "opencode"
-    # Keep the Issuer's Unix control socket below macOS's 104-byte path limit.
+    # Use a short prefix so that the Issuer's socket path can fit within macOS's 104-byte limit.
     with tempfile.TemporaryDirectory(prefix="fb-",
                                      dir=preferred if preferred.is_dir() else None) as temporary:
         tmp = Path(temporary)
@@ -144,7 +145,7 @@ def main():
                 replace(f"/etc/letsencrypt/live/{host}.example.org/privkey.pem", str(key), 1)
                 replace(f"{host}\\.example\\.org", f"{host}\\.test", 2)
                 replace(f"{host}.example.org", f"{host}.test", 6 if host == "issuer" else 4)
-            replace("https://issuer.test;", f"{issuer_url};", 1)  # CSP uses the real TLS port.
+            replace("https://issuer.test;", f"{issuer_url};", 1)  # Match the CSP to the test port.
             replace("    listen [::]:80;\n", "", 2)
             replace("    listen [::]:443 ssl;\n", "", 2)
             replace("listen 80;", f"listen 127.0.0.1:{http};", 2)
@@ -152,12 +153,13 @@ def main():
             replace("(:80)?", f"(:{http})?", 2)
             replace("(:443)?", f"(:{tls})?", 2)
             replace("127.0.0.1:8081", f"127.0.0.1:{issuer_port}", 4)
-            # Origin upstream: one live location plus two in the commented app-protection example.
+            # Replace one Origin address in active rules and two in the app-protection example.
             replace("127.0.0.1:8082", f"127.0.0.1:{origin_port}", 3)
             replace("/var/log/nginx/freebird-access.log", str(tmp / "access.log"), 1)
             replace("/var/log/nginx/freebird-error.log", str(tmp / "error.log"), 1)
             replace("/var/lib/letsencrypt", str(tmp / "acme"), 2)
-            replace("/var/www/freebird-demo", str(demo), 2)  # Comment plus root.
+            # Replace both occurrences of the demo path to point `root` at the temporary build.
+            replace("/var/www/freebird-demo", str(demo), 2)
             nginx_config = tmp / "nginx.conf"
             nginx_config.write_text(
                 f"daemon off;\nmaster_process off;\npid {tmp}/nginx.pid;\n"
@@ -179,8 +181,8 @@ def main():
 
             def start(args, label):
                 with (tmp / f"{label}.diagnostic").open("wb") as stream:
-                    # Own process group: Chrome forks helpers (zygote, crashpad)
-                    # that would otherwise outlive it and keep writing the profile.
+                    # Start a separate process group so that cleanup can stop Chrome and its helpers
+                    # before they can write to the temporary profile again.
                     child = subprocess.Popen([str(arg) for arg in args], cwd=root,
                                              stdout=stream, stderr=stream,
                                              start_new_session=True)
@@ -218,11 +220,11 @@ def main():
                 f"--ignore-certificate-errors-spki-list={trusted_spki}", "about:blank",
             ]
             if hasattr(os, "geteuid") and os.geteuid() == 0:
-                # Root-only containers cannot use Chrome's normal user sandbox.
+                # Disable the sandbox in root-only containers because Chrome cannot start it as root.
                 chrome_args.insert(1, "--no-sandbox")
             start(chrome_args, "chrome")
             active_port = profile / "DevToolsActivePort"
-            # A cold Chrome start on shared CI runners can exceed 10 s.
+            # Allow more than ten seconds because Chrome can take longer to start on shared CI runners.
             deadline = time.monotonic() + 60
             while True:
                 require(all(child.poll() is None for child in children),
@@ -235,7 +237,7 @@ def main():
                 if time.monotonic() > deadline:
                     raise RuntimeError("Chrome DevTools startup timed out")
                 time.sleep(.05)
-            # The driver emits only fixed statuses, never raw CDP/browser data.
+            # Check driver statuses before printing them to keep raw browser data private.
             output = run(["node", web / "test/e2e-cdp.mjs", str(debugging_port), origin_url,
                           issuer_url], "browser CDP flow", timeout=180)
             allowed = {
@@ -274,7 +276,7 @@ if __name__ == "__main__":
         print(f"browser demo: failed; {error}")
         raise SystemExit(1)
     except (OSError, subprocess.SubprocessError) as error:
-        # Exception class and errno carry no credentials; messages/paths may.
+        # Report only the exception type and `errno` because messages can expose paths or arguments.
         print("browser demo: failed; prerequisite/process error "
               f"({type(error).__name__} errno={getattr(error, 'errno', None)}; "
               "diagnostics suppressed)")

@@ -1,19 +1,19 @@
-# Integrating an application
+# Freebird checks tokens before requests reach the application.
 
-**Experimental, not a production service.** This guide shows how an
-application puts Freebird in front of its own routes without implementing
-Privacy Pass itself. It assumes the [single-host deployment](deployment.md) and
-[admission for application servers](app-admission.md).
+Use nginx and the Freebird packages to protect application routes without
+implementing Privacy Pass in the application. This experimental setup uses
+the [single-host deployment](deployment.md) and
+[app admission](app-admission.md). Do not use it in production.
 
-There are three pieces, and the application writes almost none of the
-cryptography:
+nginx controls which requests reach the application, and the Freebird
+packages handle admission and tokens:
 
-1. **nginx checks tokens** for the application's protected routes, using
-   Freebird's Origin. The application only receives requests that carried a
-   valid, unspent token.
-2. **The application server requests admission codes** for the users its own
-   policy approves, with `packages/freebird-server`.
-3. **The browser obtains and spends tokens** with `packages/freebird-client`.
+1. Route protected requests through **nginx and the Freebird Origin** so that
+   the application receives only requests that carry a valid, unspent token.
+2. Use `packages/freebird-server` to **request admission codes** for users
+   who meet the application's access rules.
+3. Use `packages/freebird-client` in the browser to **obtain and spend a
+   token** on a protected request.
 
 ```text
 browser ──► nginx ──auth_request──► Freebird Origin (checks + spends token)
@@ -24,53 +24,62 @@ browser ──► nginx ──auth_request──► Freebird Origin (checks + sp
    └──► Freebird Issuer /private-token/issue (code + blinded request → token)
 ```
 
-## 1. Protect routes with nginx
+## nginx checks tokens before proxying protected requests.
 
-The nginx template ends with a commented **application protection example**
-between `BEGIN app-protection example` and `END app-protection example`. Copy
-those locations into the server block that serves your application and adapt
-the upstream address. Each protected location:
+Copy the locations between `BEGIN app-protection example` and
+`END app-protection example` in the nginx template into the server block
+that serves your application. The example is commented out at the end of
+the template. Set the upstream address to your application.
 
-- sends an internal `auth_request` subrequest to the Origin's
-  `/private-token/protected` route, forwarding only `Authorization` and the
-  nginx-chosen `Freebird-Scope`;
-- lets the request through to your application only if the Origin answers 200,
-  having verified and spent the token;
-- returns the Origin's 401 and `WWW-Authenticate: PrivateToken …` challenge to
-  the browser otherwise, without contacting your application;
-- strips `Authorization` and `Freebird-Scope` before proxying to your
-  application. The token is already spent and the application never needs it.
+Verify that nginx includes the `auth_request` module so that it can call
+the Origin before proxying a request. Ubuntu's packaged nginx includes
+the module. Check with `nginx -V 2>&1 | grep auth_request`.
 
-nginx's `auth_request` module must be present (`nginx -V 2>&1 | grep
-auth_request`); Ubuntu's packaged nginx includes it.
+Each protected location handles access as follows:
 
-### Binding tokens to one resource (scope)
+- Send an **internal `auth_request` subrequest** to the Origin's
+  `/private-token/protected` route to check the token. Forward only
+  `Authorization` and the `Freebird-Scope` value that nginx sets.
+- **Proxy the request to the application** only if the Origin verified and
+  spent the token and returned 200.
+- **Return the Origin's 401 challenge** with
+  `WWW-Authenticate: PrivateToken …` so that the browser can obtain a token.
+  nginx does not contact the application for that request.
+- **Strip `Authorization` and `Freebird-Scope`** before proxying to the
+  application. The Origin has spent the token, so the application does not
+  need it.
 
-By default a token works on any protected route of the Origin. To bind tokens
-to one resource, such as a ballot, pool or thread, the internal auth location
-sets `Freebird-Scope` to a value derived from the request. The template's
-`/ballot/` example derives `ballot:<id>` from the query string. A token
-obtained for `ballot:1` is refused at `ballot:2` and at unscoped routes, and the
-browser receives a fresh challenge for the right scope.
+### Set a scope to bind a token to one resource.
 
-- The scope is set **only by nginx**. A `Freebird-Scope` header sent by the
-  client is never forwarded. The Origin trusts this header only because it
-  listens on loopback behind nginx; never expose the Origin's port directly.
-- Scopes are 1–128 visible ASCII characters. An empty value means unscoped. Two
-  headers or an invalid value return 400.
-- **Allowlist scope values in nginx** rather than copying arbitrary client
-  input: every distinct scope creates challenge records for the hour. The
-  template's example fails closed with 403 for identifiers outside its list.
+Set `Freebird-Scope` in the internal auth location to bind a token to a
+resource such as a ballot, pool, or thread. Without scoping, a token works
+on any protected route of the Origin. The template's `/ballot/` example
+derives `ballot:<id>` from the query string. A token for `ballot:1` is
+refused at `ballot:2` or at an unscoped route. The browser receives a fresh
+challenge for the requested scope.
 
-Technically the scope is mixed into the challenge's redemption context, which
-is derived from the Origin's secret, the hour and the scope. No new
-cryptography is involved, and unscoped challenges are byte-for-byte unchanged.
+Apply these checks so that clients cannot set arbitrary scopes:
 
-## 2. Request admission codes from your server
+- **Set `Freebird-Scope` only in nginx** so that clients cannot set the value
+  directly. Do not forward a client-supplied scope header. The Origin
+  accepts this header because it listens on loopback behind nginx. Do not
+  expose the Origin's port directly.
+- Use **1–128 visible ASCII characters** for a scoped value and an empty
+  value for an unscoped request. The Origin returns 400 for two scope
+  headers or an invalid value.
+- **Allow only listed scope values** in nginx because each distinct scope
+  creates challenge records for the hour. Do not copy arbitrary client
+  input. The template returns 403 for identifiers outside its list.
 
-Register the application once (`app-add`, see
-[admission for application servers](app-admission.md)) and keep its key in the
-server's secret store. When your own policy approves a user, request one code:
+The Origin binds the scope by deriving the challenge's redemption context
+from its secret, the hour, and the scope. It uses the same cryptography
+and preserves the exact bytes of unscoped challenges.
+
+## The application server requests an admission code for one user.
+
+Register the application once with `app-add` for
+[app admission](app-admission.md). Keep its key in the server's secret store.
+Request one code when a user meets the application's access rules:
 
 ```js
 import { requestAdmission } from '../path/to/freebird/packages/freebird-server/src/index.mjs';
@@ -82,13 +91,17 @@ const code = await requestAdmission({
 // Send `code` to that one user over your authenticated session. Never log it.
 ```
 
-At the daily cap it throws an error with `status` 429 and `retryAfter` (seconds
-until the next UTC midnight). A revoked or wrong key gives 401.
+`requestAdmission` throws an error with `status` 429 at the daily cap.
+The error's `retryAfter` is the number of seconds until the next UTC
+midnight. A revoked or incorrect key results in 401.
 
-Each code buys exactly one token. Hand it to one user, and fetch it only when
-that user is about to need a token: codes expire after 24 hours.
+Give each code to one user who is ready to request a token. A code can be
+spent on exactly one token and expires after 24 hours.
 
-## 3. Obtain and spend a token in the browser
+## The browser retries a challenged request with one token.
+
+Use `fetchWithToken` to obtain a token after verifying the Issuer in the
+challenge, then retry the protected request:
 
 ```js
 import { fetchWithToken } from '../path/to/freebird/packages/freebird-client/src/index.mjs';
@@ -101,33 +114,40 @@ const response = await fetchWithToken('https://app.example.org/ballot/?ballot=1'
 });
 ```
 
-`fetchWithToken` makes the request; on a 401 PrivateToken challenge it checks
-that the challenge names the configured Issuer and one of its published keys,
-then obtains the admission code, gets one token, and retries the request once
-with it. If the Origin still refuses, it throws an error with stage `access`.
-It never retries with the same code, and never logs codes or tokens.
+After receiving a 401 `PrivateToken` challenge, `fetchWithToken` checks
+that the challenge names the configured Issuer and one of its published
+keys. It then obtains one admission code, gets one token, and retries the
+request once with that token. If the Origin refuses the retry,
+`fetchWithToken` throws an error with stage `access`. It does not retry
+with the same code or log codes or tokens.
 
-The Issuer must allow your page's origin as its browser origin (the sixth
-`serve-issuer` argument), and your page's Content Security Policy must allow
-`connect-src` to the Issuer. The [browser demo](demo.md) uses the same package.
+Allow the page's origin in the sixth `serve-issuer` argument so that the
+browser can contact the Issuer. Allow `connect-src` to the Issuer in the
+page's Content Security Policy. The [browser demo](demo.md) uses the same
+package.
 
-## Distribution and limits
+## Use the packages from a source checkout.
 
-The packages live in this repository and are **not published** while release
-publishing is held for independent cryptographic review. Use them from a
-checkout or vendor them at a fixed commit. The browser package needs
-`@cloudflare/privacypass-ts` 0.9.0 as a peer dependency; that package carries
-the `sjcl` ECC advisory
-[GHSA-2w8x-224x-785m](https://github.com/advisories/GHSA-2w8x-224x-785m), and
-Freebird uses only its RSA path.
+Use the packages from this repository or vendor them at a fixed commit.
+Release publishing requires independent cryptographic review, so the packages
+are available only as source in the repository.
 
-Each token is spent by the request that carried it. If the response is lost,
-the token is gone and the browser needs a new code. Tokens from one challenge
-expire five minutes after the end of the hour in which they were issued.
+Install `@cloudflare/privacypass-ts` 0.9.0 as a peer dependency of the
+browser package. Freebird uses only its RSA path. The dependency carries the
+`sjcl` ECC advisory
+[GHSA-2w8x-224x-785m](https://github.com/advisories/GHSA-2w8x-224x-785m).
 
-## Tests
+## A protected request spends its token once.
 
-`python3 scripts/test-app-sidecar.py` runs real binaries behind nginx with TLS
-and a stub application: unauthenticated requests are refused without reaching
-the application, a token works once (GET and POST), a scoped token is refused at
-another scope, and client-sent scope headers are ignored.
+A protected request spends its token even if the response is lost. If
+the browser needs another token, it must obtain another admission code.
+Tokens from a challenge expire five minutes after the end of the hour in
+which they were issued.
+
+## The integration test checks token use and scoping.
+
+Run `python3 scripts/test-app-sidecar.py` to check the real Freebird binaries
+behind nginx with TLS and a stub application. The test verifies that
+unauthenticated requests never reach the application and that a token works
+once for GET and for POST. It also verifies that the Origin refuses a token
+at another scope and that nginx ignores client-supplied scope headers.

@@ -1,8 +1,7 @@
-//! Offline rotation and retirement drills.
-//! - `in_process_rotation_drill_with_injected_clock`: real blind-RSA client code
-//!   against Issuer::directory_at/issue_at and Origin::request_at with an injected clock.
-//! - Subprocess tests use future activation and past retirement fixtures
-//!   (never a sleep for a time boundary) and the loopback example end-to-end.
+//! These tests pass explicit times to `Issuer::directory_at`, `Issuer::issue_at`, and
+//! `Origin::request_at` to exercise offline rotation and retirement with blind RSA.
+//! The CLI tests use a far-future activation and a past retirement deadline so that the real
+//! clock cannot cross either boundary during the tests. The loopback client verifies the full HTTP flow.
 use axum::{
     body::to_bytes,
     http::{header, Request, StatusCode},
@@ -32,8 +31,8 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-// This integration test is a separate binary: coordinate its in-process stores
-// with its CLI spawners so transient pre-exec flock inheritance cannot race reopen.
+// Coordinate store tests and CLI launches within this test binary so that a child cannot
+// temporarily inherit a file lock while another test is reopening the store.
 static SPAWN_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
 const BIN: &str = env!("CARGO_BIN_EXE_freebird-privacy-pass-service");
@@ -69,7 +68,7 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
-/// Hour-aligned instant ten years out, unreachable by any real-clock server here.
+/// Picks an hour about ten years ahead so that the activation time stays in the future during the test.
 fn far_future() -> u64 {
     (unix_now() / 3600 + 24 * 365 * 10) * 3600
 }
@@ -78,7 +77,7 @@ fn p(path: &Path) -> &str {
     path.to_str().unwrap()
 }
 
-/// Genesis SPKI and key ID, read through the key store before any role opens it.
+/// Loads the initial public key and its ID before either service opens its store.
 fn genesis(keys: &Path, now: u64) -> (Vec<u8>, [u8; 32]) {
     let manifest = KeyStore::open(keys).unwrap().manifest(now).unwrap();
     let key = manifest
@@ -89,9 +88,7 @@ fn genesis(keys: &Path, now: u64) -> (Vec<u8>, [u8; 32]) {
     (key.spki.clone(), key.key_id)
 }
 
-// ---------------------------------------------------------------------------
-// In-process drill: real client-side blind RSA, injected clock.
-// ---------------------------------------------------------------------------
+// Keep the blinded request and client state together so that the test can finalize the issuer's reply.
 
 struct Blinded {
     wire: Vec<u8>,
@@ -167,7 +164,7 @@ fn invite(admission: &AdmissionStore, now: u64) -> String {
     admission.provision(now as i64).unwrap()
 }
 
-/// The single key advertised at `now`.
+/// Checks that the directory at `now` advertises exactly one type 2 key and returns it.
 fn advertised(issuer: &Issuer, now: u64) -> PublicKey {
     let document: serde_json::Value =
         serde_json::from_str(&issuer.directory_at(now).unwrap()).unwrap();
@@ -178,7 +175,7 @@ fn advertised(issuer: &Issuer, now: u64) -> PublicKey {
     PublicKey::from_spki(&spki).unwrap()
 }
 
-/// Unauthenticated origin challenge at `now`: (challenge, advertised SPKI, max-age).
+/// Sends an unauthenticated request at `now` and returns the challenge, public key bytes, and `max-age`.
 fn challenge(origin: &Origin, now: u64) -> (TokenChallenge, Vec<u8>, u64) {
     let header = origin
         .request_at(None, now)
@@ -200,7 +197,7 @@ fn challenge(origin: &Origin, now: u64) -> (TokenChallenge, Vec<u8>, u64) {
     (challenge, key, max_age)
 }
 
-/// True only when the origin accepts the token at `now` (no new challenge issued).
+/// Returns `true` if redemption at `now` succeeds and the origin does not send another challenge.
 fn redeem(origin: &Origin, token: &Token, now: u64) -> bool {
     origin.request_at(Some(token), now).unwrap().is_none()
 }
@@ -219,7 +216,8 @@ async fn in_process_rotation_drill_with_injected_clock() {
     let (genesis_spki, genesis_id) = genesis(&keys, T0);
     Origin::initialize(&origin_db, &context, &genesis_spki, genesis_id).unwrap();
 
-    // Offline rotation at T0: stage, install on the Origin FIRST, then schedule.
+    // Stage at `T0` and install the public key on the origin before scheduling it on the issuer
+    // so that the origin can verify tokens as soon as issuance switches keys.
     let store = KeyStore::open(&keys).unwrap();
     let next_id = store.stage(T0).unwrap();
     let next_spki = store.spki(next_id).unwrap();
@@ -227,7 +225,8 @@ async fn in_process_rotation_drill_with_injected_clock() {
     Origin::install_key(&origin_db, &next_spki, next_id, S, T0).unwrap();
     let store = KeyStore::open(&keys).unwrap();
     assert_eq!(store.schedule_activation(S, T0).unwrap(), next_id);
-    // Test-only access to the scheduled private key, to forge an installed-key token.
+    // Sign with the scheduled private key in the test to check that redemption still requires
+    // a challenge issued for that key.
     let next_secret = store
         .signing_keys(T0)
         .unwrap()
@@ -243,11 +242,11 @@ async fn in_process_rotation_drill_with_injected_clock() {
     let genesis_public = PublicKey::from_spki(&genesis_spki).unwrap();
     let next_public = PublicKey::from_spki(&next_spki).unwrap();
 
-    // Before S only the genesis key is advertised.
+    // Before `S`, the directory advertises only the initial key because the successor is not active.
     assert_eq!(advertised(&issuer, T0).key_id(), genesis_id);
 
-    // S-3: an installed key cannot redeem, even with a genuine K1 signature over a
-    // digest that K0 challenged; installed keys have no challenge rows.
+    // At `S - 3`, the origin rejects a token signed by the installed key K1 because it has
+    // no challenge row for K1, even though K0 issued a challenge for that digest.
     let before = S - 3;
     let (pre, pre_key, pre_age) = challenge(&origin, before);
     assert_eq!(pre_key, genesis_spki);
@@ -261,8 +260,8 @@ async fn in_process_rotation_drill_with_injected_clock() {
     };
     assert!(!redeem(&origin, &forged, before));
 
-    // S-2: issuance selects the genesis key. A K1-truncated request is 422 and
-    // leaves its invitation unconsumed, so the same invitation then succeeds.
+    // At `S - 2`, a request with K1's truncated ID returns HTTP 422 because the issuer selects K0.
+    // The same invitation still works for a request that targets K0.
     let at = S - 2;
     assert_eq!(advertised(&issuer, at).key_id(), genesis_id);
     let token_a = issue(&issuer, &invite(&admission, at), &genesis_public, d9, at).await;
@@ -276,14 +275,15 @@ async fn in_process_rotation_drill_with_injected_clock() {
     let token_c = issue(&issuer, &invite(&admission, at), &genesis_public, d9, at).await;
     let token_d = issue(&issuer, &invite(&admission, at), &genesis_public, d9, at).await;
 
-    // S-1 is still hour H0+9: same digest, deadline S+300 (max-age 301).
+    // At `S - 1`, the hour is still `H0 + 9`, so the challenge has the same digest.
+    // The deadline at `S + 300` gives a `max-age` of 301 seconds.
     let (late, late_key, late_age) = challenge(&origin, S - 1);
     assert_eq!(late.digest(), d9);
     assert_eq!(late_key, genesis_spki);
     assert_eq!(late_age, 301);
 
-    // Offline Issuer retirement is refused before S, allowed exactly at S.
-    // Existing blind signatures remain verifiable after private-key retirement.
+    // Offline retirement fails before `S` and succeeds at `S`, when the successor takes over issuance.
+    // The origin can still verify signatures from before retirement because it uses the public key.
     drop(issuer);
     let store = KeyStore::open(&keys).unwrap();
     assert!(store.retire(genesis_id, S - 1).is_err());
@@ -295,7 +295,7 @@ async fn in_process_rotation_drill_with_injected_clock() {
     drop(store);
     let issuer = Issuer::open(&keys, admission.clone(), ISSUER, ISSUE_URL, S).unwrap();
 
-    // S+1: the next key is advertised; the genesis key is refused from S onward.
+    // At `S + 1`, both services advertise K1, and the issuer rejects requests that target K0.
     let at = S + 1;
     assert_eq!(advertised(&issuer, at).key_id(), next_id);
     let (post, post_key, post_age) = challenge(&origin, at);
@@ -310,16 +310,16 @@ async fn in_process_rotation_drill_with_injected_clock() {
         StatusCode::UNPROCESSABLE_ENTITY
     );
     let token_e = issue(&issuer, &invitation_e, &next_public, d10, at).await;
-    // K1 token bound to the K0-hour digest: a valid issuance, but not redeemable.
+    // The issuer signs with K1, but the origin rejects that token because the digest was challenged under K0.
     let token_g = issue(&issuer, &invite(&admission, at), &next_public, d9, at).await;
 
-    // S+2: new-key cycle is redeemable once, and the K1 token for the K0 digest fails.
+    // At `S + 2`, a K1 token for its own challenge redeems once, while the K1 token for K0's challenge fails.
     assert!(redeem(&origin, &token_e, S + 2));
     assert!(!redeem(&origin, &token_e, S + 2), "replay must fail");
     assert!(!redeem(&origin, &token_g, S + 2));
 
-    // S+10: a K0 token whose key ID is swapped to K1 is refused, while the
-    // unmodified token still redeems: only the key binding changed.
+    // At `S + 10`, changing only the key ID from K0 to K1 makes redemption fail.
+    // The token with its original ID still redeems.
     let swapped = Token {
         nonce: token_d.nonce,
         challenge_digest: token_d.challenge_digest,
@@ -329,16 +329,16 @@ async fn in_process_rotation_drill_with_injected_clock() {
     assert!(!redeem(&origin, &swapped, S + 10));
     assert!(redeem(&origin, &token_d, S + 11));
 
-    // S+100: a pre-S token redeems within the grace window; its replay fails.
+    // At `S + 100`, a token issued before activation redeems once because it is still within the grace period.
     assert!(redeem(&origin, &token_a, S + 100));
     assert!(!redeem(&origin, &token_a, S + 100));
 
-    // Deadline is exclusive: S+299 accepted, S+300 refused.
+    // Redemption succeeds at `S + 299` but fails at `S + 300` because the deadline is exclusive.
     assert!(redeem(&origin, &token_c, S + 299));
     assert!(!redeem(&origin, &token_b, S + 300));
 
-    // Offline Origin retirement waits for the 300-second grace plus 120-second
-    // safety margin, then atomically removes the old key's challenge/spent rows.
+    // Offline retirement on the origin requires the 300-second grace period and a 120-second safety margin to pass.
+    // Retirement removes both the challenge and spent rows for the retired key in one transaction.
     drop(origin);
     drop(issuer);
     assert!(Origin::retire_key(&origin_db, genesis_id, S + 419).is_err());
@@ -349,15 +349,14 @@ async fn in_process_rotation_drill_with_injected_clock() {
     assert_eq!(status.keys[1].state, OriginKeyState::Advertising);
     assert!(Origin::install_key(&origin_db, &genesis_spki, genesis_id, S + 7200, S + 420).is_err());
     let origin = Origin::open(&origin_db, &context, ISSUER, ORIGIN).unwrap();
-    // Some(challenge) is the HTTP handler's 401 path, never 200 for a retired key.
+    // A token for the retired key returns a challenge, which the HTTP handler sends with HTTP 401.
     assert!(origin
         .request_at(Some(&token_b), S + 420)
         .unwrap()
         .is_some());
     drop(origin);
 
-    // A second complete rotation is now possible; retired rows remain as
-    // permanent tombstones but do not block the next candidate.
+    // Retired rows remain to prevent reuse of their IDs, but they leave room to stage the next candidate.
     let at = S + 421;
     let s2 = S + 7200;
     let store = KeyStore::open(&keys).unwrap();
@@ -429,9 +428,7 @@ async fn in_process_rotation_drill_with_injected_clock() {
     assert!(redeem(&origin, &after_retirement, s2 + 420));
 }
 
-// ---------------------------------------------------------------------------
-// Subprocess helpers (real CLI, real clock, far-future activation).
-// ---------------------------------------------------------------------------
+// Wrap each CLI subprocess so that drop stops it and waits for it to exit, even if an assertion fails.
 
 struct Process(Child);
 
@@ -520,7 +517,7 @@ fn free_address() -> SocketAddr {
         .unwrap()
 }
 
-/// Plain HTTP/1.1 GET; `None` when the listener is not accepting yet.
+/// Sends a plain HTTP/1.1 `GET` and returns its response, or returns `None` if the attempt fails.
 fn respond(address: SocketAddr, path: &str) -> Option<String> {
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_millis(200)).ok()?;
     stream
@@ -555,7 +552,7 @@ fn wait_ready(server: &mut Process, address: SocketAddr, path: &str, ready: impl
     }
 }
 
-/// Decoded `token-keys` of a directory response.
+/// Decodes the `token-keys` from a directory response into public key bytes.
 fn directory_keys(text: &str) -> Vec<Vec<u8>> {
     let body = text.split_once("\r\n\r\n").unwrap().1;
     let document: serde_json::Value = serde_json::from_str(body).unwrap();
@@ -567,7 +564,7 @@ fn directory_keys(text: &str) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// The `token-key` parameter of an origin challenge response.
+/// Decodes the `token-key` parameter from the origin's challenge into public key bytes.
 fn challenge_token_key(text: &str) -> Vec<u8> {
     let marker = "token-key=\"";
     let start = text.find(marker).unwrap() + marker.len();
@@ -590,7 +587,8 @@ struct Status {
     rows: Vec<Row>,
 }
 
-/// Frozen format: `now`, `high-water`, then `<state> <id> <activation> <issuance-end> <acceptance>`.
+/// Checks that status starts with `now` and `high-water`, then parses each key's five fields.
+/// Each row has the state, ID, activation time, end of issuance, and acceptance deadline.
 fn parse_status(output: &Output) -> Status {
     assert!(output.stderr.is_empty());
     let text = String::from_utf8(output.stdout.clone()).unwrap();
@@ -654,7 +652,7 @@ fn row(state: &str, id: &str, activation: &str, issuance_end: &str, acceptance: 
     }
 }
 
-/// (id, activation) pairs, order-independent: the cross-role agreement check.
+/// Sorts the ID and activation pairs so that the two roles can be compared regardless of row order.
 fn id_and_activation(status: &Status) -> Vec<(String, String)> {
     let mut pairs: Vec<_> = status
         .rows
@@ -666,8 +664,8 @@ fn id_and_activation(status: &Status) -> Vec<(String, String)> {
 }
 
 fn example_binary() -> PathBuf {
-    // Cargo can run this test from an isolated build directory; the binary
-    // supplied by Cargo identifies the actual profile output directory.
+    // Locate the example relative to the service binary that Cargo provides so that this works
+    // even when Cargo uses a separate build directory.
     let example = Path::new(BIN)
         .parent()
         .unwrap()
@@ -681,9 +679,7 @@ fn example_binary() -> PathBuf {
     example
 }
 
-// ---------------------------------------------------------------------------
-// CLI runbook.
-// ---------------------------------------------------------------------------
+// Run both services with eligible keys to check that their locks block offline retirement.
 
 #[test]
 fn cli_retirement_runbook_with_past_activation_and_real_clock() {
@@ -697,8 +693,8 @@ fn cli_retirement_runbook_with_past_activation_and_real_clock() {
     let db = origin.join("origin.sqlite");
     let context = origin.join("context");
 
-    // Build legitimate stores with injected past times through the public APIs;
-    // no SQL schedule edits, clock overrides, or waiting for a time boundary.
+    // Use past times with the public APIs so that both stores are eligible for retirement under
+    // the CLI's system clock without waiting for a time boundary.
     let started = unix_now();
     let s = (started / 3600 - 24) * 3600;
     let then = s - 3600;
@@ -739,8 +735,7 @@ fn cli_retirement_runbook_with_past_activation_and_real_clock() {
     assert_eq!(issuer_status(&issuer), before_issuer);
     assert_eq!(origin_status(&origin), before_origin);
 
-    // Both keys are eligible for retirement, but a serving process must hold
-    // off even these valid maintenance operations.
+    // Each running service holds its store lock, so offline retirement fails even for the eligible key.
     let issuer_addr = free_address();
     let mut issuer_server = spawn_server(&[
         "serve-issuer",
@@ -819,7 +814,7 @@ fn cli_retirement_runbook_with_past_activation_and_real_clock() {
         String::from_utf8(origin_output.stdout).unwrap()
     );
 
-    // Retired IDs remain public/exportable, but cannot be reinstalled or retired again.
+    // A retired ID still allows public key export, but attempts to install or retire it again fail.
     let genesis_der = temp.path().join("genesis.der");
     run_ok(&[
         "export-issuer-spki",
@@ -861,7 +856,7 @@ fn cli_runbook_rotates_origin_first_and_status_columns_agree() {
     assert_eq!(genesis.issuance_end, "-");
     let g = genesis.id.as_str();
     run_ok(&["export-issuer-spki", p(&issuer), g, p(&genesis_der)]);
-    // A key ID that does not hash the SPKI is refused before any directory exists.
+    // `init-origin` rejects an ID that does not match the public key's SPKI digest before creating the state directory.
     let wrong_key_id = "0".repeat(64);
     run_refused(&[
         "init-origin",
@@ -884,7 +879,7 @@ fn cli_runbook_rotates_origin_first_and_status_columns_agree() {
     let n = next.as_str();
     run_ok(&["export-issuer-spki", p(&issuer), n, p(&next_der)]);
 
-    // Refusals before any origin install: no state changes anywhere.
+    // Invalid commands leave the issuer's staged key and the origin's initial state unchanged.
     run_refused(&["stage-issuer-key", p(&issuer)]);
     run_refused(&[
         "install-origin-key",
@@ -911,7 +906,7 @@ fn cli_runbook_rotates_origin_first_and_status_columns_agree() {
     assert_eq!(issuer_status(&issuer), staged);
     assert_eq!(origin_status(&origin).rows, origin0.rows);
 
-    // ORIGIN FIRST, then the issuer schedules the same instant.
+    // Install the key on the origin first so that both roles are ready for the same activation time.
     run_ok(&["install-origin-key", p(&origin), p(&next_der), n, &far_s]);
     let origin1 = origin_status(&origin);
     assert_eq!(
@@ -932,7 +927,7 @@ fn cli_runbook_rotates_origin_first_and_status_columns_agree() {
     );
     assert_eq!(id_and_activation(&issuer1), id_and_activation(&origin1));
     assert_ne!(issuer1.high_water, 0);
-    // An explicit wrong ID cannot reschedule some other scheduled candidate.
+    // Supplying the wrong ID fails and leaves the scheduled key's activation unchanged.
     run_refused_with(
         &[
             "activate-issuer-key",
@@ -944,7 +939,7 @@ fn cli_runbook_rotates_origin_first_and_status_columns_agree() {
     );
     assert_eq!(issuer_status(&issuer), issuer1);
 
-    // Serving: the issuer advertises exactly one key, the genesis key, before S.
+    // Before activation, the running issuer advertises only the initial public key.
     let issuer_addr = free_address();
     let issuer_name = issuer_addr.to_string();
     let issue_url = format!("https://{issuer_name}/private-token/issue");
@@ -975,7 +970,7 @@ fn cli_runbook_rotates_origin_first_and_status_columns_agree() {
     drop(issuer_server);
     assert_eq!(issuer_status(&issuer).rows, issuer1.rows);
 
-    // The origin serves without any SPKI argument; its advertised key is the genesis key.
+    // The running origin advertises the initial public key that it loaded from its store.
     let origin_addr = free_address();
     let mut origin_server = spawn_server(&[
         "serve-origin",
@@ -1071,9 +1066,7 @@ fn loopback_example_passes_against_cli_served_roles() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// v1 refusals through the CLI: explicit message, file bytes unchanged.
-// ---------------------------------------------------------------------------
+// Check the schema error and compare file digests to verify that the CLI rejects v1 without modifying either database.
 
 fn sha256_of(path: &Path) -> [u8; 32] {
     Sha256::digest(fs::read(path).unwrap()).into()
@@ -1118,7 +1111,7 @@ fn v1_origin(dir: &Path) {
     let db = Connection::open(dir.join("origin.sqlite")).unwrap();
     db.execute_batch(V1_ORIGIN_DDL).unwrap();
     drop(db);
-    // Ownership sidecar and context secret exist, as in a previous release.
+    // Include the lock file and context secret so that the fixture exercises rejection of the schema itself.
     fs::write(dir.join("origin.sqlite.lock"), b"").unwrap();
     fs::write(dir.join("context"), [0u8; 32]).unwrap();
 }
@@ -1130,7 +1123,7 @@ fn v1_state_is_refused_by_the_cli_for_both_roles_without_touching_files() {
     let far_s = far_future().to_string();
     let issuer = temp.path().join("issuer");
     run_ok(&["init-issuer", p(&issuer)]);
-    // Replace the v2 key store (and any WAL/SHM side files) with a v1 fixture.
+    // Remove the initialized key database and its SQLite side files so that CLI commands open only the v1 fixture.
     let keys = issuer.join("issuer-keys.sqlite");
     for name in [
         "issuer-keys.sqlite",

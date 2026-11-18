@@ -1,6 +1,5 @@
-//! Time-scheduled experimental RFC 9578 issuer. Every request signs with
-//! exactly one key: the greatest activation hour at or before the latched clock
-//! hour. The key set is loaded once at open; old keys remain in memory until restart.
+//! The experimental RFC 9578 issuer signs with the key whose activation hour is the latest that
+//! does not exceed the highest observed hour. The keys loaded at startup stay in memory until restart.
 use crate::admission::AdmissionStore;
 use crate::app_admission::AppAdmission;
 use crate::key_store::{select_active, KeyStore, SigningKey};
@@ -32,11 +31,11 @@ const SIGNER_CAPACITY: usize = 2;
 const SECONDS_PER_HOUR: u64 = 3600;
 
 pub struct Issuer {
-    /// Holds the key store's lifetime lock while the issuer serves.
+    /// Keeps the key store locked while the issuer serves so that offline maintenance cannot change it.
     _key_store: KeyStore,
-    /// Private keys (never the staged key), ascending by activation hour.
+    /// Stores activated and scheduled private keys in order of activation hour.
     keys: Arc<Vec<SigningKey>>,
-    /// Greatest hour observed in this process; a clock step back never returns to an older key.
+    /// Records the highest observed hour so that a clock rollback cannot select an older key.
     latch: AtomicU64,
     admission: Arc<AdmissionStore>,
     request_url: String,
@@ -44,7 +43,7 @@ pub struct Issuer {
 }
 
 impl Issuer {
-    /// Explicit initialization only; callers must use a dedicated Privacy Pass path.
+    /// Initializes a key store at a dedicated path for Privacy Pass.
     pub fn initialize_key(key_path: impl AsRef<Path>) -> Result<()> {
         KeyStore::initialize(key_path)
     }
@@ -91,7 +90,7 @@ impl Issuer {
         })
     }
 
-    /// Index of the single key that may sign at `now`, after advancing the latch.
+    /// Updates the highest observed hour with `now` if it is later, then returns the index of the selected key.
     fn selected(&self, now: u64) -> Option<usize> {
         let hour = now / SECONDS_PER_HOUR;
         let previous = self.latch.fetch_max(hour, Ordering::SeqCst);
@@ -100,7 +99,7 @@ impl Issuer {
         select_active(&hours, effective)
     }
 
-    /// Directory body advertising exactly the selected key.
+    /// Returns a directory body that advertises only the key selected at `now`.
     pub fn directory_at(&self, now: u64) -> Result<String> {
         let index = self.selected(now).context("no active issuer key")?;
         Ok(self.directory_for(index))
@@ -118,8 +117,8 @@ impl Issuer {
         .to_string()
     }
 
-    /// Select once for both body and cache lifetime, never caching an old
-    /// directory beyond the next scheduled activation.
+    /// Use the same key selection for the body and cache lifetime so that the cached directory
+    /// expires by the next scheduled activation.
     fn directory_response_at(&self, now: u64) -> Response {
         let Some(index) = self.selected(now) else {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
@@ -142,8 +141,7 @@ impl Issuer {
             .into_response()
     }
 
-    /// Issuance with an injected clock. Admission is consumed only after the
-    /// request has been validated against the selected key, and never with two keys.
+    /// Uses `now` to select a single signing key and checks that the request targets it before consuming admission.
     pub async fn issue_at(&self, parts: &Parts, bytes: &[u8], now: u64) -> Response {
         let mut media = parts.headers.get_all(header::CONTENT_TYPE).iter();
         if media
@@ -186,8 +184,8 @@ impl Issuer {
         };
         let keys = self.keys.clone();
         let admission = self.admission.clone();
-        // The permit stays inside the blocking job, including if the HTTP future
-        // is cancelled. The store commits before the sole signing call.
+        // Move the permit into the blocking job so that cancelling the request cannot free it
+        // before the job ends. Commit the invitation's removal before making the single signing call.
         let result = tokio::task::spawn_blocking(move || {
             let _permit = permit;
             let now = i64::try_from(now).map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
@@ -227,17 +225,15 @@ pub fn router(issuer: Arc<Issuer>) -> Router {
         .with_state(issuer)
 }
 
-/// Only the explicitly PoW-enabled runner opts in to browser routes/CORS.
-/// Issuance and admission handling are otherwise exactly the same.
+/// Adds the PoW routes and enables browser CORS while keeping the same issuance and admission checks.
 pub fn router_with_pow(issuer: Arc<Issuer>, pow: Arc<Pow>, origin: BrowserOrigin) -> Router {
     router(issuer)
         .merge(crate::pow::router(pow))
         .route_layer(middleware::from_fn_with_state(origin, browser_cors))
 }
 
-/// Merges server-to-server application admission AFTER any browser CORS layer
-/// was attached, so this route never receives browser CORS headers. `None`
-/// (application state not enabled) leaves the path unrouted: 404.
+/// Merge the application route after attaching browser CORS so that the server-to-server
+/// endpoint does not receive CORS headers. Passing `None` leaves the path unrouted, so it returns HTTP 404.
 pub fn with_app_admission(router: Router, app: Option<Arc<AppAdmission>>) -> Router {
     match app {
         Some(app) => router.merge(crate::app_admission::router(app)),
@@ -296,7 +292,7 @@ async fn directory(State(issuer): State<Arc<Issuer>>) -> Response {
 
 async fn issue(State(issuer): State<Arc<Issuer>>, request: Request) -> Response {
     let (parts, body) = request.into_parts();
-    // Apply the transport limit even for unsupported media.
+    // Limit the request body before checking the media type so that unsupported types are bounded too.
     let bytes = match to_bytes(body, 4096).await {
         Ok(bytes) => bytes,
         Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
@@ -331,8 +327,8 @@ mod tests {
         Issuer::open(key, admission, "issuer.test", ISSUER_URL, now)
     }
 
-    /// Genesis K0 plus K1 staged at T0 and scheduled for S. Closed on return.
-    /// Returns (K0 id, K1 id).
+    /// Creates the initial key K0 and stages K1 at `T0` for activation at `S`.
+    /// Closes the store and returns the IDs of K0 and K1 in that order.
     fn two_key_store(key: &Path) -> ([u8; 32], [u8; 32]) {
         Issuer::initialize_key(key).unwrap();
         let store = KeyStore::open(key).unwrap();
@@ -412,7 +408,7 @@ mod tests {
         public.verify(&request.input, &signature).unwrap();
     }
 
-    /// Advertised token-key SPKIs from a directory body; every entry must be token-type 2.
+    /// Checks that every directory entry has token type 2 and returns the decoded public keys.
     fn advertised(body: &str) -> Vec<Vec<u8>> {
         let document: serde_json::Value = serde_json::from_str(body).unwrap();
         document["token-keys"]
@@ -453,7 +449,7 @@ mod tests {
         let adm = admission(dir.path());
         let key = dir.path().join("pp-signing.sqlite");
         Issuer::initialize_key(&key).unwrap();
-        // Structurally valid, but the only key activates at hour 5.
+        // Set activation to hour 5 so that the store is valid but has no active key before then.
         rusqlite::Connection::open(&key)
             .unwrap()
             .execute(
@@ -484,8 +480,8 @@ mod tests {
             let keys = store.signing_keys(5 * SECONDS_PER_HOUR).unwrap();
             blinded(&keys[0].public, &keys[0].public.key_id()).wire
         };
-        // Struct-literal construction with an empty key set is the only way to
-        // reach the defensive selection failure; open() refuses it.
+        // Build the issuer directly with an empty key set to exercise failed selection.
+        // `Issuer::open` rejects an empty key set before any request can arrive.
         let empty = Issuer {
             _key_store: store,
             keys: Arc::new(Vec::new()),
@@ -517,7 +513,7 @@ mod tests {
         let k1_spki = early.keys[1].public.to_spki().to_vec();
         assert_eq!(advertised(&early.directory_at(T0).unwrap()), vec![k0_spki]);
         let code = adm.provision(T0 as i64).unwrap();
-        // The wrong key is refused with 422 and must not consume the invitation.
+        // A request for the wrong key returns HTTP 422 and leaves the invitation usable.
         let wrong = blinded(&early.keys[1].public, &k1);
         assert_eq!(
             issue_at_with(&early, wrong.wire, &code, T0).await.status(),
@@ -587,7 +583,7 @@ mod tests {
         let (k0, k1) = two_key_store(&key);
         let issuer = open_at(&key, adm.clone(), T0).unwrap();
         let k1_spki = issuer.keys[1].public.to_spki().to_vec();
-        // Advancing to hour H latches K1 for the rest of the process.
+        // Advancing to K1's activation hour keeps K1 selected even if the clock goes back.
         assert_eq!(
             advertised(&issuer.directory_at(S).unwrap()),
             vec![k1_spki.clone()]

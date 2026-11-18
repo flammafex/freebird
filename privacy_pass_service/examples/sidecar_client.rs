@@ -1,13 +1,16 @@
-//! Test client for an application route protected by nginx `auth_request` to this
-//! Origin. It fetches a challenge from CHALLENGE_URL, performs one issuance, presents
-//! the token to PRESENT_URL (default: CHALLENGE_URL) with METHOD, then replays the
-//! same token once. Prints status codes and the first presentation's body; never
-//! prints the invitation, token, or challenge bytes.
+//! This client tests an application route that nginx protects through `auth_request` to the origin.
+//! It fetches a challenge from `CHALLENGE_URL`, obtains one token, and presents it twice to
+//! `PRESENT_URL` using `METHOD`. If `PRESENT_URL` is omitted, it uses `CHALLENGE_URL`.
+//! It prints the status codes and first presentation's response body and does not print
+//! the invitation, token, or challenge bytes.
 //!
-//! --scope-header V sends a client-chosen Freebird-Scope on presentations, to check
-//! that nginx overwrites it.
+//! Pass `--scope-header V` to send `Freebird-Scope` with each presentation and test that nginx replaces it.
 //!
-//! Usage: sidecar_client [--method M] [--scope-header V] --tls-ca CA --connect IP ISSUER_BASE CHALLENGE_URL [PRESENT_URL] < invitation
+//! Run the client with an invitation file on stdin to test the protected route:
+//!
+//! ```text
+//! sidecar_client [--method M] [--scope-header V] --tls-ca CA --connect IP ISSUER_BASE CHALLENGE_URL [PRESENT_URL] < invitation
+//! ```
 use anyhow::{bail, ensure, Context, Result};
 use base64ct::{Base64Url, Base64UrlUnpadded, Encoding};
 use freebird_common::privacy_pass::{
@@ -94,7 +97,7 @@ fn options(args: &[String]) -> Result<Options> {
     })
 }
 
-/// `host:port` for an explicit-port TLS URL; matches the Origin's configured names.
+/// Returns `host:port` from a TLS URL with an explicit port to match the identities configured on the origin.
 fn authority(url: &Url) -> Result<String> {
     Ok(format!(
         "{}:{}",
@@ -110,7 +113,7 @@ fn single<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str> {
     Ok(value)
 }
 
-// Not a general RFC 9577 parser: accept only the exact layout our Origin emits.
+// Require the parameter names and order that the reference origin uses for its RFC 9577 challenge.
 fn challenge(value: &str) -> Result<(TokenChallenge, Vec<u8>)> {
     let value = value
         .strip_prefix("PrivateToken challenge=\"")
@@ -134,7 +137,7 @@ fn challenge(value: &str) -> Result<(TokenChallenge, Vec<u8>)> {
     Ok((TokenChallenge::parse(&decoded)?, spki))
 }
 
-/// Reads a bounded body and returns the status; the caller checks headers first.
+/// After the caller checks the headers, this function returns the status and body if the body fits the limit.
 async fn finish(mut response: Response, cap: usize) -> Result<(u16, Vec<u8>)> {
     let status = response.status().as_u16();
     ensure!(
@@ -150,7 +153,7 @@ async fn finish(mut response: Response, cap: usize) -> Result<(u16, Vec<u8>)> {
 }
 
 fn read_invitation() -> Result<String> {
-    // Bounded stdin, never included in errors or output.
+    // Limit the read from stdin and omit the invitation from output and diagnostics.
     let mut invitation = String::new();
     std::io::stdin()
         .lock()
@@ -238,7 +241,8 @@ async fn run() -> Result<()> {
     );
     let public = PublicKey::from_spki(&spki)?;
 
-    // Unauthenticated request to the protected route: the challenge must be ours.
+    // Request the route without credentials and check that the challenge matches the directory key
+    // and the configured issuer and origin.
     let response = client
         .get(options.challenge.clone())
         .header("Cache-Control", "no-store")
@@ -311,7 +315,7 @@ async fn run() -> Result<()> {
         }
         let response = request.send().await?;
         if response.status().as_u16() == 401 {
-            // Any rejection must carry a fresh challenge, never a bare 401.
+            // Require a valid challenge with HTTP 401 so that a client can obtain another token.
             challenge(single(response.headers(), "www-authenticate")?)?;
         }
         results.push(finish(response, 4096).await?);
@@ -327,7 +331,7 @@ async fn run() -> Result<()> {
 #[tokio::main]
 async fn main() {
     if run().await.is_err() {
-        // Avoid client error chains, which can carry sensitive request data.
+        // Use a generic error because the client error chain can include sensitive request data.
         eprintln!("sidecar client failed (no secrets displayed)");
         std::process::exit(1);
     }

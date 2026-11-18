@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise operator-only live provisioning against the real loopback Issuer."""
+"""Check that operators can provision invitations while the Issuer serves requests on loopback."""
 import http.client
 import os
 from pathlib import Path
@@ -98,9 +98,9 @@ def main():
             run(["provision", issuer], succeeds=False)
             require(child.poll() is None, "issuer stopped serving")
             phase = "issuance admission"
-            # Use the selected truncated key ID, so admission is actually checked.
-            # An invalid blinded message is sufficient: live admission must advance
-            # past 403, whereas an unprovisioned canonical invitation must get 403.
+            # Use the selected truncated key ID so that the request reaches admission.
+            # A provisioned invitation passes admission even with an invalid blinded message.
+            # A well-formed invitation that was not provisioned returns `403`.
             body = b"\x00\x02" + bytes([int(key_id[-2:], 16)]) + bytes(256)
             require(len(body) == 259, "invalid request length")
             require(issue(number, b"A" * 43, body) == 403, "garbage invitation was not refused")

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Cold restore drill. No root/systemd or fault injection; all output is redacted."""
+"""Check that stopped services can be restored from backups under an unprivileged user.
+
+The drill runs the binaries directly and reports fixed results to keep
+credentials out of the output.
+"""
 import base64
 import http.client
 import os
@@ -16,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 BIN = ROOT / "target/debug/freebird-privacy-pass-service"
 PHASE = "build"
 PROCESSES = []
-# The Issuer control socket is runtime-only, recreated at startup, never state.
+# Omit the Issuer control socket from backups because the Issuer recreates it at startup.
 RUNTIME = shutil.ignore_patterns("control.sock")
 
 
@@ -169,7 +173,7 @@ def main():
         issue(ports, spare, root / "spare-token")
         stop()
         print("PASS cold snapshot; restart redemption 200 then 401; spare consumed")
-        # Each case stages fresh directories; live state is never overwritten.
+        # Stage each restore in separate directories to keep live state untouched.
         for case in ("admission", "origin", "issuer-keys", "full"):
             PHASE = "restore " + case
             stage_i, stage_o = root / (case + "-i"), root / (case + "-o")

@@ -1,5 +1,5 @@
-// Invoked by scripts/test-browser-demo.py with real services and Chrome.
-// Intentionally inert under `node --test`, which has no live TLS fixture.
+// Run through `scripts/test-browser-demo.py` so that this check has live TLS services and Chrome.
+// Skip the check under `node --test`, which does not start those services.
 import { setTimeout as delay } from 'node:timers/promises';
 
 class CheckFailure extends Error {}
@@ -54,12 +54,12 @@ async function main(debuggingPort, origin, issuer) {
     const { method, params, sessionId } = message;
     const requestKey = id => `${sessionId ?? 'page'}:${id}`;
     if (method === 'Target.attachedToTarget') {
-      // Observe dedicated workers as well as the document; run no injected solver.
+      // Attach to dedicated workers so that the test can observe the proof-of-work code that the page starts.
       const setup = (async () => {
         const workerSession = params.sessionId;
         if (params.targetInfo.type === 'worker') {
-          // Chrome can omit the worker bootstrap from Network events. Its target
-          // URL still identifies the actual loaded script; audit that URL too.
+          // Check the target URL because Chrome can omit the worker's script request from
+          // `Network` events.
           const url = new URL(params.targetInfo.url);
           if (!allowedOrigins.has(url.origin) || url.username || url.password || url.search) {
             outsideRequests++;
@@ -78,7 +78,7 @@ async function main(debuggingPort, origin, issuer) {
         if (!allowedOrigins.has(url.origin) || url.username || url.password || url.search) {
           outsideRequests++;
         }
-        // Never retain headers, POST bodies, or other credential-bearing CDP data.
+        // Store only the origin, path, and method so that request credentials are not retained.
         requests.set(requestKey(params.requestId),
           { url: `${url.origin}${url.pathname}`, method: params.request.method });
       } catch {
@@ -99,7 +99,8 @@ async function main(debuggingPort, origin, issuer) {
       const entry = params.entry;
       if (entry.source === 'security') cspErrors++;
       if (entry.level === 'error') {
-        // Chrome logs the two expected HTTP 401s as resource errors, not JS errors.
+        // Check network errors separately because Chrome logs the challenge and replay `401`
+        // responses as resource errors.
         if (entry.source === 'network') {
           networkErrors.push({ url: entry.url, expected401: /\b401\b/.test(entry.text) });
         } else {
@@ -176,7 +177,8 @@ async function main(debuggingPort, origin, issuer) {
       && document.querySelector('#replay-button')?.disabled === true`, 'replay', 15_000);
     console.log('browser demo replay: 401');
     await Promise.all([...setups]);
-    // Allow asynchronous CSP/Log events triggered by the last response to arrive.
+    // Wait briefly so that asynchronous CSP and `Log` events from the final response can arrive
+    // before the checks.
     await delay(250);
     check(!setupFailed && powWorkerCount > 0, 'real PoW worker not observed');
     check(consoleErrors === 0, 'browser console/exception errors observed');
@@ -220,7 +222,8 @@ async function main(debuggingPort, origin, issuer) {
 
 if (!process.env.NODE_TEST_CONTEXT) {
   main(...process.argv.slice(2)).catch(error => {
-    // Never dump upstream exception messages, URLs, console arguments, or CDP data.
+    // Print only fixed messages so that diagnostics do not expose credentials from exceptions,
+    // URLs, console arguments, or CDP data.
     console.error(`browser demo CDP: failed; ${error instanceof CheckFailure
       ? error.message : 'browser/driver operation failed (diagnostics suppressed)'}`);
     process.exitCode = 1;

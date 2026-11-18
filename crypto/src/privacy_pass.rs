@@ -1,8 +1,9 @@
-//! Experimental RFC 9578 type 0x0002 primitive adapter.
+//! This experimental adapter provides blind signing and verification for token type `0x0002`.
 //!
-//! Fixed RFC 9474 SHA384/PSS/Deterministic profile (48-byte salt), RSA-2048.
-//! The pinned blind-RSA implementation is unaudited; this is not a
-//! production-readiness or side-channel-resistance claim.
+//! The adapter implements RFC 9578 with RSA-2048 and the `SHA384/PSS/Deterministic` profile
+//! from RFC 9474. This profile uses a 48-byte salt.
+//! The pinned blind RSA implementation has not been audited for production use or resistance
+//! to side-channel attacks.
 use blind_rsa_signatures::{
     BlindSignature, BlindingResult, DefaultRng, Deterministic, KeyPair,
     PublicKeySha384PSSDeterministic, SecretKeySha384PSSDeterministic, Sha384, Signature, PSS,
@@ -28,10 +29,10 @@ pub struct PublicKey {
     spki: Vec<u8>,
 }
 
-/// Secret material deliberately has no Debug implementation.
+/// This key type omits `Debug` to keep secret key material out of debug output.
 pub struct SecretKey(SecretKeySha384PSSDeterministic);
 
-/// Single-use client state; neither its secret nor the token input is exposed.
+/// Finalization consumes this state, which keeps the blinding secret and token input private.
 pub struct BlindState {
     inner: BlindingResult,
     input: [u8; 98],
@@ -52,9 +53,9 @@ impl PublicKey {
         let inner =
             PublicKeySha384PSSDeterministic::from_spki(bytes).map_err(|_| Error::InvalidKey)?;
         let key = Self::checked(inner)?;
-        // The upstream parser checks only the OID. Byte equality with the
-        // fixed-profile canonical encoder additionally enforces all explicit
-        // SHA384 / MGF1-SHA384 / salt48 parameters, DER lengths and consumption.
+        // Compare the input with the canonical encoding to check the PSS parameters and DER
+        // lengths and to reject trailing bytes. The upstream parser checks the algorithm OID
+        // but does not enforce SHA-384, MGF1 with SHA-384, or the 48-byte salt.
         if key.spki != bytes {
             return Err(Error::InvalidKey);
         }
@@ -125,7 +126,7 @@ impl SecretKey {
         Ok(Self(pair.sk))
     }
 
-    /// Import canonical PKCS#8 DER only (not the upstream PKCS#1 fallback).
+    /// Import a private key only if its bytes match the canonical PKCS#8 DER encoding.
     pub fn from_pkcs8(bytes: &[u8]) -> Result<Self, Error> {
         let inner =
             SecretKeySha384PSSDeterministic::from_der(bytes).map_err(|_| Error::InvalidKey)?;
@@ -137,7 +138,7 @@ impl SecretKey {
         Ok(key)
     }
 
-    /// Caller is responsible for securely storing and erasing exported secrets.
+    /// Store the exported key bytes securely and erase them after use.
     pub fn to_pkcs8(&self) -> Result<Vec<u8>, Error> {
         self.0.to_der().map_err(|_| Error::Crypto)
     }

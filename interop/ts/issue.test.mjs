@@ -7,7 +7,7 @@ test('library challenge and response byte roundtrips without an issuer', () => {
   const challenge = new TokenChallenge(2, 'issuer.test', new Uint8Array(32), ['origin.test']);
   const bytes = challenge.serialize();
   assert.deepEqual(TokenChallenge.deserialize(bytes).serialize(), bytes);
-  // Node Buffer may be a view into a larger slab; copy to a standalone buffer.
+  // Copy into a standalone buffer so that the test reads only the bytes in the Node `Buffer` view.
   const slab = Buffer.concat([Buffer.alloc(13), Buffer.from(bytes), Buffer.alloc(17)]);
   const view = slab.subarray(13, 13 + bytes.length);
   assert.deepEqual(TokenChallenge.deserialize(Uint8Array.from(view)).serialize(), bytes);

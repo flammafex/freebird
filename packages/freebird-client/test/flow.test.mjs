@@ -1,7 +1,7 @@
-// Full Privacy Pass flows with the real @cloudflare/privacypass-ts 0.9.0 blind-RSA
-// code. The Issuer and Origin are in-memory fakes. The Issuer really signs, and
-// the Origin really verifies the redeemed token. Skipped with a reason when the
-// pinned peer is not installed (see test/support/peer.mjs).
+// These tests use `@cloudflare/privacypass-ts` at version `0.9.0` to exercise blind-RSA signing
+// and verification.
+// The Issuer and Origin run in memory so that the tests do not need a server.
+// If the peer dependency cannot be loaded, the test runner reports why the tests were skipped.
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
 import test from 'node:test';
@@ -35,7 +35,7 @@ const issuer = peer.available
 const origin = peer.available ? new pp.publicVerif.Origin(PSS) : undefined;
 const spki = peer.available ? await pp.publicVerif.getPublicKeyBytes(keys.publicKey) : undefined;
 
-// A fake Issuer + Origin. Options let each test break one part of the contract.
+// Set options to vary Issuer or Origin responses and check how the client handles each failure.
 function world(options = {}) {
   const log = {
     requests: [], issuances: 0, redemptions: 0, verified: 0, badOptions: [],
@@ -81,7 +81,7 @@ function world(options = {}) {
       if (options.alwaysRefuse) return new Response('no', { status: 401 });
       const match = /^PrivateToken token="([A-Za-z0-9_=-]+)"$/.exec(authorization);
       if (!match) return new Response(null, { status: 401 });
-      // Copy out of Buffer's pooled memory: upstream reads from offset zero.
+      // Copy the `Buffer` bytes because `Token.deserialize` starts at offset zero in the backing buffer.
       const token = pp.Token.deserialize(pp.TOKEN_TYPES.BLIND_RSA, Uint8Array.from(Buffer.from(match[1]
         .replaceAll('-', '+').replaceAll('_', '/'), 'base64')));
       const ok = await origin.verify(token, keys.publicKey);

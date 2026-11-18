@@ -1,4 +1,4 @@
-//! Test client: challenge JSON on stdin, widget-format payload on stdout.
+//! This test client reads a challenge as JSON from stdin and prints a solution in the widget's format.
 use altcha::{solve_challenge, Challenge, Payload, SolveChallengeOptions};
 use base64ct::{Base64, Encoding};
 use std::io::{self, Read, Write};
@@ -21,7 +21,7 @@ fn solve() -> anyhow::Result<()> {
 
 fn main() {
     if solve().is_err() {
-        // Never echo either the challenge or the solution.
+        // Report a generic error to keep the challenge and solution out of diagnostics.
         eprintln!("PoW solving failed");
         std::process::exit(1);
     }

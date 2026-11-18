@@ -1,4 +1,4 @@
-//! Deliberately limited to this experimental Origin's three-parameter challenge.
+//! This loopback test client handles only the three challenge parameters that the reference origin sends.
 use anyhow::{ensure, Context, Result};
 use base64ct::{Base64Url, Base64UrlUnpadded, Encoding};
 use freebird_common::privacy_pass::{
@@ -96,7 +96,7 @@ fn single<'a>(headers: &'a HeaderMap, name: &str) -> Result<&'a str> {
     Ok(value)
 }
 
-// Not a general RFC 9577 parser: accept only the exact layout our Origin emits.
+// Require the parameter names and order that the reference origin uses for its RFC 9577 challenge.
 fn challenge(value: &str) -> Result<(TokenChallenge, Vec<u8>)> {
     let value = value
         .strip_prefix("PrivateToken challenge=\"")
@@ -145,8 +145,8 @@ async fn run() -> Result<()> {
         tls,
     } = options(&args)?;
     let tls_mode = tls.is_some();
-    // Bounded stdin, never included in errors or output. Interactive input may echo;
-    // prefer piping a protected file.
+    // Limit the read from stdin and omit the invitation from output and diagnostics.
+    // Pipe a protected file to keep the terminal from echoing the invitation.
     let mut invitation = String::new();
     std::io::stdin()
         .lock()
@@ -314,7 +314,7 @@ fn challenge_header(headers: &HeaderMap) -> Result<()> {
 #[tokio::main]
 async fn main() {
     if run().await.is_err() {
-        // Avoid reqwest error chains, which can carry sensitive request data.
+        // Use a generic error because a `reqwest` error chain can include sensitive request data.
         eprintln!("loopback client failed (no secrets displayed)");
         std::process::exit(1);
     }

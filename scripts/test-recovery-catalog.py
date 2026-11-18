@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Focused, dependency-free recovery catalog CLI tests."""
+"""Check that the recovery catalog accepts matching key history and rejects invalid inputs.
+
+The tests use the Python standard library, so they need no extra packages.
+"""
 import json
 from contextlib import closing
 import os
@@ -100,7 +103,7 @@ class CatalogTests(unittest.TestCase):
                     db.execute(sql)
                     db.commit()
                 self.cli("record", False)
-                # Recreate the fixture between deliberately destructive cases.
+                # Recreate the fixture so that each destructive case starts from intact state.
                 self.temp.cleanup()
                 self.setUp()
 

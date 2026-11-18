@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Protect application routes with Freebird's Origin via nginx auth_request.
+"""Run the nginx app-protection example to check that the Origin protects application routes.
 
-Runs the shipped app-protection example from deploy/nginx/freebird.conf (only the
-comment markers are removed and ports are substituted) in front of a stdlib
-application, with real Issuer and Origin binaries on loopback behind nginx TLS.
-Secrets, tokens, and application bodies are never printed.
+Remove comment prefixes from the example in `deploy/nginx/freebird.conf` and
+substitute the test ports. The test runs a Python application and both service
+binaries on loopback behind nginx TLS. It keeps secrets, tokens, and request
+bodies out of the printed diagnostics.
 
-Build first: cargo build --locked -p freebird-privacy-pass-service --bin
-freebird-privacy-pass-service --example sidecar_client
+Build the service and client with `cargo build --locked -p freebird-privacy-pass-service --bin freebird-privacy-pass-service --example sidecar_client`.
 """
 import http.server
 import os
@@ -38,7 +37,7 @@ def port():
 
 
 def replace(text, old, new, count):
-    # Literal substitutions: any drift in the template must fail closed.
+    # Count exact matches before substituting so that unexpected template changes fail the test.
     require(text.count(old) == count, "app-protection example changed: substitution count")
     return text.replace(old, new)
 
@@ -59,7 +58,7 @@ def app_example(template, app_port, origin_port):
 
 
 class Application:
-    """Stdlib upstream that records only method, path, and header presence."""
+    """Record request metadata in a local HTTP server to check routing and header isolation."""
 
     def __init__(self, bind_port):
         self.records = []
@@ -153,7 +152,7 @@ def main():
                         "invalid invitation output")
             secrets.extend(invitations)
 
-            # Shipped example, uncommented verbatim except for ports.
+            # Use the deployment example with test ports to exercise the exact routing rules.
             template = (root / "deploy/nginx/freebird.conf").read_text()
             example = app_example(template, app_port, origin_port)
             tls_files = (f"    listen 127.0.0.1:{tls} ssl;\n"
@@ -176,7 +175,7 @@ def main():
                          "    proxy_next_upstream off;\n"
                          "    proxy_pass_request_headers off;\n"
                          "    proxy_set_header Connection close;\n")
-            # The Issuer shares the TLS listener; this mirrors the deployment template.
+            # Put the Issuer on the same TLS listener to match the deployment template.
             issuer_block = (
                 "server {\n"
                 f"    listen 127.0.0.1:{tls} ssl;\n"
@@ -282,7 +281,7 @@ def main():
                 require(output.startswith(f"challenge: 401; first: {first}; replay: 401\n".encode()),
                         f"{label}: unexpected sidecar result")
 
-            # 1. Unauthenticated and malformed requests are denied before the app.
+            # Check that missing or malformed credentials and disallowed ballot IDs block app access.
             status, headers = probe("GET", "/app/x")
             require(status == 401 and 'www-authenticate: privatetoken challenge="' in headers,
                     "unauthenticated app request was not challenged")
@@ -297,24 +296,24 @@ def main():
             require(status == 403, "ballot id outside the allowlist was not refused")
             require(application.snapshot() == [], "application was contacted without a token")
 
-            # 2. Valid tokens reach the application once; replays are challenged again.
+            # Redeem each valid token once to check that a replay receives a `401` challenge.
             expect_accepted(sidecar(invitations[0], "/app/x"), "unscoped GET")
             expect_accepted(sidecar(invitations[1], "/app/x", "/app/x", "--method", "POST"),
                             "unscoped POST")
-            # The client's own Freebird-Scope is overwritten by nginx, so this is accepted.
+            # The proxy takes the ballot ID from the query string, so `Freebird-Scope` cannot replace it.
             expect_accepted(sidecar(invitations[2], "/ballot/x?ballot=1", "/ballot/x?ballot=1",
                                     "--scope-header", "ballot:2"), "ballot with client scope")
-            # A token for ballot=1 is refused at ballot=2 and at the unscoped route.
+            # A token scoped to `ballot=1` must fail at `ballot=2` and at the unscoped route.
             expect_rejected(sidecar(invitations[3], "/ballot/x?ballot=1", "/ballot/x?ballot=2"),
                             "cross-ballot", 401)
             expect_rejected(sidecar(invitations[4], "/ballot/x?ballot=1", "/app/x"),
                             "scoped-to-unscoped", 401)
-            # A client-chosen Freebird-Scope on an unscoped route changes nothing.
+            # An unscoped route must accept its token even if the client sets `Freebird-Scope`.
             expect_accepted(sidecar(invitations[5], "/app/x", "/app/x",
                                     "--scope-header", "ballot:1"), "unscoped with client scope")
 
-            # 3. The application saw exactly the four accepted requests, with no credential
-            # or scope header and the POST body intact.
+            # Verify that only the four accepted requests reached the app and that the `POST` body arrived.
+            # Neither the credential header nor the scope header should reach the app.
             records = application.snapshot()
             require([(r["method"], r["path"]) for r in records] == [
                 ("GET", "/app/x"), ("POST", "/app/x"),

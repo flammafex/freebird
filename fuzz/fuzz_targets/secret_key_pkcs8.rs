@@ -3,8 +3,8 @@
 use freebird_crypto::privacy_pass::SecretKey;
 use libfuzzer_sys::fuzz_target;
 
-// RSA private-key validation is expensive; bound the parser's input even when
-// this target is run without a matching libFuzzer -max_len option.
+// Cap input size to limit the cost of RSA private key validation.
+// This cap also applies if `libFuzzer` runs without a matching `-max_len` setting.
 const MAX_PKCS8_LEN: usize = 4096;
 
 fuzz_target!(|bytes: &[u8]| {

@@ -1,12 +1,12 @@
-// Proof-of-work admission: POST {payload} to /freebird/pow/admission.
-// No peer dependency.
+// Posting `{ payload }` to `/freebird/pow/admission` exchanges a proof for an admission code
+// without loading the Privacy Pass library.
 import { protocolError } from './errors.mjs';
 import { isAdmissionCode, parseJSON } from './protocol.mjs';
 import { configure, readText, refusal, send } from './transport.mjs';
 
 /**
- * Exchanges one solved ALTCHA payload for one single-use admission code.
- * The payload is sent once and never logged. Resolves to the 43-character code.
+ * Send one solved ALTCHA payload to obtain a 43-character admission code that can be used once.
+ * The request is sent once, and the payload is kept out of error messages.
  */
 export async function admissionFromPow(issuer, payload, options = {}) {
   if (typeof payload !== 'string' || payload.length === 0) {

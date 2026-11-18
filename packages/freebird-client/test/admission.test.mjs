@@ -1,4 +1,5 @@
-// Proof-of-work admission and transport guards with a mocked fetch. No peer dependency.
+// A mock `fetch` lets these tests check proof-of-work admission and transport rules without
+// a live Issuer or the Privacy Pass library.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomBytes } from 'node:crypto';

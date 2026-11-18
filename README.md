@@ -1,65 +1,49 @@
-# Freebird
+# Freebird implements Privacy Pass in Rust
 
-Freebird is an **experimental, unreleased** Rust implementation of publicly
-verifiable Privacy Pass tokens.
+Freebird is an **experimental, unreleased** implementation of publicly verifiable Privacy Pass tokens. Do not deploy it as a production authorization system.
 
-The current profile is RFC 9578 token type `0x0002`: RSA-2048 blind signatures
-with the RFC 9474 SHA-384/PSS deterministic-message variant. An Origin verifies
-with the Issuer's **public** key and never receives its signing key. RFC 9577
-defines the HTTP challenge and redemption headers. Freebird adds an explicitly
-nonstandard, one-use operator invitation to control issuance quantity.
+Freebird uses RFC 9578 token type `0x0002`, which uses RSA-2048 blind signatures with the RFC 9474 SHA-384/PSS deterministic-message variant.
+An Origin verifies tokens with the Issuer's public key and does not receive the signing key.
+RFC 9577 defines the HTTP headers for challenges and redemption. Freebird limits issuance through a nonstandard, one-use operator invitation.
 
-## Status
+## Independent cryptographic review blocks release
 
-**Do not deploy as a production authorization system.** GitHub release
-publishing is blocked. The RFC 9474 library is pinned to a compatibility fork
-using stable RustCrypto RSA; the fork and signing path still require independent
-review. Bidirectional tests against pinned TypeScript and Go implementations
-passed locally. Offline key staging, public-key export,
-activation (rotation, Origin first, with an explicit candidate key ID), and
-retirement are implemented for one local instance per role. **Release remains
-blocked** only by independent crypto review of the RSA backend and protocol
-integration.
-Unsupported: no HSM, no online rotation API, no multi-instance operation, no zeroization of
-superseded key memory, and no multi-key directory with a not-before field.
-The experimental single-host topology uses nginx TLS in front of one
-loopback-only process per role, with exclusive, crash-durable SQLite state and
-no automatic failover. Backup
-restoration requires deliberate invalidation of old invitations or challenge
-contexts. See the [deployment guide](docs/deployment.md) and
-[security status and dependency provenance](SECURITY.md).
+GitHub release publishing is blocked pending independent review of the RSA backend and protocol integration, the sole release blocker.
+The RFC 9474 library is pinned to a compatibility fork that uses stable RustCrypto RSA. Bidirectional tests against pinned TypeScript and Go implementations passed locally.
+[SECURITY.md](SECURITY.md) records the dependency provenance and the limits of the test evidence.
 
-The published `freebird-crypto` and `freebird-common` crates predate this
-implementation and do **not** provide the protocol described here. Current
-crates have `publish = false`; use this source checkout for experimentation,
-not an older registry release.
+The [deployment guide](docs/deployment.md) covers an experimental single-host setup with nginx terminating TLS for one loopback-only process per role.
+SQLite state is exclusive and crash-durable. The setup has no automatic failover. Restoring a backup requires invalidating old invitations or challenge contexts.
 
-The reference client tests exercise challenge → one admitted blinded request →
-finalization → one redemption through both Axum routers and live loopback HTTP,
-with replay and restart rejection. They are not a general-purpose client SDK.
-Operators can provision invitations while the Issuer runs (`provision-live`),
-and [application servers](docs/app-admission.md) can request one-use codes for
-their own users under a daily cap, so an application's own policy decides who
-gets access. An [integration guide](docs/integration.md) covers protecting any
-application route through nginx, optionally bound to one resource, plus
-unpublished browser and server packages.
-An optional [browser demo](docs/demo.md) lets anyone earn one admission by
-solving an ALTCHA proof-of-work puzzle, then obtains and redeems a token in
-JavaScript; proof-of-work raises cost, it does not prove a unique person.
-There is no batch, renewal, non-consuming token-check endpoint, token
-expiration extension, general browser client, Docker image, Kubernetes
-manifest, or production authorization deployment. Planned work, including
-batched issuance once its RFC is published, is in the [roadmap](docs/roadmap.md).
+Offline key staging, public-key export, activation, and retirement support one local instance per role. To rotate keys, install the Origin key first and specify the candidate key ID when scheduling the Issuer.
+Freebird does not support HSMs, an online rotation API, multiple instances per role, zeroization of superseded key memory, or a multi-key directory with a not-before field.
 
-## Workspace
+Use this source checkout to test the protocol. The workspace crates have `publish = false`. The published `freebird-crypto` and `freebird-common` crates do not implement this protocol.
+
+## One admission permits one signing attempt
+
+Run `provision-live` to provision invitations while the Issuer runs. [Application servers](docs/app-admission.md) can request one-use codes under a daily cap and use their own policy to decide which users receive them.
+
+The [integration guide](docs/integration.md) explains how to protect any application route through nginx, optionally bind tokens to one resource, and use the unpublished browser and server packages.
+The optional [browser demo](docs/demo.md) lets anyone solve an ALTCHA proof-of-work puzzle for one admission, then obtain and redeem a token in JavaScript.
+Proof-of-work raises the cost of collecting admissions but does not establish that a solver is a unique person.
+
+Freebird does not support batching, renewal, a non-consuming token-check endpoint, or a token expiration extension.
+It does not provide a general-purpose browser client, Docker image, Kubernetes manifest, or production authorization deployment.
+The [roadmap](docs/roadmap.md) lists planned work, including batched issuance after publication of its RFC.
+
+## Three crates separate parsing, signing, and serving
 
 | Crate | Role |
 | --- | --- |
-| `freebird-common` | Strict RFC 9577/9578 type-2 wire codec and HTTP header parsing |
-| `freebird-crypto` | Fixed-profile blind-RSA adapter and independent RFC vectors |
-| `freebird-privacy-pass-service` | Experimental Issuer, Origin, durable one-use admission and spent state, loopback-only runner |
+| `freebird-common` | This crate strictly parses RFC 9577/9578 type-2 wire data and HTTP headers. |
+| `freebird-crypto` | This crate adapts blind RSA for a fixed profile and tests it against independent RFC vectors. |
+| `freebird-privacy-pass-service` | This experimental service runs the Issuer and Origin on loopback and stores durable records of admission and spend. |
 
-Run the focused checks:
+The reference client tests obtain a challenge, submit one blinded request with an admission, finalize the token, and redeem it once.
+They exercise both Axum routers and live loopback HTTP, including rejection of reuse after replay or restart. The reference client is not a general-purpose SDK.
+
+Run these commands to test the workspace, check formatting, lint all targets, and check repository consistency:
 
 ```sh
 cargo test --locked --workspace
@@ -68,12 +52,9 @@ cargo clippy --locked --workspace --all-targets -- -D warnings
 python3 scripts/ci-static-checks.py
 ```
 
-See the [protocol contract](docs/protocol/privacy-pass-phase1.md), its
-[RFC fixture provenance](common/test-fixtures/privacy-pass/README.md), and
-the [local experimental runner](docs/quick-start.md), and the
-[single-host deployment guide](docs/deployment.md).
+The [protocol contract](docs/protocol/privacy-pass-phase1.md) defines the implementation profile, and the [RFC fixture provenance](common/test-fixtures/privacy-pass/README.md) identifies the source of its test vectors.
+The [local runner guide](docs/quick-start.md) exercises the protocol over loopback.
 
-## License and security
+## Either the MIT or Apache-2.0 license applies
 
-MIT OR Apache-2.0: [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE). See
-[SECURITY.md](SECURITY.md) before testing or reporting a vulnerability.
+Freebird is available under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE). Read [SECURITY.md](SECURITY.md) before testing or reporting a vulnerability.

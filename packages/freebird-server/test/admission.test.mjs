@@ -1,4 +1,5 @@
-// requestAdmission contract with a mocked fetch. No network, no dependencies.
+// A mock `fetch` lets these tests check `requestAdmission` without opening a network connection
+// or installing dependencies.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { randomBytes } from 'node:crypto';
@@ -124,7 +125,7 @@ test('401 is a rejected key; other refusals keep their status', async () => {
 test('malformed success bodies are protocol errors and never echo the body', async () => {
   for (const body of [
     'not json', '{}', JSON.stringify({ admission: 'short' }),
-    JSON.stringify({ admission: `${CODE.slice(0, 42)}B` }), // Nonzero unused pad bits.
+    JSON.stringify({ admission: `${CODE.slice(0, 42)}B` }), // `B` sets a padding bit, so encoding fails validation.
     JSON.stringify({ admission: CODE, extra: 'x'.repeat(2000) }),
   ]) {
     const { fetch } = recorder(new Response(body, { status: 200 }));

@@ -1,6 +1,7 @@
-//! Experimental, single-instance Origin. Key activation and retirement are offline
-//! (`install_key`, `retire_key`). Cold snapshot restoration requires an offline
-//! context invalidation; see `invalidate_context_for_restore`.
+//! One instance of the experimental Origin serves requests for a given store.
+//! Take the Origin offline to schedule key activation or retire a key.
+//! After restoring a cold snapshot, run `invalidate_context_for_restore`
+//! before serving requests to invalidate tokens issued with the restored secret.
 use anyhow::{bail, ensure, Context, Result};
 use axum::{
     extract::State,
@@ -30,9 +31,9 @@ use std::{
 
 const SCHEMA_VERSION: i64 = 2;
 const HOUR: u64 = 3600;
-/// Seconds an advertised challenge stays redeemable after the next key activates.
+/// A challenge expires this many seconds after its issuance hour ends.
 const GRACE: u64 = 300;
-/// Additional safety margin after the superseded key's acceptance deadline.
+/// A superseded key cannot be retired until this many seconds after its acceptance deadline.
 const RETIRE_MARGIN: u64 = 120;
 const PRUNE_BATCH: i64 = 256;
 const ORIGIN_CAPACITY: usize = 2;
@@ -61,7 +62,7 @@ pub struct Origin {
     workers: Arc<tokio::sync::Semaphore>,
     _ownership: File,
     secret: [u8; 32],
-    /// Non-retired keys, ascending by activation hour. Loaded once at open.
+    /// Opening the store loads its non-retired keys in ascending order by activation hour.
     keys: Vec<LiveKey>,
     issuer: String,
     name: String,
@@ -85,20 +86,20 @@ pub enum OriginKeyState {
 pub struct OriginKeyRecord {
     pub key_id: [u8; 32],
     pub spki: Vec<u8>,
-    /// Activation in whole hours (the stored form). Multiply by 3600 for seconds.
+    /// The store records activation in whole hours. Multiply by 3,600 to get seconds.
     pub activation_hour: u64,
     pub state: OriginKeyState,
-    /// Seconds. Present only when a successor key exists: successor activation.
+    /// Issuance ends when the successor activates. If present, the time is in seconds.
     pub issuance_end: Option<u64>,
-    /// Seconds. `issuance_end + 300` when present.
+    /// When `issuance_end` is set, the acceptance deadline is 300 seconds later.
     pub acceptance_deadline: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OriginStatus {
-    /// Seconds (injected clock used to derive states).
+    /// Key states are based on this supplied time in seconds.
     pub now: u64,
-    /// Seconds (durable clock floor).
+    /// This stored time in seconds is the lower bound for clock readings that update the store.
     pub high_water: u64,
     pub keys: Vec<OriginKeyRecord>,
 }
@@ -142,8 +143,8 @@ fn connect(path: &Path, initialize: bool) -> Result<Connection> {
 }
 
 fn ownership(path: &Path, fresh: bool) -> Result<File> {
-    // Never lock SQLite's database inode: its own byte-range locks can
-    // conflict with flock on supported platforms. Keep this sidecar forever.
+    // Lock a separate file so that `flock` cannot conflict with SQLite's byte-range locks.
+    // Keep the lock file in place so that all processes lock the same inode.
     let mut lock_path = path.as_os_str().to_os_string();
     lock_path.push(".lock");
     let mut options = OpenOptions::new();
@@ -153,7 +154,7 @@ fn ownership(path: &Path, fresh: bool) -> Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    // Opening existing state never creates even a missing ownership sidecar.
+    // If the lock file is missing, opening an existing store fails.
     let file = options.open(Path::new(&lock_path))?;
     file.try_lock_exclusive()
         .context("Origin store already owned")?;
@@ -170,15 +171,16 @@ fn sync_parent(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// OFFLINE maintenance only: stop and hold the systemd services BEFORE restoring
-/// a cold snapshot, and keep that maintenance hold until this operation succeeds.
-/// The ownership lock alone cannot prevent a service restart between restoration
-/// and invalidation. Keys (including retired tombstones) and pinned names survive.
+/// Stop the systemd services before restoring a cold snapshot and keep them offline
+/// until this function succeeds so that the restored state cannot be used to serve requests.
+/// The ownership lock does not prevent a restart between restoration and invalidation.
+/// Invalidation clears replay rows and preserves the pinned names and all key records,
+/// including records for retired keys.
 ///
-/// Publication precedes the database commit deliberately. A failure after context
-/// publication leaves a hash mismatch that refuses normal startup; never revert
-/// the new secret or automatically reset state. Before publication, errors leave
-/// the old pair startable, which is why the operator maintenance hold is mandatory.
+/// The replacement secret is published before the database commit so that a failure
+/// between the two blocks startup with a hash mismatch.
+/// After such a failure, keep the replacement secret and do not reset the store automatically.
+/// An error before publication does not invalidate the restored database and secret.
 pub fn invalidate_context_for_restore(
     db_path: impl AsRef<Path>,
     context_secret_path: impl AsRef<Path>,
@@ -209,8 +211,8 @@ fn invalidate_context_for_restore_inner(
     integrity(&db)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     require_plain_schema(&tx)?;
-    // Refuse altered key/replay schemas before erasing any evidence. Only the
-    // schema produced by this version's initializer is supported by maintenance.
+    // Compare table definitions with `SCHEMA_V2` so that a mismatch stops the
+    // restore before any evidence of corruption is erased.
     let canonical = Connection::open_in_memory()?;
     canonical.execute_batch(SCHEMA_V2)?;
     for table in ["metadata", "origin_keys", "challenges", "spent"] {
@@ -232,8 +234,8 @@ fn invalidate_context_for_restore_inner(
         "invalid Origin metadata"
     );
     ensure!(now >= high, "Origin clock regression");
-    // Explicitly preserve replay corruption evidence before publishing a secret
-    // or deleting rows, independently of read_keys' current validation.
+    // Check the replay rows directly so that corruption stops the restore
+    // before the secret is replaced or the rows are deleted.
     validate_replay(&tx)?;
     let keys = read_keys(&tx)?;
     let mut fresh = [0u8; 32];
@@ -290,8 +292,9 @@ fn invalidate_context_for_restore_inner(
     Ok(())
 }
 
-/// Read-only probe run before any write-capable pragma, so a refused store
-/// (for example v1, whose WAL conversion would rewrite the file header) is untouched.
+/// Check the schema version with a read-only connection so that an unsupported
+/// database is left untouched.
+/// For example, switching a v1 database to WAL mode could rewrite its file header.
 fn require_v2(path: &Path) -> Result<()> {
     let probe = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let version: i64 = probe
@@ -326,14 +329,14 @@ fn require_plain_schema(db: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Canonical SPKI whose SHA-256 equals the operator-supplied key id.
+/// Return a public key only if the SPKI is canonical and its SHA-256 matches `key_id`.
 fn checked_key(spki: &[u8], key_id: [u8; 32]) -> Result<PublicKey> {
     let key = PublicKey::from_spki(spki)?;
     ensure!(key.key_id() == key_id, "origin key id does not match SPKI");
     Ok(key)
 }
 
-/// Hour whose seconds form and grace deadline both fit in i64 storage.
+/// Accept an hour only if its start and the time `GRACE` seconds later fit in an `i64`.
 fn hour_fits(hour: u64) -> bool {
     hour.checked_mul(HOUR)
         .and_then(|s| s.checked_add(GRACE))
@@ -341,7 +344,7 @@ fn hour_fits(hour: u64) -> bool {
         .is_some()
 }
 
-/// Returns (secret_hash, high_water, pinned names).
+/// Return the hash of the secret, the high-water mark, and the pinned names from v2 metadata.
 fn read_metadata(db: &Connection) -> Result<(Vec<u8>, u64, Option<Vec<u8>>)> {
     let (version, hash, high, names): (i64, Vec<u8>, i64, Option<Vec<u8>>) = db.query_row(
         "SELECT version,secret_hash,high_water,names FROM metadata WHERE singleton=1",
@@ -352,7 +355,8 @@ fn read_metadata(db: &Connection) -> Result<(Vec<u8>, u64, Option<Vec<u8>>)> {
     Ok((hash, u64::try_from(high)?, names))
 }
 
-/// Structural invariants (time-independent). Returns all keys ascending by hour.
+/// Return all keys in ascending order by activation hour after checking their structure
+/// and replay rows. These checks do not depend on the clock.
 fn read_keys(db: &Connection) -> Result<Vec<StoredKey>> {
     let mut stmt = db.prepare(
         "SELECT key_id,spki,activation_hour,retired FROM origin_keys ORDER BY activation_hour",
@@ -402,8 +406,9 @@ fn read_keys(db: &Connection) -> Result<Vec<StoredKey>> {
     Ok(keys)
 }
 
-/// Validate before expiry can erase evidence. This streams key metadata and
-/// probes replay invariants in SQL; the request path never reparses SPKIs.
+/// Check replay rows before pruning so that expired rows cannot hide corruption.
+/// The function reads key metadata one row at a time and checks replay rules in SQL.
+/// Requests use public keys that were parsed when the store opened.
 fn validate_replay(db: &Connection) -> Result<()> {
     let exists = |sql: &str| -> Result<bool> { Ok(db.query_row(sql, [], |r| r.get(0))?) };
     for sql in [
@@ -460,7 +465,8 @@ fn validate_replay(db: &Connection) -> Result<()> {
         }
         if let Some((previous_id, previous_hour)) = previous {
             ensure!(hour > previous_hour, "corrupt Origin activation order");
-            // Checked successor deadline: never add margins to SQLite integers.
+            // Use checked Rust arithmetic so that computing the successor's deadline
+            // cannot overflow a SQLite integer.
             let limit = i64::try_from(
                 hour.checked_mul(HOUR)
                     .and_then(|s| s.checked_add(GRACE))
@@ -477,9 +483,9 @@ fn validate_replay(db: &Connection) -> Result<()> {
                 "corrupt Origin store: superseded key replay row outlives successor grace"
             );
         }
-        // A key's first possible challenge expires at activation + hour + grace.
-        // A maximal installable hour may have no representable first deadline;
-        // it is still installable, but cannot have any replay rows.
+        // A key's first challenge expires one hour and `GRACE` seconds after activation.
+        // If that deadline is too large to store, installation is allowed but
+        // replay rows for the key are rejected.
         let earliest = hour
             .checked_add(1)
             .and_then(|h| h.checked_mul(HOUR))
@@ -557,8 +563,8 @@ fn hash_lp(hash: &mut Sha256, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Canonical, constant-memory replay fingerprint. Its preservation check relies
-/// on SHA-256 collision resistance, not literal equality of materialized rows.
+/// Hash the replay rows in a fixed order so that they can be compared using constant memory.
+/// The comparison relies on the collision resistance of SHA-256.
 fn replay_digest(db: &Connection, excluded_key: Option<[u8; 32]>) -> Result<ReplayDigest> {
     let mut hash = Sha256::new();
     hash_lp(&mut hash, b"freebird-origin-replay-v1")?;
@@ -632,7 +638,7 @@ fn ensure_replay_digest(
     Ok(())
 }
 
-/// Pure derivation of per-key states at `hour` (= now / 3600).
+/// Use the activation schedule and `hour` to report each key's state without changing the store.
 fn derive(keys: &[StoredKey], hour: u64) -> Vec<OriginKeyRecord> {
     let advertising = keys
         .iter()
@@ -665,9 +671,9 @@ fn derive(keys: &[StoredKey], hour: u64) -> Vec<OriginKeyRecord> {
 }
 
 impl Origin {
-    /// Fresh provisioning only. The genesis SPKI must be canonical and hash to
-    /// `expected_key_id`; it is validated before any file is created. Partial
-    /// failure requires operator cleanup, never automatic replacement.
+    /// Create a store only if the first key's SPKI is canonical and its SHA-256
+    /// matches `expected_key_id`. Both checks run before any files are created.
+    /// If setup fails after creating files, the operator must clean them up before retrying.
     pub fn initialize(
         db_path: impl AsRef<Path>,
         context_secret_path: impl AsRef<Path>,
@@ -703,7 +709,8 @@ impl Origin {
             "INSERT INTO metadata VALUES(1,2,?1,0,NULL)",
             params![&Sha256::digest(secret)[..]],
         )?;
-        // Store is never key-less: genesis is activated at hour 0 in this transaction.
+        // Activate the first key at hour 0 in the same transaction so that the
+        // store always has a key.
         tx.execute(
             "INSERT INTO origin_keys VALUES(?1,?2,0,0)",
             params![expected_key_id.as_slice(), genesis_spki],
@@ -716,8 +723,8 @@ impl Origin {
         Ok(())
     }
 
-    /// Opens existing state only. The first open durably pins the names; the key
-    /// set is read from the store, so activation happens offline via `install_key`.
+    /// Open an existing store and pin the issuer and origin names on the first successful open.
+    /// The key schedule is loaded at startup, so use `install_key` while the Origin is offline.
     pub fn open(
         db_path: impl AsRef<Path>,
         context_secret_path: impl AsRef<Path>,
@@ -774,7 +781,8 @@ impl Origin {
         })
     }
 
-    /// Offline inspection. Takes the ownership lock, so it refuses while serving.
+    /// Read the key schedule under the ownership lock so that inspection fails
+    /// while the Origin serves requests.
     pub fn status(db_path: impl AsRef<Path>, now: u64) -> Result<OriginStatus> {
         let db_path = db_path.as_ref();
         let _owner = ownership(db_path, false)?;
@@ -792,9 +800,9 @@ impl Origin {
         })
     }
 
-    /// Offline activation/rescheduling. `at` must be hour-aligned and in the future.
-    /// Installing a new key requires no installed or superseded-unretired key;
-    /// rescheduling is allowed only for the same installed key before its activation.
+    /// Schedule a key to activate at a future hour boundary while the Origin is offline.
+    /// To install another key, wait for any scheduled key to activate and retire any
+    /// superseded key. To reschedule an installed key, use its key ID before it activates.
     pub fn install_key(
         db_path: impl AsRef<Path>,
         spki: &[u8],
@@ -826,7 +834,8 @@ impl Origin {
             }
             Some(existing) if existing.hour <= hour => bail!("origin key already active"),
             Some(existing) => {
-                // Installed and not yet advertising: only its own schedule may move.
+                // Move only this key's activation time, and keep it after every
+                // other key's activation.
                 ensure!(
                     keys.iter()
                         .all(|k| k.key_id == expected_key_id || k.hour < at_hour),
@@ -887,9 +896,10 @@ impl Origin {
         Ok(())
     }
 
-    /// Offline retirement, at least 420 seconds after the next live key activates.
-    /// Keeps the key record permanently, but atomically deletes its replay rows.
-    /// Takes the ownership lock and refuses corrupt state or clock regression.
+    /// Retire a key while the Origin is offline, at least 420 seconds after its successor activates.
+    /// The transaction deletes the retired key's replay rows and keeps its key record permanently.
+    /// Retirement requires the ownership lock, a valid store, and a clock reading at or above
+    /// the high-water mark.
     pub fn retire_key(db_path: impl AsRef<Path>, key_id: [u8; 32], now: u64) -> Result<()> {
         let db_path = db_path.as_ref();
         let now_sql = i64::try_from(now)?;
@@ -901,8 +911,8 @@ impl Origin {
         require_plain_schema(&tx)?;
         let (_, high, _) = read_metadata(&tx)?;
         ensure!(now >= high, "clock regression");
-        // Validate before deleting anything: invariant-7 corruption must not be
-        // erased by the very operation that would otherwise hide it.
+        // Validate replay rows before deleting them so that a deadline beyond the
+        // successor's grace period still blocks retirement.
         let keys = read_keys(&tx)?;
         let target = keys
             .iter()
@@ -988,12 +998,12 @@ impl Origin {
         Ok((self.challenge_for(hour, scope)?, deadline))
     }
 
-    /// The single definition of a challenge for an hour and optional scope. Issuance
-    /// and redemption both call it, so they cannot disagree.
+    /// Use the same challenge formula for issuance and redemption so that they
+    /// produce the same challenge for a given hour and scope.
     ///
-    /// Unscoped challenges keep the v1 context byte-for-byte. Scoped challenges use
-    /// a separate v2 domain, so no v1 input can equal a v2 input. The explicit length
-    /// prefix keeps the encoding unambiguous if fields are ever appended.
+    /// Unscoped challenges use the v1 context label, and scoped challenges use the v2
+    /// label so that their HMAC inputs cannot match.
+    /// Prefix the scope with its length so that its end remains clear if more fields are added.
     fn challenge_for(&self, hour: u64, scope: Option<&[u8]>) -> Result<TokenChallenge> {
         let mut mac = Hmac::<Sha256>::new_from_slice(&self.secret)?;
         match scope {
@@ -1016,9 +1026,10 @@ impl Origin {
         )?)
     }
 
-    /// A stored challenge row's deadline pins its issuance hour, so a token must carry
-    /// exactly the digest this Origin would have issued for that hour and scope. This
-    /// is what stops a token for scope A matching a scope-B or unscoped request.
+    /// Use the stored deadline to recover the issuance hour, then require the
+    /// digest for that hour and the request's scope.
+    /// A token that was issued for one scope cannot be redeemed at another scope
+    /// or on an unscoped request.
     fn issued_for(&self, digest: &[u8; 32], deadline: i64, scope: Option<&[u8]>) -> bool {
         u64::try_from(deadline)
             .ok()
@@ -1027,20 +1038,20 @@ impl Origin {
             .is_some_and(|challenge| challenge.digest() == *digest)
     }
 
-    /// Admitted, committed requests, including invalid credentials, advance the
-    /// durable clock and prune at most 256 rows per replay table after expiry + 120.
-    /// A token is verified only with the non-retired key whose exact key_id it
-    /// names (no trial verification across keys). Challenges are recorded under
-    /// the advertising key. Never evict redeemable spends to impose a quota.
+    /// A request that commits records `now` as the high-water mark even if its credentials
+    /// are invalid. It prunes up to 256 rows per replay table that expired at least 120 seconds ago.
+    /// Verify a token only with the non-retired key that matches its `token_key_id`.
+    /// Record each challenge under the advertising key. Keep spent-token records at least
+    /// until their challenges expire so that each token can be redeemed at most once.
     ///
-    /// Synchronous and outside the HTTP worker semaphore: library callers must
-    /// run it on a blocking thread and bound their own concurrency. The HTTP
-    /// router applies the two-permit admission gate.
+    /// Library callers must use a blocking thread and limit their own concurrency because
+    /// this synchronous method does not take a worker permit.
+    /// The HTTP router limits admission to two workers.
     pub fn request_at(&self, token: Option<&Token>, now: u64) -> Result<Option<String>> {
         self.request_with_clock(token, || Ok(now))
     }
 
-    /// Like `request_at`, bound to an nginx-set scope (see `scope_header`).
+    /// Process a request whose challenge and redemption are bound to the scope supplied by nginx.
     pub fn request_scoped_at(
         &self,
         token: Option<&Token>,
@@ -1056,8 +1067,8 @@ impl Origin {
         })
     }
 
-    /// Sample only after taking the connection mutex and beginning the
-    /// transaction, so queued blocking jobs do not carry stale clock readings.
+    /// Read the clock after locking the connection and starting the transaction
+    /// so that jobs do not use a reading that was taken while they waited.
     fn request_with_clock(
         &self,
         token: Option<&Token>,
@@ -1075,8 +1086,9 @@ impl Origin {
         self.request_with_prune_hook(token, scope, clock, |_| Ok(()))
     }
 
-    // A private transaction seam for failure injection; production always passes
-    // a no-op. It cannot bypass validation, commit, or the high-water check.
+    // Let tests abort the transaction after pruning so that they can check rollback.
+    // In production the hook does nothing. Validation and the high-water check
+    // run before the hook, and a successful request still requires a commit.
     fn request_with_prune_hook(
         &self,
         token: Option<&Token>,
@@ -1176,13 +1188,11 @@ pub fn router(origin: Arc<Origin>) -> Router {
         .with_state(origin)
 }
 
-/// Optional request header that binds a challenge and token to an application scope.
+/// The `Freebird-Scope` header binds a challenge and token to an application scope.
 ///
-/// SECURITY: the Origin trusts this header only because it listens on loopback
-/// (`loopback_bind` in main.rs) behind nginx, which sets it on every protected route
-/// (`proxy_set_header Freebird-Scope ...` in deploy/nginx/freebird.conf) and never
-/// forwards the client's value. Never expose this listener directly: a client that
-/// can reach it chooses its own scope.
+/// Keep the Origin on loopback behind nginx so that clients cannot set their own scope.
+/// On every protected route, nginx sets or clears this header with `proxy_set_header`
+/// in `deploy/nginx/freebird.conf` and discards any value sent by the client.
 const SCOPE_HEADER: &str = "freebird-scope";
 const MAX_SCOPE: usize = 128;
 
@@ -1190,8 +1200,8 @@ fn valid_scope(scope: &[u8]) -> bool {
     (1..=MAX_SCOPE).contains(&scope.len()) && scope.iter().all(|b| matches!(b, 0x21..=0x7e))
 }
 
-/// Inverts `deadline = (hour + 1) * HOUR + GRACE`. Returns `None` for any deadline
-/// that no `challenge_scoped` call could have produced.
+/// Recover the issuance hour from `deadline = (hour + 1) * HOUR + GRACE`.
+/// Return `None` if `challenge_scoped` could not have produced the deadline.
 fn issued_hour(deadline: u64) -> Option<u64> {
     let base = deadline.checked_sub(GRACE)?;
     if base < HOUR || base % HOUR != 0 {
@@ -1200,9 +1210,9 @@ fn issued_hour(deadline: u64) -> Option<u64> {
     Some(base / HOUR - 1)
 }
 
-/// Absent or empty means unscoped, so an nginx line can be commented out or emptied.
-/// More than one header, or a value outside 1..=128 visible ASCII bytes, is a 400
-/// without a challenge.
+/// A missing or empty `Freebird-Scope` header leaves the request unscoped.
+/// A duplicate header, a value longer than 128 bytes, or a value with any byte
+/// outside visible ASCII results in HTTP 400 with no challenge.
 fn scope_header(headers: &HeaderMap) -> std::result::Result<Option<Vec<u8>>, StatusCode> {
     let mut values = headers.get_all(SCOPE_HEADER).iter();
     let Some(first) = values.next() else {
@@ -1235,8 +1245,7 @@ async fn protected_with_request(
         + Send
         + 'static,
 ) -> Response {
-    // Validated before a worker permit and before storage: malformed scope is a
-    // client error, never a challenge and never a capacity cost.
+    // Reject malformed scopes before taking a worker permit or accessing the store.
     let scope = match scope_header(&headers) {
         Ok(scope) => scope,
         Err(status) => return status.into_response(),
@@ -1259,8 +1268,9 @@ async fn protected_with_request(
     } else {
         None
     };
-    // Cancellation drops the HTTP future, not the job or its permit. A lost
-    // response may burn a token; never refund a possibly committed redemption.
+    // Keep the permit with the blocking job so that cancelling the HTTP request
+    // does not release it before the job finishes.
+    // Do not refund a token after a lost response because its redemption may have committed.
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         request(&origin, token.as_ref(), scope.as_deref())
@@ -1283,7 +1293,7 @@ async fn protected_with_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    // Signing material exists only in this test harness, never in Origin.
+    // The tests sign tokens with private keys. The Origin verifies them with public keys.
     use freebird_crypto::privacy_pass::SecretKey;
     use std::path::PathBuf;
 
@@ -1293,14 +1303,15 @@ mod tests {
     type ChallengeRow = (Vec<u8>, Vec<u8>, i64);
     type SpentRow = (Vec<u8>, Vec<u8>, Vec<u8>, i64);
 
-    // Only test snapshots materialize rows; production fingerprints stream them.
+    // Tests collect replay rows for direct comparison. Production checks hash
+    // them one at a time to keep memory use constant.
     #[derive(Debug, PartialEq, Eq)]
     struct ReplayRows {
         challenges: Vec<ChallengeRow>,
         spent: Vec<SpentRow>,
     }
 
-    /// Schema v1 exactly as the previous release created it.
+    /// This fixture creates a v1 store to test rejection without a file change.
     const V1_FIXTURE: &str = "CREATE TABLE metadata (
             singleton INTEGER PRIMARY KEY CHECK(singleton=1),
             version INTEGER NOT NULL CHECK(version=1),
@@ -1483,7 +1494,8 @@ mod tests {
         Ok(())
     }
 
-    /// Genesis K1 at hour 0, optionally K2 installed at S (installed at S-3600).
+    /// Create a store with the first key active at hour 0. If a successor is
+    /// supplied, install it at `S - HOUR` to activate at `S`.
     fn fresh(
         dir: &Path,
         genesis: &PublicKey,
@@ -1539,7 +1551,8 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let (_, key) = signer()?;
         let (db, secret) = fresh(dir.path(), &key, None)?;
-        // A well-shaped replay row referencing an unknown key is corrupt.
+        // A reference to an unknown key makes the replay row invalid even though
+        // its fields have the expected types and sizes.
         plant(&db, &[0u8; 32], [1; 32], (HOUR + GRACE) as i64)?;
         let old_secret = std::fs::read(&secret)?;
         let metadata = read_metadata(&read_only(&db)?)?;
@@ -1592,7 +1605,8 @@ mod tests {
         assert!(Origin::open(&db, &secret, "issuer", "origin").is_err());
         assert!(Origin::status(&db, 0).is_err());
         assert!(origin.request_at(None, 3601)?.is_some());
-        assert!(origin.request_at(None, 3600).is_err()); // same-hour regression
+        // Reject clock regression even within the same hour.
+        assert!(origin.request_at(None, 3600).is_err());
         let (challenge, deadline) = origin.challenge(3601)?;
         let mut token = Token {
             nonce: [7; 32],
@@ -1645,7 +1659,8 @@ mod tests {
             .to_str()?
             .starts_with("PrivateToken challenge=\""));
         let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-        // Persist the challenge at the fixed test instant (handles hour rollover).
+        // Record the challenge at the test's fixed time so that crossing an
+        // hour boundary after the first request does not invalidate the setup.
         origin.request_at(None, now)?;
         let (challenge, _) = origin.challenge(now)?;
         let mut token = Token {
@@ -1854,7 +1869,8 @@ mod tests {
             drop(conn);
             refused(&db, &secret)?;
 
-            // The exact first valid deadline is allowed for both row types.
+            // Both tables accept a deadline exactly one hour and `GRACE`
+            // seconds after activation.
             raw(&db)?.execute(
                 &format!("UPDATE {table} SET deadline=?1"),
                 [(S + HOUR + GRACE) as i64],
@@ -1905,7 +1921,7 @@ mod tests {
         install(&db, &p2, S, S - HOUR)?;
         let origin = Origin::open(&db, &secret, "issuer", "origin")?;
 
-        // Before S: K1 advertises; K2 is installed and must not be accepted.
+        // Before `S`, the Origin advertises `p1` and rejects tokens for `p2`.
         let before = S - 1;
         let d_before = origin.challenge(before)?.0.digest();
         assert!(origin.request_at(None, before)?.is_some());
@@ -1922,7 +1938,8 @@ mod tests {
         };
         assert!(origin.request_at(Some(&wrong_id), before)?.is_some());
 
-        // At S: K2 advertises; K1 verifies only persisted rows until S+300.
+        // At `S`, the Origin advertises `p2` and accepts tokens for `p1` only
+        // for a stored challenge before `S + GRACE`.
         let d_h = origin.challenge(S)?.0.digest();
         assert!(origin.request_at(None, S)?.is_some());
         assert_eq!(
@@ -1953,7 +1970,8 @@ mod tests {
             .is_none());
         drop(origin);
 
-        // Reopen: invariant 7 holds and the accepted K1 token is durably spent.
+        // Reopen the store to check that the replay rows pass validation and
+        // that the token is still rejected.
         let origin = Origin::open(&db, &secret, "issuer", "origin")?;
         assert!(origin
             .request_at(Some(&token(&k1, &p1, d_before, 4)?), S + 400)?
@@ -1972,43 +1990,47 @@ mod tests {
         let t0 = S - HOUR;
         Origin::initialize(&db, &secret, p1.to_spki(), p1.key_id())?;
 
-        // Refusals that leave the store untouched.
+        // An invalid SPKI, a mismatched key ID, or an activation time that is
+        // not on a future hour boundary leaves the store untouched.
         assert!(Origin::install_key(&db, p2.to_spki(), p3.key_id(), S, t0).is_err());
         let mut noncanonical = p2.to_spki().to_vec();
         noncanonical.push(0);
         let id: [u8; 32] = Sha256::digest(&noncanonical).into();
         assert!(Origin::install_key(&db, &noncanonical, id, S, t0).is_err());
-        assert!(install(&db, &p2, S + 1, t0).is_err()); // not hour-aligned
-        assert!(install(&db, &p2, S, S).is_err()); // S == now
-        assert!(install(&db, &p2, S, S + 1).is_err()); // S < now
+        assert!(install(&db, &p2, S + 1, t0).is_err());
+        assert!(install(&db, &p2, S, S).is_err());
+        assert!(install(&db, &p2, S, S + 1).is_err());
         assert_eq!(Origin::status(&db, t0)?.high_water, 0);
 
-        // Install, then high-water refusal and another-installed refusal.
+        // Installing `p2` sets the clock floor to `t0` and blocks installing
+        // `p3`. A time below `t0` also blocks rescheduling `p2`.
         install(&db, &p2, S, t0)?;
         assert_eq!(Origin::status(&db, t0)?.high_water, t0);
-        assert!(install(&db, &p3, S + HOUR, t0).is_err()); // another installed
-        assert!(install(&db, &p2, S + HOUR, t0 - 1).is_err()); // now < high_water
+        assert!(install(&db, &p3, S + HOUR, t0).is_err());
+        assert!(install(&db, &p2, S + HOUR, t0 - 1).is_err());
         assert_eq!(Origin::status(&db, t0)?.high_water, t0);
 
-        // Reschedule before S is allowed; same-S is a no-op success.
+        // Rescheduling before activation changes the activation hour.
+        // Repeating the same schedule succeeds and leaves that hour unchanged.
         install(&db, &p2, S + HOUR, t0)?;
         assert_eq!(Origin::status(&db, t0)?.keys[1].activation_hour, H + 1);
         install(&db, &p2, S, t0)?;
         install(&db, &p2, S, t0)?;
         assert_eq!(Origin::status(&db, t0)?.keys[1].activation_hour, H);
 
-        // At S: K2 advertises, K1 verifies. Reschedule after S and new keys refused.
-        assert!(install(&db, &p2, S + HOUR, S).is_err()); // already active
-        assert!(install(&db, &p1, S + HOUR, S).is_err()); // already active
-        assert!(install(&db, &p3, S + HOUR, S).is_err()); // superseded K1 unretired
+        // At `S`, neither the advertising key nor the superseded key can be
+        // rescheduled. The superseded key must be retired before installing `p3`.
+        assert!(install(&db, &p2, S + HOUR, S).is_err());
+        assert!(install(&db, &p1, S + HOUR, S).is_err());
+        assert!(install(&db, &p3, S + HOUR, S).is_err());
         assert_eq!(Origin::status(&db, S)?.high_water, t0);
 
-        // A retained retired key record must never be reinstalled.
+        // Marking `p1` retired prevents its reinstallation and allows `p3` to be installed.
         raw(&db)?.execute(
             "UPDATE origin_keys SET retired=1 WHERE key_id=?1",
             [p1.key_id().as_slice()],
         )?;
-        assert!(install(&db, &p1, S + HOUR, S).is_err()); // retired never reinstalled
+        assert!(install(&db, &p1, S + HOUR, S).is_err());
         install(&db, &p3, S + HOUR, S)?;
         let status = Origin::status(&db, S)?;
         assert_eq!(status.high_water, S);
@@ -2144,7 +2166,7 @@ mod tests {
         now: u64,
         expected_error: &str,
     ) -> Result<()> {
-        // Pin names before taking a complete logical snapshot.
+        // Open the store first to pin the names so that the snapshots include them.
         drop(Origin::open(db, secret, "issuer", "origin")?);
         let before = Origin::status(db, now)?;
         let metadata = read_metadata(&raw(db)?)?;
@@ -2414,7 +2436,7 @@ mod tests {
         remove_test_schema_objects(&db)?;
         let origin = Origin::open(&db, &secret, "issuer", "origin")?;
         assert_eq!(store_snapshot(&db)?, before);
-        // Some(challenge) is the rejected/401 path, not a successful redemption.
+        // A returned challenge marks a rejected redemption and leads to HTTP 401.
         assert!(origin.request_at(Some(&spent), S + 420)?.is_some());
         assert_eq!(
             challenge_rows(&db)?,
@@ -2597,7 +2619,8 @@ mod tests {
         assert_eq!(parent_and_spend, (true, true));
         assert!(!challenge_rows(&db)?.iter().any(|r| r.1 == numbered(0)));
         assert!(spent_rows(&db)?.iter().any(|r| r.2 == spent.nonce));
-        // A deleted parent with unbatched spends cannot redeem either token.
+        // Once the challenge row is deleted, neither token can be redeemed
+        // even if a spend row remains.
         assert!(origin.request_at(Some(&spent), now)?.is_some());
         assert!(origin.request_at(Some(&unspent), now)?.is_some());
         for _ in 0..5 {
@@ -2683,7 +2706,8 @@ mod tests {
             }
             let metadata = read_metadata(&conn)?;
             let rows = quoted_replay(&conn)?;
-            // Even the invalid successor+301 deadline is already prunable here.
+            // The request time makes replay rows with a deadline of `S + GRACE + 1`
+            // old enough to prune, but the invalid deadline must block the request.
             assert!(origin.request_at(None, S + HOUR + 1000).is_err());
             assert_eq!(read_metadata(&conn)?, metadata);
             assert_eq!(quoted_replay(&conn)?, rows);
@@ -2797,7 +2821,7 @@ mod tests {
         let excluded = replay_digest(&db, Some([1; 32]))?;
         assert_eq!((excluded.challenges, excluded.spent), (1, 1));
         assert_ne!(excluded.sha256, before.sha256);
-        // Scope itself is domain-separated, even when it excludes no rows.
+        // An exclusion changes the hash input even if it excludes no rows.
         assert_ne!(replay_digest(&db, Some([9; 32]))?.sha256, before.sha256);
         for sql in [
             "UPDATE challenges SET key_id=zeroblob(32) WHERE key_id=?1",
@@ -2819,7 +2843,7 @@ mod tests {
             tx.rollback()?;
             ensure_replay_digest(&db, None, &before)?;
         }
-        // Reversing physical insertion order does not affect canonical ordering.
+        // Inserting the rows in reverse order leaves the digest unchanged.
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute("DELETE FROM challenges", [])?;
         tx.execute("DELETE FROM spent", [])?;
@@ -2842,7 +2866,7 @@ mod tests {
             "UPDATE spent SET deadline='text'",
         ] {
             let tx = db.transaction()?;
-            // Limit the rewrite to one row, avoiding a primary-key collision.
+            // Limit the rewrite to one row so that it cannot cause a primary key collision.
             tx.execute(&format!("{sql} WHERE key_id=?1"), [[1u8; 32].as_slice()])?;
             assert!(replay_digest(&tx, None).is_err(), "{sql}");
             tx.rollback()?;
@@ -2886,7 +2910,8 @@ mod tests {
             }
             let high = read_metadata(&tx)?.1;
             advance_high_water(&tx, (S - HOUR + 1) as i64, high)?;
-            // Exercise the actual digest guard, not just schema-trigger refusal.
+            // Update the nonce directly so that the digest check can detect
+            // the change in a schema that passes validation.
             tx.execute("UPDATE spent SET nonce=zeroblob(32)", [])?;
             read_keys(&tx)?;
             assert_eq!(replay_digest(&tx, None)?.spent, replay_before.spent);
@@ -2988,8 +3013,8 @@ mod tests {
             StatusCode::TOO_MANY_REQUESTS
         );
         release_tx.send(())?;
-        // Acquiring the job's permit waits for its closure to finish, not merely
-        // for the cancelled HTTP future. The transaction has committed by then.
+        // Wait for the job's permit so that the transaction has committed before
+        // checking the replay rows. Cancelling the HTTP future does not release the permit.
         let completed = origin.workers.clone().acquire_owned().await?;
         assert_eq!(spent_rows(&db)?.len(), 1);
         assert!(read_metadata(&read_only(&db)?)?.1 >= now);
@@ -3102,7 +3127,7 @@ mod tests {
         );
         assert_eq!(after.keys[0].acceptance_deadline, Some(S + GRACE));
 
-        // Status takes the ownership lock and refuses while the store is served.
+        // The serving process holds the ownership lock, so `status` fails.
         let origin = Origin::open(&db, &secret, "issuer", "origin")?;
         assert!(Origin::status(&db, S).is_err());
         drop(origin);
@@ -3125,12 +3150,13 @@ mod tests {
         let (unscoped, _) = origin.challenge(now)?;
         let unscoped_token = token(&signer, &key, unscoped.digest(), 2)?;
 
-        // Another scope and no scope both reject, and a rejection never spends.
+        // The Origin rejects the token and leaves it unspent if the request
+        // has a different scope or no scope.
         assert!(origin
             .request_scoped_at(Some(&scoped_token), Some(b"ballot:2"), now)?
             .is_some());
         assert!(origin.request_at(Some(&scoped_token), now)?.is_some());
-        // The matching scope accepts exactly once.
+        // The Origin spends the token on the first request with the matching scope.
         assert!(origin
             .request_scoped_at(Some(&scoped_token), Some(ballot_one), now)?
             .is_none());
@@ -3138,8 +3164,8 @@ mod tests {
             .request_scoped_at(Some(&scoped_token), Some(ballot_one), now)?
             .is_some());
 
-        // An unscoped token never redeems at a scope, and a scoped request never
-        // accepts it; the unscoped route still accepts it exactly once.
+        // The Origin rejects an unscoped token on scoped requests and accepts
+        // it once on an unscoped request.
         assert!(origin
             .request_scoped_at(Some(&unscoped_token), Some(ballot_one), now)?
             .is_some());
@@ -3234,7 +3260,8 @@ mod tests {
         assert!(!response.headers().contains_key(header::WWW_AUTHENTICATE));
         assert_eq!(store_snapshot(&db)?, before);
 
-        // Maximum length is accepted; empty is unscoped, so both reach a challenge.
+        // A 128-byte value and an empty value both result in a challenge.
+        // The empty value leaves the request unscoped.
         for value in [&[b'x'; 128][..], b""] {
             let response = protected(State(origin.clone()), scoped_header(value)?).await;
             assert_eq!(response.status(), StatusCode::UNAUTHORIZED);

@@ -1,4 +1,4 @@
-//! Reference client: only HTTP wire data and the advertised public key cross roles.
+//! The reference client tests issuance and redemption by passing only HTTP data and the advertised public key between roles.
 use axum::{
     body::{to_bytes, Body},
     http::{header, Request, StatusCode},
@@ -31,7 +31,7 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
-/// Genesis SPKI and key ID, read through the key store before any role opens it.
+/// Loads the initial public key and its ID before either service opens its store.
 fn genesis(key_path: &Path) -> (Vec<u8>, [u8; 32]) {
     let manifest = KeyStore::open(key_path)
         .unwrap()
@@ -45,8 +45,8 @@ fn genesis(key_path: &Path) -> (Vec<u8>, [u8; 32]) {
     (genesis.spki.clone(), genesis.key_id)
 }
 
-// tower 0.4's optional `util` feature is not enabled in this package.
-// Router is always ready; this is the same single-request dispatch as oneshot.
+// Call the router directly for one request because it is always ready.
+// This gives the same dispatch as `oneshot`, which requires the optional `tower` feature `util`.
 async fn oneshot(mut router: Router, request: Request<Body>) -> Response {
     router.call(request).await.unwrap()
 }
@@ -82,8 +82,7 @@ async fn empty(response: Response, status: StatusCode) {
         .is_empty());
 }
 
-// Deliberately limited to the three parameters emitted by this reference Origin;
-// this is not a general-purpose RFC authentication parser.
+// Match only the three challenge parameters that the reference origin sends.
 fn challenge(response: &Response) -> (TokenChallenge, Vec<u8>) {
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     let field = response.headers()[header::WWW_AUTHENTICATE]
@@ -160,7 +159,7 @@ async fn http_reference_client_and_durable_single_use() {
     let spki = Base64Url::decode_vec(encoded).unwrap();
     assert_eq!(Base64Url::encode_string(&spki), encoded);
     let public = PublicKey::from_spki(&spki).unwrap();
-    // Origin receives only the public directory bytes, never a signing-key path.
+    // Initialize the origin from the public directory so that it does not need access to the signing key.
     let origin_state =
         Arc::new(Origin::open(&replay_path, &context, "issuer.test", "origin.test").unwrap());
     let origin_router = origin::router(origin_state.clone());
@@ -267,7 +266,7 @@ async fn http_reference_client_and_durable_single_use() {
         StatusCode::UNAUTHORIZED,
     )
     .await;
-    // A distinct Origin has its own issued contexts, even with the same public key.
+    // A separate origin rejects the token because it did not issue the context, even though it uses the same public key.
     let other_db = files.path().join("other.sqlite");
     let other_context = files.path().join("other-context");
     Origin::initialize(&other_db, &other_context, &spki, public.key_id()).unwrap();
@@ -280,7 +279,7 @@ async fn http_reference_client_and_durable_single_use() {
         StatusCode::UNAUTHORIZED,
     )
     .await;
-    // Concurrent HTTP redemption has exactly one winner.
+    // Concurrent requests to redeem the same token produce exactly one success.
     let (first, second) = tokio::join!(
         get(
             &origin_router,

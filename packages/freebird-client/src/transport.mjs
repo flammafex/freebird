@@ -1,12 +1,12 @@
-// HTTP plumbing shared by the protocol steps. Every request is made with
-// credentials omitted, redirects rejected, caches bypassed and a timeout.
+// Apply the same timeout to the protocol requests and reject redirects.
+// Omit browser credentials and referrers, and bypass the cache for each request.
 import { FreebirdError, protocolError } from './errors.mjs';
 import { issuerBaseURL, parseRetryAfter } from './protocol.mjs';
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_TIMEOUT_MS = 120_000;
 
-/** Validates the caller's options once and returns the internal settings. */
+/** Validate the caller's options before returning the settings that requests use. */
 export function configure(options = {}) {
   if (options === null || typeof options !== 'object') {
     throw new TypeError('Options must be an object.');
@@ -32,7 +32,7 @@ export function configure(options = {}) {
 }
 
 export async function send(stage, url, init, config) {
-  // Native browser fetch must not receive the config object as its receiver.
+  // Call `fetch` directly because native browser implementations reject `config` as the `this` value.
   const { fetch } = config;
   const timer = AbortSignal.timeout(config.timeout);
   const signal = init.signal ? AbortSignal.any([init.signal, timer]) : timer;
@@ -46,7 +46,7 @@ export async function send(stage, url, init, config) {
       referrerPolicy: 'no-referrer',
     });
   } catch {
-    // The underlying error can carry URLs or upstream text; drop it.
+    // Keep only the failure category so that URLs and upstream text stay out of the error message.
     const reason = timer.aborted ? 'timeout' : init.signal?.aborted ? 'aborted' : 'network';
     throw new FreebirdError(`The ${stage} request failed (${reason}).`, { stage, reason });
   }
@@ -56,11 +56,14 @@ export async function discard(response) {
   try {
     await response.body?.cancel();
   } catch {
-    // Already consumed or locked: nothing left to release.
+    // Ignore cancellation failures because the body may already be consumed or locked.
   }
 }
 
-/** A non-success answer. The body is discarded; only the status and Retry-After survive. */
+/**
+ * Discard the refusal body so that it cannot appear in the error.
+ * Keep the status and the parsed `Retry-After` delay if a `429` or `503` response included one.
+ */
 export async function refusal(stage, response) {
   const { status } = response;
   const retryAfter = status === 429 || status === 503

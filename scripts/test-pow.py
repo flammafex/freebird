@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise optional ALTCHA admissions against the real binary; secrets stay private."""
+"""Check that the Issuer enforces ALTCHA admission while keeping credentials out of diagnostics."""
 import base64
 import hashlib
 import http.client
@@ -59,8 +59,8 @@ def main():
 
     run(["cargo", "build", "--locked", "-q", "-p", "freebird-privacy-pass-service",
          "--bin", "freebird-privacy-pass-service"])
-    # Optimize the solver, not the server. Debug PBKDF2 is unrepresentatively
-    # slow and can outlive a challenge. Build before starting its expiry clock.
+    # Build the optimized solver before issuing any challenges because debug PBKDF2
+    # can take longer than a challenge remains valid.
     run(["cargo", "build", "--locked", "-q", "--release", "-p",
          "freebird-privacy-pass-service", "--example", "pow_solve"])
     with tempfile.TemporaryDirectory(prefix="freebird-pow-") as directory:
@@ -74,7 +74,8 @@ def main():
             number = port()
             arguments = ["serve-issuer", issuer, "issuer.test",
                          "https://issuer.test/private-token/issue", f"127.0.0.1:{number}"]
-            cli(*arguments, allowed, succeeds=False)  # Never auto-create PoW state.
+            # Missing proof-of-work state must block startup until explicit initialization.
+            cli(*arguments, allowed, succeeds=False)
             cli("init-issuer-pow", issuer)
             cli("init-issuer-pow", issuer, succeeds=False)
             for name in ("pow-key", "pow.sqlite", "pow.sqlite.lock"):
@@ -149,8 +150,8 @@ def main():
             require(status == 200 and headers.get("access-control-allow-origin") == allowed,
                     "directory response")
             spki = base64.urlsafe_b64decode(json.loads(document)["token-keys"][0]["token-key"])
-            # Correct selected key ID reaches admission; a wrong key's 422 is
-            # checked BEFORE admission and cannot prove that a code is valid.
+            # Use the selected key ID to reach admission and check the code.
+            # The Issuer returns `422` for a mismatched key before it checks the code.
             body = b"\x00\x02" + hashlib.sha256(spki).digest()[-1:] + bytes(256)
             issue_headers = {"Content-Type": "application/private-token-request",
                              "Freebird-Admission": "A" * 43}

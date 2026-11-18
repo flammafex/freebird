@@ -1,12 +1,9 @@
-// Test-only helper: makes `@cloudflare/privacypass-ts` resolvable for the crypto
-// tests without installing anything into this package.
+// Resolve `@cloudflare/privacypass-ts` from the client package first so that the crypto tests use
+// its copy when available. Otherwise, use the pinned copy in `demo/web/node_modules`.
+// CI installs that copy with `npm ci --ignore-scripts` in `demo/web`.
 //
-// Resolution order:
-//   1. this package's own install (a consumer or future local install), if any;
-//   2. the exact pinned copy in demo/web/node_modules, which CI installs with
-//      `npm ci --ignore-scripts` for the browser demo.
-// Otherwise the crypto tests are skipped with an explicit reason. The
-// protocol tests never need the peer, so they always run.
+// If neither copy is installed, the test runner reports why the crypto tests are skipped.
+// The protocol tests run without the peer.
 import { createRequire, register, registerHooks } from 'node:module';
 import * as hook from './peer-hook.mjs';
 
@@ -21,7 +18,13 @@ function tryResolve(base) {
   }
 }
 
-/** @returns {Promise<{ available: boolean, source?: string }>} */
+/**
+ * Resolve the peer so that the test runner can skip the signing and verification checks if it
+ * is missing.
+ *
+ * @returns {Promise<{ available: boolean, source?: string }>} The result includes the source
+ *   if the peer is available.
+ */
 export async function installPeer() {
   if (tryResolve(import.meta.url)) return { available: true, source: 'package' };
   const entry = tryResolve(demoPackage.href);

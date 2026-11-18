@@ -1,6 +1,6 @@
-// Application-server side of Freebird app admission: one POST per admission code.
-// Node >= 20, ESM, zero dependencies. The application key is a secret: keep it
-// on the server and never send it to a browser or log it.
+// Exchange an application key for one admission code per `POST` on Node.js 20 or later.
+// The application server can import this module without installing any dependencies.
+// Keep the application key on the server and out of logs to prevent others from using it to request codes.
 
 const KEY = /^fba_([A-Za-z0-9_-]{43})$/;
 const CODE = /^[A-Za-z0-9_-]{43}$/;
@@ -9,7 +9,9 @@ const MAX_RESPONSE_CHARS = 1024;
 
 export class FreebirdError extends Error {
   /**
-   * @param {string} message fixed, non-sensitive text
+   * Keep the stage and other failure details separate from the error message.
+   *
+   * @param {string} message Supply fixed text that contains no sensitive data.
    * @param {{
    *   stage?: 'admission',
    *   status?: number,
@@ -22,14 +24,14 @@ export class FreebirdError extends Error {
     this.name = 'FreebirdError';
     this.stage = stage;
     this.status = status;
-    /** Seconds from Retry-After on 429 (the daily cap), when the Issuer sent it. */
+    /** If a `429` or `503` response had a valid `Retry-After` header, store the delay in seconds. */
     this.retryAfter = retryAfter;
     this.reason = reason;
   }
 }
 
 /**
- * Asks the Issuer for one single-use admission code for an application.
+ * Send an application key to the Issuer to obtain one single-use admission code.
  *
  * @param {{
  *   issuer: string,
@@ -37,10 +39,10 @@ export class FreebirdError extends Error {
  *   fetch?: typeof fetch,
  *   allowInsecureLoopback?: boolean,
  * }} options
- *   `issuer` is the Issuer HTTPS origin (no path, query or credentials).
- *   `allowInsecureLoopback` permits `http://127.0.0.1` only, for tests.
- * @returns {Promise<string>} the 43-character admission code. Hand it to exactly
- *   one user; it is valid for 24 hours and usable once.
+ *   Set `issuer` to an HTTPS origin with no path, query, or credentials.
+ *   Set `allowInsecureLoopback` to permit `http://127.0.0.1` in tests.
+ * @returns {Promise<string>} The promise resolves to a 43-character code.
+ *   Give it to one user because the code can be used once and expires after 24 hours.
  */
 export async function requestAdmission({
   issuer,
@@ -62,7 +64,7 @@ export async function requestAdmission({
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
   } catch (error) {
-    // The underlying error may echo request details; keep only the category.
+    // Keep only the failure category so that sensitive request details stay out of the error message.
     const timedOut = error?.name === 'TimeoutError';
     throw new FreebirdError(`The admission request failed (${timedOut ? 'timeout' : 'network'}).`, {
       stage: 'admission', reason: timedOut ? 'timeout' : 'network',
@@ -120,8 +122,8 @@ function issuerOrigin(value, allowInsecureLoopback) {
   return url.origin;
 }
 
-// Exactly one textual spelling per 32-byte value: the final character carries
-// only two significant bits, so its low two bits must be zero.
+// Require the low two bits of the final base64url character to be zero so that each 32-byte value
+// has only one encoding.
 function canonical(code43) {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
   return alphabet.indexOf(code43[42]) % 4 === 0;
@@ -139,11 +141,11 @@ async function discard(response) {
   try {
     await response.body?.cancel();
   } catch {
-    // Already consumed or locked.
+    // Ignore cancellation failures because the body may already be consumed or locked.
   }
 }
 
-// Delta seconds or an IMF-fixdate; anything else is ignored.
+// Parse `Retry-After` as seconds or an IMF-fixdate and return `undefined` for other formats.
 function parseRetryAfter(value, now = Date.now()) {
   if (typeof value !== 'string') return undefined;
   const text = value.trim();

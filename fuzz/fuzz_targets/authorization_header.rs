@@ -4,7 +4,7 @@ use freebird_common::privacy_pass::{build_authorization_header, parse_authorizat
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|bytes: &[u8]| {
-    // Invalid UTF-8 cannot be supplied to this string-based API.
+    // Skip invalid UTF-8 because the header parser accepts strings.
     if let Ok(header) = std::str::from_utf8(bytes) {
         if let Ok(token) = parse_authorization_header(header) {
             let canonical = build_authorization_header(&token);

@@ -1,11 +1,12 @@
-# Local experimental runner
+# Run one Issuer and one Origin on loopback.
 
-This is a **loopback-only development probe**. For the experimental nginx/TLS
-topology, see the [single-host deployment guide](deployment.md).
-The binary does not provide TLS, automatic failover, multi-instance operation,
-or backup restoration. It does provide offline key staging, **activation**
-(rotation), and **retirement** for one local instance per role, described below.
-Run one process per role with fresh, private state directories.
+Use the experimental runner for local development with one process per role
+and fresh, private state directories. It supports offline key staging,
+activation for rotation, and retirement. The binary does not provide TLS,
+automatic failover, multi-instance operation, or backup restoration. The
+experimental [single-host deployment](deployment.md) uses nginx for TLS.
+
+Build the runner, create Issuer state, and provision the first invitation:
 
 ```sh
 cargo build --locked -p freebird-privacy-pass-service
@@ -16,23 +17,26 @@ $bin issuer-key-status /path/to/new-issuer-state
 ```
 
 `init-issuer` creates `admission.sqlite`, the invitation generation file, and
-`issuer-keys.sqlite` (a genesis key active from hour 0). `provision` prints a
-24-hour, one-use admission code **once**. Capture it privately; never put a
-code in logs, shell history, or public issue reports. Offline `provision`
-requires the Issuer to be stopped; while it serves, run
-`$bin provision-live <issuer-state-dir>` as the same user instead. A failed or partial initialization is never reset automatically.
+`issuer-keys.sqlite`. The genesis key is active from hour 0. A failed or
+partial initialization is not reset automatically.
 
-`issuer-key-status` prints a frozen format: a `now` line, a `high-water` line,
-then one row per key. Each row is
+Capture the output of `provision` privately because the command prints the
+code only once. The code expires in 24 hours and can be used once. Keep it
+out of logs, shell history, and public issue reports. Stop the Issuer before
+running `provision`. While the Issuer serves, run
+`$bin provision-live <issuer-state-dir>` as the Issuer's user.
+
+`issuer-key-status` prints a fixed format with a `now` line, a `high-water`
+line, and one row per key. Each row uses
 `<state> <key-id-hex> <activation-secs|-> <issuance-end-secs|-> <acceptance-deadline-secs|->`.
 Issuer states are `staged`, `scheduled`, `active`, `retired-for-issuance`, and
-`retired`. Times are Unix seconds. `-` means not applicable.
+`retired`. Times are in Unix seconds. The value `-` means that a time does
+not apply.
 
-## Initialize the Origin from the genesis key
+## Initialize the Origin from the public genesis key.
 
-The Origin is initialized from the Issuer's **public** genesis key. It never
-receives `issuer-keys.sqlite`. Export the active key by its public ID, then
-create the Origin state with that exact key ID:
+Export the active public key by its ID and use that exact ID to create the
+Origin state. Do not transfer the Issuer's `issuer-keys.sqlite` to the Origin:
 
 ```sh
 key_id="$($bin issuer-key-status /path/to/new-issuer-state | awk '$1=="active"{print $2}')"
@@ -41,14 +45,17 @@ $bin init-origin /path/to/new-origin-state /path/to/genesis-spki.der "$key_id"
 $bin origin-key-status /path/to/new-origin-state
 ```
 
-`init-origin` refuses if the file's SHA-256 does not equal the key ID, and it
-requires a fresh directory. `export-issuer-spki` writes a **new** mode-0600
-file, synchronizes it and its parent directory, and never overwrites output.
+`init-origin` requires a fresh directory and a public key file whose SHA-256
+hash matches the key ID. `export-issuer-spki` creates a mode-0600 file and
+synchronizes it and its parent directory. It does not overwrite a file.
 
-## Serving
+## Serve the directory and challenge over loopback HTTP.
 
-Start the Issuer and the Origin. Their HTTPS request URL describes an external
-identity; the runner itself listens **only on loopback HTTP**:
+Start the Issuer and Origin on separate loopback HTTP addresses. The HTTPS
+request URL identifies the Issuer externally. It does not change where the
+runner listens.
+
+Start the Issuer and check its directory:
 
 ```sh
 $bin serve-issuer /path/to/new-issuer-state issuer.example \
@@ -56,35 +63,40 @@ $bin serve-issuer /path/to/new-issuer-state issuer.example \
 curl -fsS http://127.0.0.1:8081/.well-known/private-token-issuer-directory
 ```
 
+Start the Origin and check its protected route:
+
 ```sh
 $bin serve-origin /path/to/new-origin-state issuer.example origin.example 127.0.0.1:8082
 curl -i http://127.0.0.1:8082/private-token/protected
 ```
 
-`serve-origin` takes **no public-key argument**. Its keys come from the Origin
-store. This replaces the former `serve-origin <dir> <issuer> <origin> <spki.der> <bind>`
-form. `serve-origin` refuses a clock behind its high-water mark or when no key
-is advertising at the current time.
+`serve-origin` loads keys from the Origin store. It does not accept a public
+key argument such as `<spki.der>` in
+`serve-origin <dir> <issuer> <origin> <spki.der> <bind>`. Startup is refused
+if the clock is behind the high-water mark or if there is no key to advertise
+at startup.
 
-The response to the protected resource is an RFC 9577 `PrivateToken`
-challenge. The reference client tests in `privacy_pass_service/tests/` exercise
-the complete flow through Axum routers and live loopback TCP:
+The protected route returns an RFC 9577 `PrivateToken` challenge. Run the
+reference client tests in `privacy_pass_service/tests/` to exercise the
+complete flow through Axum routers and live loopback TCP:
 
 ```sh
 cargo test --locked -p freebird-privacy-pass-service --tests
 ```
 
-## Offline key maintenance
+## Stop each role before changing its keys.
 
-Every offline key command takes the state's lifetime lock. It **refuses while a
-process serves that state**, with an `already owned` message. Stop the Issuer
-before issuer key commands and the Origin before origin key commands. Times are
-whole UTC hours, so each activation instant is Unix seconds divisible by 3600.
-Commands never read a clock override; they use the system clock. Activation
-must be in the future and after every existing activation.
+Stop the Issuer before Issuer key commands and the Origin before Origin key
+commands. Every offline key command needs the lifetime lock for the state.
+If a process is serving that state, the command fails with `already owned`.
 
-Rotation order is **Origin first**. The Origin must be able to challenge with
-and verify the new key before any Issuer signs with it.
+Choose an activation time in the future and after every existing activation.
+It must be a whole UTC hour, expressed as Unix seconds divisible by 3600.
+Commands use the system clock and do not accept a clock override.
+
+Install the successor's public key on the Origin before scheduling it on the
+Issuer. The Origin must be able to issue challenges for the key and verify
+its tokens before the Issuer signs with it:
 
 ```sh
 # 1. Stop the Issuer. Stage its next candidate key (refused while one is staged or scheduled).
@@ -107,61 +119,71 @@ $bin origin-key-status /path/to/new-origin-state
 # 5. Start both roles again before S.
 ```
 
-Each refusal leaves state unchanged. Expected refusals include a non-aligned
-`S`, a past `S`, a key ID that does not match the SPKI file or the Issuer's
-staged/scheduled candidate, a second stage,
-and any offline command run while the role is serving. Repeating the same `S`
-for the same key is a successful no-op. Before `S` arrives, the operator may
-reschedule the same key to a new future hour by running the install (Origin)
-and activate (Issuer) commands again with the new value. Do this on both roles.
-A retired key ID is never reinstalled.
+An offline command fails and leaves state unchanged if you run it while the
+role is serving. Other refusals include a past `S`, an `S` that is not a whole
+hour, a mismatched key ID, and a second staging request. The ID must match
+the SPKI file or the Issuer's staged or scheduled key, as applicable.
 
-### Reading the status diff
+Repeating the same `S` for the same key succeeds without changing state.
+Before `S` arrives, you can reschedule the same key to a different future
+hour. Run `install-origin-key` on the Origin and `activate-issuer-key` on the
+Issuer with the same replacement time. Do not reinstall a retired key ID.
 
-After step 4 the Issuer shows the current key `active` and the new key
-`scheduled`. The Origin shows the current key `advertising` and the new key
-`installed`. Both key rows have the same ID and activation values. The Issuer's
-`issuance-end` (its successor's activation) and `acceptance-deadline` (that
-plus 300 seconds) describe the last issuance window of the old key. The
-Origin's `acceptance-deadline` matches it. Once the new key's activation hour
-arrives, the old key becomes `retired-for-issuance` on the Issuer and
-`verifying` on the Origin. The superseded key is never used for signing after
-its successor's activation hour; its private material remains in
-`issuer-keys.sqlite` until the operator retires it.
+### Matching statuses confirm the rotation schedule.
 
-### Half-done rotation recovery
+Compare key IDs and activation times across both roles in step 4. The active
+key is `active` on the Issuer and `advertising` on the Origin. Its successor
+is `scheduled` on the Issuer and `installed` on the Origin.
 
-- **Origin installed, Issuer not yet scheduled.** The Origin advertises the new
-  key only from `S`. Until then no key changes. Schedule the Issuer with the
-  same `S` before it arrives. If `S` has passed, the Origin challenges with a
-  key the Issuer cannot yet sign with, so new requests fail until the Issuer's
-  new activation (see below). Tokens already issued under the old key
-  keep redeeming until its acceptance deadline.
-- **Issuer scheduled, Origin install refused or not run.** The Issuer signs
-  with the new key from `S`, but the Origin cannot verify it: an outage, not an
-  acceptance bypass. Install the Origin key with the same `S` before `S`.
-  If `S` has already passed on the lagging Origin, use the recovery below;
-  installing at a past hour is refused.
-- **`S` passed on either lagging side.** Stop both roles and choose a new
-  whole-hour `S'` in the future on **both** clocks. Schedule/install the same
-  `NEW-ID` at `S'` on **both sides as needed**, Origin first: an absent or still
-  installed Origin key uses `install-origin-key <dir> <spki> NEW-ID S'`, and a
-  staged or still scheduled Issuer key uses
-  `activate-issuer-key <dir> NEW-ID S'`. Do not leave a still-pending side at the
-  old `S`. A key already advertising on the Origin or active on the Issuer
-  cannot be rescheduled; leave that side at its existing activation and bring
-  only the lagging side forward at `S'`. Check both statuses before restarting.
-  There is an outage until the lagging side activates at `S'`, not an acceptance
-  bypass; do not backdate a schedule or roll either clock back.
+Check the `issuance-end` and `acceptance-deadline` values for the key that is
+being replaced. Issuance ends when its successor activates. The acceptance
+deadline is 300 seconds later and matches on both roles.
 
-Never edit the SQLite files, delete a `.lock` sidecar, or copy an Issuer key
-store to the Origin. A process crash releases the lifetime lock automatically.
+At the successor's activation hour, the old key becomes
+`retired-for-issuance` on the Issuer and `verifying` on the Origin. The
+Issuer stops signing with the old key at that hour. Its private material
+remains in `issuer-keys.sqlite` until you retire it.
 
-## Retire the superseded key
+### Finish a partial rotation to restore issuance.
 
-Retirement is offline, under the same lifetime locks as activation. Keep the
-old public key ID (`OLD-ID` below) from the status output. These times refer to
-the **successor's** activation `S`, not the old key's activation:
+If a rotation is incomplete, use the scheduled time if it is still in the
+future. Otherwise, pick a future time for any role that has yet to activate
+the key.
+
+- **Schedule the Issuer before `S`** if the Origin has installed the
+  successor but the Issuer has not scheduled it. Neither role changes keys
+  before `S`. From `S`, the Origin challenges with the successor. If the
+  Issuer cannot sign with it, issuance requests fail until the Issuer
+  activates that key. Tokens signed with the old key can still be redeemed
+  until its acceptance deadline.
+- **Install the key on the Origin before `S`** if the Issuer has scheduled
+  it but Origin installation failed or did not run. From `S`, the Issuer
+  signs with the successor. If the Origin cannot verify those tokens,
+  requests fail rather than bypassing token checks. The Origin refuses an
+  installation at a past hour.
+- **Choose a future whole hour `S'`** if `S` has passed on either role that
+  has yet to activate the key. Stop both roles and choose an hour that is
+  in the future on both clocks. Install or schedule the same `NEW-ID` at
+  `S'` wherever the key has not activated, Origin first. For an absent or
+  still installed Origin key, run `install-origin-key <dir> <spki> NEW-ID S'`.
+  For a staged or still scheduled Issuer key, run
+  `activate-issuer-key <dir> NEW-ID S'`. Do not leave a pending activation at
+  the old `S`. A key that is already advertising on the Origin or active on
+  the Issuer cannot be rescheduled. Leave its activation time unchanged and
+  check both statuses before restarting. Requests fail until the lagging
+  role activates at `S'`. Token checks are not bypassed. Do not backdate a
+  schedule or roll either clock back.
+
+A process crash releases the lifetime lock automatically. Do not edit
+SQLite files, delete a `.lock` file, or copy an Issuer key store to the
+Origin.
+
+## Retire a key after its role stops using it.
+
+Stop each role before retiring its key. Retirement uses the same offline
+lifetime locks as activation. Take `OLD-ID` from the status output for the
+old public key. Use `S` for the successor's activation time, not the old
+key's activation time:
 
 ```sh
 # 6. Once now >= S, stop the Issuer and retire its old private key.
@@ -172,56 +194,58 @@ $bin issuer-key-status /path/to/new-issuer-state       # old row: retired
 # 7. Once now >= S+420, stop the Origin and retire the same old key ID.
 $bin retire-origin-key /path/to/new-origin-state OLD-ID
 $bin origin-key-status /path/to/new-origin-state       # old row: retired
-# Restart the Origin. A new rotation can now follow the same runbook.
+# Restart the Origin after retirement. Use the same procedure for the next rotation.
 ```
 
-The Issuer refuses retirement until a successor is active (`now >= S`). The
-Origin refuses until `now >= S+420`: the last challenge deadline `S+300` plus
-a 120-second safety margin. Retirement before that boundary is refused, not
-queued. Unknown IDs, malformed IDs, an already retired key, the current key
-without an active successor, and a clock behind high-water are also refused.
+Retire the old key on the Issuer only once its successor is active,
+when `now >= S`. The Origin requires `now >= S+420`, which is the last
+challenge deadline `S+300` plus a 120-second safety margin. Commands that
+run too early are refused, not queued. Retirement also fails for unknown
+or malformed IDs, retired keys, keys with no active successor, and clocks
+behind the high-water mark.
 
-Issuer retirement atomically removes the old private material (`pkcs8=NULL`)
-and advances high-water. Origin retirement atomically removes that key's
-challenge and spent rows, marks the key retired, and advances high-water.
-Both retain the public key record. **Retired IDs can never be reinstalled**;
-retirement is not a way to reset or reuse an old key. The old status row keeps
-its original activation, issuance-end, and acceptance-deadline values.
+Issuer retirement removes the old private material by setting `pkcs8=NULL`
+and advances the high-water mark in one transaction. Origin retirement
+removes the key's challenge and spent rows, marks it retired, and advances
+the high-water mark in one transaction. Both roles retain the public key
+record. The status row retains the key's activation, issuance-end, and
+acceptance-deadline values. Retired IDs cannot be reinstalled, reset, or reused.
 
-SQLite uses `secure_delete=ON`, and Issuer retirement attempts a
-`wal_checkpoint(TRUNCATE)` after committing. This is **best-effort cleanup,
-not a destruction guarantee**. Checkpoint failure or a busy result does not
-undo committed retirement or make the command fail. Journal copies, backups,
-snapshots, and process memory are outside this guarantee; no zeroization or
-forensic erasure is claimed. Never use retirement as a substitute for the
-documented backup/recovery procedure.
+SQLite uses `secure_delete=ON`. After committing retirement, the Issuer
+attempts `wal_checkpoint(TRUNCATE)` to clean up SQLite data. A failed or busy
+checkpoint does not undo retirement or make the command fail. Cleanup does
+not guarantee destruction of private material. It does not cover journal
+copies, backups, snapshots, or process memory. It does not guarantee
+zeroization or forensic erasure. Use the
+[backup and recovery procedure](recovery.md) to restore state, not retirement.
 
-## Unsupported
+## The runner advertises one key at a time.
 
-No HSM, no online rotation API, no multi-instance or failover, no zeroization
-of superseded key memory, and no multi-key directory with a not-before field.
-The Issuer advertises exactly one key at a time.
-Release remains blocked by independent cryptographic review. See the
-[stopped backup and recovery runbook](recovery.md) before restoring any state.
+The Issuer directory advertises exactly one key at a time. It does not
+provide multiple keys with a not-before field. The runner does not provide
+HSM support, an online rotation API, multi-instance operation, failover, or
+zeroization of memory that holds superseded keys. Release requires
+independent cryptographic review.
 
-## Upgrading older state
+## Unsupported schemas require a fresh state directory.
 
-State created by earlier experimental builds is refused explicitly. Both
-`signing.pk8` (legacy Issuer state) and schema-v1 key or Origin stores fail
-with a message saying there is no migration and to initialize fresh state. The
-file is left untouched, with no reset. Initialize fresh state in a new
-directory.
+Initialize a fresh state directory if startup refuses an unsupported schema.
+Older experimental state such as the Issuer's `signing.pk8` or schema-v1 key
+or Origin stores is refused. The error states that migration is unavailable
+and that you must initialize fresh state. The existing file is not changed
+or reset.
 
-## Experimental loopback client
+## Test issuance, redemption, and replay on loopback.
 
-This example is **local-only**, not a production client or general RFC 9577
-parser. It accepts only this Origin's current three-parameter challenge layout.
-The directory's advertised HTTPS identity is compared with the challenge;
-network requests still go only to the explicitly supplied numeric loopback
-HTTP bases. Proxies and redirects are disabled, responses are bounded, and the
-invitation and token are never printed by the client.
+Use the experimental loopback client for local tests only. It is not a
+production or remote client, and it is not a general RFC 9577 parser. It
+accepts only the Origin's three-parameter challenge layout. It checks the
+challenge against the HTTPS identity in the directory. In HTTP mode it sends
+requests only to the specified numeric loopback base addresses. It disables
+proxies and redirects, limits response sizes, and does not print the
+invitation or token.
 
-For a fresh run, in terminal 1:
+In terminal 1, create fresh state and an invitation, then start the Issuer:
 
 ```sh
 cargo build --locked -p freebird-privacy-pass-service
@@ -238,8 +262,9 @@ $bin serve-issuer "$demo/issuer" issuer.example \
   https://issuer.example/private-token/issue 127.0.0.1:8081
 ```
 
-In terminal 2, from the same repository directory, set `demo` to the path
-printed in terminal 1 and start the Origin:
+In terminal 2, use the same repository directory and set `demo` to the
+path printed in terminal 1. Start the Origin and wait for its listening
+message before running the client:
 
 ```sh
 umask 077
@@ -253,17 +278,17 @@ kill "$origin_pid"
 rm "$demo/invitation"
 ```
 
-Wait for the Origin's listening message before invoking the client. Expected
-output is `issuance: 200; redemption: 200; replay: 401; invitation retry: 403`.
-The invitation is spent even if a later step fails; use fresh state or stop
-the Issuer and provision another invitation before retrying. Never pass an
-invitation as a command-line argument. Prefer the protected-file stdin
-redirection above; interactive stdin requires one line followed by EOF (and
-may echo in your terminal, so disable echo or avoid it). Keep the temporary
-state directory private; remove it after stopping both servers and completing
-the experiment.
+Check for `issuance: 200; redemption: 200; replay: 401; invitation retry: 403`.
+The invitation is spent even if a later step fails. Before retrying, start
+with fresh state or stop the Issuer and provision another invitation.
 
-The example also has an opt-in, CA-pinned HTTPS mode for a local TLS proxy;
-see the [deployment guide](deployment.md). It is not a remote or general client.
-See the [protocol contract](protocol/privacy-pass-phase1.md) for the exact
-binary formats, admission policy, challenge windows, and release blockers.
+Redirect a protected file to standard input to keep the invitation out of
+command-line arguments. Interactive input requires one line followed by EOF.
+Disable terminal echo if you enter the invitation interactively. Keep the
+temporary state directory private and remove it after the test when both
+servers are stopped.
+
+Use the opt-in HTTPS mode with a pinned CA to test the
+[local TLS proxy](deployment.md). The
+[protocol contract](protocol/privacy-pass-phase1.md) specifies the binary
+formats, admission policy, challenge windows, and release requirements.

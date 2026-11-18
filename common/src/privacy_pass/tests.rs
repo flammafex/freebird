@@ -154,7 +154,7 @@ fn http_headers() {
         .unwrap(),
         t
     );
-    // Full tokens are divisible by three; challenge values exercise padding.
+    // Use challenge values to test padding because full token lengths are multiples of three bytes.
     let c = TokenChallenge::new("issuer.example", &[], "origin.example").unwrap();
     assert_eq!(
         build_challenge_header(&c, &[0], 42),
@@ -179,8 +179,7 @@ fn http_headers() {
     }
 }
 
-// Mix arbitrary inputs with exact-length, valid-type inputs so successful
-// decodes are exercised rather than relying on random bytes to find them.
+// Mix arbitrary inputs with inputs of the right size and type to test successful decoding.
 fn wire_bytes(length: usize) -> impl Strategy<Value = Vec<u8>> {
     prop_oneof![
         4 => proptest::collection::vec(any::<u8>(), 0..=4096),
@@ -288,7 +287,7 @@ proptest! {
 
     #[test]
     fn arbitrary_authorization_header_round_trip(bytes in authorization_bytes()) {
-        // The header API accepts strings; non-UTF-8 bytes cannot reach it.
+        // Test only valid UTF-8 because the header parser accepts strings.
         if let Ok(header) = std::str::from_utf8(&bytes) {
             if let Ok(token) = parse_authorization_header(header) {
                 let canonical = build_authorization_header(&token);

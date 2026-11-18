@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Recreate small, deterministic fuzz corpora from the checked-in RFC vectors."""
+"""Generate small, repeatable sets of fuzz inputs from the RFC test vectors in the repository."""
 
 import base64
 import json
@@ -77,7 +77,7 @@ def main():
                 if field == "token":
                     seed("authorization_header", prefix, header(data))
                 elif field == "skI":
-                    # The RFC's hex field contains PEM; also seed its PKCS#8 DER.
+                    # Decode the PEM from the RFC's hex field to seed the fuzzer with PKCS#8 DER.
                     der = base64.b64decode(
                         b"".join(line for line in data.splitlines() if not line.startswith(b"-")),
                         validate=True,
@@ -94,7 +94,7 @@ def main():
                         fields["token_type"],
                     ),
                 )
-            # Retain the other decoded hex fields as malformed wire inputs too.
+            # Use the other decoded hex fields to exercise malformed wire inputs.
             for field in (
                 "token_type", "issuer_name", "redemption_context", "origin_info",
                 "nonce", "token_key_id", "token_authenticator_input", "blind", "salt",

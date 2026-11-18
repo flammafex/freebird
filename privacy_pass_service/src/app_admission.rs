@@ -1,8 +1,7 @@
-//! Experimental server-to-server application admission. A trusted application
-//! server presents its per-application secret and receives one-use admission
-//! codes, capped per application per UTC day. Like PoW, this state is a separate
-//! SQLite file enabled only by its explicit initialization. Unannounced rollback
-//! requires offline recovery, which revokes every application.
+//! An application server presents its own secret to obtain a single-use admission code.
+//! Each application has a separate cap for each UTC day. Initializing the separate
+//! SQLite file enables application admission. If the database is rolled back, run
+//! offline recovery to revoke every application's key.
 use crate::admission::AdmissionStore;
 use anyhow::{ensure, Result};
 use axum::{
@@ -37,11 +36,11 @@ const ISSUE_CAPACITY: usize = 2;
 pub const KEY_PREFIX: &str = "fba_";
 pub const MAX_DAILY_CAP: i64 = 100_000;
 const CLIENTS_SCHEMA: &str = "CREATE TABLE clients (name TEXT PRIMARY KEY NOT NULL CHECK(name GLOB '[a-z0-9]*' AND length(name) BETWEEN 1 AND 64 AND name NOT GLOB '*[^a-z0-9-]*'), key_hash BLOB UNIQUE NOT NULL CHECK(typeof(key_hash)='blob' AND length(key_hash)=32), daily_cap INTEGER NOT NULL CHECK(daily_cap BETWEEN 1 AND 100000), revoked INTEGER NOT NULL CHECK(revoked IN (0,1)))";
-// No REFERENCES clause: SQLite does not enforce it without PRAGMA foreign_keys.
+// A `REFERENCES` clause would not enforce the link to `clients` unless SQLite foreign keys were enabled.
 const USAGE_SCHEMA: &str =
     "CREATE TABLE usage (name TEXT NOT NULL, day INTEGER NOT NULL, issued INTEGER NOT NULL, PRIMARY KEY(name, day))";
 
-/// Why an admission was refused. Carries no secret material.
+/// Reports why admission was refused without including secret material.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Refusal {
     Unauthorized,
@@ -49,7 +48,7 @@ pub enum Refusal {
     Unavailable,
 }
 
-/// One row of the operator listing; `issued` counts today's (UTC) admissions.
+/// Reports one application in the operator listing and counts admissions in `issued` for the UTC day.
 pub struct AppRow {
     pub name: String,
     pub daily_cap: i64,
@@ -57,21 +56,22 @@ pub struct AppRow {
     pub revoked: bool,
 }
 
-/// Holds the store's lifetime lock. Deliberately does not implement Debug.
+/// Keeps the database lock until drop, so only one process can use the store.
+/// Omits `Debug` to keep internal state out of debug output.
 pub struct AppClients {
     db: Mutex<Connection>,
     _lock: File,
 }
 
-/// Admission over the shared invitation store. The issuance path is an HTTP
-/// route; management goes through `AppClients` (control socket or offline).
+/// Issues codes from the shared invitation store through an HTTP route.
+/// Manage applications through `AppClients` over the control socket or offline.
 pub struct AppAdmission {
     clients: Arc<AppClients>,
     admission: Arc<AdmissionStore>,
     workers: Arc<Semaphore>,
 }
 
-/// Names are lowercase DNS-like labels: `[a-z0-9][a-z0-9-]{0,63}`.
+/// Accepts only names that match `[a-z0-9][a-z0-9-]{0,63}`.
 pub fn valid_name(name: &str) -> bool {
     let bytes = name.as_bytes();
     matches!(bytes.first(), Some(b'a'..=b'z' | b'0'..=b'9'))
@@ -88,8 +88,8 @@ pub fn now_seconds() -> Option<i64> {
         .and_then(|duration| i64::try_from(duration.as_secs()).ok())
 }
 
-/// Enabled iff the store file exists. A non-regular entry is an invalid state,
-/// never a silent disable.
+/// Returns `true` for a regular store file and `false` if it is absent.
+/// An entry that is not a regular file produces an error.
 pub fn enabled(dir: &Path) -> Result<bool> {
     match fs::symlink_metadata(dir.join(DB)) {
         Ok(metadata) => {
@@ -207,7 +207,7 @@ fn begin(db: &mut Connection) -> Result<Transaction<'_>> {
     Ok(tx)
 }
 
-/// Explicit, non-resetting initialization of an absent store.
+/// Creates the application store only if its database is absent, so existing state is preserved.
 pub fn initialize(dir: &Path) -> Result<()> {
     let _lock = lock(dir)?;
     let path = dir.join(DB);
@@ -240,8 +240,7 @@ fn reserve_in(
 ) -> Result<std::result::Result<(), Refusal>> {
     let day = day_of(now);
     let tx = begin(db)?;
-    // Indexed equality on the SHA-256 of a 256-bit random key. The lookup
-    // touches only the digest, never a comparison against the raw secret.
+    // Look up the SHA-256 digest in the index so that SQLite never compares the raw 256-bit key.
     let client: Option<(String, i64)> = tx
         .query_row(
             "SELECT name, daily_cap FROM clients WHERE key_hash=?1 AND revoked=0",
@@ -265,19 +264,19 @@ fn reserve_in(
             retry_after: (day + 1) * DAY - now,
         }));
     }
-    // Usage older than two days is no longer needed for any cap decision.
+    // Delete usage older than two days because it does not affect the cap.
     tx.execute("DELETE FROM usage WHERE day<?1", [day - 2])?;
     tx.execute(
         "INSERT INTO usage(name,day,issued) VALUES(?1,?2,1) ON CONFLICT(name,day) DO UPDATE SET issued=issued+1",
         params![name, day],
     )?;
-    // Invariant: the quota is spent durably before any code is provisioned.
+    // Commit the charge to the quota before provisioning a code so that it persists after a crash.
     tx.commit()?;
     Ok(Ok(()))
 }
 
 impl AppClients {
-    /// Opens an existing, strictly checked store under its lifetime lock.
+    /// Locks and validates an existing store before opening it for use.
     pub fn open(dir: &Path) -> Result<Self> {
         let lock = lock(dir)?;
         let db = open_db(dir)?;
@@ -293,10 +292,10 @@ impl AppClients {
             .map_err(|_| anyhow::anyhow!("app admission store poisoned"))
     }
 
-    /// Creates a new active application, or re-activates a revoked one with a
-    /// fresh key. Re-activation keeps today's usage, so revoke/re-add cannot
-    /// bypass the daily cap. Returns `None` for refusals (invalid input, active
-    /// name, or the client limit).
+    /// Creates or reactivates an application and returns a fresh key.
+    /// Reactivation preserves the UTC day's usage so that revoking and re-adding an application
+    /// cannot bypass its daily cap. Returns `None` for invalid input, an active name, or a name
+    /// that would exceed the client limit.
     pub fn add(&self, name: &str, daily_cap: i64) -> Result<Option<String>> {
         if !valid_name(name) || !(1..=MAX_DAILY_CAP).contains(&daily_cap) {
             return Ok(None);
@@ -335,7 +334,7 @@ impl AppClients {
         )))
     }
 
-    /// Returns whether a named application existed (revocation is idempotent).
+    /// Revokes the named application and returns `true` if it exists, even if it was already revoked.
     pub fn revoke(&self, name: &str) -> Result<bool> {
         let mut db = self.db()?;
         let tx = begin(&mut db)?;
@@ -378,8 +377,8 @@ impl AppClients {
         Ok(rows)
     }
 
-    /// Offline restore hook: a restored database could resurrect revoked keys,
-    /// so every application is revoked and its usage cleared in one transaction.
+    /// During offline recovery, revoke every application and clear its usage in one transaction.
+    /// This prevents restored rows from making a previously revoked key usable again.
     pub fn revoke_all_for_restore(&self) -> Result<()> {
         let mut db = self.db()?;
         let tx = begin(&mut db)?;
@@ -389,7 +388,7 @@ impl AppClients {
         Ok(())
     }
 
-    /// Spends one unit of today's quota for the key digest, or refuses.
+    /// Charges one unit against the daily cap if the key belongs to an active application with quota left.
     fn reserve(&self, key_hash: &[u8; 32], now: i64) -> std::result::Result<(), Refusal> {
         let mut db = self.db().map_err(|_| Refusal::Unavailable)?;
         match reserve_in(&mut db, key_hash, now) {
@@ -408,8 +407,7 @@ impl AppAdmission {
         }
     }
 
-    /// Quota is committed BEFORE provisioning. A provisioning failure therefore
-    /// burns the unit; nothing is refunded.
+    /// Commits the charge to the quota before provisioning a code, so a provisioning failure leaves the unit spent.
     fn issue(&self, key_hash: &[u8; 32], now: i64) -> std::result::Result<String, Refusal> {
         self.clients.reserve(key_hash, now)?;
         self.admission
@@ -440,8 +438,8 @@ fn unauthorized() -> Response {
     response
 }
 
-/// Exactly one `Authorization: Bearer fba_<43 base64url>` with canonical
-/// encoding. The scheme is matched exactly; anything else is `None`.
+/// Accepts one `Authorization: Bearer fba_<43 base64url>` header and returns the decoded key.
+/// Any other scheme spelling, duplicate header, or noncanonical encoding returns `None`.
 fn bearer_key(headers: &HeaderMap) -> Option<[u8; 32]> {
     let mut values = headers.get_all(header::AUTHORIZATION).iter();
     let value = values.next()?.to_str().ok()?;
@@ -453,13 +451,13 @@ fn bearer_key(headers: &HeaderMap) -> Option<[u8; 32]> {
         return None;
     }
     let raw: [u8; 32] = Base64UrlUnpadded::decode_vec(token).ok()?.try_into().ok()?;
-    // Exactly one textual spelling per key.
+    // Re-encode the key to reject alternate spellings of the same bytes.
     (Base64UrlUnpadded::encode_string(&raw) == token).then_some(raw)
 }
 
 async fn admission(State(app): State<Arc<AppAdmission>>, request: Request) -> Response {
     let (parts, body) = request.into_parts();
-    // Server-to-server contract: no body at all. Zero-byte limit rejects any byte.
+    // Enforce the server-to-server requirement for an empty body with a limit of zero bytes.
     if to_bytes(body, 0).await.is_err() {
         return no_store(StatusCode::BAD_REQUEST);
     }
@@ -471,7 +469,7 @@ async fn admission(State(app): State<Arc<AppAdmission>>, request: Request) -> Re
         Ok(permit) => permit,
         Err(_) => return no_store(StatusCode::TOO_MANY_REQUESTS),
     };
-    // Hold capacity even if the HTTP future is cancelled.
+    // Move the permit into the blocking job so that cancelling the request cannot free it before the job ends.
     let result = tokio::task::spawn_blocking(move || {
         let _permit = permit;
         let now = now_seconds().ok_or(Refusal::Unavailable)?;
@@ -646,7 +644,7 @@ mod tests {
             tx.commit().unwrap();
         }
         assert_eq!(app.clients.add("overflow", 1).unwrap(), None);
-        // Re-activation of an existing revoked name does not grow the table.
+        // Reactivating a revoked name reuses its row, so it succeeds even at the client limit.
         assert!(app.clients.add("c0", 1).unwrap().is_some());
     }
 
@@ -675,7 +673,7 @@ mod tests {
         );
         let next = app.issue(&hash, day + DAY).unwrap();
         assert!(app.admission.consume(&next, day + DAY).unwrap());
-        // Day 20000 usage is older than two days at day 20003 and is pruned.
+        // On day 20003, pruning removes usage from day 20000 because it is more than two days old.
         app.issue(&hash, day + 3 * DAY).unwrap();
         let rows: Vec<i64> = {
             let db = app.clients.db().unwrap();
@@ -781,7 +779,7 @@ mod tests {
             admission(State(app.clone()), with_body).await.status(),
             StatusCode::BAD_REQUEST
         );
-        // Refusals spent nothing.
+        // Refused requests leave the quota unchanged.
         assert_eq!(list(&app)[0].2, 2);
 
         assert!(app.clients.revoke("alpha").unwrap());
@@ -919,8 +917,7 @@ mod tests {
         );
         let key = app.clients.add("alpha", 10).unwrap().unwrap();
         let origin = BrowserOrigin::parse("https://origin.example").unwrap();
-        // Same Issuer and Pow instances (their file locks are single-owner) for
-        // both the configured router and the plain router below.
+        // Share the issuer and PoW instances between routers so that each file lock has only one owner.
         let plain = issuer::router_with_pow(issuer.clone(), pow.clone(), origin.clone());
         let router = issuer::with_app_admission(
             issuer::router_with_pow(issuer, pow, origin),
@@ -965,7 +962,7 @@ mod tests {
                 .contains_key(header::ACCESS_CONTROL_ALLOW_ORIGIN));
             assert!(!response.headers().contains_key(header::VARY));
         }
-        // Without the app route merged, the path does not exist at all.
+        // Omitting the application route leaves the endpoint unrouted, so requests return HTTP 404.
         let response = plain.clone().call(post(Some(&bearer(&key)))).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }

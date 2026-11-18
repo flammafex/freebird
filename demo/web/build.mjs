@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const dist = join(root, 'dist');
-// Only this script's generated output directory is ever removed.
+// Clear the generated `dist` directory so that stale files are not deployed.
 await rm(dist, { recursive: true, force: true });
 await mkdir(join(dist, 'assets/workers'), { recursive: true });
 await build({
@@ -13,8 +13,7 @@ await build({
   entryPoints: ['src/main.mjs'],
   outfile: 'dist/assets/app.js',
   bundle: true,
-  // The shared client lives outside demo/web and has no node_modules of its own.
-  // Its peer dependency must resolve to this one pinned install (single copy).
+  // Resolve the shared client's peer from `demo/web/node_modules` so that the bundle uses the pinned copy.
   nodePaths: [join(root, 'node_modules')],
   format: 'esm',
   platform: 'browser',
@@ -34,14 +33,14 @@ for (const [source, destination] of [
   await copyFile(join(root, source), join(dist, destination));
 }
 
-// Preserve installed third-party license/notice files with the deployed bundle.
+// Copy license and notice files so that they are distributed with the dependencies in the bundle.
 const lock = JSON.parse(await readFile(join(root, 'package-lock.json'), 'utf8'));
 for (const packagePath of Object.keys(lock.packages).filter(path => path.startsWith('node_modules/'))) {
   let files;
   try {
     files = await readdir(join(root, packagePath), { withFileTypes: true });
   } catch (error) {
-    if (error.code === 'ENOENT') continue; // Optional packages for other platforms.
+    if (error.code === 'ENOENT') continue; // Skip optional packages that were not installed on this platform.
     throw error;
   }
   for (const file of files.filter(entry => entry.isFile() && /^(license|licence|notice|copying)([.-]|$)/i.test(entry.name))) {
@@ -51,8 +50,8 @@ for (const packagePath of Object.keys(lock.packages).filter(path => path.startsW
   }
 }
 
-// Fail closed if a dependency update introduces dynamic code or inline assets.
-// This is a static guard, not a substitute for a browser CSP smoke test.
+// Reject dynamic code and inline assets that the demo's Content Security Policy does not allow.
+// Run the browser smoke test to check that the policy works with the built files.
 for (const relative of ['assets/app.js', 'assets/workers/pbkdf2.js', 'assets/workers/sha.js']) {
   const source = await readFile(join(dist, relative), 'utf8');
   if (/\beval\s*\(|\b(?:new\s+)?Function\s*\(|\bWebAssembly\s*[.(]/.test(source)) {

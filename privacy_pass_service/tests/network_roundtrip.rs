@@ -1,4 +1,4 @@
-//! Loopback HTTP reference client, including durable single-use enforcement.
+//! These tests use loopback HTTP to check that a token can be redeemed only once, even after reopening the store.
 use base64ct::{Base64Url, Encoding};
 use freebird_common::privacy_pass::{
     build_authorization_header, token_input, token_key_id, Token, TokenChallenge, TokenRequest,
@@ -26,7 +26,7 @@ fn unix_now() -> u64 {
         .as_secs()
 }
 
-/// Genesis SPKI and key ID, read through the key store before any role opens it.
+/// Loads the initial public key and its ID before either service opens its store.
 fn genesis(key_path: &Path) -> (Vec<u8>, [u8; 32]) {
     let manifest = KeyStore::open(key_path)
         .unwrap()
@@ -40,7 +40,7 @@ fn genesis(key_path: &Path) -> (Vec<u8>, [u8; 32]) {
     (genesis.spki.clone(), genesis.key_id)
 }
 
-// Abort on unwinding too, so a failed assertion cannot leave a listener running.
+// Abort the server task on drop so that a failed assertion cannot leave a listener running.
 struct Server(JoinHandle<()>);
 
 impl Server {
@@ -52,8 +52,8 @@ impl Server {
 
     async fn stop(self) {
         self.0.abort();
-        // Await cancellation before reopening either store.
-        // Borrow the handle because this type implements Drop.
+        // Wait for cancellation to release the file locks before reopening either store.
+        // Borrow the handle because this type implements `Drop`.
         let mut server = self;
         let result = (&mut server.0).await;
         assert!(result.unwrap_err().is_cancelled());
@@ -154,7 +154,7 @@ async fn loopback_http_roundtrip_and_durable_single_use() {
     let field = response.headers()[header::WWW_AUTHENTICATE]
         .to_str()
         .unwrap();
-    // This parser intentionally handles only this Origin's three RFC parameters.
+    // Match the three challenge parameters that the reference origin sends.
     let fields: Vec<_> = field
         .strip_prefix("PrivateToken ")
         .unwrap()
