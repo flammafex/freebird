@@ -2,6 +2,7 @@
 //! exactly one key: the greatest activation hour at or before the latched clock
 //! hour. The key set is loaded once at open; old keys remain in memory until restart.
 use crate::admission::AdmissionStore;
+use crate::app_admission::AppAdmission;
 use crate::key_store::{select_active, KeyStore, SigningKey};
 use crate::pow::{BrowserOrigin, Pow};
 use anyhow::{bail, ensure, Context, Result};
@@ -232,6 +233,16 @@ pub fn router_with_pow(issuer: Arc<Issuer>, pow: Arc<Pow>, origin: BrowserOrigin
     router(issuer)
         .merge(crate::pow::router(pow))
         .route_layer(middleware::from_fn_with_state(origin, browser_cors))
+}
+
+/// Merges server-to-server application admission AFTER any browser CORS layer
+/// was attached, so this route never receives browser CORS headers. `None`
+/// (application state not enabled) leaves the path unrouted: 404.
+pub fn with_app_admission(router: Router, app: Option<Arc<AppAdmission>>) -> Router {
+    match app {
+        Some(app) => router.merge(crate::app_admission::router(app)),
+        None => router,
+    }
 }
 
 async fn browser_cors(

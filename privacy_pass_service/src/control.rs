@@ -1,12 +1,15 @@
-//! Operator-only live invitation provisioning over the Issuer's local socket.
+//! Operator-only management over the Issuer's local socket: live invitation
+//! provisioning and application-admission administration. Requests are exact
+//! single lines; anything else is answered with `error`.
 
 use crate::admission::AdmissionStore;
+use crate::app_admission::{self, AppClients, AppRow, MAX_DAILY_CAP};
 use std::{
     fs, io,
     os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt},
     path::Path,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -16,9 +19,16 @@ use tokio::{
 
 const SOCKET: &str = "control.sock";
 const REQUEST: &[u8] = b"provision\n";
+/// Longest accepted request line, including the newline (an `app-add` line is <= 80).
+const REQUEST_LIMIT: usize = 128;
+/// Bounds any reply; the largest `app-list` reply (256 rows) is well below this.
+const RESPONSE_LIMIT: u64 = 65_536;
+const ERROR: &str = "error\n";
 const TIMEOUT: Duration = Duration::from_secs(5);
 pub const LIVE_ERROR: &str =
     "live provisioning failed; is the issuer running and are you its service user?";
+pub const APP_ERROR: &str =
+    "app admission command failed; check arguments and state, and whether the issuer is running";
 
 pub struct ControlListener {
     listener: UnixListener,
@@ -57,14 +67,19 @@ impl ControlListener {
 
     /// Sequential handling bounds provisioning work and connection resources.
     /// Listener errors are fatal; individual protocol/store/write errors are not.
-    pub async fn serve(self, store: Arc<AdmissionStore>) -> io::Result<()> {
+    /// `apps` is `None` when application admission is not enabled.
+    pub async fn serve(
+        self,
+        store: Arc<AdmissionStore>,
+        apps: Option<Arc<AppClients>>,
+    ) -> io::Result<()> {
         loop {
             let (stream, _) = self.listener.accept().await?;
             // No root bypass. Failure to obtain credentials also fails closed.
             if !matches!(stream.peer_cred(), Ok(cred) if cred.uid() == self.owner_uid) {
                 continue;
             }
-            handle(stream, store.clone()).await;
+            handle(stream, store.clone(), apps.clone()).await;
         }
     }
 }
@@ -73,8 +88,93 @@ fn valid_request(bytes: &[u8]) -> bool {
     bytes == REQUEST
 }
 
-async fn read_request(stream: &mut UnixStream) -> io::Result<bool> {
-    let mut buffer = [0; 16];
+/// One management command. Names and caps are validated during parsing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AppCommand {
+    Add { name: String, cap: i64 },
+    Revoke { name: String },
+    Cap { name: String, cap: i64 },
+    List,
+}
+
+/// Canonical decimal cap: no sign, no leading zeros, range 1..=MAX_DAILY_CAP.
+fn parse_cap(text: &str) -> Option<i64> {
+    if text.is_empty()
+        || text.len() > 6
+        || !text.bytes().all(|b| b.is_ascii_digit())
+        || (text.len() > 1 && text.starts_with('0'))
+    {
+        return None;
+    }
+    let cap: i64 = text.parse().ok()?;
+    (1..=MAX_DAILY_CAP).contains(&cap).then_some(cap)
+}
+
+/// Exact grammar: one line, single spaces, terminated by a single `\n`.
+pub fn parse_app(bytes: &[u8]) -> Option<AppCommand> {
+    let line = std::str::from_utf8(bytes.strip_suffix(b"\n")?).ok()?;
+    if line.contains('\n') {
+        return None;
+    }
+    let name = |text: &str| app_admission::valid_name(text).then(|| text.to_owned());
+    let fields: Vec<&str> = line.split(' ').collect();
+    match fields.as_slice() {
+        ["app-add", name_text, cap] => Some(AppCommand::Add {
+            name: name(name_text)?,
+            cap: parse_cap(cap)?,
+        }),
+        ["app-revoke", name_text] => Some(AppCommand::Revoke {
+            name: name(name_text)?,
+        }),
+        ["app-cap", name_text, cap] => Some(AppCommand::Cap {
+            name: name(name_text)?,
+            cap: parse_cap(cap)?,
+        }),
+        ["app-list"] => Some(AppCommand::List),
+        _ => None,
+    }
+}
+
+/// Executes one command and renders its exact reply. `None` means `error`.
+/// The `add` reply carries the key itself; it is the only secret-bearing reply.
+pub fn run_app(clients: &AppClients, command: AppCommand, now: i64) -> Option<String> {
+    match command {
+        AppCommand::Add { name, cap } => clients
+            .add(&name, cap)
+            .ok()
+            .flatten()
+            .map(|key| format!("ok {key}\n")),
+        AppCommand::Revoke { name } => clients
+            .revoke(&name)
+            .ok()
+            .filter(|changed| *changed)
+            .map(|_| "ok\n".to_owned()),
+        AppCommand::Cap { name, cap } => clients
+            .set_cap(&name, cap)
+            .ok()
+            .filter(|changed| *changed)
+            .map(|_| "ok\n".to_owned()),
+        AppCommand::List => clients.list(now).ok().map(|rows| {
+            let mut reply = String::new();
+            for AppRow {
+                name,
+                daily_cap,
+                issued,
+                revoked,
+            } in rows
+            {
+                let state = if revoked { "revoked" } else { "active" };
+                reply.push_str(&format!("app {name} {daily_cap} {issued} {state}\n"));
+            }
+            reply.push_str("end\n");
+            reply
+        }),
+    }
+}
+
+/// Reads one line of at most REQUEST_LIMIT bytes, stopping at the first newline.
+async fn read_request(stream: &mut UnixStream) -> io::Result<Vec<u8>> {
+    let mut buffer = [0; REQUEST_LIMIT];
     let mut length = 0;
     while length < buffer.len() {
         let read = stream.read(&mut buffer[length..]).await?;
@@ -86,27 +186,44 @@ async fn read_request(stream: &mut UnixStream) -> io::Result<bool> {
             break;
         }
     }
-    Ok(valid_request(&buffer[..length]))
+    Ok(buffer[..length].to_vec())
 }
 
-async fn handle(mut stream: UnixStream, store: Arc<AdmissionStore>) {
-    let invitation = if matches!(
-        timeout(TIMEOUT, read_request(&mut stream)).await,
-        Ok(Ok(true))
-    ) {
-        tokio::task::spawn_blocking(move || {
-            let seconds = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-            store.provision(i64::try_from(seconds)?)
+async fn respond(
+    request: Vec<u8>,
+    store: Arc<AdmissionStore>,
+    apps: Option<Arc<AppClients>>,
+) -> String {
+    if valid_request(&request) {
+        let invitation = tokio::task::spawn_blocking(move || {
+            let seconds = app_admission::now_seconds().ok_or(())?;
+            store.provision(seconds).map_err(|_| ())
         })
         .await
         .ok()
-        .and_then(Result::ok)
-    } else {
-        None
+        .and_then(Result::ok);
+        // Provisioning is already durable. A failed/timed-out write orphans the
+        // invitation until its 24h expiry: never retry, undo, or refund it.
+        return invitation.map_or_else(|| ERROR.to_owned(), |code| format!("ok {code}\n"));
+    }
+    let (Some(apps), Some(command)) = (apps, parse_app(&request)) else {
+        return ERROR.to_owned();
     };
-    let response = invitation.map_or_else(|| "error\n".to_owned(), |code| format!("ok {code}\n"));
-    // Provisioning is already durable. A failed/timed-out write orphans the
-    // invitation until its 24h expiry: never retry, undo, or refund it.
+    tokio::task::spawn_blocking(move || {
+        let now = app_admission::now_seconds()?;
+        run_app(&apps, command, now)
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| ERROR.to_owned())
+}
+
+async fn handle(mut stream: UnixStream, store: Arc<AdmissionStore>, apps: Option<Arc<AppClients>>) {
+    let response = match timeout(TIMEOUT, read_request(&mut stream)).await {
+        Ok(Ok(request)) => respond(request, store, apps).await,
+        _ => ERROR.to_owned(),
+    };
     let _ = timeout(TIMEOUT, stream.write_all(response.as_bytes())).await;
 }
 
@@ -122,6 +239,96 @@ fn validate_response(bytes: &[u8]) -> Option<&str> {
         return None;
     }
     std::str::from_utf8(code).ok()
+}
+
+/// Exact reply shapes per command; anything else is refused, never displayed.
+fn valid_app_response(command: &AppCommand, bytes: &[u8]) -> bool {
+    match command {
+        AppCommand::Add { .. } => {
+            bytes.len() == 51
+                && bytes.starts_with(b"ok fba_")
+                && bytes.ends_with(b"\n")
+                && bytes[7..50]
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        }
+        AppCommand::Revoke { .. } | AppCommand::Cap { .. } => bytes == b"ok\n",
+        AppCommand::List => {
+            let Ok(text) = std::str::from_utf8(bytes) else {
+                return false;
+            };
+            let Some(rows) = text.strip_suffix("end\n") else {
+                return false;
+            };
+            rows.split_inclusive('\n').all(|line| {
+                let Some(fields) = line
+                    .strip_suffix('\n')
+                    .and_then(|line| line.strip_prefix("app "))
+                else {
+                    return false;
+                };
+                let fields: Vec<&str> = fields.split(' ').collect();
+                fields.len() == 4
+                    && app_admission::valid_name(fields[0])
+                    && fields[1].parse::<i64>().is_ok()
+                    && fields[2].parse::<i64>().is_ok()
+                    && matches!(fields[3], "active" | "revoked")
+            })
+        }
+    }
+}
+
+async fn live_app(
+    mut stream: UnixStream,
+    command: &AppCommand,
+    line: &str,
+) -> Result<String, &'static str> {
+    timeout(TIMEOUT, stream.write_all(line.as_bytes()))
+        .await
+        .map_err(|_| APP_ERROR)?
+        .map_err(|_| APP_ERROR)?;
+    let mut response = Vec::new();
+    timeout(
+        TIMEOUT,
+        stream.take(RESPONSE_LIMIT).read_to_end(&mut response),
+    )
+    .await
+    .map_err(|_| APP_ERROR)?
+    .map_err(|_| APP_ERROR)?;
+    if !valid_app_response(command, &response) {
+        return Err(APP_ERROR);
+    }
+    String::from_utf8(response).map_err(|_| APP_ERROR)
+}
+
+/// Offline maintenance under the store's lifetime lock. Refuses while an
+/// issuer holds the lock, so it never races a serving process.
+fn offline_app(dir: &Path, command: AppCommand) -> Result<String, &'static str> {
+    if !app_admission::enabled(dir).map_err(|_| APP_ERROR)? {
+        return Err(APP_ERROR);
+    }
+    let clients = AppClients::open(dir).map_err(|_| APP_ERROR)?;
+    let now = app_admission::now_seconds().ok_or(APP_ERROR)?;
+    run_app(&clients, command, now).ok_or(APP_ERROR)
+}
+
+/// Runs one management line. The live socket is tried first. Offline execution
+/// happens only when no socket exists or it refuses connections. A live reply,
+/// including `error`, is never retried offline.
+pub async fn app_command(dir: &Path, line: &str) -> Result<String, &'static str> {
+    let command = parse_app(line.as_bytes()).ok_or(APP_ERROR)?;
+    match timeout(TIMEOUT, UnixStream::connect(dir.join(SOCKET))).await {
+        Ok(Ok(stream)) => live_app(stream, &command, line).await,
+        Ok(Err(error))
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            offline_app(dir, command)
+        }
+        _ => Err(APP_ERROR),
+    }
 }
 
 /// Returns the sole invitation, never including protocol text or diagnostics.
@@ -148,7 +355,10 @@ pub async fn provision_live(dir: &Path) -> Result<String, &'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::{fs::symlink, net::UnixListener as StdUnixListener};
+    use std::{
+        os::unix::{fs::symlink, net::UnixListener as StdUnixListener},
+        time::{SystemTime, UNIX_EPOCH},
+    };
 
     fn setup() -> (tempfile::TempDir, Arc<AdmissionStore>) {
         let dir = tempfile::tempdir().unwrap();
@@ -216,7 +426,7 @@ mod tests {
         let metadata = fs::symlink_metadata(dir.path().join(SOCKET)).unwrap();
         assert!(metadata.file_type().is_socket());
         assert_eq!(metadata.permissions().mode() & 0o777, 0o600);
-        let server = tokio::spawn(listener.serve(store.clone()));
+        let server = tokio::spawn(listener.serve(store.clone(), None));
 
         // An unknown request must fail without taking down the listener.
         let mut stream = UnixStream::connect(dir.path().join(SOCKET)).await.unwrap();
@@ -246,6 +456,245 @@ mod tests {
         assert!(server.await.unwrap_err().is_cancelled());
     }
 
+    #[test]
+    fn app_requests_parse_exactly() {
+        let name = "a".repeat(64);
+        assert_eq!(parse_app(b"app-list\n"), Some(AppCommand::List));
+        assert_eq!(
+            parse_app(b"app-add alpha 2\n"),
+            Some(AppCommand::Add {
+                name: "alpha".to_owned(),
+                cap: 2
+            })
+        );
+        assert_eq!(
+            parse_app(b"app-add a-1 100000\n"),
+            Some(AppCommand::Add {
+                name: "a-1".to_owned(),
+                cap: 100_000
+            })
+        );
+        assert_eq!(
+            parse_app(format!("app-add {name} 1\n").as_bytes()),
+            Some(AppCommand::Add {
+                name: name.clone(),
+                cap: 1
+            })
+        );
+        assert_eq!(
+            parse_app(b"app-revoke alpha\n"),
+            Some(AppCommand::Revoke {
+                name: "alpha".to_owned()
+            })
+        );
+        assert_eq!(
+            parse_app(b"app-cap alpha 7\n"),
+            Some(AppCommand::Cap {
+                name: "alpha".to_owned(),
+                cap: 7
+            })
+        );
+        for line in [
+            "".to_owned(),
+            "app-list".to_owned(),
+            "app-list\n\n".to_owned(),
+            "app-list x\n".to_owned(),
+            " app-list\n".to_owned(),
+            "app-list \n".to_owned(),
+            "APP-LIST\n".to_owned(),
+            "app-list\r\n".to_owned(),
+            "app-add alpha 2".to_owned(),
+            "app-add alpha 2\r\n".to_owned(),
+            "app-add  alpha 2\n".to_owned(),
+            "app-add alpha  2\n".to_owned(),
+            "app-add alpha 2 \n".to_owned(),
+            "app-add Alpha 2\n".to_owned(),
+            "app-add -alpha 2\n".to_owned(),
+            "app-add alpha_b 2\n".to_owned(),
+            "app-add a.b 2\n".to_owned(),
+            "app-add alpha 0\n".to_owned(),
+            "app-add alpha 100001\n".to_owned(),
+            "app-add alpha 1000000\n".to_owned(),
+            "app-add alpha 01\n".to_owned(),
+            "app-add alpha +1\n".to_owned(),
+            "app-add alpha -1\n".to_owned(),
+            "app-add alpha 1e3\n".to_owned(),
+            "app-add alpha 1\nextra\n".to_owned(),
+            "app-add alpha 1\0\n".to_owned(),
+            "app-add alpha 1 extra\n".to_owned(),
+            "app-add alpha\n".to_owned(),
+            "app-add\n".to_owned(),
+            format!("app-add {}b 1\n", name),
+            "app-revoke\n".to_owned(),
+            "app-revoke alpha extra\n".to_owned(),
+            "app-cap alpha\n".to_owned(),
+            "provision\n\n".to_owned(),
+        ] {
+            assert_eq!(parse_app(line.as_bytes()), None, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn app_responses_have_exact_shapes_and_store_effects() {
+        let _spawn_guard = crate::SPAWN_LOCK.blocking_read();
+        let (dir, _store) = setup();
+        app_admission::initialize(dir.path()).unwrap();
+        let clients = AppClients::open(dir.path()).unwrap();
+        let now = 20_000 * 86_400;
+        let add = AppCommand::Add {
+            name: "alpha".to_owned(),
+            cap: 2,
+        };
+        let reply = run_app(&clients, add.clone(), now).unwrap();
+        assert!(
+            valid_app_response(&add, reply.as_bytes()),
+            "add reply shape"
+        );
+        assert_eq!(reply.len(), 51);
+        assert!(run_app(&clients, add, now).is_none(), "active name refused");
+        let revoke_missing = AppCommand::Revoke {
+            name: "missing".to_owned(),
+        };
+        assert_eq!(run_app(&clients, revoke_missing, now), None);
+        let cap = AppCommand::Cap {
+            name: "alpha".to_owned(),
+            cap: 3,
+        };
+        assert_eq!(run_app(&clients, cap.clone(), now).as_deref(), Some("ok\n"));
+        assert!(valid_app_response(&cap, b"ok\n"));
+        let revoke = AppCommand::Revoke {
+            name: "alpha".to_owned(),
+        };
+        assert_eq!(
+            run_app(&clients, revoke.clone(), now).as_deref(),
+            Some("ok\n")
+        );
+        assert_eq!(run_app(&clients, cap, now), Some("ok\n".to_owned()));
+        assert!(run_app(
+            &clients,
+            AppCommand::Cap {
+                name: "alpha".to_owned(),
+                cap: 0
+            },
+            now
+        )
+        .is_none());
+        let add_beta = AppCommand::Add {
+            name: "beta".to_owned(),
+            cap: 1,
+        };
+        run_app(&clients, add_beta, now).unwrap();
+        let list = run_app(&clients, AppCommand::List, now).unwrap();
+        assert_eq!(list, "app alpha 3 0 revoked\napp beta 1 0 active\nend\n");
+        assert!(valid_app_response(&AppCommand::List, list.as_bytes()));
+        for invalid in [
+            "app alpha 3 0 revoked\n",
+            "app alpha 3 0 revoked\nend",
+            "app alpha 3 0 gone\nend\n",
+            "app Alpha 3 0 active\nend\n",
+            "app alpha x 0 active\nend\n",
+            "app alpha 3 0 active extra\nend\n",
+            "ok\n",
+        ] {
+            assert!(
+                !valid_app_response(&AppCommand::List, invalid.as_bytes()),
+                "{invalid:?}"
+            );
+        }
+        assert!(valid_app_response(&AppCommand::List, b"end\n"));
+        assert!(valid_app_response(
+            &AppCommand::Add {
+                name: "x".to_owned(),
+                cap: 1
+            },
+            format!("ok fba_{}\n", "A".repeat(43)).as_bytes()
+        ));
+        assert!(!valid_app_response(
+            &AppCommand::Add {
+                name: "x".to_owned(),
+                cap: 1
+            },
+            format!("ok fba_{}\n", "A".repeat(42)).as_bytes()
+        ));
+    }
+
+    #[tokio::test]
+    async fn app_commands_are_error_when_disabled_and_never_fall_back_after_a_reply() {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
+        let (dir, store) = setup();
+        app_admission::initialize(dir.path()).unwrap();
+        let listener = ControlListener::bind(dir.path()).unwrap();
+        let server = tokio::spawn(listener.serve(store, None));
+        // The store exists on disk, but this server has not enabled it. A live
+        // `error` must NOT trigger an offline retry that would succeed.
+        let mut stream = UnixStream::connect(dir.path().join(SOCKET)).await.unwrap();
+        stream.write_all(b"app-list\n").await.unwrap();
+        let mut response = Vec::new();
+        timeout(TIMEOUT, stream.take(128).read_to_end(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response, b"error\n");
+        assert_eq!(app_command(dir.path(), "app-list\n").await, Err(APP_ERROR));
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        // With the socket gone, the same command runs offline under the lock.
+        assert_eq!(
+            app_command(dir.path(), "app-list\n").await.unwrap(),
+            "end\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_app_commands_are_exact_over_the_socket() {
+        let _spawn_guard = crate::SPAWN_LOCK.read().await;
+        let (dir, store) = setup();
+        app_admission::initialize(dir.path()).unwrap();
+        let clients = Arc::new(AppClients::open(dir.path()).unwrap());
+        let listener = ControlListener::bind(dir.path()).unwrap();
+        let server = tokio::spawn(listener.serve(store, Some(clients.clone())));
+        let key = app_command(dir.path(), "app-add alpha 2\n").await.unwrap();
+        assert!(key.starts_with("ok fba_") && key.ends_with('\n') && key.len() == 51);
+        assert_eq!(
+            app_command(dir.path(), "app-add alpha 2\n").await,
+            Err(APP_ERROR),
+            "active name"
+        );
+        assert_eq!(
+            app_command(dir.path(), "app-cap alpha 5\n").await.unwrap(),
+            "ok\n"
+        );
+        assert_eq!(
+            app_command(dir.path(), "app-revoke alpha\n").await.unwrap(),
+            "ok\n"
+        );
+        assert_eq!(
+            app_command(dir.path(), "app-list\n").await.unwrap(),
+            "app alpha 5 0 revoked\nend\n"
+        );
+        assert_eq!(
+            app_command(dir.path(), "app-list x\n").await,
+            Err(APP_ERROR)
+        );
+        // A raw malformed line over the socket is answered with an exact error.
+        let mut stream = UnixStream::connect(dir.path().join(SOCKET)).await.unwrap();
+        stream.write_all(b"app-add Bad 1\n").await.unwrap();
+        let mut response = Vec::new();
+        timeout(TIMEOUT, stream.take(128).read_to_end(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(response, b"error\n");
+        server.abort();
+        assert!(server.await.unwrap_err().is_cancelled());
+        drop(clients);
+        // Offline after shutdown: the lock is free and the same state is visible.
+        assert_eq!(
+            app_command(dir.path(), "app-list\n").await.unwrap(),
+            "app alpha 5 0 revoked\nend\n"
+        );
+    }
+
     #[tokio::test]
     async fn stale_socket_is_replaced() {
         let _spawn_guard = crate::SPAWN_LOCK.read().await;
@@ -255,7 +704,7 @@ mod tests {
         drop(stale);
         assert!(fs::symlink_metadata(&path).unwrap().file_type().is_socket());
         let listener = ControlListener::bind(dir.path()).unwrap();
-        let server = tokio::spawn(listener.serve(store));
+        let server = tokio::spawn(listener.serve(store, None));
         assert!(provision_live(dir.path()).await.is_ok());
         server.abort();
         assert!(server.await.unwrap_err().is_cancelled());

@@ -42,14 +42,27 @@ the Rust `privacypass` crate, which both implement generic batching; extend the
 browser demo so one PoW yields N tokens; and include the change in the
 independent review scope.
 
+### Admission requests from app servers (available)
+
+See [admission for application servers](app-admission.md). An application
+server authenticates with its own secret key and receives
+one-use admission codes, up to a fixed daily cap per server set by the
+operator. The application's own policy decides which of its users get a code;
+Freebird keeps no user accounts or social graph and never learns who the end
+users are. The application's server then verifies the resulting tokens with
+the Issuer's public key, as any Origin does.
+
+## Not planned unless a real application needs them
+
+- **Issuer-to-issuer admission**: an Issuer acting as an ordinary Origin for
+  another Issuer's tokens, exchanging each for one local admission. An
+  application that trusts another community can usually request admission
+  codes on its behalf instead.
+- **Origins trusting more than one Issuer.** One Issuer can already serve many
+  independent applications.
+
 ## Under consideration (not committed)
 
-- **Admission requests from trusted app servers**, so an application's own
-  policy (for example a social trust graph) decides eligibility and receives
-  one-use admission codes, without Freebird keeping accounts or a graph.
-- **Issuer-to-issuer admission**: an Issuer acting as an ordinary Origin for
-  another Issuer's tokens, exchanging each for one local admission.
-- **Origins trusting more than one Issuer.**
 - **A memory-hard PoW option** (Argon2id or scrypt) to narrow GPU advantage,
   at the cost of WebAssembly and a looser browser security policy.
 - **Post-quantum tokens**, once a standard successor to RSA blind signatures

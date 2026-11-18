@@ -7,6 +7,7 @@
 pub(crate) static SPAWN_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
 pub mod admission;
+pub mod app_admission;
 pub mod control;
 pub mod issuer;
 pub mod key_store;

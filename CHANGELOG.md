@@ -31,4 +31,7 @@
   with a durable spent record, single-origin CORS and recovery rotation.
 - Added a self-hosted browser demo (`demo/web/`) and a headless-Chrome TLS
   end-to-end test; nginx template serves it with a strict CSP and rate-limits PoW.
+- Added admission for application servers: per-application secret keys
+  (stored as hashes), a daily cap per application, management over the control
+  socket, a server-only endpoint, and revocation of all keys on recovery.
 - Release publishing remains blocked pending independent cryptographic review.

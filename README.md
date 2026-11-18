@@ -37,7 +37,10 @@ not an older registry release.
 The reference client tests exercise challenge → one admitted blinded request →
 finalization → one redemption through both Axum routers and live loopback HTTP,
 with replay and restart rejection. They are not a general-purpose client SDK.
-Operators can provision invitations while the Issuer runs (`provision-live`).
+Operators can provision invitations while the Issuer runs (`provision-live`),
+and [application servers](docs/app-admission.md) can request one-use codes for
+their own users under a daily cap, so an application's own policy decides who
+gets access.
 An optional [browser demo](docs/demo.md) lets anyone earn one admission by
 solving an ALTCHA proof-of-work puzzle, then obtains and redeems a token in
 JavaScript; proof-of-work raises cost, it does not prove a unique person.

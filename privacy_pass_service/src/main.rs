@@ -3,6 +3,7 @@
 use freebird_crypto::privacy_pass::PublicKey;
 use freebird_privacy_pass_service::{
     admission::AdmissionStore,
+    app_admission::{self, AppAdmission, AppClients},
     control::{self, ControlListener},
     issuer::{self, Issuer},
     key_store::{KeyState, KeyStore},
@@ -24,8 +25,13 @@ Experimental Privacy Pass (one process per role; no failover or multi-instance).
 Usage:
   freebird-privacy-pass-service init-issuer <issuer-state-dir>
   freebird-privacy-pass-service init-issuer-pow <issuer-state-dir>
+  freebird-privacy-pass-service init-issuer-app-admission <issuer-state-dir>
   freebird-privacy-pass-service provision <issuer-state-dir>
   freebird-privacy-pass-service provision-live <issuer-state-dir>
+  freebird-privacy-pass-service app-add <issuer-state-dir> <name> <daily-cap>
+  freebird-privacy-pass-service app-revoke <issuer-state-dir> <name>
+  freebird-privacy-pass-service app-cap <issuer-state-dir> <name> <daily-cap>
+  freebird-privacy-pass-service app-list <issuer-state-dir>
   freebird-privacy-pass-service recover-issuer-admission <issuer-state-dir>
   freebird-privacy-pass-service stage-issuer-key <issuer-state-dir>
   freebird-privacy-pass-service export-issuer-spki <issuer-state-dir> <key-id-hex> <new-output-path>
@@ -47,6 +53,14 @@ issuer or origin first. Activation is whole-hour Unix seconds in the future;
 rotation order is ORIGIN FIRST (install-origin-key), then activate-issuer-key.
 Retire the old Issuer key once now >= successor activation; retire the old
 Origin key once now >= successor activation + 420 seconds.
+App admission is OFF unless app-clients.sqlite exists (created only by
+init-issuer-app-admission). When it exists, serve-issuer serves
+POST /freebird/app/admission for applications holding a key from app-add, and
+refuses to start if that state is invalid or already owned. app-add prints the
+key once on stdout: store it securely; the Issuer keeps only its digest. Each
+application gets an admission cap per UTC day. app-* commands use a running
+Issuer's control socket, or run offline only when the Issuer is stopped.
+recover-issuer-admission revokes EVERY application; re-add them with new keys.
 Initialization requires a fresh directory;
 partial failures are never reset automatically.";
 
@@ -116,6 +130,27 @@ fn keys(dir: &Path) -> Result<KeyStore> {
             "cannot open issuer keys (missing, invalid, or already owned); stop issuer first",
         )
     })
+}
+
+/// Opens the app store only when it exists. `Ok(None)` is the disabled state.
+fn app_clients(dir: &Path) -> Result<Option<Arc<AppClients>>> {
+    if !app_admission::enabled(dir).map_err(|_| APP_STATE)? {
+        return Ok(None);
+    }
+    AppClients::open(dir)
+        .map(|clients| Some(Arc::new(clients)))
+        .map_err(|_| APP_STATE)
+}
+
+const APP_STATE: &str =
+    "cannot open app admission state (invalid, missing, or already owned); stop issuer first";
+
+fn print_app(text: &str) -> Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout
+        .write_all(text.as_bytes())
+        .and_then(|()| stdout.flush())
+        .map_err(|_| control::APP_ERROR)
 }
 
 fn unix_now() -> Result<u64> {
@@ -442,6 +477,33 @@ async fn run(args: &[String]) -> Result<()> {
                     )
                 })
         }
+        [command, dir] if command == "init-issuer-app-admission" => {
+            let dir = Path::new(dir);
+            reject_legacy(dir)?;
+            app_admission::initialize(dir).map_err(|_| {
+                "app admission initialization refused or failed; partial state retained"
+            })
+        }
+        [command, dir, name, cap] if command == "app-add" => {
+            let reply =
+                control::app_command(Path::new(dir), &format!("app-add {name} {cap}\n")).await?;
+            // Only the key leaves the process: the protocol's `ok ` prefix is dropped.
+            print_app(reply.strip_prefix("ok ").ok_or(control::APP_ERROR)?)
+        }
+        [command, dir, name] if command == "app-revoke" => {
+            let reply =
+                control::app_command(Path::new(dir), &format!("app-revoke {name}\n")).await?;
+            print_app(&reply)
+        }
+        [command, dir, name, cap] if command == "app-cap" => {
+            let reply =
+                control::app_command(Path::new(dir), &format!("app-cap {name} {cap}\n")).await?;
+            print_app(&reply)
+        }
+        [command, dir] if command == "app-list" => {
+            let reply = control::app_command(Path::new(dir), "app-list\n").await?;
+            print_app(&reply)
+        }
         [command, dir] if command == "provision" => {
             let store = admission(Path::new(dir))?;
             let now = i64::try_from(unix_now()?).map_err(|_| "invalid system clock")?;
@@ -467,6 +529,14 @@ async fn run(args: &[String]) -> Result<()> {
         [command, dir] if command == "recover-issuer-admission" => {
             let dir = Path::new(dir);
             let store = admission(dir)?;
+            // Revoke first: a restored app database could resurrect old keys.
+            if app_admission::enabled(dir)
+                .map_err(|_| "app admission recovery refused; keep both services stopped")?
+            {
+                AppClients::open(dir)
+                    .and_then(|clients| clients.revoke_all_for_restore())
+                    .map_err(|_| "app admission recovery refused; keep both services stopped")?;
+            }
             pow::invalidate_for_restore(dir)
                 .map_err(|_| "PoW recovery refused; keep both services stopped")?;
             store
@@ -510,6 +580,10 @@ async fn run(args: &[String]) -> Result<()> {
                 )
             })?;
             let issuer = Arc::new(issuer);
+            let clients = app_clients(dir)?;
+            let app = clients
+                .clone()
+                .map(|clients| Arc::new(AppAdmission::new(clients, store.clone())));
             let router = match browser_origin {
                 Some(origin) => {
                     let pow = Pow::open(dir, store.clone())
@@ -518,11 +592,13 @@ async fn run(args: &[String]) -> Result<()> {
                 }
                 None => issuer::router(issuer),
             };
+            // Merged last: app admission is server-to-server and never gets CORS.
+            let router = issuer::with_app_admission(router, app);
             let control =
                 ControlListener::bind(dir).map_err(|_| "cannot bind issuer control socket")?;
             tokio::select! {
                 result = serve(router, bind) => result,
-                result = control.serve(store) =>
+                result = control.serve(store, clients) =>
                     result.map_err(|_| "issuer control server failed"),
             }
         }

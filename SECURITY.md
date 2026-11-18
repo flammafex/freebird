@@ -148,6 +148,14 @@ establish a unique person. The demo ships the same pinned
 `@cloudflare/privacypass-ts` (and its `sjcl` advisory) to browsers, using its
 RSA path only. PoW and the demo are product features, not release gates.
 
+Optional [admission for application servers](docs/app-admission.md) lets an
+application exchange its secret key (a random 256-bit value, stored by the
+Issuer only as a SHA-256 hash) for one-use codes under a daily cap. Quota is
+committed before provisioning. The application learns which user received
+which code; blinding still keeps that code unlinkable to the redeemed token.
+Recovery revokes every application key. This is a product feature, not a
+release gate.
+
 ## Reporting vulnerabilities
 
 Use GitHub private vulnerability reporting for this repository if available.

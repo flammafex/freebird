@@ -181,7 +181,9 @@ stopped. The socket path is `<state-dir>/control.sock`; Unix socket paths are
 limited to about 100 bytes, so keep the state directory path short (the
 default `/var/lib/freebird-issuer/state` is fine), or the Issuer refuses to start.
 To offer open admission through a browser puzzle, see the
-[browser demo and PoW guide](demo.md). Key staging, activation, and
+[browser demo and PoW guide](demo.md); to let your own application servers
+request codes for their users, see
+[admission for application servers](app-admission.md). Key staging, activation, and
 retirement follow the [offline rotation runbook](quick-start.md#offline-key-maintenance):
 enter the [two-role serving hold](recovery.md#hold-serving-before-touching-state),
 run each command as **its** role user, compare statuses and activation times,
@@ -199,6 +201,7 @@ refuses incompatible key history and invalidates old credentials before
 reopening. It is not automatic failover. An upgrade must retain state and the old binary until validated;
 older experimental schema is refused, not silently migrated.
 
-Live invitations and an optional browser PoW demo are available; WebAuthn,
+Live invitations, admission for application servers, and an optional browser
+PoW demo are available; WebAuthn,
 vouching, and multi-instance operation are not. PoW raises cost, not
 uniqueness. Nothing here waives the independent cryptographic review.

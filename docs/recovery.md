@@ -9,7 +9,8 @@ checkout for `scripts/recovery-catalog.py`. They are not automatic failover.
 
 The three SQLite stores are `issuer/admission.sqlite`,
 `issuer/issuer-keys.sqlite`, and `origin/origin.sqlite`. The Issuer also has a
-`generation` file (and, if PoW is enabled, `pow-key` and `pow.sqlite`) and the
+`generation` file (and, if enabled, `pow-key`, `pow.sqlite` and
+`app-clients.sqlite`) and the
 Origin a `context` file. SQLite WAL files may contain
 committed changes not yet copied into the main files. **Copy whole state
 directories only while both processes are stopped**, including any `-wal`,
@@ -146,7 +147,8 @@ runuser -u freebird-origin -- "$bin" origin-key-status "$next_origin"
 
 The Issuer command publishes a new invitation generation and removes every
 restored invitation; if PoW is enabled it also rotates `pow-key` and clears
-the spent-challenge table. The Origin command publishes a new context secret and
+the spent-challenge table; if app admission is enabled it revokes every
+application key, so run `app-add` again for each application afterward. The Origin command publishes a new context secret and
 atomically clears **all** restored challenges and spent rows while keeping
 the full key/tombstone history, pinned names, and clock floor. If interrupted
 between secret publication and database commit, the hash mismatch refuses
